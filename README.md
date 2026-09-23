@@ -25,6 +25,7 @@
 - **Safe Chest Reroll**: Blocks accidental chest rerolls if they contain a valuable item (configurable)
 - **Dungeon Chest Profit**: Shows the value of the items while in a dungeon chest
 - **Dungeon Friends & LFG (/skymyce pf)**: Shows online friends with floor eligibility, Catacombs/class levels, PBs, last-played classes, and quick party invites/messages.
+- The party finder includes a live username search. Friend rows show green idle, red in-run/limbo, or gray unknown status badges.
 ### Dungeon Tracker
 - **Tracker Screen (/skymyce dungeon)**: Opens a detailed overview of your dungeon runs
 - **Widget**: Shows a summary of your dungeon tracker while in the dungeon hub or at the end of your dungeon run

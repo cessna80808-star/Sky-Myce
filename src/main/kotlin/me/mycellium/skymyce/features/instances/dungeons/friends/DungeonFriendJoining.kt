@@ -4,6 +4,10 @@ import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
+
+fun canBeAvailable(island: SkyBlockIsland?, inParty: Boolean): Boolean =
+    island == SkyBlockIsland.DUNGEON_HUB && !inParty
 
 data class DungeonAvailability(
     val floor: DungeonFloor = DungeonFloor.F7,
@@ -13,7 +17,7 @@ data class DungeonAvailability(
     val enabled get() = classes.isNotEmpty()
     fun accepts(stats: DungeonFriendStats?, requestedFloor: DungeonFloor): Boolean =
         requestedFloor == floor && maxPbMillis != null && stats?.state == StatsState.AVAILABLE &&
-            stats.eligible(floor) && stats.sPlusTimes[floor]?.let { it > 0 && it <= maxPbMillis } == true
+            stats.eligible(floor) && stats.sPlusTimes[floor]?.let { it in 1..maxPbMillis } == true
 }
 
 data class DungeonJoinPolicy(val floor: DungeonFloor, val maxPbMillis: Long?, val open: Boolean = true) {
@@ -146,7 +150,11 @@ data class JoinPartyContext(
     val missing: Set<DungeonClass>,
     val members: Set<String>,
 ) {
-    val policy get() = DungeonJoinPolicy(floor, availability.maxPbMillis.takeIf { availability.floor == floor }, canInvite && partySize < 5)
+    val policy get() = DungeonJoinPolicy(
+        floor,
+        availability.maxPbMillis.takeIf { availability.floor == floor },
+        availability.enabled && canInvite && partySize < 5,
+    )
 }
 
 /** Hold a possible opening border until the following packet identifies whose notice it surrounds. */

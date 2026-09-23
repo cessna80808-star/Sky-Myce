@@ -21,6 +21,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     private var floorChosen = DungeonFriends.partyFloor != null
     private var sort = FriendSort.CATACOMBS
     private var ascending = false
+    private var usernameQuery = ""
     private var missingClasses: Set<DungeonClass>? = null
     private var settingsOpen = false
     private var editingFriend: String? = null
@@ -37,6 +38,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     private lateinit var classButton: ButtonComponent
     private lateinit var sortButton: ButtonComponent
     private lateinit var refreshButton: ButtonComponent
+    private lateinit var availabilityButton: ButtonComponent
     private val refreshProgress = DungeonRefreshProgress()
     private val sortHeaders = mutableMapOf<FriendSort, Pair<ButtonComponent, String>>()
     private val actions = mutableListOf<ButtonComponent>()
@@ -86,7 +88,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         partyStatus.text(Component.literal(DungeonFriends.partyStatus + if (DungeonFriends.partyFull) "  Full" else ""))
         partyStatus.color(Color.ofRgb(if (DungeonFriends.partyFull) 0xF18C8C else CYAN))
         partyStatus.tooltip(Component.literal(DungeonFriendsSettings.availability.let {
-            if (it.enabled) "Available for ${it.floor.name}: ${it.classes.joinToString { clazz -> clazz.displayName }}"
+            if (DungeonFriends.availabilityActive) "Available for ${it.floor.name}: ${it.classes.joinToString { clazz -> clazz.displayName }}"
             else "Choose Available classes for Join requests. Auto-joining requires a relay agreement."
         } + DungeonFriends.joining.status.takeIf { it.isNotEmpty() }?.let { "\n$it" }.orEmpty()))
         listStatus.tooltip(Component.literal(DungeonFriends.scanner.status))
@@ -100,6 +102,12 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             append(DungeonFriends.scanner.status)
             if (remaining > 0) append("\n$remaining player stats remaining")
         }))
+        availabilityButton.message = Component.literal(if (DungeonFriends.availabilityActive) "§aAvailable" else "Available")
+        availabilityButton.active(DungeonFriends.canToggleAvailability)
+        availabilityButton.tooltip(Component.literal(
+            if (DungeonFriends.canToggleAvailability) "Toggle whether friends can request to join you."
+            else "Available can only be enabled while solo in the Dungeon Hub."
+        ))
     }
 
     private fun label(text: String, color: Int = WHITE) = UIComponents.label(Component.literal(text))
@@ -147,6 +155,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             floorButton.tooltip(Component.literal("Dungeon floor"))
             child(floorButton)
         })
+        child(usernameSearch())
         child(row().apply {
             gap(6)
             sortButton = button("Sort: ${sort.label}", 116) { button ->
@@ -210,7 +219,15 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     }
 
     private fun toolbarActions(row: FlowLayout) {
-        row.child(button(if (DungeonFriendsSettings.availability.enabled) "§aAvailable" else "Available", 76) { openSettings(null) })
+        availabilityButton = button(if (DungeonFriends.availabilityActive) "§aAvailable" else "Available", 76) {
+            if (!DungeonFriends.canToggleAvailability) return@button
+            val enabled = !DungeonFriendsSettings.availabilityEnabled
+            if (DungeonFriendsSettings.save(availableEnabled = enabled)) {
+                DungeonFriends.joining.clear()
+                it.message = Component.literal(if (enabled) "§aAvailable" else "Available")
+            }
+        }
+        row.child(availabilityButton)
         refreshButton = button("Refresh", 82) {
             DungeonFriends.scanner.refresh(DungeonFriends.now())
             DungeonFriendStatsCache.refresh()
@@ -218,6 +235,15 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         }
         row.child(refreshButton)
         row.child(button("Settings", 54) { openSettings(null) })
+    }
+
+    private fun usernameSearch(): UIComponent = UIComponents.textBox(Sizing.fill()).apply {
+        text(usernameQuery)
+        setHint(Component.literal("Search usernames"))
+        onChanged().subscribe { query ->
+            usernameQuery = query
+            updateResults()
+        }
     }
 
     private fun wantedClasses(): Set<DungeonClass> = missingClasses ?: DungeonFriends.openClasses
@@ -251,11 +277,13 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             header.first.message = Component.literal("${if (sort == value) "§b" else "§7"}${header.second}")
         }
         val stats = DungeonFriendStatsCache.stats
+        val query = usernameQuery.trim()
         val friends = DungeonFriends.scanner.online.values.filter { friend ->
             val data = stats[friend.name.lowercase()]
-            (data?.eligible(floor) != false) && matchesFriendClass(
-                data, DungeonFriendsSettings.secondaryClasses[friend.name.lowercase()].orEmpty(), wanted,
-            )
+            friend.name.contains(query, ignoreCase = true) &&
+                (data?.eligible(floor) != false) && matchesFriendClass(
+                    data, DungeonFriendsSettings.secondaryClasses[friend.name.lowercase()].orEmpty(), wanted,
+                )
         }.sortedWith(friendComparator(stats, floor, sort, ascending))
         listStatus.text(Component.literal("FRIENDS  ${friends.size}/${DungeonFriends.scanner.online.size}"))
         actions.clear()
@@ -277,16 +305,17 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             val reply = DungeonFriends.replies.get(friend.name)
             val pendingInvite = reply?.status in setOf(LfgReplyStatus.WAITING, LfgReplyStatus.INVITED)
             val declined = reply?.status == LfgReplyStatus.DECLINED
-            surface(if (pendingInvite || declined) Surface.flat(if (declined) 0xFF2D1B20.toInt() else 0xFF29231C.toInt()).and(Surface { graphics, component ->
+            surface(if (pendingInvite || declined) Surface.flat(if (declined) 0xFF2D1B20.toInt() else 0xFF29231C.toInt()).and { graphics, component ->
                 graphics.fill(component.x(), component.y(), component.x() + 2, component.y() + component.height(),
                     if (declined) 0xFFFF5555.toInt() else 0xFFFFAA00.toInt())
-            }) else Surface.flat(0xFF17212A.toInt()))
+            } else Surface.flat(0xFF17212A.toInt()))
             val accepted = reply?.status == LfgReplyStatus.ACCEPTED
             val availability = stats?.state?.takeIf { it != StatsState.AVAILABLE }?.label
                 ?: if (stats == null) "Waiting for SkyBlock stats" else "SkyBlock profile stats"
             val identity = UIContainers.verticalFlow(Sizing.expand(), Sizing.content()).apply {
                 gap(3)
                 child(label(if (friend.bestFriend) "§l${friend.name}" else friend.name).horizontalSizing(Sizing.fill()))
+                child(label(friend.badge, friend.statusColor).horizontalSizing(Sizing.fill()))
                 child(label(stats?.selectedClass?.displayName ?: "Unknown", if (stats?.selectedClass != null) CYAN else MUTED)
                     .horizontalSizing(Sizing.fill()))
                 if (reply != null) child(label(reply.status.label).horizontalSizing(Sizing.fill()))
@@ -365,6 +394,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         })
     }
 
+    @Suppress("UsePropertyAccessSyntax")
     private fun settingsContent(): FlowLayout = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
         gap(8)
         if (editingFriend == null) {
@@ -434,7 +464,8 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
                     if (classesDraft.isEmpty()) classes.remove(name) else classes[name] = classesDraft
                 }
                 val changedAvailability = available != DungeonFriendsSettings.availability
-                if (DungeonFriendsSettings.save(templateDraft, classes, available, titles = titlesDraft)) {
+                if (DungeonFriendsSettings.save(templateDraft, classes, available,
+                        titles = titlesDraft, availableEnabled = DungeonFriendsSettings.availabilityEnabled)) {
                     if (changedAvailability) DungeonFriends.joining.clear()
                     settingsOpen = false
                     rebuild()

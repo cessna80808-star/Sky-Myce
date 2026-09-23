@@ -43,6 +43,8 @@ object DungeonFriendsSettings {
         private set
     var availability = DungeonAvailability()
         private set
+    var availabilityEnabled = false
+        private set
     var titleNotifications = false
         private set
     var lastParty: SavedDungeonParty? = null
@@ -84,6 +86,7 @@ object DungeonFriendsSettings {
             messageTemplate = template
             secondaryClasses = secondary
             availability = available
+            availabilityEnabled = json.get("availabilityEnabled")?.asBoolean ?: available.classes.isNotEmpty()
             titleNotifications = json.get("titleNotifications")?.asBoolean ?: false
             lastParty = savedParty
             relayUrl = relay.trim()
@@ -100,6 +103,7 @@ object DungeonFriendsSettings {
         savedParty: SavedDungeonParty? = lastParty,
         relay: String = relayUrl,
         titles: Boolean = titleNotifications,
+        availableEnabled: Boolean = availabilityEnabled,
     ): Boolean {
         load()
         if (error != null) return false
@@ -113,7 +117,8 @@ object DungeonFriendsSettings {
             try {
                 Files.newBufferedWriter(temporary).use { writer ->
                     gson.toJson(mapOf("messageTemplate" to template, "secondaryClasses" to classes,
-                        "availability" to available, "lastParty" to savedParty, "relayUrl" to relay.trim(), "titleNotifications" to titles), writer)
+                        "availability" to available, "availabilityEnabled" to availableEnabled,
+                        "lastParty" to savedParty, "relayUrl" to relay.trim(), "titleNotifications" to titles), writer)
                 }
                 try {
                     Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
@@ -126,6 +131,7 @@ object DungeonFriendsSettings {
             messageTemplate = template
             secondaryClasses = classes
             availability = available
+            availabilityEnabled = availableEnabled
             titleNotifications = titles
             lastParty = savedParty
             relayUrl = relay.trim()

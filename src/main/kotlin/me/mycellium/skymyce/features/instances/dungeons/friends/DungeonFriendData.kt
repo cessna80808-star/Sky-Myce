@@ -133,12 +133,21 @@ private fun JsonObject.number(key: String): Double? = get(key)?.takeIf { it.isJs
     ?.let { runCatching { it.asDouble }.getOrNull() }?.takeIf { it.isFinite() && it >= 0 }
 
 data class OnlineDungeonFriend(val name: String, val location: String, val rankColor: Int? = null, val bestFriend: Boolean = false) {
-    val badge: String get() = when {
-        location.contains("Dungeon Hub", true) -> "§aIdle"
-        location.contains("Dungeons", true) || location.contains("Catacombs", true) -> "§cIn Run"
-        location.contains("Hub", true) || location.contains("Island", true) -> "§aIdle"
-        else -> "§7Unknown"
+    val status: FriendStatus get() = when {
+        location.contains("limbo", true) -> FriendStatus.IN_RUN
+        location.contains("Dungeons", true) || location.contains("Catacombs", true) -> FriendStatus.IN_RUN
+        location.contains("Dungeon Hub", true) -> FriendStatus.IDLE
+        location.contains("Hub", true) || location.contains("Island", true) -> FriendStatus.IDLE
+        else -> FriendStatus.UNKNOWN
     }
+    val badge: String get() = status.label
+    val statusColor: Int get() = status.color
+}
+
+enum class FriendStatus(val label: String, val color: Int) {
+    IDLE("§aIdle", 0x55FF55),
+    IN_RUN("§cIn Run", 0xFF5555),
+    UNKNOWN("§7Unknown", 0xAAAAAA),
 }
 
 /** Read the name's rendered style, including inherited component styles and legacy formatting codes. */

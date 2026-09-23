@@ -32,6 +32,7 @@ import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import tech.thatgravyboat.skyblockapi.utils.text.Text.send
 import java.util.UUID
 
+@Suppress("unused")
 object DungeonFriends : SkyMyceModule() {
     val replies = DungeonLfgReplies()
     val joining = DungeonFriendJoining()
@@ -64,14 +65,19 @@ object DungeonFriends : SkyMyceModule() {
         private set
     var partyRevision = 0L
         private set
-    val neededClass: DungeonClass? get() = party.neededClass
-
     val partySize: Int get() = maxOf(party.size, PartyAPI.size, 1)
     val partyFull: Boolean get() = partySize >= 5
     val canAct: Boolean get() = LocationAPI.onHypixel && party.canInvite && !partyFull && now() >= nextAction
     val openClasses: Set<DungeonClass> get() = party.openClasses
     val partyStatus: String get() = if (!party.ready) "Checking party size..." else "Party $partySize/5"
     private val solo get() = party.ready && !PartyAPI.inParty && partySize == 1
+    val canToggleAvailability: Boolean
+        get() = canBeAvailable(LocationAPI.island, PartyAPI.inParty)
+    val availabilityActive: Boolean
+        get() = DungeonFriendsSettings.availabilityEnabled && canToggleAvailability &&
+            DungeonFriendsSettings.availability.classes.isNotEmpty()
+    private val effectiveAvailability: DungeonAvailability
+        get() = DungeonFriendsSettings.availability.takeIf { availabilityActive } ?: DungeonAvailability()
 
     fun joinUnavailable(friend: OnlineDungeonFriend, floor: DungeonFloor): String? {
         if (!LocationAPI.isOnSkyBlock || !solo) return "You must be solo in SkyBlock to use Join"
@@ -149,7 +155,7 @@ object DungeonFriends : SkyMyceModule() {
             val self = MC.player
             val canInvite = canAct && (!PartyAPI.inParty || PartyAPI.allInvite || PartyAPI.leader?.uuid == self.uuid ||
                 PartyAPI.leader?.name.equals(self.name.string, true) || PartyAPI.members.any { it.uuid == self.uuid && it.role.name == "MOD" })
-            val context = JoinPartyContext(DungeonFriendsSettings.availability, solo, canInvite, partySize,
+            val context = JoinPartyContext(effectiveAvailability, solo, canInvite, partySize,
                 partyFloor ?: DungeonFriendsSettings.availability.floor, openClasses, party.members.toSet())
             DungeonFriendRelay.publishPolicy(context.policy, DungeonFriendStatsCache.get(self.name.string)?.selectedClass)
             joining.nextCommand(context, now(), DungeonFriendStatsCache::verified)?.let {

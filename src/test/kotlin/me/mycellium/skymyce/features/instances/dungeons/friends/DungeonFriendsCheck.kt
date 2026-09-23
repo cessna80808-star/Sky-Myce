@@ -12,6 +12,7 @@ import net.minecraft.network.chat.Style
 import net.minecraft.ChatFormatting
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.*
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.*
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
 import kotlin.time.Duration
@@ -19,6 +20,9 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /** Run with ./gradlew dungeonFriendsCheck; requires no Minecraft client or API credentials. */
 fun main() {
+    check(canBeAvailable(SkyBlockIsland.DUNGEON_HUB, false))
+    check(!canBeAvailable(SkyBlockIsland.DUNGEON_HUB, true))
+    check(!canBeAvailable(SkyBlockIsland.THE_CATACOMBS, false))
     val progress = DungeonRefreshProgress()
     check(progress.update(0, 100, 0, 0) == 0)
     check(progress.update(3, 97, 0, 0) == 3)
@@ -109,6 +113,7 @@ fun main() {
     check(!scanner.receive("Alice is asking for a party", 10))
     check(scanner.receive("--------------------\nFriends (Page 1 of 8)\nAlice is in Dungeons\n--------------------", 100))
     check(scanner.online["alice"]?.badge == "§cIn Run")
+    check(scanner.online["alice"]?.statusColor == 0xFF5555)
     check(scanner.tick(1299) == null)
     check(scanner.tick(1300) == "friend list 2")
     check(scanner.receive("--------------------", 1310))
@@ -121,6 +126,8 @@ fun main() {
     check(!scanner.scanning)
     check(scanner.online.keys == setOf("alice", "carol"))
     check(scanner.online["carol"]?.badge == "§aIdle")
+    check(OnlineDungeonFriend("Limbo", "Limbo").badge == "§cIn Run")
+    check(OnlineDungeonFriend("Unknown", "SkyBlock").statusColor == 0xAAAAAA)
     check(scanner.tick(6200) == null)
     scanner.notification("Alice", false)
     scanner.notification("Dave", true)
@@ -717,6 +724,9 @@ private fun checkJoining(known: DungeonFriendStats, hidden: DungeonFriendStats) 
     val client = DungeonFriendJoining()
     val host = DungeonFriendJoining()
     val clientContext = JoinPartyContext(available, true, true, 1, F7, setOf(HEALER, ARCHER, TANK), setOf("self"))
+    check(clientContext.policy.open)
+    check(!clientContext.copy(availability = DungeonAvailability()).policy.open)
+    check(!clientContext.copy(partySize = 5).policy.open)
     val hostContext = clientContext.copy(solo = false, partySize = 4, missing = setOf(TANK), members = setOf("host", "bob", "carol", "dave"))
     check(client.request("Host", request, 100) == "msg Host ${request.message()}")
     check(host.receiveRequest("Self", request, 200))
