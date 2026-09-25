@@ -4,6 +4,8 @@ Sky-Hawk is a modern Fabric mod for Hypixel SkyBlock built to streamline the gri
 
 Open the in-game config with `/skymyce` or `/sm`.
 
+New to the mod? Follow the [player manual](MANUAL.md) for a step-by-step walkthrough of every feature.
+
 Settings now use five searchable categories with expandable advanced options and shared accent/opacity controls. See the [settings and Party Finder matcher guide](docs/settings-party-finder.md).
 
 The integrated **2.4.2** upgrade adds a paged auction index and item browser (`/sm ah`), a four-view dungeon dashboard (`/sm dungeon`), permanent personal RNG collections, inherited global/widget themes, server-owned visual cosmetics, and acknowledged relay private messages. Read the [auction/tracker/theme guide](docs/auction-tracker-themes.md), [cosmetics and messaging setup](docs/cosmetics-messaging.md), and [validation checklist](docs/upgrade-validation.md). Existing saves and command roots remain compatible; cosmetics require an operator-configured relay/Discord application.
