@@ -33,13 +33,18 @@ fun loadSkyMyceConfig(): ResourcefulConfig {
         SkyMyce.logger.warn("Could not save configuration; previous file retained")
     })
     Runtime.getRuntime().addShutdownHook(Thread({ runCatching { writer.flush() } }, "Sky-Hawk-Config-Save"))
-    return object : ResourcefulConfig by delegate {
-        override fun save() {
-            // Capture values together, then perform serialization/disk work on the scheduler.
-            val known = JsoncObject.parse(Writer.save(delegate).toString())
-            if (recoverable) writer.submit(mergeConfigFields(original, known))
-        }
+    return SavingConfig(delegate) {
+        // Capture values together, then perform serialization/disk work on the scheduler.
+        val known = JsoncObject.parse(Writer.save(delegate).toString())
+        if (recoverable) writer.submit(mergeConfigFields(original, known))
     }
+}
+
+internal class SavingConfig(private val delegate: ResourcefulConfig, private val saveAction: () -> Unit) : ResourcefulConfig by delegate {
+    // Kotlin delegation inherits these Java defaults (empty elements/version 0) unless forwarded explicitly.
+    override fun elements() = delegate.elements()
+    override fun version() = delegate.version()
+    override fun save() = saveAction()
 }
 
 internal fun mergeConfigFields(original: JsonObject, known: JsonObject): JsonObject = original.deepCopy().apply {

@@ -12,7 +12,16 @@ fun checkSettings() {
     row.children(listOf(first, second)); row.inflate(io.wispforest.owo.ui.core.Size.of(400, 240)); row.mount(null, 0, 0)
     check(row.children().size == 2 && second.x() == first.x() + 105 && second.y() == first.y())
     val build = Config.javaClass.methods.first { it.name.startsWith("build") && it.parameterCount == 1 }
-    val rows = settingRows(build.invoke(Config, null) as com.teamresourceful.resourcefulconfig.api.types.ResourcefulConfig)
+    val raw = build.invoke(Config, null) as com.teamresourceful.resourcefulconfig.api.types.ResourcefulConfig
+    val delegate = com.teamresourceful.resourcefulconfig.common.loader.ParsedConfig(7, raw.id(), raw.info(), raw.elements(), raw.categories())
+    var saves = 0
+    val wrapped = SavingConfig(delegate) { saves++ }
+    val rows = settingRows(wrapped) // Use the same saving wrapper as the live settings screen.
+    check(rows.map { it.path } == settingRows(delegate).map { it.path }) { "Saving wrapper lost settings" }
+    check(wrapped.version() == 7 && wrapped.id() == delegate.id() && wrapped.info() === delegate.info())
+    check(wrapped.categories() === delegate.categories())
+    wrapped.save(); check(saves == 1)
+    check(rows.map { it.path }.containsAll(listOf("devMode", "gatherData", "openConfigKey")))
     check(rows.isNotEmpty() && rows.map { it.path }.distinct().size == rows.size)
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
     check(rows.map { settingsTab(it.path) }.toSet() == SettingsTab.entries.toSet())
