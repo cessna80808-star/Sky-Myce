@@ -27,6 +27,7 @@ Relinking the same Minecraft account with a fresh in-game code transfers it to t
 
 Plain names and a safe subset of Minecraft text-component JSON are supported. For example, the value of the name option can be:
 
+Note: use this website for easier customisation https://text.datapackhub.net/
 ```json
 {"text":"Sky","color":"gold","bold":true,"extra":[{"text":" Hawk","color":"#67ccf2","italic":true}]}
 ```
