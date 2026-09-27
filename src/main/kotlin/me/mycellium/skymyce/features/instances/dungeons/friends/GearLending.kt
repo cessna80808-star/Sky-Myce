@@ -44,7 +44,7 @@ object GearLending : SkyMyceModule() {
         return current
     }
 
-    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { sampleTrade() } }
+    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) sampleTrade() } }
 
     @Subscription(ContainerInitializedEvent::class, SlotClickEvent::class)
     fun sampleBeforeClick() { sampleTrade() }

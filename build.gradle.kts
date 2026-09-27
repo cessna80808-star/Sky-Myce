@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
 	id("net.fabricmc.fabric-loom")
@@ -74,9 +75,11 @@ dependencies {
 tasks.processResources {
 	val version = version
 	inputs.property("version", version)
+	inputs.property("minimumBootstrapVersion", providers.gradleProperty("minimum_bootstrap_version"))
 
 	filesMatching("fabric.mod.json") {
-		expand("version" to version)
+		expand("version" to version, "minecraft_version" to providers.gradleProperty("minecraft_version").get(),
+            "loader_version" to providers.gradleProperty("loader_version").get(), "bootstrap_version" to providers.gradleProperty("minimum_bootstrap_version").get())
 	}
 }
 
@@ -101,6 +104,7 @@ java {
 }
 
 tasks.jar {
+	exclude("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class", "sky-myce-loader.properties")
 	val projectName = project.name
 	inputs.property("projectName", projectName)
 
@@ -108,6 +112,49 @@ tasks.jar {
 		rename { "${it}_$projectName" }
 	}
 }
+
+val loaderResources = layout.buildDirectory.dir("generated/loader")
+val generateLoaderResources by tasks.registering {
+    val values = mapOf(
+        "backend" to providers.gradleProperty("skyMyceBackend").orElse("https://configure-before-distribution.invalid").get(),
+        "minecraft" to providers.gradleProperty("minecraft_version").get(),
+        "loaderVersion" to providers.gradleProperty("bootstrap_version").get(),
+        "modVersion" to version.toString(),
+        "owoVersion" to providers.gradleProperty("owo_version").get(),
+        "key." + providers.gradleProperty("skyMyceSigningKeyId").orElse("release-1").get() to providers.gradleProperty("skyMyceSigningPublicKey").orElse("").get()
+    )
+    inputs.properties(values)
+    outputs.dir(loaderResources)
+    doLast {
+        val output = loaderResources.get().asFile.apply { mkdirs() }
+        output.resolve("sky-myce-loader.properties").writer().use { writer -> Properties().apply { putAll(values) }.store(writer, "Sky-Myce public deployment configuration") }
+        output.resolve("fabric.mod.json").writeText("""{
+          "schemaVersion":1,"id":"skymyce-loader","version":"${values["loaderVersion"]}","name":"Sky-Myce Loader","environment":"client",
+          "entrypoints":{"preLaunch":["me.mycellium.skymyce.loader.PayloadVerifier"],"client":[{"adapter":"kotlin","value":"me.mycellium.skymyce.loader.LoaderEntrypoint"}]},
+          "mixins":["sky-myce-loader.mixins.json"],
+          "jars":[{"file":"META-INF/jars/owo-lib.jar"}],
+          "depends":{"fabricloader":">=${providers.gradleProperty("loader_version").get()}","minecraft":"~${values["minecraft"]}","java":">=25","fabric-api":"*","fabric-language-kotlin":"*","owo":">=${values["owoVersion"]}"}
+        }""")
+        output.resolve("sky-myce-loader.mixins.json").writeText("""{"required":true,"package":"me.mycellium.mixin","compatibilityLevel":"JAVA_25","client":["MinecraftAccountKeyAccessor"],"injectors":{"defaultRequire":1}}""")
+    }
+}
+
+val loaderJar by tasks.registering(Jar::class) {
+    group = "build"
+    description = "Build the Fabric bootstrap and standalone signed update installer"
+    dependsOn(tasks.classes, generateLoaderResources)
+    archiveFileName = "Sky-Myce-Loader.jar"
+    from(sourceSets.main.get().output) { include("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class") }
+    from(loaderResources)
+    // First activation has no protected mod (or its sentinel); owo includes its own nested dependencies.
+    from({ configurations.runtimeClasspath.get().single { it.name == "owo-lib-${providers.gradleProperty("owo_version").get()}.jar" } }) {
+        into("META-INF/jars"); rename { "owo-lib.jar" }
+    }
+    // Gson already ships with Minecraft; bundling it lets java -jar apply an update outside Minecraft.
+    from({ configurations.runtimeClasspath.get().filter { it.name.startsWith("gson-") }.map { zipTree(it) } }) { exclude("META-INF/**") }
+    manifest { attributes["Main-Class"] = "me.mycellium.skymyce.loader.LoaderInstaller" }
+}
+tasks.assemble { dependsOn(loaderJar) }
 
 val dungeonFriendsCheck by tasks.registering(JavaExec::class) {
     group = "verification"
@@ -127,7 +174,14 @@ val hudCheck by tasks.registering(JavaExec::class) {
     doFirst { workingDir.mkdirs() }
 }
 
-tasks.check { dependsOn(dungeonFriendsCheck, hudCheck) }
+val loaderCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks loader signatures, installation binding, offline grace and private IRC routing"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.loader.LoaderCheckKt"
+}
+tasks.check { dependsOn(dungeonFriendsCheck, hudCheck, loaderCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

@@ -11,6 +11,7 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.SavedDungeonPart
 import me.mycellium.skymyce.features.instances.dungeons.friends.FRIEND_FLOORS
 import me.mycellium.skymyce.features.instances.dungeons.friends.parseDungeonClass
 import me.mycellium.skymyce.features.instances.dungeons.friends.relayUri
+import me.mycellium.skymyce.features.instances.dungeons.friends.currentRelayUrl
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import java.nio.file.AtomicMoveNotSupportedException
@@ -47,7 +48,7 @@ object DungeonFriendsSettings {
         private set
     var lastParty: SavedDungeonParty? = null
         private set
-    var relayUrl = "wss://skyblock-relay.skyblock-relay.workers.dev/websocket"
+    var relayUrl = currentRelayUrl(null)
         private set
     var error: String? = null
         private set
@@ -69,7 +70,7 @@ object DungeonFriendsSettings {
                 ?.let { gson.fromJson(it, DungeonAvailability::class.java) } ?: DungeonAvailability()
             require(available.floor in FRIEND_FLOORS && available.classes.all { it in DungeonClass.entries })
             require(available.maxPbMillis == null || available.maxPbMillis in 1..59999999)
-            val relay = json.get("relayUrl")?.asString ?: relayUrl
+            val relay = currentRelayUrl(json.get("relayUrl")?.asString)
             require(relay.isBlank() || relayUri(relay) != null)
             val savedParty = json.get("lastParty")?.takeUnless { it.isJsonNull }
                 ?.let { gson.fromJson(it, SavedDungeonParty::class.java) }

@@ -95,6 +95,10 @@ fun main() {
     check(progress.update(200, 0, 0, 1) == 99)
     check(progress.update(200, 0, 1, 0) == 100)
     check(progress.update(200, 10, 0, 1) == 0) // A new refresh starts a new percentage.
+    check(currentRelayUrl(null) == "wss://sky-myce-backend.skyblock-relay.workers.dev/websocket")
+    check(currentRelayUrl("wss://skyblock-relay.skyblock-relay.workers.dev/websocket") == currentRelayUrl(null))
+    check(currentRelayUrl(" wss://custom.example/websocket?room=testing ") == "wss://custom.example/websocket?room=testing")
+    check(currentRelayUrl("") == "")
     check(relayUri("wss://example.workers.dev/websocket") != null)
     check(relayUri("ws://127.0.0.1:8787/websocket?room=testing") != null)
     listOf("http://example.com/websocket", "ws://example.com/websocket", "wss://user:password@example.com/websocket",

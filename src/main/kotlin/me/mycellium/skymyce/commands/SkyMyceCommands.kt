@@ -43,7 +43,7 @@ object SkyMyceCommands : SkyMyceModule() {
     override fun init() {
         settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Hawk Settings", Config.openConfigKey, KeyMapping.Category.MISC))
         ClientTickEvents.END_CLIENT_TICK.register { client ->
-            while (settingsKey.consumeClick()) if (client.screen == null && client.player != null) client.setScreen(SettingsScreen())
+            while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) client.setScreen(SettingsScreen())
         }
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             dispatcher.register(root("skymyce"))
@@ -53,6 +53,7 @@ object SkyMyceCommands : SkyMyceModule() {
 
     fun root(name: String): LiteralArgumentBuilder<FabricClientCommandSource> {
         return literal(name)
+            .requires { me.mycellium.skymyce.loader.LoaderClient.localAllowed }
             .executes {
                 MC.instance.execute {
                     MC.instance.setScreen(

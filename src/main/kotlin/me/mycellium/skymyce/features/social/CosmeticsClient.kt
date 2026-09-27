@@ -54,7 +54,12 @@ class CosmeticCache(private val maximum: Int = 512) {
         while (values.size > maximum) values.remove(values.keys.first())
         return true
     }
-    fun get(uuid: UUID, now: Long): CosmeticProfile? = values[uuid]?.takeIf { now - it.received in 0..600000 }?.profile
+    fun get(uuid: UUID, now: Long, touch: Boolean = false): CosmeticProfile? {
+        val entry = values[uuid]?.takeIf { now - it.received in 0..600000 } ?: return null
+        // Rendered players survive background lookup pressure without extending their offline lifetime.
+        if (touch) { values.remove(uuid); values[uuid] = entry }
+        return entry.profile
+    }
     fun clear() = values.clear()
     fun expire(now: Long): Boolean = values.entries.removeIf { now - it.value.received !in 0..600000 }
     val size get() = values.size
@@ -145,6 +150,7 @@ object CosmeticsClient : SkyMyceModule() {
 
     override fun init() { ClientTickEvents.END_CLIENT_TICK.register { tick() } }
     override fun tick() {
+        if (!me.mycellium.skymyce.loader.LoaderClient.localAllowed) { if (enabled || identity != null) clear(); return }
         val now = System.currentTimeMillis()
         if (!LocationAPI.onHypixel || MC.instance.player == null || identity != null && identity != MC.instance.user.profileId) {
             if (identity != null || enabled) clear()
@@ -183,7 +189,7 @@ object CosmeticsClient : SkyMyceModule() {
         // Retained social identities continue refreshing even after a player leaves the tab roster.
         val visible = (listOf(MC.instance.user.profileId) + if (wanted) identities.uuids() else emptyList()).distinct()
         val pendingNames = if (wanted && DungeonFriendRelay.cosmeticsNamesAvailable) identities.names(now) else emptyList()
-        val ids = visible.filter { (checked[it] ?: 0) + 300000 <= now }.take(16 - minOf(8, pendingNames.size))
+        val ids = visible.filter { cache.get(it, now) == null || (checked[it] ?: 0) + 300000 <= now }.take(16 - minOf(8, pendingNames.size))
         val names = pendingNames.take(16 - ids.size)
         if (ids.isEmpty() && names.isEmpty()) return
         val token = generation
@@ -214,7 +220,7 @@ object CosmeticsClient : SkyMyceModule() {
     @Subscription
     fun onPlayerMessage(event: PlayerMessageEvent) { observe(event.player, null) }
     fun observe(name: String, uuid: UUID?) {
-        if (!LocationAPI.onHypixel || !enabled || identity != MC.instance.user.profileId) return
+        if (!me.mycellium.skymyce.loader.LoaderClient.localAllowed || !LocationAPI.onHypixel || !enabled || identity != MC.instance.user.profileId) return
         identities.observe(name, uuid, System.currentTimeMillis(), priority = true)
     }
     fun ready() { generation++; lookup?.cancel(false); lookup = null; checked.clear(); identities.reconnect(); nextTick = 0; revision++ }
@@ -260,5 +266,5 @@ object CosmeticsClient : SkyMyceModule() {
         val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap()
         if (CosmeticNames.update(known)) MC.instance.gui.chat.rescaleChat()
     }
-    @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? = if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis()) else null
+    @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? = if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis(), touch = true) else null
 }

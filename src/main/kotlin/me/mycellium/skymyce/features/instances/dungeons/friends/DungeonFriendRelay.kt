@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import me.mycellium.mixin.MinecraftAccountKeyAccessor
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.loader.LoaderClient
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
@@ -50,6 +51,11 @@ internal fun closeRelaySocket(ws: WebSocket, sending: CompletableFuture<*>, time
         if (!ws.isInputClosed || !ws.isOutputClosed) ws.abort()
     }
 }
+
+/** Migrate only the retired default; preserve custom endpoints and an intentionally disabled relay. */
+fun currentRelayUrl(saved: String?): String = saved?.trim()
+    ?.takeUnless { it == "wss://skyblock-relay.skyblock-relay.workers.dev/websocket" }
+    ?: "wss://sky-myce-backend.skyblock-relay.workers.dev/websocket"
 
 fun relayUri(text: String): URI? = runCatching {
     require(text.length <= 512)
@@ -113,6 +119,9 @@ object DungeonFriendRelay {
         private set
     var userMessagesAvailable = false
         private set
+    var ircAvailable = false
+        private set
+    private var activeLease: String? = null
     var onDigestEvent: ((JsonObject) -> Unit)? = null
     var onDigestReady: (() -> Unit)? = null
     var onDigestClosed: (() -> Unit)? = null
@@ -144,6 +153,7 @@ object DungeonFriendRelay {
         private set
 
     fun tick(active: Boolean) {
+        if (!LoaderClient.onlineAllowed) { if (identity.isNotEmpty()) disconnect(); status = "Sky-Myce online authorization required"; return }
         val url = DungeonFriendsSettings.relayUrl
         val user = MC.instance.user
         val key = "$url|${user.profileId}"
@@ -153,6 +163,10 @@ object DungeonFriendRelay {
             return
         }
         if (key != identity) { disconnect(); identity = key }
+        if (activeLease != LoaderClient.authorization.lease) {
+            // Renew the authenticated socket without discarding this same player's bounded public appearance cache.
+            disconnect(clearCosmetics = false); identity = key; activeLease = LoaderClient.authorization.lease
+        }
         val now = DungeonFriends.now()
         if (now >= policyDeadline) policyRequest = null
         deliveries.tick(now)
@@ -204,7 +218,7 @@ object DungeonFriendRelay {
                                 val json = decoded!!.getOrThrow()
                                 when (json.get("type")?.asString) {
                                     "challenge" -> {
-                                        check(!authenticating && !connected && json.get("protocol")?.asInt == 2)
+                                        check(!authenticating && !connected && json.get("protocol")?.asInt == 3)
                                         val serverId = json.get("serverId").asString
                                         check(serverId.matches(Regex("[a-f0-9]{32}")))
                                         authenticating = true
@@ -235,7 +249,7 @@ object DungeonFriendRelay {
                                                 "publicKey" to base64.encodeToString(certificate.key().encoded),
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
                                                 "proof" to base64.encodeToString(proof),
-                                                "profile" to textures.value(), "profileSignature" to textures.signature())
+                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + LoaderClient.relayAuthorization(serverId)
                                         }.whenComplete { proof, error -> MC.instance.execute {
                                             if (token == generation) {
                                                 if (error != null) {
@@ -256,7 +270,7 @@ object DungeonFriendRelay {
                                         } }
                                     }
                                     "ready" -> {
-                                        check(authenticating && json.get("protocol")?.asInt == 2)
+                                        check(authenticating && json.get("protocol")?.asInt == 3)
                                         check(json.get("uuid").asString == user.profileId.toString().replace("-", ""))
                                         check(json.get("name").asString.equals(user.name, true))
                                         connected = true
@@ -268,6 +282,7 @@ object DungeonFriendRelay {
                                         userMessagesAvailable = json.get("userMessages")?.asBoolean == true
                                         cosmeticsAvailable = json.get("cosmetics")?.asBoolean == true
                                         cosmeticsNamesAvailable = cosmeticsAvailable && json.get("cosmeticsNames")?.asBoolean == true
+                                        ircAvailable = json.get("irc")?.asBoolean == true
                                         retry.reset()
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -276,7 +291,11 @@ object DungeonFriendRelay {
                                         SkyMyce.logger.info("[Dungeon relay] Connected (shared wealth={})", sharedWealthAvailable)
                                         onDigestReady?.invoke()
                                         me.mycellium.skymyce.features.social.CosmeticsClient.ready()
+                                        RelayMessages.ircReady()
                                     }
+                                    "irc_message" -> { check(connected && ircAvailable); RelayMessages.receiveIrc(json) }
+                                    "irc_result" -> { check(connected); if (json.has("error")) RelayMessages.ircError() }
+                                    "authorization_revoked" -> { LoaderClient.deny(json.get("reason")?.asString == "license_revoked"); disconnect() }
                                     "message", "user_message", "ack" -> {
                                         check(connected)
                                         val id = json.get("id").asString
@@ -364,6 +383,7 @@ object DungeonFriendRelay {
                         4004 -> "Minecraft proof rejected; restart Minecraft or update the mod, then use Reconnect in Settings"
                         else -> "Relay closed ($statusCode); reconnecting"
                     }, pause = relayNeedsReconnect(statusCode), graceful = true)
+                    if (statusCode == 4005) LoaderClient.deny()
                 } }
                 return null
             }
@@ -379,6 +399,12 @@ object DungeonFriendRelay {
 
     fun send(name: String, text: String, received: () -> Unit = {}, failed: () -> Unit = {}): Boolean {
         return sendDelivery("message", name, text, received) { failed() }
+    }
+
+    fun ircPacket(type: String, fields: Map<String, Any>): Boolean {
+        if (!connected || !ircAvailable || !LoaderClient.onlineAllowed || type !in setOf("irc_send", "irc_subscribe")) return false
+        packet(fields + mapOf("type" to type, "id" to UUID.randomUUID().toString().replace("-", "")))
+        return true
     }
 
     fun sendUserMessage(name: String, text: String, received: () -> Unit, failed: (String) -> Unit): Boolean {
@@ -540,6 +566,7 @@ object DungeonFriendRelay {
         digestNewsAvailable = false
         rngFeedAvailable = false
         userMessagesAvailable = false
+        ircAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false
@@ -566,9 +593,9 @@ object DungeonFriendRelay {
         deliveries.connectionFailed()
     }
 
-    fun disconnect() {
+    fun disconnect(clearCosmetics: Boolean = true) {
         RelayMessages.reset()
-        me.mycellium.skymyce.features.social.CosmeticsClient.clear()
+        if (clearCosmetics) me.mycellium.skymyce.features.social.CosmeticsClient.clear()
         deliveries.clear()
         failed("Relay disconnected", graceful = true)
         identity = ""

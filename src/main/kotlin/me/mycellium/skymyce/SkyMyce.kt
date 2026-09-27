@@ -39,6 +39,7 @@ import net.minecraft.resources.Identifier
 import org.slf4j.LoggerFactory
 import tech.thatgravyboat.skyblockapi.api.SkyBlockAPI
 import java.nio.file.Path
+import me.mycellium.skymyce.loader.LoaderClient
 
 
 object SkyMyce : ClientModInitializer {
@@ -57,6 +58,22 @@ object SkyMyce : ClientModInitializer {
         ThemeConfig.migrateDigestTheme()
         config.save()
 
+        // Fabric key mappings must register before GameOptions exists. Execution is gated below.
+        initializeModules()
+        LoaderClient.observe { allowed ->
+            ModuleManager.modules.forEach {
+                if (allowed) { SkyBlockAPI.eventBus.unregister(it); SkyBlockAPI.eventBus.register(it); it.enable() }
+                else { SkyBlockAPI.eventBus.unregister(it); it.disable() }
+            }
+            if (!allowed && modulesInitialized) {
+                me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay.disconnect()
+            }
+        }
+    }
+
+    private var modulesInitialized = false
+    private fun initializeModules() {
+        modulesInitialized = true
         ModuleManager.loadModules(
             CheesePizza,
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
@@ -68,7 +85,6 @@ object SkyMyce : ClientModInitializer {
         )
 
         ModuleManager.modules.forEach {
-            SkyBlockAPI.eventBus.register(it)
             it.init()
         }
     }

@@ -32,6 +32,20 @@ fun checkCosmetics() {
     cache.apply(profile.copy(uuid = UUID(0, 2)), 700002); cache.apply(profile.copy(uuid = UUID(0, 3)), 700003)
     check(cache.size == 2 && cache.get(profile.uuid, 700004) == null)
     cache.clear(); check(cache.size == 0)
+    // F5 keeps reading the local profile while cross-lobby discovery fills the bounded cache.
+    val rendered = CosmeticCache()
+    rendered.apply(profile, 1000)
+    repeat(511) { rendered.apply(profile.copy(uuid = UUID(0, it.toLong() + 1)), 1001) }
+    repeat(40) { frame ->
+        check(rendered.get(profile.uuid, 2000 + frame.toLong(), touch = true)?.scaleY == 1.5f)
+        repeat(16) { rendered.apply(profile.copy(uuid = UUID(1, frame * 16L + it)), 2000 + frame.toLong()) }
+        check(rendered.size == 512 && rendered.get(profile.uuid, 2100 + frame.toLong()) == profile)
+    }
+    check(rendered.get(profile.uuid, 601000, touch = true) == profile)
+    check(rendered.get(profile.uuid, 601001, touch = true) == null) // Rendering/reconnection cannot renew offline TTL.
+    check(rendered.apply(reset, 601002) && rendered.get(profile.uuid, 601003, touch = true) == reset)
+    check(!rendered.apply(profile, 601004)) // A real reset still wins over a delayed pre-reset snapshot.
+    rendered.clear(); check(rendered.get(profile.uuid, 601005, touch = true) == null) // Account/logout clears still apply.
     check(parse(raw.replace("\"Hawk\"", "null").replace("1.5", "1").replace("\"revision\":1", "\"revision\":0").replace("1700000000000", "0")) != null)
     check(parse(raw.replace("1.5", "0.1"))?.scale == .1f)
     check(parse(raw.replace("1.5", "3.0"))?.scale == 3f)
@@ -147,5 +161,5 @@ fun checkCosmetics() {
     check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, UUID(0, 2), true))
     check(!cosmeticLookupCurrent(1, 1, null, profile.uuid, profile.uuid, true))
     check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, profile.uuid, false))
-    println("Cosmetic client checks passed: strict public payloads, scale/name limits, snapshot/live ordering, reset tombstones, reconnect freshness and bounded offline cache")
+    println("Cosmetic client checks passed: strict public payloads, scale/name limits, snapshot/live ordering, reset tombstones, reconnect freshness, rendered-player retention and bounded offline cache")
 }

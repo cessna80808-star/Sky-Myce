@@ -24,7 +24,7 @@ abstract class SkyMyceModule {
         }
     }
 
-    fun isEnabled(): Boolean = enabled
+    fun isEnabled(): Boolean = enabled && me.mycellium.skymyce.loader.LoaderClient.localAllowed
 
     open fun init() {}
 

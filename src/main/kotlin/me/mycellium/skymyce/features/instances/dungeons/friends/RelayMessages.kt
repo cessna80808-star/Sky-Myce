@@ -48,6 +48,9 @@ internal class RelayConversation {
 
 /** Ordinary private messages never enter the LFG parser and never fall back to Hypixel chat. */
 object RelayMessages {
+    private val irc = IrcMode()
+    private val ircSeen = linkedSetOf<String>()
+    private var ircNextSend = 0L
     private val conversations = RelayConversation()
     private val quiet = ThreadLocal.withInitial { false }
     private var nextSend = 0L
@@ -58,12 +61,23 @@ object RelayMessages {
     fun init() {
         ClientSendMessageEvents.ALLOW_CHAT.register { text ->
             session()
+            if (!irc.chat(text, ::sendIrc)) return@register false
             conversations.allowChat(text, ::send)
+        }
+        ClientSendMessageEvents.ALLOW_COMMAND.register { command ->
+            val wasIrc = irc.selected
+            val allow = irc.command(command)
+            if (!allow) {
+                conversations.leaveChat()
+                DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to true))
+                display(Component.literal("Sky-Myce IRC selected. /chat p or /chat a exits. Messages stay private if delivery fails.").withColor(HudTheme.ACCENT))
+            } else if (wasIrc && !irc.selected) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
+            allow
         }
         ClientSendMessageEvents.COMMAND.register { command ->
             if (conversations.channelCommand(command)) chatClosed()
         }
-        ClientPlayConnectionEvents.DISCONNECT.register { _, _ -> conversations.clear(); nextSend = 0 }
+        ClientPlayConnectionEvents.DISCONNECT.register { _, _ -> conversations.clear(); nextSend = 0; irc.selected = false; ircSeen.clear() }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
     fun send(name: String, text: String) {
@@ -97,6 +111,7 @@ object RelayMessages {
     fun chat(name: String) {
         session()
         recipientError(name)?.let { error(it); return }
+        if (irc.selected) { irc.selected = false; DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false)) }
         conversations.chat(name)
         display(Component.literal("Relay chat → $name. Type normally to message them; /chat a or /sm chat exits.").withColor(HudTheme.ACCENT))
         val client = MC.instance
@@ -111,10 +126,32 @@ object RelayMessages {
         }
     }
     fun leaveChat() {
+        if (irc.selected) { irc.selected = false; DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false)) }
         conversations.leaveChat()
         chatClosed()
     }
     private fun chatClosed() = display(Component.literal("Relay chat off. Normal messages use your Hypixel chat channel.").withColor(HudTheme.MUTED))
+    fun ircReady() { if (irc.selected) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to true)) }
+    fun ircError() = error("Sky-Myce IRC could not deliver the message. Nothing was sent to public chat.")
+    private fun sendIrc(text: String) {
+        if (userMessageError("IRC", text) != null || System.nanoTime() < ircNextSend) { ircError(); return }
+        ircNextSend = System.nanoTime() + 1_000_000_000
+        if (!DungeonFriendRelay.ircPacket("irc_send", mapOf("text" to text))) ircError()
+    }
+    fun receiveIrc(json: com.google.gson.JsonObject) {
+        if (!irc.selected || !me.mycellium.skymyce.loader.LoaderClient.onlineAllowed) return
+        val id = json.get("id").asString
+        val source = json.get("source").asString
+        val name = json.get("from").asString
+        val text = json.get("text").asString
+        require(id.matches(Regex("[a-f0-9-]{32,36}")) && source in setOf("minecraft", "discord"))
+        require(name.length in 1..80 && name.none { it.isISOControl() || it == '§' })
+        require(userMessageError("IRC", text) == null)
+        if (!ircSeen.add(id)) return
+        while (ircSeen.size > 256) ircSeen.remove(ircSeen.first())
+        display(Component.literal("[${if (source == "discord") "Discord" else "IRC"}] $name: ").withColor(HudTheme.SECONDARY)
+            .append(Component.literal(text).withColor(HudTheme.TEXT)))
+    }
     fun reply(text: String) {
         session()
         val name = conversations.replyTarget

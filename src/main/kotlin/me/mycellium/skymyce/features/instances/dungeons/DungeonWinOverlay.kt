@@ -35,7 +35,7 @@ object DungeonWinOverlay : SkyMyceModule() {
         HudElementRegistry.attachElementBefore(
             VanillaHudElements.CHAT,
             Identifier.fromNamespaceAndPath(SkyMyce.MOD_ID, "dungeon_win_screen")
-        ) { context, _ -> render(context) }
+        ) { context, _ -> if (isEnabled()) render(context) }
     }
 
     @Subscription

@@ -123,6 +123,7 @@ object DungeonFriends : SkyMyceModule() {
         ClientLifecycleEvents.CLIENT_STOPPING.register { saveFriends(true); DungeonFriendStatsCache.save(true); FriendWealthCache.save(true); DungeonFriendRelay.disconnect() }
         ClientTickEvents.END_CLIENT_TICK.register { tick() }
         ClientSendMessageEvents.ALLOW_COMMAND.register { command ->
+            if (!isEnabled()) return@register true
             if (!sendingPartyAction) partyNotices.command(command, automatic = false, now())
             if (!sendingScan && command.matches(Regex("(?i)(?:f|friend) list(?: \\d+)?"))) scanner.manualCommand()
             val reply = Regex("(?i)^(?:msg|w|tell|whisper) ([A-Za-z0-9_]{1,16}) (.+)$").matchEntire(command)
@@ -143,6 +144,7 @@ object DungeonFriends : SkyMyceModule() {
     }
 
     override fun tick() {
+        if (!isEnabled()) return
         DungeonFriendRelay.tick(LocationAPI.onHypixel && MC.connection != null)
         if (!LocationAPI.isOnSkyBlock) {
             fallbackMessages.clear()

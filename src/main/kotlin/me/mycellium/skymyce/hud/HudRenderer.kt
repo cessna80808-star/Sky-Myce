@@ -18,7 +18,7 @@ import net.minecraft.resources.Identifier
 
 object HudRenderer : SkyMyceModule() {
     private var pressedWidget: Widget? = null
-    private val interactive get() = MC.screen is ChatScreen && !MC.instance.options.hideGui && MC.instance.player != null
+    private val interactive get() = isEnabled() && MC.screen is ChatScreen && !MC.instance.options.hideGui && MC.instance.player != null
 
     override fun init() {
         HudElementRegistry.attachElementBefore(
@@ -66,7 +66,7 @@ object HudRenderer : SkyMyceModule() {
         WidgetManager.widgets.asReversed().firstOrNull { it.isRenderable && it.inBounds(mouseX, mouseY) }
 
     fun render(context: GuiGraphicsExtractor, partialTicks: Float) {
-        if (MC.instance.options.hideGui || MC.instance.player == null) return
+        if (!isEnabled() || MC.instance.options.hideGui || MC.instance.player == null) return
         val window = MC.instance.window
         val mouseX = if (interactive) (MC.instance.mouseHandler.xpos() * window.guiScaledWidth / window.screenWidth).toInt() else -1000000
         val mouseY = if (interactive) (MC.instance.mouseHandler.ypos() * window.guiScaledHeight / window.screenHeight).toInt() else -1000000

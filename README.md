@@ -10,7 +10,9 @@ Settings now use five searchable categories with expandable advanced options and
 
 The integrated **2.4.2** upgrade adds a paged auction index and item browser (`/sm ah`), a four-view dungeon dashboard (`/sm dungeon`), permanent personal RNG collections, inherited global/widget themes, server-owned visual cosmetics, and acknowledged relay private messages. Read the [auction/tracker/theme guide](docs/auction-tracker-themes.md), [cosmetics and messaging setup](docs/cosmetics-messaging.md), and [validation checklist](docs/upgrade-validation.md). Existing saves and command roots remain compatible; cosmetics require an operator-configured relay/Discord application.
 
-**2.4.3** discovers cosmetic names from cached friends, party members and chat senders across lobbies, with bounded lookups and live appearance updates.
+**2.4.3** discovers cosmetic names from cached friends, party members and chat senders across lobbies. Apply the signed update through the [Sky-Myce Loader](docs/LOADER.md#updates-and-cached-artifacts).
+
+**2.4.4** keeps cosmetic sizes stable during lease renewal and background lookups. Loader **1.0.1** adds code → Confirm → Restart setup, automatic update installation, and a main-menu Loader button with Prism restart support.
 
 ## Why play with Sky-Hawk?
 

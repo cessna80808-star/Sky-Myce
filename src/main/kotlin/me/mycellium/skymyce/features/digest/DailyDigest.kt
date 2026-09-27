@@ -22,6 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Client-thread coordinator. All file work runs on SBAPI's scheduler; the menu reads immutable snapshots. */
 object DailyDigest : SkyMyceModule() {
+    override fun onDisable() { wake?.cancel(false); wake = null }
     private val gate = DigestDailyGate()
     private val profiles = linkedMapOf<String, DigestProfileState>()
     private val history = DigestRngHistory()
@@ -151,7 +152,7 @@ object DailyDigest : SkyMyceModule() {
         changed()
     }
 
-    private fun contextReady(): Boolean = loaded && LocationAPI.isOnSkyBlock && MC.instance.player != null &&
+    private fun contextReady(): Boolean = isEnabled() && loaded && LocationAPI.isOnSkyBlock && MC.instance.player != null &&
         ProfileAPI.isLoaded && currentProfileKey() == profileKey && profileKey != null
 
     private fun currentProfileKey(): String? = ProfileAPI.profileName?.takeIf { it.isNotBlank() && ProfileAPI.isLoaded && LocationAPI.isOnSkyBlock }
@@ -177,13 +178,13 @@ object DailyDigest : SkyMyceModule() {
 
     private fun scheduleWake(delay: Long) {
         wake?.cancel(false)
-        if (!LocationAPI.isOnSkyBlock) return
+        if (!isEnabled() || !LocationAPI.isOnSkyBlock) return
         wake = Scheduling.schedule(delay.coerceAtLeast(100).milliseconds) { MC.instance.execute { autoOpen() } }
     }
 
     private fun autoOpen() {
         wake = null
-        if (!LocationAPI.isOnSkyBlock || MC.instance.player == null) return
+        if (!isEnabled() || !LocationAPI.isOnSkyBlock || MC.instance.player == null) return
         synchronizeContext()
         val now = System.currentTimeMillis()
         if (MC.instance.screen is DailyDigestScreen) {
@@ -199,6 +200,7 @@ object DailyDigest : SkyMyceModule() {
     }
 
     fun open() {
+        if (!isEnabled()) return
         if (!LocationAPI.isOnSkyBlock || MC.instance.player == null) {
             MC.instance.player?.sendSystemMessage(Component.literal("The Daily Digest is available after joining SkyBlock."))
             return

@@ -36,7 +36,7 @@ object Plane : SkyMyceModule() {
         net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementBefore(
             net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements.CHAT,
             Identifier.fromNamespaceAndPath(SkyMyce.MOD_ID, "plane_jumpscare")
-        ) { graphics, _ -> render(graphics) }
+        ) { graphics, _ -> if (isEnabled()) render(graphics) }
     }
 
     @Subscription
