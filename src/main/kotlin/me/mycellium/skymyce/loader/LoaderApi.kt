@@ -16,6 +16,17 @@ import java.util.UUID
 
 internal class AuthorizationDenied(val code: String) : Exception()
 
+/** Fixed, safe guidance shared by the desktop window and in-game menu. Never echo server text. */
+internal fun accountAccessError(code: String): String? = when (code) {
+    "device_reset_required" -> "This account is registered to another installation. Ask an admin to use /hwid reset for your Discord account, then retry your newest activation code. A new code alone cannot switch devices. (device_reset_required)"
+    "device_owned" -> "This installation belongs to another Sky-Myce account. Ask an admin to review its device registration. (device_owned)"
+    "device_revoked" -> "Device registration is blocked for this account. Ask an admin to review it before retrying. (device_revoked)"
+    "minecraft_account_owned" -> "This Minecraft account is linked to another Sky-Myce account. Ask an admin to review the link. (minecraft_account_owned)"
+    "minecraft_proof_invalid", "minecraft_proof_required" -> "Minecraft sign-in could not be verified. Close the game, sign in again through your launcher, then retry. (minecraft_proof_invalid)"
+    "version_denied" -> "These Minecraft or Loader versions are not supported by the current release. Ask an admin for the current loader and required Minecraft version. (version_denied)"
+    else -> null
+}
+
 /** Same signed protocol for the pre-game window and the in-game owo menu. No Minecraft classes. */
 internal class LoaderApi(private val config: Properties, private val installation: Installation, private val version: String) {
     companion object {

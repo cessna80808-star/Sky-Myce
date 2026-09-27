@@ -204,6 +204,26 @@ identity. These are explicit limits, not claims of physical hardware proof.
 Deleting the identity creates a new installation that the server rejects
 until the account's reset/re-enrollment policy permits it.
 
+### Linux and moving installations
+
+Ubuntu uses the same loader JAR, activation window, signed self-update and
+launcher-independent restart. Use Java 25 with desktop/AWT support in Prism;
+the loader starts the same Java executable inside the launcher's environment.
+It does not invoke Windows commands on Linux. Automated update/restart checks
+run on Ubuntu 24.04 CI; the same checks and the native desktop window were also
+verified on Ubuntu 22.04 under WSLg. These checks do not authenticate a real
+Minecraft account or verify every launcher sandbox.
+
+An OS reinstall, switching from Windows to Linux, or a launcher package with
+a different Java `user.home` can produce a new installation identity. Keep
+`~/.sky-myce/device-v1/` private and persistent; deleting it does not fix sign-in.
+If the loader reports `device_reset_required`, a Sky-Myce admin must use
+the Backend Bot's `/hwid reset user:<Discord user>` before the replacement
+installation can activate. This revokes the old installation. Retry the newest
+unexpired, unused activation code afterward; `/authorise` by itself does not
+reset the device. The desktop and in-game menus now explain this restriction
+instead of giving a generic authorization error.
+
 ## Leases, revocation and outages
 
 Public signing keys are compiled into the loader. Server replies cannot add

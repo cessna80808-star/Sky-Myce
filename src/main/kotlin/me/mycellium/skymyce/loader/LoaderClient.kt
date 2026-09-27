@@ -286,7 +286,7 @@ object LoaderClient {
                         }
                         authorization.deny(); nextAttempt = Long.MAX_VALUE
                         showAuthorization = true
-                        status = when (cause.code) {
+                        status = accountAccessError(cause.code) ?: when (cause.code) {
                             "challenge_expired", "invalid_challenge" -> "The sign-in request expired. Paste the same code again and click Confirm."
                             "activation_invalid", "invalid_activation", "invalid_activation_key" -> "The activation code was not accepted. Use the code from your latest Sky-Myce DM, or ask an admin for a replacement."
                             "approval_pending" -> "Enter the activation code from your Sky-Myce DM and click Confirm."

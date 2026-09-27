@@ -19,7 +19,7 @@ internal fun startupError(failure: Throwable): String {
     val cause = generateSequence(failure) { it.cause }.last()
     return when (cause) {
         is StartupHandoffLimit -> "The release changed again during startup. Close this window and launch your instance once more. Automatic startup has stopped to prevent a relaunch loop."
-        is AuthorizationDenied -> when (cause.code) {
+        is AuthorizationDenied -> accountAccessError(cause.code) ?: when (cause.code) {
             "invalid_activation_key", "invalid_activation", "activation_invalid" -> "That activation code is invalid, expired or already used. Use your newest Discord DM code, or ask an admin to reissue it."
             "license_revoked", "account_suspended", "installation_revoked", "authorization_revoked", "license_expired" -> "Sky-Myce access is restricted. Contact a Sky-Myce admin to review the account."
             else -> if (startupActivationAllowed(cause.code)) "Paste the activation code from your Discord DM. Sky-Myce will install before Minecraft starts."

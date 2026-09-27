@@ -45,6 +45,14 @@ fun checkStartup() {
     requireStartupHandoffAllowed(null)
     for (marker in listOf("1", "0", "invalid")) reject { requireStartupHandoffAllowed(marker) }
     check("prevent a relaunch loop" in startupError(StartupHandoffLimit()))
+    val deviceHelp = requireNotNull(accountAccessError("device_reset_required"))
+    check("/hwid reset" in deviceHelp && "new code alone cannot switch devices" in deviceHelp)
+    check(startupError(AuthorizationDenied("device_reset_required")) == deviceHelp)
+    for (code in listOf("device_reset_required", "device_owned", "device_revoked", "minecraft_account_owned", "minecraft_proof_invalid", "version_denied")) {
+        check(!startupActivationAllowed(code)) // Another code must never bypass an account/device restriction.
+        check(code in requireNotNull(accountAccessError(code)))
+    }
+    check(accountAccessError(token) == null)
     for (failure in listOf(IllegalStateException(token), AuthorizationDenied(token), SecurityException(token), IllegalArgumentException(token))) {
         check(token !in startupError(failure))
     }

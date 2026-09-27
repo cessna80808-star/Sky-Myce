@@ -34,6 +34,13 @@ fun main() {
         val installation = Installation(temporary.resolve("identity"))
         val reload = Installation(temporary.resolve("identity"))
         check(installation.id == reload.id && installation.publicKey == reload.publicKey && installation.deviceHash == reload.deviceHash)
+        if (Files.getFileStore(temporary).supportsFileAttributeView("posix")) {
+            val identity = temporary.resolve("identity")
+            check(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(identity)) == "rwx------")
+            check(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(identity.resolve("identity.properties"))) == "rw-------")
+            val proof = "test Linux installation persistence"
+            check(installation.sign(proof) == reload.sign(proof))
+        }
         val copiedGame = Installation(temporary.resolve("other-device"))
         check(copiedGame.id != installation.id && copiedGame.publicKey != installation.publicKey)
         val manifest = JsonObject().apply {
