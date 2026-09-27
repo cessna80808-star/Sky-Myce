@@ -135,6 +135,7 @@ public final class LoaderInstaller {
     }
     /** Only the already trusted helper verifies and installs a downloaded loader; never execute it first. */
     static boolean applyLoader(Path game, java.util.Properties config) throws Exception {
+        if (!LoaderPreferences.autoUpdateLoader(game)) return false;
         game = game.toAbsolutePath().normalize();
         var state = game.resolve(".sky-myce");
         try (var channel = FileChannel.open(state.resolve("install.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);

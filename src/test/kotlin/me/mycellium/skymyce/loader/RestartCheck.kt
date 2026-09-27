@@ -177,6 +177,7 @@ fun checkRestart(root: Path, helperJar: Path, loaderUpdate: Pair<ByteArray, Stri
         if (loaderUpdate != null && mode != "commit") continue
         val game = Files.createDirectories(root.resolve("Any launcher Ω $mode"))
         if (loaderUpdate != null) {
+            LoaderPreferences.saveAutoUpdateLoader(game, true)
             Files.createDirectories(game.resolve("mods")); Files.createDirectories(game.resolve(".sky-myce"))
             Files.copy(helperJar, game.resolve("mods/Sky-Myce-Loader.jar"))
             Files.write(game.resolve(".sky-myce/Loader.pending.jar"), loaderUpdate.first)

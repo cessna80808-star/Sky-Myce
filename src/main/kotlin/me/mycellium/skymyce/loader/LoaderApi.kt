@@ -46,7 +46,8 @@ internal class LoaderApi(private val config: Properties, private val installatio
             require(SignedFiles.compareVersion(manifest.get("version").asString, baseline) >= 0)
             return envelope
         }
-        fun loaderRelease(config: Properties): JsonObject? {
+        fun loaderRelease(config: Properties, game: Path): JsonObject? {
+            if (!LoaderPreferences.autoUpdateLoader(game)) return null
             // A temporary update-service outage must not disable an otherwise supported loader.
             val response = try {
                 http.send(HttpRequest.newBuilder(endpoint(config, "/loader/bootstrap-release")).timeout(Duration.ofSeconds(20)).GET().build(),

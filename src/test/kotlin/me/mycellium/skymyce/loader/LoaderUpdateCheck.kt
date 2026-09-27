@@ -34,10 +34,29 @@ fun checkLoaderUpdate(root: Path, config: Properties, envelope: (JsonObject) -> 
     reject { SignedFiles.loaderManifest(envelope(manifest.deepCopy().apply { addProperty("size", 64L * 1024 * 1024 + 1) }), config, now) }
     reject { SignedFiles.loaderManifest(signed.deepCopy().apply { addProperty("kid", "untrusted") }, config, now) }
     reject { SignedFiles.loaderManifest(signed.deepCopy().apply { addProperty("signature", Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(64))) }, config, now) }
-    fun instance(name: String) = root.resolve(name).also { Files.createDirectories(it.resolve("mods")); Files.createDirectories(it.resolve(".sky-myce")) }
+    fun instance(name: String) = root.resolve(name).also {
+        Files.createDirectories(it.resolve("mods")); Files.createDirectories(it.resolve(".sky-myce"))
+        LoaderPreferences.saveAutoUpdateLoader(it, true)
+    }
     fun stage(game: Path, bytes: ByteArray = updated, metadata: JsonObject = signed) {
         Files.write(game.resolve(".sky-myce/Loader.pending.jar"), bytes)
         Files.writeString(game.resolve(".sky-myce/loader-pending-manifest.json"), metadata.toString())
+    }
+    val preferences = root.resolve("default-off")
+    check(!LoaderPreferences.autoUpdateLoader(preferences))
+    // No backend configuration or connection is needed when automatic loader updates are disabled.
+    check(LoaderApi.loaderRelease(Properties(), preferences) == null)
+    check(!LoaderInstaller.applyLoader(preferences, Properties()))
+    LoaderPreferences.saveAutoUpdateLoader(preferences, true)
+    check(LoaderPreferences.autoUpdateLoader(preferences))
+    check(!LoaderPreferences.autoUpdateLoader(root.resolve("another-instance")))
+    LoaderPreferences.saveAutoUpdateLoader(preferences, false)
+    check(!LoaderPreferences.autoUpdateLoader(preferences))
+    val settingsFile = preferences.resolve(".sky-myce/loader-settings.properties")
+    for (invalid in listOf("", "autoUpdateLoader=yes", "autoUpdateLoader=TRUE", "autoUpdateLoader=\\uZZZZ", "autoUpdateLoader=true\n" + "x".repeat(4096))) {
+        Files.writeString(settingsFile, invalid)
+        check(!LoaderPreferences.autoUpdateLoader(preferences))
+        check(LoaderApi.loaderRelease(Properties(), preferences) == null)
     }
     val game = instance("update")
     val target = game.resolve("mods/Sky-Myce-Loader.jar")
@@ -100,5 +119,17 @@ fun checkLoaderUpdate(root: Path, config: Properties, envelope: (JsonObject) -> 
     checkPostExit(recoveryGame, recoveryHelper, unrelated)
     check(!Files.exists(recoveryGame.resolve(".sky-myce/Loader.pending.jar")))
     check(Files.readAllBytes(recoveryHelper).contentEquals(recoveryBytes))
-    println("Loader self-update checks passed: signed metadata, tamper/downgrade rejection, identity, backup, rollback and Windows-safe post-exit replacement")
+    val disabledGame = instance("opt-out-before-exit")
+    val disabledHelper = installerHelperJar(disabledGame.resolve("mods/Sky-Myce-Loader.jar"), config)
+    val retained = Files.readAllBytes(disabledHelper)
+    stage(disabledGame)
+    LoaderPreferences.saveAutoUpdateLoader(disabledGame, false)
+    check(!LoaderInstaller.applyLoader(disabledGame, config))
+    Files.write(disabledGame.resolve(".sky-myce/Sky-Myce.pending.jar"), unrelated)
+    Files.writeString(disabledGame.resolve(".sky-myce/pending-manifest.json"), envelope(payloadManifest).toString())
+    checkPostExit(disabledGame, disabledHelper, unrelated)
+    check(Files.readAllBytes(disabledHelper).contentEquals(retained))
+    check(Files.readAllBytes(disabledGame.resolve(".sky-myce/Loader.pending.jar")).contentEquals(updated))
+    check(Files.exists(disabledGame.resolve(".sky-myce/loader-pending-manifest.json")))
+    println("Loader self-update checks passed: default-off opt-in, persisted preference, opt-out before exit, signed metadata, tamper/downgrade rejection, identity, backup, rollback and Windows-safe post-exit replacement")
 }

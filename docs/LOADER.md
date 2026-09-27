@@ -59,8 +59,22 @@ starting Minecraft cannot extend its lifetime or authorize an offline restart.
 
 ## Updates and cached artifacts
 
-Loader **1.0.5** checks Cloudflare for a newer loader before normal account/mod
-setup. It verifies a separate Ed25519-signed manifest, downloads the loader,
+Starting with loader **1.0.9**, automatic loader updates are **off by default**.
+Opt in through the main menu's **Loader → Automatic loader updates: OFF** button.
+The saved choice applies to this Minecraft instance on its next launch; press
+the button again to turn updates off. Missing, unreadable or invalid settings
+leave loader updates disabled. The setting is stored in
+`.sky-myce/loader-settings.properties` as `autoUpdateLoader=true` or `false`.
+Disabling it also prevents a staged loader update from installing on exit.
+Ordinary Sky-Myce mod installation, mod updates and authorization still run.
+You can install a new loader manually using the JAR from an admin's Discord DM.
+
+Older loaders (1.0.5–1.0.8) update automatically once to receive this new
+default; their existing code cannot read the opt-in setting. From 1.0.9 onward,
+future loader self-updates require explicit opt-in.
+
+When enabled, the loader checks Cloudflare for a newer loader before normal
+account/mod setup. It verifies a separate Ed25519-signed manifest, downloads the loader,
 and verifies its SHA-256, size, mod ID and version. A helper running from a
 cached copy waits for this process to exit, backs up the old loader, installs
 the new one and restarts the same instance. The updated loader resumes setup
@@ -164,7 +178,7 @@ if installation is interrupted, rerun the installer with Minecraft closed.
 
 Install loader 1.0.5 once to upgrade from 1.0.0–1.0.4. Those older loaders
 cannot gain self-updating from a protected-mod update. Later compatible loader
-releases install automatically through the startup window.
+releases install through the startup window when automatic loader updates are enabled.
 The loader includes owo and its dependencies, so its themed setup screen
 works before the protected mod exists. Activation input is masked and never
 placed in chat, command history or screen-reader narration.

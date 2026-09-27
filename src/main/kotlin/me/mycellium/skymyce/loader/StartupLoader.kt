@@ -55,7 +55,7 @@ object StartupLoader {
                     val config = SignedFiles.configuration()
                     val account = StartupAccount.parse(loader.getLaunchArguments(false))
                     val installation = Installation()
-                    val loaderRelease = LoaderApi.loaderRelease(config)
+                    val loaderRelease = LoaderApi.loaderRelease(config, loader.gameDir)
                     if (loaderRelease != null && SignedFiles.compareVersion(
                             SignedFiles.loaderManifest(loaderRelease, config, System.currentTimeMillis()).get("version").asString,
                             config.getProperty("loaderVersion")) > 0) {

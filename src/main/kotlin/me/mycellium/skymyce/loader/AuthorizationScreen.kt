@@ -31,6 +31,7 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
     private lateinit var activate: ButtonComponent
     private lateinit var retry: ButtonComponent
     private lateinit var update: ButtonComponent
+    private lateinit var autoUpdate: ButtonComponent
     private lateinit var restartButton: ButtonComponent
     private lateinit var restartHint: LabelComponent
     private lateinit var done: ButtonComponent
@@ -70,6 +71,7 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         content.child(steps)
         retry = button("Retry authorization") { LoaderClient.retry() }
         update = button("Check for update") { LoaderClient.retry() }
+        autoUpdate = button("") { LoaderClient.setLoaderAutoUpdate(!LoaderClient.autoUpdateLoader) }
         restartButton = button("Restart Minecraft") {
             activation.value = ""
             LoaderClient.requestRestart()
@@ -86,7 +88,7 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         val busy = LoaderClient.isBusy
         val restart = LoaderClient.restartRequired
         val ready = LoaderClient.onlineAllowed && !restart
-        val state = listOf(busy, restart, ready, LoaderClient.status, LoaderClient.canRestart, activation.value.isNotBlank())
+        val state = listOf(busy, restart, ready, LoaderClient.status, LoaderClient.canRestart, LoaderClient.autoUpdateLoader, activation.value.isNotBlank())
         if (state == displayedState) return
         displayedState = state
         status.text(Component.literal(LoaderClient.status).withColor(if (ready || restart) 0x87D6A2 else 0x91A2AF))
@@ -99,6 +101,8 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         activation.setEditable(!busy && showSteps)
         retry.active(!busy && !restart && !ready)
         update.active(!busy && ready)
+        autoUpdate.active(!busy)
+        autoUpdate.message = Component.literal("Automatic loader updates: " + if (LoaderClient.autoUpdateLoader) "ON" else "OFF").withColor(0xEDF3F7)
         restartButton.active(!busy && LoaderClient.canRestart)
         restartHint.text(Component.literal(if (LoaderClient.canRestart) "Restarts this Minecraft instance after applying any verified update."
             else "Restart is not ready yet. Minecraft stays open if preparation fails.").withColor(0x91A2AF))
@@ -106,6 +110,7 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         actions.clearChildren()
         if (showSteps) actions.child(retry)
         if (ready) actions.child(update)
+        actions.child(autoUpdate)
         actions.child(restartButton).child(restartHint).child(done)
     }
 

@@ -275,7 +275,7 @@ internal fun installerHelperJar(file: Path, config: Properties): Path {
         mainAttributes[Attributes.Name.MAIN_CLASS] = LoaderInstaller::class.java.name
     }
     JarOutputStream(Files.newOutputStream(file), manifest).use { jar ->
-        val types = listOf(LoaderInstaller::class.java, LoaderRestart::class.java, RestartNatives::class.java,
+        val types = listOf(LoaderInstaller::class.java, LoaderPreferences::class.java, LoaderRestart::class.java, RestartNatives::class.java,
             SignedFiles::class.java, InstallerCheckChild::class.java)
         for (type in types + types.flatMap { it.declaredClasses.toList() }) {
             val name = type.name.replace('.', '/') + ".class"

@@ -39,6 +39,8 @@ object LoaderClient {
     private var updateInstaller: Process? = null
     var canRestart = false
         private set
+    var autoUpdateLoader = false
+        private set
     private var initialized = false
     private val generation get() = authorization.generation
     private var showAuthorization = true
@@ -54,6 +56,7 @@ object LoaderClient {
     fun initialize() {
         if (initialized) return
         initialized = true
+        autoUpdateLoader = LoaderPreferences.autoUpdateLoader(FabricLoader.getInstance().gameDir)
         showAuthorization = !hasPayload
         registerLoaderMenu()
         uuid = Minecraft.getInstance().user.profileId.toString().replace("-", "")
@@ -169,6 +172,15 @@ object LoaderClient {
         authorization.invalidatePending(); nextAttempt = 0
         status = "Checking your Sky-Myce account again…"
         if (!::installation.isInitialized) work({ installation = Installation() }) { canRestart = restartRuntimeAvailable(); nextAttempt = 0 }
+    }
+    fun setLoaderAutoUpdate(enabled: Boolean) {
+        if (isBusy) return
+        try {
+            LoaderPreferences.saveAutoUpdateLoader(FabricLoader.getInstance().gameDir, enabled)
+            autoUpdateLoader = enabled
+            status = if (enabled) "Automatic loader updates enabled for this instance, starting next launch."
+                else "Automatic loader updates disabled for this instance."
+        } catch (_: Exception) { status = "Could not save the loader update preference. Check this instance's file permissions and retry." }
     }
     private fun restartRuntimeAvailable() = runCatching { FabricLauncherBase.getLauncher().classPath.isNotEmpty() }.getOrDefault(false)
     fun requestRestart() {
