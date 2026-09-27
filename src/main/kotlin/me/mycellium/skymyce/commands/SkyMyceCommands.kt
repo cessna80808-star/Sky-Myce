@@ -12,6 +12,8 @@ import me.mycellium.skymyce.ModuleManager
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.features.general.AuctionHouseScreen
+import me.mycellium.skymyce.features.general.PersonalBestCommand
+import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsScreen
@@ -44,10 +46,14 @@ object SkyMyceCommands : SkyMyceModule() {
         settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Hawk Settings", Config.openConfigKey, KeyMapping.Category.MISC))
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) client.setScreen(SettingsScreen())
+            // One shared scheduler, including explicit lookups without the party-finder module or Hypixel.
+            if (isEnabled() && client.player != null) DungeonFriendStatsCache.tick()
+            PersonalBestCommand.tick(isEnabled())
         }
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             dispatcher.register(root("skymyce"))
             dispatcher.register(root("sm"))
+            dispatcher.register(m7PbCommand())
         }
     }
 
@@ -63,6 +69,7 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             }
             .then(dungeon())
+            .then(m7PbCommand())
             .then(literal("digest").executes {
                 MC.instance.execute { DailyDigest.open() }
                 1
@@ -99,6 +106,15 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(modules())
             .then(troll())
     }
+
+    private fun m7PbCommand() = literal("m7pb")
+        .requires { me.mycellium.skymyce.loader.LoaderClient.localAllowed }
+        .executes { PersonalBestCommand.lookupM7(); 1 }
+        .then(argument("player", StringArgumentType.word()).suggests { _, builder ->
+            MC.connection?.onlinePlayers?.map { it.profile.name }
+                ?.filter { it.startsWith(builder.remaining, true) }?.forEach(builder::suggest)
+            builder.buildFuture()
+        }.executes { PersonalBestCommand.lookupM7(StringArgumentType.getString(it, "player")); 1 })
 
     private fun messageCommand(name: String, send: (String, String) -> Unit) = literal(name)
         .then(argument("name", StringArgumentType.word()).suggests { _, builder ->

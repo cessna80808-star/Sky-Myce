@@ -183,7 +183,6 @@ object DungeonFriends : SkyMyceModule() {
         }
         saveFriends()
         FriendWealthCache.tick(scanner.all.values, scanner.online.keys)
-        DungeonFriendStatsCache.tick()
         joinedTitles.entries.removeIf { (name, title) ->
             !DungeonFriendsSettings.titleNotifications || name !in party.members || (title.shownUntil != 0L && title.shownUntil <= now())
         }

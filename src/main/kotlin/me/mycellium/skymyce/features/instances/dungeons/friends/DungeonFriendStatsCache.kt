@@ -16,7 +16,7 @@ import kotlin.time.Duration.Companion.seconds
 
 /** Cache lookups run independently of the single, rate-limited provider/API request. */
 object DungeonFriendStatsCache {
-    private data class Request(val uuid: UUID?, val force: Boolean)
+    private data class Request(val uuid: UUID?, val force: Boolean, val refreshExpired: Boolean)
     private data class SharedLookup(val response: CompletableFuture<JsonObject?>, val expires: Long)
     private val cache = mutableMapOf<String, CachedDungeonFriend>()
     private val liveClasses = mutableMapOf<String, Pair<String, DungeonClass>>()
@@ -85,21 +85,22 @@ object DungeonFriendStatsCache {
     private fun withLiveClass(name: String, record: CachedDungeonFriend): CachedDungeonFriend =
         liveClasses[name]?.takeIf { it.first == record.uuid }?.let { record.copy(stats = record.stats.copy(selectedClass = it.second)) } ?: record
 
-    fun request(name: String, uuid: UUID? = null, force: Boolean = false, priority: Boolean = false, bypassShared: Boolean = false) {
+    fun request(name: String, uuid: UUID? = null, force: Boolean = false, priority: Boolean = false, bypassShared: Boolean = false, refreshExpired: Boolean = false) {
         if (!name.matches(Regex("[A-Za-z0-9_]{1,16}"))) return
         val key = name.lowercase()
         val existing = cache[key]
         val changedPlayer = uuid != null && existing?.uuid != null && existing.uuid != uuid.toString().replace("-", "")
         if (changedPlayer) { cache.remove(key); dirty = true; version++ }
         if (key == inFlight && !force && !changedPlayer) return
-        if (!force && !changedPlayer && existing?.shouldRefresh(System.currentTimeMillis()) == false) return
+        if (!force && !changedPlayer && existing != null &&
+            !(if (refreshExpired) System.currentTimeMillis() >= existing.expires else existing.shouldRefresh(System.currentTimeMillis()))) return
         if (force || changedPlayer) {
             revisions[key] = (revisions[key] ?: 0) + 1
             sharedLookups.remove(key)
         }
         val queued = pending[key]
         if (bypassShared) invalidProfiles.putIfAbsent(key, System.currentTimeMillis())
-        val request = Request(uuid ?: queued?.uuid, force || changedPlayer || queued?.force == true)
+        val request = Request(uuid ?: queued?.uuid, force || changedPlayer || queued?.force == true, refreshExpired || queued?.refreshExpired == true)
         if (priority) {
             pending.remove(key)
             val rest = pending.toMap()
@@ -107,6 +108,13 @@ object DungeonFriendStatsCache {
             pending[key] = request
             pending.putAll(rest)
         } else pending[key] = request
+    }
+
+    /** Recheck at dequeue: another request or relay report may have refreshed this player meanwhile. */
+    internal fun queuedNeedsFetch(name: String, now: Long): Boolean {
+        val request = pending[name] ?: return false
+        val record = cache[name] ?: return true
+        return request.force || if (request.refreshExpired) now >= record.expires else record.shouldRefresh(now)
     }
 
     fun initialize(file: Path) {
@@ -260,9 +268,10 @@ object DungeonFriendStatsCache {
         val request = pending.entries.firstOrNull {
             !DungeonFriendRelay.sharedStatsAvailable || sharedLookups[it.key]?.response?.isDone == true
         } ?: return
+        val fetch = queuedNeedsFetch(request.key, now)
         pending.remove(request.key)
         val sharedLookup = sharedLookups.remove(request.key)
-        if (!request.value.force && cache[request.key]?.shouldRefresh(now) == false) { completedCount++; return }
+        if (!fetch) { completedCount++; return }
         val knownUuid = request.value.uuid?.toString()?.replace("-", "") ?: cache[request.key]?.uuid
         inFlight = request.key
         val token = generation

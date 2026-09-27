@@ -21,6 +21,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /** Run with ./gradlew dungeonFriendsCheck; requires no Minecraft client or API credentials. */
 fun main() {
+    me.mycellium.skymyce.features.general.checkPersonalBestCommand()
     me.mycellium.skymyce.features.general.auction.checkAuctions()
     me.mycellium.skymyce.features.instances.dungeons.tracker.checkTracker()
     me.mycellium.skymyce.features.instances.dungeons.checkPartyMatcher()

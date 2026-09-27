@@ -2,6 +2,7 @@ package me.mycellium.skymyce.features.social
 
 import com.google.gson.JsonParser
 import me.mycellium.skymyce.features.instances.dungeons.friends.relayPacketSizeAllowed
+import me.mycellium.skymyce.features.instances.dungeons.friends.retainCosmeticsDuringOutage
 import java.util.UUID
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.Style
@@ -46,6 +47,28 @@ fun checkCosmetics() {
     check(rendered.apply(reset, 601002) && rendered.get(profile.uuid, 601003, touch = true) == reset)
     check(!rendered.apply(profile, 601004)) // A real reset still wins over a delayed pre-reset snapshot.
     rendered.clear(); check(rendered.get(profile.uuid, 601005, touch = true) == null) // Account/logout clears still apply.
+    // Local grace keeps only the same account/room's public appearance, without renewing its TTL.
+    val relayIdentity = "wss://relay.example/websocket?room=friends|${profile.uuid}"
+    val outage = CosmeticCache()
+    outage.apply(profile, 1000)
+    check(retainCosmeticsDuringOutage(true, true, relayIdentity, relayIdentity))
+    check(outage.get(profile.uuid, 301000, touch = true) == profile)
+    check(outage.get(profile.uuid, 601001, touch = true) == null)
+    val boundaries = listOf(
+        Triple(false, true, relayIdentity), // Denial or exhausted local grace.
+        Triple(true, false, relayIdentity), // Logout or disabled relay.
+        Triple(true, true, relayIdentity.replace("friends", "testing")),
+        Triple(true, true, "wss://other.example/websocket?room=friends|${profile.uuid}"),
+        Triple(true, true, "wss://relay.example/websocket?room=friends|${UUID(0, 9)}")
+    )
+    for ((allowed, active, requested) in boundaries) {
+        outage.apply(profile, 1000)
+        val retain = retainCosmeticsDuringOutage(allowed, active, relayIdentity, requested)
+        check(!retain)
+        if (!retain) outage.clear()
+        check(outage.get(profile.uuid, 1001) == null)
+    }
+    check(!retainCosmeticsDuringOutage(true, true, "", relayIdentity))
     check(parse(raw.replace("\"Hawk\"", "null").replace("1.5", "1").replace("\"revision\":1", "\"revision\":0").replace("1700000000000", "0")) != null)
     check(parse(raw.replace("1.5", "0.1"))?.scale == .1f)
     check(parse(raw.replace("1.5", "3.0"))?.scale == 3f)

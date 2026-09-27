@@ -35,6 +35,9 @@ internal class RelayRetry {
 
 internal fun relayNeedsReconnect(code: Int) = code == 4001 || code == 4004
 
+internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean, identity: String, requestedIdentity: String) =
+    localAllowed && active && identity.isNotEmpty() && identity == requestedIdentity
+
 internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..65536 &&
     (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result"))
 
@@ -153,10 +156,20 @@ object DungeonFriendRelay {
         private set
 
     fun tick(active: Boolean) {
-        if (!LoaderClient.onlineAllowed) { if (identity.isNotEmpty()) disconnect(); status = "Sky-Myce online authorization required"; return }
         val url = DungeonFriendsSettings.relayUrl
         val user = MC.instance.user
         val key = "$url|${user.profileId}"
+        if (!LoaderClient.onlineAllowed) {
+            if (identity.isNotEmpty()) {
+                val retain = retainCosmeticsDuringOutage(LoaderClient.localAllowed, active && url.isNotBlank(), identity, key)
+                if (!retain || connected || connecting || socket != null) {
+                    disconnect(clearCosmetics = !retain)
+                    // Keep the boundary through the outage so reconnect does not clear this same cache.
+                    if (retain) identity = key
+                }
+            }
+            status = "Sky-Myce online authorization required"; return
+        }
         if (!active || url.isBlank()) {
             if (identity.isNotEmpty()) disconnect()
             status = if (url.isBlank()) "Relay not configured" else "Relay connects on Hypixel"
