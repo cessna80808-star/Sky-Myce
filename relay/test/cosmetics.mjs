@@ -27,7 +27,8 @@ export async function checkCosmetics(script, proof) {
     const response = await mf.dispatchFetch(`http://localhost/websocket?room=${room}`, { headers: { Upgrade: "websocket", "CF-Connecting-IP": `127.3.0.${sockets.length + 1}` } });
     assert.equal(response.status, 101);
     const ws = response.webSocket, next = inbox(ws); sockets.push(ws); ws.accept(); const challenge = await next();
-    ws.send(JSON.stringify({ ...proof(name, challenge.serverId), cosmetics: capable, cosmeticsVersion: version })); assert.equal((await next()).cosmetics, true);
+    ws.send(JSON.stringify({ ...proof(name, challenge.serverId), cosmetics: capable, cosmeticsVersion: version }));
+    const ready = await next(); assert.equal(ready.cosmetics, true); assert.equal(ready.cosmeticsNames, true);
     return { ws, next };
   }
   async function request(client, data) {
@@ -186,6 +187,51 @@ export async function checkCosmetics(script, proof) {
     const publicRows = await storage.exec("SELECT * FROM cosmetics_public");
     assert.ok(publicRows.every(row => !Object.hasOwn(row, "discord") && !Object.hasOwn(row, "actor")));
     const challenges = await storage.exec("SELECT * FROM cosmetics_challenges"); assert.ok(challenges.every(row => !Object.hasOwn(row, "code")));
+    // Resolve off-lobby names through authenticated relay identities, without a global registry dump.
+    let namesPeer = await connect("InvalidPolicy"), nameRequests = 0;
+    const namesRequest = async fields => {
+      if (nameRequests === 6) { namesPeer = await connect("InvalidPolicy"); nameRequests = 0; }
+      nameRequests++; return request(namesPeer, { type: "cosmetics_get", ...fields });
+    };
+    const named = await namesRequest({ names: ["bOb", "UnknownPlayer"] });
+    assert.deepEqual(named.identities, [{ uuid: b, name: "Bob" }]); assert.equal(named.records.length, 1);
+    assert.equal(named.records[0].uuid, b); assert.deepEqual(Object.keys(named.identities[0]).sort(), ["name", "uuid"]);
+    await resetLimits(); assert.match(await call(command("set", { name: "Across lobbies" })), /Saved/);
+    const namedEvent = await namesPeer.next(); assert.equal(namedEvent.type, "cosmetics_event");
+    assert.equal(namedEvent.record.uuid, b); assert.equal(namedEvent.record.name, "Across lobbies", "A name-only lookup subscribes to live updates");
+    const mixed = await namesRequest({ uuids: [b, b], names: ["Bob"] });
+    assert.equal(mixed.records.length, 1); assert.deepEqual(mixed.identities, [{ uuid: b, name: "Bob" }]);
+    assert.deepEqual((await namesRequest({ uuids: [b], names: [] })).identities, []);
+    assert.equal(Object.hasOwn(await namesRequest({ uuids: [b] }), "identities"), false, "UUID-only clients retain their original response shape");
+    assert.deepEqual((await request(isolated, { type: "cosmetics_get", names: ["Bob"] })).identities, [], "Other rooms cannot resolve this room's identities");
+    for (const conflicting of ["e".repeat(32), "f".repeat(32)]) {
+      await storage.exec("INSERT INTO mod_users VALUES(?,?,?,?)", conflicting, "Ambiguous", Date.now(), Date.now());
+    }
+    const ambiguous = await namesRequest({ names: ["AMBIGUOUS"] });
+    assert.deepEqual(ambiguous.identities, []); assert.deepEqual(ambiguous.records, [], "An ambiguous historical name cannot pick an arbitrary UUID");
+    // A legitimate shared-cache upload is public data, not a verified identity association.
+    const uploadedUuid = "9".repeat(32), uploadRequest = (sequence++).toString(16).padStart(32, "0");
+    namesPeer.ws.send(JSON.stringify({ type: "stats_get", id: uploadRequest, name: "OnlyUpload", uuid: uploadedUuid }));
+    const grant = await namesPeer.next(); assert.equal(grant.type, "stats_result"); assert.ok(grant.upload);
+    namesPeer.ws.send(JSON.stringify({ type: "stats_put", id: (sequence++).toString(16).padStart(32, "0"), name: "OnlyUpload", uuid: uploadedUuid,
+      upload: grant.upload, fetchedAt: Date.now(), stats: { state: "HIDDEN", classes: {}, completionTimes: {}, sPlusTimes: {}, completedFloors: [] } }));
+    assert.equal((await namesPeer.next()).stored, true);
+    const untrusted = await namesRequest({ names: ["OnlyUpload"] }); assert.deepEqual(untrusted.identities, []); assert.deepEqual(untrusted.records, []);
+    for (const malformed of [{}, { names: [] }, { names: null }, { names: "Bob" }, { names: ["Bob", "bOB"] },
+      { names: [""] }, { names: ["Bob Space"] }, { names: ["@everyone"] }, { names: [17] }, { names: ["x".repeat(17)] },
+      { uuids: null, names: ["Bob"] }, { uuids: [b], names: Array.from({ length: 16 }, (_, i) => `Player${i}`) },
+      { names: Array.from({ length: 17 }, (_, i) => `Player${i}`) }]) {
+      assert.equal((await namesRequest(malformed)).error, "invalid_lookup");
+    }
+    const unauthenticated = await mf.dispatchFetch("http://localhost/websocket?room=friends", { headers: { Upgrade: "websocket", "CF-Connecting-IP": "127.9.0.1" } });
+    const unverified = unauthenticated.webSocket, unverifiedNext = inbox(unverified); sockets.push(unverified); unverified.accept(); await unverifiedNext();
+    const rejected = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error("Unauthenticated name lookup was not rejected")), 3000);
+      unverified.addEventListener("close", event => { clearTimeout(timer); resolve(event); }, { once: true });
+    });
+    unverified.send(JSON.stringify({ type: "cosmetics_get", id: "1".repeat(32), names: ["Bob"] }));
+    assert.equal((await rejected).code, 1008, "Name lookup still requires authenticated Minecraft identity");
     console.log("Cosmetics checks passed: signed/channel-scoped commands, self-only ownership, short codes, expiry/replay/relink/unlink, axis preservation, safe styling, durable migration, reset, hibernation and limits.");
+    console.log("Cosmetic name resolution checks passed: targeted case-insensitive identities, live updates without a lobby roster, input bounds, ambiguity, upload spoof rejection, protocol compatibility and room isolation.");
   } finally { for (const ws of sockets) { try { ws.close(); } catch {} } await mf.dispose(); }
 }

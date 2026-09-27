@@ -12,9 +12,11 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
+import me.mycellium.skymyce.features.social.CosmeticsClient
 import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 
 class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     private val floor get() = DungeonFriends.hostingFloor
@@ -278,6 +280,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
                 data, DungeonFriendsSettings.secondaryClasses[friend.name.lowercase()].orEmpty(), wanted,
             )
         }.sortedWith(friendComparator(stats, floor, sort, ascending))
+        friends.take(128).forEach { CosmeticsClient.observe(it.name, FriendsAPI.getFriend(it.name)?.uuid) }
         listStatus.text(Component.literal("FRIENDS  ${friends.size}/${DungeonFriends.scanner.online.size}"))
         actions.clear()
         joinActions.clear()

@@ -2,12 +2,17 @@ package me.mycellium.skymyce.features.social
 
 import com.google.gson.JsonObject
 import me.mycellium.skymyce.SkyMyceModule
+import me.mycellium.skymyce.api.events.PlayerMessageEvent
 import me.mycellium.skymyce.config.misc.CosmeticsConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
+import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
+import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
+import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 import java.text.Normalizer
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
@@ -55,10 +60,74 @@ class CosmeticCache(private val maximum: Int = 512) {
     val size get() = values.size
 }
 
+/** Names from chat are lookup selectors, never proof of a UUID. Keep discovery outside rendering. */
+internal class CosmeticIdentities(private val maximum: Int = 512) {
+    private data class Entry(val name: String, var uuid: UUID?, var seen: Long, val byName: Boolean, var checked: Long? = null, var priorityUntil: Long = 0)
+    private val entries = linkedMapOf<String, Entry>()
+    init { require(maximum in 1..512) }
+    fun observe(name: String, uuid: UUID?, now: Long, priority: Boolean = false) {
+        if (!name.matches(Regex("[A-Za-z0-9_]{1,16}"))) return
+        val key = name.lowercase()
+        val previous = entries[key]
+        if (!priority && uuid != null && entries.any { it.key != key && it.value.uuid == uuid && it.value.priorityUntil > now }) return
+        if (previous == null && entries.size >= maximum) {
+            if (!priority) return // Bulk cache scans cannot displace recent chat, tab or menu identities.
+            entries.remove(entries.entries.firstOrNull { it.value.priorityUntil <= now }?.key ?: entries.keys.first())
+        }
+        entries.remove(key)
+        if (uuid != null) entries.entries.removeIf { it.value.uuid == uuid }
+        val entry = if (uuid == null && previous != null) previous.apply { seen = now }
+            else Entry(name, uuid, now, uuid == null)
+        entry.priorityUntil = maxOf(previous?.priorityUntil ?: 0, if (priority) now + 600000 else 0)
+        entries[key] = entry
+    }
+    fun expire(now: Long) { entries.entries.removeIf { now - it.value.seen !in 0..600000 } }
+    fun uuids() = entries.values.filter { !it.byName }.mapNotNull { it.uuid }.distinct()
+    fun names(now: Long) = entries.values.filter { it.byName && (it.checked == null || now - it.checked!! !in 0 until 300000) }
+        .sortedByDescending { it.priorityUntil }.map { it.name }
+    fun resolved() = entries.values.mapNotNull { entry -> entry.uuid?.let { it to entry.name } }.toMap()
+    fun complete(names: List<String>, resolved: Map<String, UUID>, now: Long) {
+        for (name in names) entries[name.lowercase()]?.takeIf { it.byName }?.let { entry ->
+            entry.checked = now; entry.uuid = resolved[name.lowercase()]
+        }
+    }
+    fun reconnect() { entries.values.forEach { it.checked = null } }
+    fun clear() = entries.clear()
+    val size get() = entries.size
+}
+
+internal data class CosmeticLookupResult(val records: List<CosmeticProfile>, val identities: Map<String, UUID>)
+internal fun cosmeticLookupCurrent(generation: Long, expectedGeneration: Long, identity: UUID?, expectedIdentity: UUID, currentIdentity: UUID, onHypixel: Boolean) =
+    generation == expectedGeneration && identity == expectedIdentity && currentIdentity == expectedIdentity && onHypixel
+
+/** Named responses must account for exactly the requested UUIDs plus the requested, resolved names. */
+internal fun parseCosmeticsLookup(result: JsonObject?, ids: List<UUID>, names: List<String>): CosmeticLookupResult? = runCatching {
+    require(result != null && ids.size + names.size in 1..16)
+    val raw = result.get("records").also { require(it.isJsonArray && it.asJsonArray.size() <= 16) }.asJsonArray
+    val records = raw.map { requireNotNull(parseCosmeticProfile(it.asJsonObject)) }
+    require(records.map { it.uuid }.distinct().size == records.size)
+    val identities = linkedMapOf<String, UUID>()
+    if (names.isNotEmpty()) {
+        val requested = names.map { it.lowercase() }.toSet()
+        val resolved = result.get("identities").also { require(it.isJsonArray && it.asJsonArray.size() <= requested.size) }.asJsonArray
+        for (value in resolved) {
+            val row = value.asJsonObject
+            require(row.keySet() == setOf("name", "uuid") && row.get("name").asJsonPrimitive.isString && row.get("uuid").asJsonPrimitive.isString)
+            val name = row.get("name").asString
+            val id = row.get("uuid").asString
+            require(name.matches(Regex("[A-Za-z0-9_]{1,16}")) && name.lowercase() in requested && name.lowercase() !in identities && id.matches(Regex("[a-f0-9]{32}")))
+            identities[name.lowercase()] = UUID.fromString("${id.take(8)}-${id.substring(8, 12)}-${id.substring(12, 16)}-${id.substring(16, 20)}-${id.substring(20)}")
+        }
+        require(identities.values.distinct().size == identities.size)
+    } else require(!result.has("identities") || result.get("identities").isJsonArray && result.getAsJsonArray("identities").isEmpty)
+    require(records.map { it.uuid }.toSet() == ids.toSet() + identities.values)
+    CosmeticLookupResult(records, identities)
+}.getOrNull()
+
 object CosmeticsClient : SkyMyceModule() {
     private val cache = CosmeticCache()
     private val checked = linkedMapOf<UUID, Long>()
-    private val usernames = linkedMapOf<UUID, String>()
+    private val identities = CosmeticIdentities()
     private var lookup: CompletableFuture<JsonObject?>? = null
     private var generation = 0L
     private var nextTick = 0L
@@ -92,14 +161,18 @@ object CosmeticsClient : SkyMyceModule() {
         if (now < nextTick) return
         nextTick = now + 1000
         if (cache.expire(now)) revision++
-        // Hypixel's signed-in tab profiles provide current UUID/name pairs without extra Mojang calls.
+        // Reuse cached social identities without issuing friend scans or Mojang requests.
         val roster = MC.connection?.onlinePlayers.orEmpty().asSequence().take(256).toList()
-        usernames[MC.instance.user.profileId] = MC.instance.user.name
+        FriendsAPI.friends.asSequence().take(512).forEach { identities.observe(it.name, it.uuid, now) }
+        (DungeonFriends.scanner.online.values.asSequence() + DungeonFriends.scanner.all.values.asSequence())
+            .distinctBy { it.name.lowercase() }.take(512).forEach { identities.observe(it.name, null, now) }
+        PartyAPI.members.asSequence().take(256).forEach { member -> member.name?.let { identities.observe(it, member.uuid, now, priority = true) } }
         roster.forEach { player ->
-            usernames.entries.removeIf { it.key != player.profile.id() && it.value.equals(player.profile.name(), true) }
-            usernames[player.profile.id()] = player.profile.name()
+            identities.observe(player.profile.name(), player.profile.id(), now, priority = true)
         }
-        while (usernames.size > 512) usernames.remove(usernames.keys.first())
+        identities.observe(MC.instance.user.name, MC.instance.user.profileId, now, priority = true)
+        identities.expire(now)
+        checked.keys.retainAll(identities.resolved().keys)
         updateNames(now)
         if (linkCode != null && now >= linkExpires) { linkCode = null; revision++ }
         if (!wanted && !forceOwn) return
@@ -107,25 +180,30 @@ object CosmeticsClient : SkyMyceModule() {
             status = if (DungeonFriendRelay.connected) "Relay does not support cosmetics" else "Relay offline • cached cosmetics expire after 10 minutes"; return
         }
         if (lookup != null) return
-        // Bounded tab roster scan once per second, never inside a renderer or tied to a friends/menu scan.
-        val visible = (listOf(MC.instance.user.profileId) + if (wanted) roster.map { it.profile.id() } else emptyList()).distinct()
-        val ids = visible.filter { (checked[it] ?: 0) + 300000 <= now }.take(16)
-        if (ids.isEmpty()) return
+        // Retained social identities continue refreshing even after a player leaves the tab roster.
+        val visible = (listOf(MC.instance.user.profileId) + if (wanted) identities.uuids() else emptyList()).distinct()
+        val pendingNames = if (wanted && DungeonFriendRelay.cosmeticsNamesAvailable) identities.names(now) else emptyList()
+        val ids = visible.filter { (checked[it] ?: 0) + 300000 <= now }.take(16 - minOf(8, pendingNames.size))
+        val names = pendingNames.take(16 - ids.size)
+        if (ids.isEmpty() && names.isEmpty()) return
         val token = generation
-        val request = DungeonFriendRelay.cosmeticsRequest("cosmetics_get", mapOf("uuids" to ids.map { it.toString().replace("-", "") })) ?: return
+        val owner = MC.instance.user.profileId
+        val fields = mutableMapOf<String, Any>("uuids" to ids.map { it.toString().replace("-", "") })
+        if (names.isNotEmpty()) fields["names"] = names
+        val request = DungeonFriendRelay.cosmeticsRequest("cosmetics_get", fields) ?: return
         ids.forEach { checked.putIfAbsent(it, 0) } // Accept a newer live update while this lookup is still pending.
         forceOwn = false
         lookup = request
         request.whenComplete { result, _ -> MC.instance.execute {
-            if (token != generation) return@execute
+            if (!cosmeticLookupCurrent(generation, token, identity, owner, MC.instance.user.profileId, LocationAPI.onHypixel)) return@execute
             lookup = null
-            val records = result?.get("records")?.takeIf { it.isJsonArray }?.asJsonArray
-            val parsed = records?.takeIf { it.size() <= 16 }?.mapNotNull { runCatching { parseCosmeticProfile(it.asJsonObject) }.getOrNull() }
-            if (parsed == null || parsed.size != ids.size || parsed.map { it.uuid }.toSet() != ids.toSet()) {
+            val parsed = parseCosmeticsLookup(result, ids, names)
+            if (parsed == null) {
                 status = "Cosmetics unavailable • retrying in 10 seconds"; nextTick = System.currentTimeMillis() + 10000
             } else {
                 val received = System.currentTimeMillis()
-                parsed.forEach { cache.apply(it, received); checked[it.uuid] = received }
+                identities.complete(names, parsed.identities, received)
+                parsed.records.forEach { cache.apply(it, received); checked[it.uuid] = received }
                 while (checked.size > 512) checked.remove(checked.keys.first())
                 status = "Cosmetics synchronized • visual only"; revision++
                 updateNames(received)
@@ -133,10 +211,16 @@ object CosmeticsClient : SkyMyceModule() {
             if (!enabled) DungeonFriendRelay.disableCosmetics()
         } }
     }
-    fun ready() { generation++; lookup?.cancel(false); lookup = null; checked.clear(); nextTick = 0; revision++ }
+    @Subscription
+    fun onPlayerMessage(event: PlayerMessageEvent) { observe(event.player, null) }
+    fun observe(name: String, uuid: UUID?) {
+        if (!LocationAPI.onHypixel || !enabled || identity != MC.instance.user.profileId) return
+        identities.observe(name, uuid, System.currentTimeMillis(), priority = true)
+    }
+    fun ready() { generation++; lookup?.cancel(false); lookup = null; checked.clear(); identities.reconnect(); nextTick = 0; revision++ }
     fun closed() { generation++; lookup?.cancel(false); lookup = null; linkCode = null; revision++ }
     fun clear() {
-        closed(); cache.clear(); checked.clear(); usernames.clear()
+        closed(); cache.clear(); checked.clear(); identities.clear()
         val namesEnabled = CosmeticNames.enabled
         CosmeticNames.enabled = false
         val namesChanged = CosmeticNames.update(emptyMap())
@@ -173,7 +257,7 @@ object CosmeticsClient : SkyMyceModule() {
         } }
     }
     private fun updateNames(now: Long) {
-        val known = usernames.entries.mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap()
+        val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap()
         if (CosmeticNames.update(known)) MC.instance.gui.chat.rescaleChat()
     }
     @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? = if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis()) else null

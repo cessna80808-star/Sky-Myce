@@ -1,6 +1,7 @@
 package me.mycellium.skymyce.features.social
 
 import com.google.gson.JsonParser
+import me.mycellium.skymyce.features.instances.dungeons.friends.relayPacketSizeAllowed
 import java.util.UUID
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.Style
@@ -77,5 +78,74 @@ fun checkCosmetics() {
     CosmeticNames.enabled = false
     check(text(CosmeticNames.display(displayed)) == "Alice")
     CosmeticNames.update(emptyMap())
+    // A sender absent from the tab roster resolves through the relay and works in chat and menu labels.
+    val remote = CosmeticIdentities()
+    remote.observe("Alice", null, 1000, priority = true)
+    check(remote.uuids().isEmpty() && remote.names(1000) == listOf("Alice"))
+    fun lookup(records: String = raw, identities: String? = null) = JsonParser.parseString(
+        "{\"records\":[$records]" + (identities?.let { ",\"identities\":[$it]" } ?: "") + "}").asJsonObject
+    val resolvedIdentity = """{"uuid":"${"a".repeat(32)}","name":"Alice"}"""
+    val resolved = requireNotNull(parseCosmeticsLookup(lookup(identities = resolvedIdentity), emptyList(), listOf("alice")))
+    remote.complete(listOf("Alice"), resolved.identities, 1100)
+    val remoteCache = CosmeticCache()
+    resolved.records.forEach { remoteCache.apply(it, 1100) }
+    val remoteNames = CosmeticNameMap()
+    remoteNames.update(remote.resolved().mapNotNull { (uuid, name) -> remoteCache.get(uuid, 1100)?.nameStyle?.let { name to it } }.toMap())
+    check(text(remoteNames.string("Party > Alice: hi")) == "Party > Hawk: hi")
+    check(text(remoteNames.string("1. Alice • Profile")) == "1. Hawk • Profile")
+    check(remote.names(301099).isEmpty() && remote.names(301100) == listOf("Alice"))
+    remote.complete(listOf("Alice"), emptyMap(), 301100)
+    check(remote.resolved().isEmpty()) // A name no longer resolved by the server loses its old UUID.
+    remote.observe("Alice", null, 302000, priority = true)
+    check(remote.names(302000).isEmpty()) // Repeated chat and menu observations cannot bypass a negative cache.
+    remote.reconnect(); check(remote.names(302001) == listOf("Alice"))
+    remote.expire(902001); check(remote.size == 0)
+
+    val retained = CosmeticIdentities(2)
+    retained.observe("Alice", profile.uuid, 1000)
+    retained.expire(301000); check(retained.uuids() == listOf(profile.uuid)) // Refresh after leaving the lobby.
+    retained.observe("Bob", UUID(0, 2), 301000)
+    retained.observe("MenuSearch", null, 301001, priority = true)
+    check(retained.size == 2 && "MenuSearch" in retained.names(301001))
+    retained.observe("invalid name", null, 301002); check(retained.size == 2)
+    retained.expire(901002); check(retained.size == 0)
+    val crowded = CosmeticIdentities()
+    repeat(700) { crowded.observe("Cached$it", null, 1000) }
+    crowded.observe("GuildSender", null, 1100, priority = true)
+    repeat(700) { crowded.observe("Cached$it", null, 1200) }
+    check(crowded.size == 512 && crowded.names(1200).first() == "GuildSender")
+    crowded.complete(listOf("GuildSender"), mapOf("guildsender" to profile.uuid), 1300)
+    check(crowded.resolved()[profile.uuid] == "GuildSender")
+    crowded.clear(); check(crowded.size == 0 && crowded.resolved().isEmpty())
+
+    check(parseCosmeticsLookup(lookup(), listOf(profile.uuid), emptyList()) != null) // Old UUID-only relay response.
+    check(parseCosmeticsLookup(lookup(identities = resolvedIdentity), listOf(profile.uuid), listOf("Alice")) != null) // Deduplicated UUID/name union.
+    check(parseCosmeticsLookup(lookup("", ""), emptyList(), listOf("Unknown"))?.records?.isEmpty() == true)
+    check(parseCosmeticsLookup(lookup(identities = resolvedIdentity), emptyList(), listOf("Mallory")) == null)
+    check(parseCosmeticsLookup(lookup(), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup(identities = resolvedIdentity.replace("Alice", "Alice other")), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup(identities = "$resolvedIdentity,$resolvedIdentity"), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup(identities = resolvedIdentity.replace("a".repeat(32), "b".repeat(32))), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup("$raw,$raw", resolvedIdentity), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup("", resolvedIdentity), emptyList(), listOf("Alice")) == null)
+    check(parseCosmeticsLookup(lookup(identities = resolvedIdentity), listOf(profile.uuid), emptyList()) == null)
+    // Sixteen valid styled profiles exceed the ordinary relay-frame limit without exceeding the batch cap.
+    val styled = extended.deepCopy().apply {
+        addProperty("name", "H" + "a".repeat(15))
+        add("nameStyle", JsonParser.parseString("""{"text":"H","extra":[${List(15) { """{"text":"a","color":"#67ccf2","bold":true,"italic":false,"underlined":true}""" }.joinToString(",") }]}"""))
+    }
+    val batch = lookup(List(16) { index -> styled.deepCopy().apply { addProperty("uuid", (index + 1).toString(16).padStart(32, '0')) }.toString() }.joinToString(","))
+        .apply { addProperty("type", "cosmetics_result") }
+    val batchIds = (1..16).map { UUID(0, it.toLong()) }
+    check(parseCosmeticsLookup(batch, batchIds, emptyList())?.records?.size == 16)
+    check(batch.toString().length in 8193..65536)
+    check(relayPacketSizeAllowed(batch.toString().length, "cosmetics_result"))
+    check(!relayPacketSizeAllowed(batch.toString().length, "message"))
+    check(!relayPacketSizeAllowed(65537, "cosmetics_result"))
+    check(cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, profile.uuid, true))
+    check(!cosmeticLookupCurrent(2, 1, profile.uuid, profile.uuid, profile.uuid, true))
+    check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, UUID(0, 2), true))
+    check(!cosmeticLookupCurrent(1, 1, null, profile.uuid, profile.uuid, true))
+    check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, profile.uuid, false))
     println("Cosmetic client checks passed: strict public payloads, scale/name limits, snapshot/live ordering, reset tombstones, reconnect freshness and bounded offline cache")
 }

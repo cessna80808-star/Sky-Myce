@@ -93,6 +93,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.cosmetics = new PlayerCosmetics(ctx.storage);
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS mod_users (
       uuid TEXT PRIMARY KEY, name TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS mod_users_name ON mod_users(name COLLATE NOCASE)");
     // Register already-authenticated sockets on the first wake after upgrading the relay.
     for (const ws of ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
@@ -186,7 +187,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.cosmeticsVersion = data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
         session.challenge = "";
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: 2, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3 }));
+        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: 2, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
@@ -209,12 +210,23 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, ...result, ...(result.error ? {} : { code }) }));
         return;
       }
-      if (data.type !== "cosmetics_get" || !Array.isArray(data.uuids) || data.uuids.length < 1 || data.uuids.length > 16 || data.uuids.some(it => typeof it !== "string" || !uuid.test(it))) {
+      const requestedIds = data.uuids === undefined ? [] : data.uuids, requestedNames = data.names === undefined ? [] : data.names;
+      if (data.type !== "cosmetics_get" || !Array.isArray(requestedIds) || !Array.isArray(requestedNames) ||
+          requestedIds.length + requestedNames.length < 1 || requestedIds.length + requestedNames.length > 16 ||
+          requestedIds.some(it => typeof it !== "string" || !uuid.test(it)) || requestedNames.some(it => typeof it !== "string" || !username.test(it)) ||
+          new Set(requestedNames.map(name => name.toLowerCase())).size !== requestedNames.length) {
         ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "invalid_lookup" })); return;
       }
-      const ids = [...new Set(data.uuids as string[])];
+      const identities = (requestedNames as string[]).flatMap(name => {
+        // Only verified relay identities may resolve names. Stats/friend uploads are not identity proofs.
+        const matches = this.ctx.storage.sql.exec<{ uuid: string; name: string }>(
+          "SELECT uuid,name FROM mod_users WHERE name = ? COLLATE NOCASE LIMIT 2", name).toArray();
+        return matches.length === 1 ? matches : []; // A renamed/reassigned name must never pick an ambiguous owner.
+      });
+      const ids = [...new Set([...(requestedIds as string[]), ...identities.map(value => value.uuid)])];
       session.cosmeticWatching = watchCosmetics(session.cosmeticWatching, ids); ws.serializeAttachment(session);
-      ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, records: ids.map(id => cosmeticPayload(this.cosmetics.get(id), session.cosmeticsVersion)) }));
+      ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, records: ids.map(id => cosmeticPayload(this.cosmetics.get(id), session.cosmeticsVersion)),
+        ...(data.names === undefined ? {} : { identities }) }));
       return;
     }
 

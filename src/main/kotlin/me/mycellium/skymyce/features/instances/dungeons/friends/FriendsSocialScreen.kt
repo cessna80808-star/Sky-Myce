@@ -11,9 +11,11 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
+import me.mycellium.skymyce.features.social.CosmeticsClient
 import me.mycellium.skymyce.utils.NumberUtils.condense
 import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -129,6 +131,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<Fl
         val friends = DungeonFriends.scanner.all.values.filter { matchesFriendName(it.name, search) }
             .sortedWith(compareBy<OnlineDungeonFriend> { it.activity == FriendActivity.OFFLINE }
                 .thenByDescending { it.bestFriend }.thenBy { it.name.lowercase() })
+        friends.take(128).forEach { CosmeticsClient.observe(it.name, FriendsAPI.getFriend(it.name)?.uuid) }
         list.child(label("FRIENDS  ${friends.size}/${DungeonFriends.scanner.all.size} • ${DungeonFriends.scanner.online.size} online", CYAN))
         if (friends.isEmpty()) list.child(label("No matching friends.", MUTED))
         friends.forEach { friend ->
@@ -200,6 +203,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<Fl
             .sortedWith(compareBy<OnlineDungeonFriend> { values(FriendWealthCache.get(it.name))[sort] == null }
                 .thenBy { values(FriendWealthCache.get(it.name))[sort]?.let { value -> if (ascending) value else -value } ?: 0.0 }
                 .thenBy { it.name.lowercase() })
+        friends.take(128).forEach { CosmeticsClient.observe(it.name, FriendsAPI.getFriend(it.name)?.uuid) }
         if (friends.isEmpty()) list.child(label("No matching SkyBlock friends. Clear search or click Refresh.", MUTED).horizontalSizing(Sizing.fill()))
         friends.forEachIndexed { index, friend ->
             val data = FriendWealthCache.get(friend.name)

@@ -34,6 +34,9 @@ internal class RelayRetry {
 
 internal fun relayNeedsReconnect(code: Int) = code == 4001 || code == 4004
 
+internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..65536 &&
+    (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result"))
+
 /** Exception messages can contain URLs, tokens or response bodies. Keep types and call sites only. */
 internal fun relayErrorDetail(error: Throwable?): String = generateSequence(error) { it.cause }
     .take(8).joinToString(" <- ") { cause ->
@@ -101,6 +104,8 @@ object DungeonFriendRelay {
     private val digestRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val cosmeticsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     var cosmeticsAvailable = false
+        private set
+    var cosmeticsNamesAvailable = false
         private set
     var digestNewsAvailable = false
         private set
@@ -186,10 +191,10 @@ object DungeonFriendRelay {
                 if (last) {
                     val message = text.toString()
                     text.setLength(0)
-                    // Decode bounded news/history packets on the WebSocket executor, never during a client tick.
+                    // Decode bounded batch packets on the WebSocket executor, never during a client tick.
                     val decoded = if (message == "pong") null else runCatching {
                         JsonParser.parseString(message).asJsonObject.also {
-                            check(message.length <= 8192 || it.get("type")?.asString in setOf("digest_news_result", "rng_result"))
+                            check(relayPacketSizeAllowed(message.length, it.get("type")?.asString))
                         }
                     }
                     MC.instance.execute {
@@ -262,6 +267,7 @@ object DungeonFriendRelay {
                                         rngFeedAvailable = json.get("rngFeed")?.asBoolean == true
                                         userMessagesAvailable = json.get("userMessages")?.asBoolean == true
                                         cosmeticsAvailable = json.get("cosmetics")?.asBoolean == true
+                                        cosmeticsNamesAvailable = cosmeticsAvailable && json.get("cosmeticsNames")?.asBoolean == true
                                         retry.reset()
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -277,6 +283,8 @@ object DungeonFriendRelay {
                                         val from = json.get("from").asString
                                         val uuid = json.get("uuid").asString
                                         check(id.matches(Regex("[a-f0-9]{32}")) && from.matches(Regex("[A-Za-z0-9_]{1,16}")) && uuid.matches(Regex("[a-f0-9]{32}")))
+                                        me.mycellium.skymyce.features.social.CosmeticsClient.observe(from,
+                                            UUID.fromString("${uuid.take(8)}-${uuid.substring(8, 12)}-${uuid.substring(12, 16)}-${uuid.substring(16, 20)}-${uuid.substring(20)}"))
                                         if (json.get("type").asString == "ack") deliveries.acknowledge(id, from)
                                         else {
                                             val body = json.get("text").asString
@@ -533,6 +541,7 @@ object DungeonFriendRelay {
         rngFeedAvailable = false
         userMessagesAvailable = false
         cosmeticsAvailable = false
+        cosmeticsNamesAvailable = false
         policiesAvailable = false
         partyPolicies.clear()
         policyRequest = null
