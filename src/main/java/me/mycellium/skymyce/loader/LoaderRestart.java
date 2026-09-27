@@ -11,6 +11,8 @@ import java.util.jar.*;
 public final class LoaderRestart {
     private static final int MAX_BYTES = 1024 * 1024;
     private static final int READY = 83;
+    private static final List<String> STAGES = List.of("REQUEST", "RUNTIME_LIBRARIES", "NATIVE_LIBRARIES", "WRAPPER", "JVM_OPTIONS", "READY", "TIMEOUT");
+    private static String preparationStage = "REQUEST";
     private LoaderRestart() {}
 
     // This object contains session credentials. Never include its fields in diagnostic output.
@@ -26,11 +28,35 @@ public final class LoaderRestart {
         var prepared = CompletableFuture.runAsync(() -> {
             try {
                 write(installer.getOutputStream(), plan);
-                if (installer.getInputStream().read() != READY) throw new IOException("Restart was not prepared");
+                var input = new DataInputStream(installer.getInputStream());
+                int response = input.read();
+                if (response != READY) {
+                    var stage = response == 'F' ? input.readUTF() : "REQUEST";
+                    throw new IOException("restart:" + (STAGES.contains(stage) ? stage : "REQUEST"));
+                }
             } catch (IOException failure) { throw new CompletionException(failure); }
         });
         try { prepared.get(30, TimeUnit.SECONDS); }
-        catch (Exception failure) { installer.destroyForcibly(); throw new IOException("Restart preparation failed"); }
+        catch (Exception failure) {
+            installer.destroyForcibly();
+            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new IOException("restart:" + (failure instanceof TimeoutException ? "TIMEOUT" : failureStage(failure)));
+        }
+    }
+
+    /** Only fixed stage identifiers may cross into logs or the UI, never exception text/arguments. */
+    public static String failureStage(Throwable failure) {
+        for (int depth = 0; failure != null && depth < 12; depth++, failure = failure.getCause())
+            for (var stage : STAGES) if (("restart:" + stage).equals(failure.getMessage())) return stage;
+        return "REQUEST";
+    }
+
+    static void reportFailure(Exception failure) {
+        System.err.println("Sky-Myce restart failed at " + preparationStage + " (" + failure.getClass().getSimpleName() + ").");
+        try {
+            var output = new DataOutputStream(System.out);
+            output.write('F'); output.writeUTF(preparationStage); output.flush();
+        } catch (IOException ignored) { /* The parent may already have exited. */ }
     }
 
     public static void commit(Process installer) throws IOException {
@@ -98,9 +124,13 @@ public final class LoaderRestart {
                 plan.properties().putIfAbsent(argument.substring(2, separator), argument.substring(separator + 1));
         }
         plan.properties().remove("java.class.path"); plan.properties().remove("sun.java.command");
+        preparationStage = "NATIVE_LIBRARIES";
         plan.properties().putAll(RestartNatives.preserve(plan.directory(), plan.properties()));
+        preparationStage = "WRAPPER";
         var wrapper = wrapper(plan.directory(), plan.classPath());
+        preparationStage = "JVM_OPTIONS";
         command(wrapper, plan); // Reject an unrepresentable JVM option before the game closes.
+        preparationStage = "READY";
         return wrapper;
     }
 
@@ -130,6 +160,7 @@ public final class LoaderRestart {
 
     /** Temporary launch-agent JARs can disappear when their original launcher observes game exit. */
     static Plan preserveRuntime(Plan original) throws Exception {
+        preparationStage = "RUNTIME_LIBRARIES";
         var paths = new ArrayList<Path>();
         var replacements = new LinkedHashMap<String, String>();
         var temporary = Path.of(original.properties().getOrDefault("java.io.tmpdir", System.getProperty("java.io.tmpdir"))).toRealPath();

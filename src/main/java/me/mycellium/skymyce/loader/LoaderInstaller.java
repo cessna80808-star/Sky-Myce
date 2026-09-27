@@ -31,7 +31,7 @@ public final class LoaderInstaller {
                     try { if (Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar"))) apply(game); break; }
                     catch (FileSystemException locked) { if (attempt == 19) throw locked; Thread.sleep(250); }
                 }
-                System.err.println("Sky-Myce update installed.");
+                System.err.println("Sky-Myce updater finished.");
                 if (restart != null) LoaderRestart.launch(wrapper, restart);
                 return;
             }
@@ -53,6 +53,7 @@ public final class LoaderInstaller {
             else prepareBootstrap(game, SignedFiles.configuration());
             if (arguments.length == 0) JOptionPane.showMessageDialog(null, "Loader installed. Start this instance with Fabric.\n\nEnter the code from your Sky-Myce DM and click Confirm.\nAfter the download, click Restart Minecraft to finish setup.\nUse the Sky-Myce Loader button on the main menu for updates.\nFuture updates install automatically when Minecraft closes.");
         } catch (Exception failure) {
+            if (arguments.length > 0 && arguments[0].equals("--apply-after")) LoaderRestart.reportFailure(failure);
             String message = "Sky-Myce could not finish installation. Close Minecraft and run the loader again.\nChoose the instance folder, not mods. Existing files and verified downloads are retained.\nIf the problem continues, request the current loader from a Sky-Myce admin.";
             System.err.println(message);
             if (arguments.length == 0) JOptionPane.showMessageDialog(null, message, "Sky-Myce installation", JOptionPane.ERROR_MESSAGE);
@@ -68,10 +69,13 @@ public final class LoaderInstaller {
         Files.createDirectories(state);
         var directory = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
         var wrapper = LoaderRestart.wrapper(directory, List.of(loaderJar.toAbsolutePath()));
+        var log = state.resolve("update.log");
+        if (Files.exists(log) && Files.size(log) > 65536)
+            Files.move(log, state.resolve("update.previous.log"), StandardCopyOption.REPLACE_EXISTING);
         var builder = new ProcessBuilder(java.toString(), "-cp", directory.relativize(wrapper).toString(), LoaderInstaller.class.getName(), "--apply-after",
             game.toAbsolutePath().normalize().toUri().toASCIIString(), Long.toString(current.pid()), Long.toString(started))
             .directory(directory.toFile())
-            .redirectError(state.resolve("update.log").toFile());
+            .redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()));
         LoaderRestart.clearInjectedOptions(builder);
         return builder.start();
     }

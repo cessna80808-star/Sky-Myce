@@ -44,7 +44,14 @@ fun checkRestartNatives(root: Path) {
         Files.delete(source)
         check(Files.exists(cached.resolve("liblwjgl.so")) && Files.exists(updated.resolve("liblwjgl.so")))
         check(RestartNatives.preserve(game, first) == first)
-        reject { RestartNatives.preserve(game, properties) }
+        check(RestartNatives.preserve(game, properties) == properties)
+        val unusedSearch = root.resolve("missing-launcher-natives")
+        val availableLwjgl = mapOf(
+            "java.library.path" to "$unusedSearch${File.pathSeparator}$platform",
+            "org.lwjgl.librarypath" to cached.toString()
+        )
+        check(RestartNatives.preserve(game, availableLwjgl) == availableLwjgl)
+        check(Files.exists(cached.resolve("liblwjgl.so")))
         native(cached.resolve("liblwjgl.so"), "corrupted")
         reject { RestartNatives.preserve(game, first) }
 

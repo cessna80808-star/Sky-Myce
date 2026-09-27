@@ -248,7 +248,15 @@ object LoaderClient {
             else {
                 helper?.destroyForcibly()
                 if (updateInstaller === helper) updateInstaller = null
-                status = "Restart preparation failed. Minecraft is still open; any verified update has been kept. You can retry Restart Minecraft."
+                val step = when (LoaderRestart.failureStage(failure)) {
+                    "RUNTIME_LIBRARIES" -> "runtime libraries"
+                    "NATIVE_LIBRARIES" -> "native libraries"
+                    "WRAPPER" -> "restart helper"
+                    "JVM_OPTIONS" -> "Java settings"
+                    "TIMEOUT" -> "preparation timeout"
+                    else -> "helper connection"
+                }
+                status = "Restart preparation failed ($step). Minecraft is still open; your verified update is safe. Details are in .sky-myce/update.log."
                 // Preserve normal quit-to-update behavior if a restart attempt could not be prepared.
                 CompletableFuture.runAsync { runCatching { ensureInstaller() } }
             }

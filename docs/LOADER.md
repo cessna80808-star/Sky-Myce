@@ -64,7 +64,7 @@ Downloads are capped at 128 MiB; redirects are disabled. Failure leaves the
 previous JAR intact. All HTTP, key protection, disk access and payload hashing
 run away from Minecraft's render thread.
 
-Loader 1.0.2 stages updates under `.sky-myce` because Windows cannot reliably
+Loader 1.0.3 stages updates under `.sky-myce` because Windows cannot reliably
 replace an open JAR. A single helper using Minecraft's Java runtime waits for
 the exact Minecraft process to exit, verifies the download again, backs up
 old Sky-Myce payloads (including renamed copies), then installs the replacement.
@@ -73,7 +73,9 @@ Normal Minecraft exit also triggers installation; it is not tied to the button.
 The helper retries transient file locks at most 20 times, 250 ms apart. It never
 authorizes the account. It only relaunches after an explicit
 Restart click; a normal quit never relaunches. Its safe result is recorded in
-`.sky-myce/update.log`.
+`.sky-myce/update.log`. Preparation errors report a fixed stage identifier,
+never launch arguments or credentials. Recovery appends to this log instead of
+erasing the failure; logs over 64 KiB rotate to `update.previous.log`.
 
 Restart is independent of the launcher brand. It reuses the same Java runtime,
 VM settings, Fabric classpath, instance directory and current Minecraft account.
@@ -90,7 +92,10 @@ may remove when its original game process exits. The `.sky-myce` cache in the
 game's original working directory stores
 executable libraries, not account files. Native copying is bounded to 4,096 libraries
 and 256 MiB per preparation and verifies the copied contents before reuse. The
-new JVM starts Fabric normally only after the original Minecraft process exits
+JVM may list native search directories that do not exist; these optional entries
+remain unchanged and do not block restart when LWJGL loads its natives elsewhere.
+This covers Minecraft 26.1 launchers whose old native extraction directory is unused.
+The new JVM starts Fabric normally only after the original Minecraft process exits
 and any pending signed update has been verified and installed.
 Windows instance names, including characters outside the active system code page,
 travel through encoded file references and the private pipe. Special JVM options
@@ -111,7 +116,7 @@ files; backups are retained and no other mod is replaced. Restart afterward.
 The pending JAR/manifest pair remains available until both replacements finish;
 if installation is interrupted, rerun the installer with Minecraft closed.
 
-Install the new trusted loader once to upgrade from 1.0.0 or 1.0.1; an older
+Install the new trusted loader once to upgrade from 1.0.0–1.0.2; an older
 loader cannot gain the new restart behavior from a protected-mod update.
 The loader includes owo and its dependencies, so its themed setup screen
 works before the protected mod exists. Activation input is masked and never

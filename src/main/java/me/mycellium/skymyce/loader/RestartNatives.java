@@ -37,6 +37,9 @@ public final class RestartNatives {
                         && (source.equals(gameRoot) || source.equals(temporaryRoot)
                             || (!source.startsWith(gameRoot) && !source.startsWith(temporaryRoot)))) continue;
                 if (replacement == null) {
+                    // JVM/LWJGL search paths may include absent directories when natives came from JARs.
+                    // There is nothing to retain from an absent entry; keep its original search position.
+                    if (Files.notExists(source, LinkOption.NOFOLLOW_LINKS)) continue;
                     if (!Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Native directory is unavailable");
                     if (cache.equals(source.getParent()) && source.getFileName().toString().matches("[0-9a-f]{64}"))
                         verifyCache(source, source.getFileName().toString());
