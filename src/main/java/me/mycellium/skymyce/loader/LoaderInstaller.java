@@ -51,7 +51,7 @@ public final class LoaderInstaller {
             installBootstrap(game, source);
             if (Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar"))) apply(game);
             else prepareBootstrap(game, SignedFiles.configuration());
-            if (arguments.length == 0) JOptionPane.showMessageDialog(null, "Loader installed. Start this instance with Fabric.\n\nEnter the code from your Sky-Myce DM and click Confirm.\nAfter the download, click Restart Minecraft to finish setup.\nUse the Sky-Myce Loader button on the main menu for updates.\nFuture updates install automatically when Minecraft closes.");
+            if (arguments.length == 0) JOptionPane.showMessageDialog(null, "Loader installed. Start this instance normally with Fabric.\n\nSky-Myce opens a setup window before Minecraft loads.\nEnter the code from your Discord DM and click Confirm and start.\nMinecraft starts automatically after the verified installation.\nFuture updates are checked before startup. The in-game Loader menu remains available.");
         } catch (Exception failure) {
             if (arguments.length > 0 && arguments[0].equals("--apply-after")) LoaderRestart.reportFailure(failure);
             String message = "Sky-Myce could not finish installation. Close Minecraft and run the loader again.\nChoose the instance folder, not mods. Existing files and verified downloads are retained.\nIf the problem continues, request the current loader from a Sky-Myce admin.";

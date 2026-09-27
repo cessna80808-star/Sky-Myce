@@ -2,8 +2,6 @@ package me.mycellium.skymyce.loader
 
 import me.mycellium.mixin.MinecraftAccountKeyAccessor
 import net.minecraft.client.Minecraft
-import java.security.Signature
-import java.util.Base64
 import java.util.concurrent.CompletableFuture
 
 /** Same Mojang certificate + signed profile + domain-separated nonce proof as the existing relay. */
@@ -22,15 +20,8 @@ object MinecraftProof {
             check(profile.id() == user.profileId && profile.name().equals(user.name, true))
             val textures = service.getPackedTextures(profile)
             check(textures != null && textures.hasSignature())
-            val uuid = user.profileId.toString().replace("-", "")
-            val proof = Signature.getInstance("SHA256withRSA").run {
-                initSign(pair.privateKey()); update("SkyMyce relay v2\n$nonce\n$uuid\n${user.name}".toByteArray()); sign()
-            }
-            val base64 = Base64.getEncoder()
-            mapOf("type" to "authenticate", "name" to user.name, "uuid" to uuid,
-                "expires" to certificate.expiresAt().toEpochMilli(), "publicKey" to base64.encodeToString(certificate.key().encoded),
-                "keySignature" to base64.encodeToString(certificate.keySignature()), "proof" to base64.encodeToString(proof),
-                "profile" to textures.value(), "profileSignature" to requireNotNull(textures.signature()))
+            signedMinecraftProof(user.name, user.profileId, nonce, certificate.expiresAt().toEpochMilli(),
+                pair.privateKey(), certificate.key(), certificate.keySignature(), textures)
         }
     }
 }

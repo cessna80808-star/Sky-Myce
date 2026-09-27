@@ -10,6 +10,7 @@ import java.util.Base64;
 /** Reject altered cached payloads before Minecraft and the protected mod's entrypoints initialize. */
 public final class PayloadVerifier implements PreLaunchEntrypoint {
     @Override public void onPreLaunch() {
+        StartupLoader.run();
         var loader = FabricLoader.getInstance();
         var payload = loader.getModContainer("skymyce");
         if (payload.isEmpty()) return;

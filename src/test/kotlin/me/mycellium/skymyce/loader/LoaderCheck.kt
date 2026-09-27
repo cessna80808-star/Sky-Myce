@@ -19,6 +19,7 @@ import java.util.jar.JarOutputStream
 import java.util.jar.Manifest
 
 fun main() {
+    checkStartup()
     val pair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
     val config = Properties().apply {
         setProperty("key.test", Base64.getEncoder().encodeToString(pair.public.encoded))

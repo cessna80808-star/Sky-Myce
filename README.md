@@ -12,7 +12,7 @@ The integrated **2.4.2** upgrade adds a paged auction index and item browser (`/
 
 **2.4.3** discovers cosmetic names from cached friends, party members and chat senders across lobbies. Apply the signed update through the [Sky-Myce Loader](docs/LOADER.md#updates-and-cached-artifacts).
 
-**2.4.5** adds `/m7pb [player]` (also `/sm m7pb`) for a local, selected-profile M7 S+ PB lookup; omit the name for yourself. It reuses cached stats and existing relay/SkyBlockPv/SkyBlocker/API providers, waits for a result automatically, and reports hidden or unavailable stats without opening a menu. Cosmetic sizes stay stable during lease renewal, background lookups and temporary offline grace. Loader **1.0.3** provides code → Confirm → Restart setup, automatic update installation, and a main-menu Loader button that restarts the current Fabric instance independently of its launcher.
+**2.4.5** adds `/m7pb [player]` (also `/sm m7pb`) for a local, selected-profile M7 S+ PB lookup; omit the name for yourself. It reuses cached stats and existing relay/SkyBlockPv/SkyBlocker/API providers, waits for a result automatically, and reports hidden or unavailable stats without opening a menu. Cosmetic sizes stay stable during lease renewal, background lookups and temporary offline grace. Loader **1.0.4** opens a matching desktop setup window before Minecraft initializes: code → Confirm and start → automatic verified installation and game launch. Startup updates need no manual restart; the owo-lib main-menu Loader screen remains available.
 
 ## Why play with Sky-Hawk?
 

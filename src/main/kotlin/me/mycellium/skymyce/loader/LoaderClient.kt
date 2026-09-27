@@ -2,7 +2,6 @@ package me.mycellium.skymyce.loader
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback
@@ -11,26 +10,18 @@ import net.fabricmc.loader.api.FabricLoader
 import net.fabricmc.loader.impl.launch.FabricLauncherBase
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.screens.TitleScreen
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.nio.file.Files
 import java.nio.file.Path
-import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
-import java.util.UUID
 import java.lang.management.ManagementFactory
 
 class LoaderEntrypoint : ClientModInitializer { override fun onInitializeClient() = LoaderClient.initialize() }
 
 object LoaderClient {
     private val gson = Gson()
-    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
     private val config by lazy { SignedFiles.configuration() }
     private lateinit var installation: Installation
-    val authorization = AuthorizationState()
+    val authorization = StartupLoader.authorization
     private val stateDirectory get() = FabricLoader.getInstance().gameDir.resolve(".sky-myce")
     @Volatile private var targetVersion: String? = null
     private val version get() = targetVersion ?: config.getProperty("modVersion")
@@ -70,7 +61,19 @@ object LoaderClient {
             dispatcher.register(ClientCommands.literal("skymyce-auth").executes { Minecraft.getInstance().setScreen(AuthorizationScreen()); 1 })
         }
         ClientTickEvents.END_CLIENT_TICK.register { tick() }
-        work({ installation = Installation() }) { canRestart = restartRuntimeAvailable(); nextAttempt = 0 }
+        val startup = StartupLoader.ready?.takeIf { it.uuid == uuid && it.version == loadedVersion }
+        if (startup != null) {
+            installation = startup.installation; targetVersion = startup.version; release = startup.release
+            checkedPayload = true; showAuthorization = false; canRestart = restartRuntimeAvailable()
+            nextAttempt = startup.renewAt
+            status = if (onlineAllowed) "Sky-Myce is ready. You can continue to Minecraft." else "Refreshing your Sky-Myce session…"
+        } else {
+            authorization.deny()
+            if (StartupLoader.skipped) showAuthorization = false
+            work({ installation = Installation() }) {
+                canRestart = restartRuntimeAvailable(); nextAttempt = if (StartupLoader.skipped) Long.MAX_VALUE else 0
+            }
+        }
     }
     private fun tick() {
         val minecraft = Minecraft.getInstance()
@@ -82,45 +85,15 @@ object LoaderClient {
         if (localAllowed) showAuthorization = false
         if (!busy && ::installation.isInitialized && System.nanoTime() >= nextAttempt) renew()
     }
-    private fun endpoint(path: String): URI {
-        val base = URI(config.getProperty("backend"))
-        require(base.scheme == "https" && base.userInfo == null && base.rawQuery == null && base.fragment == null && base.path in setOf("", "/"))
-        return base.resolve(path)
-    }
-    private fun request(path: String, body: Any): HttpRequest = HttpRequest.newBuilder(endpoint(path)).timeout(Duration.ofSeconds(if (path == "/loader/artifact") 90 else 20))
-        .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(gson.toJson(body))).build()
-    private class Denied(val code: String) : Exception()
+    private fun api() = LoaderApi(config, installation, version)
     private fun discoverRelease() {
-        val response = http.send(HttpRequest.newBuilder(endpoint("/loader/release")).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), 16384))
-        val bytes = response.body()
-        if (response.statusCode() != 200) throw java.io.IOException("Release unavailable")
-        require(bytes.size <= 16384)
-        val envelope = JsonParser.parseString(String(bytes, Charsets.UTF_8)).asJsonObject
-        val manifest = SignedFiles.manifest(envelope, config, System.currentTimeMillis())
-        val published = manifest.get("version").asString
-        require(SignedFiles.compareVersion(published, if (loadedVersion.isNotBlank()) loadedVersion else config.getProperty("modVersion")) >= 0)
-        targetVersion = published; release = envelope
+        val envelope = LoaderApi.release(config, loadedVersion.ifBlank { config.getProperty("modVersion") })
+        targetVersion = SignedFiles.manifest(envelope, config, System.currentTimeMillis()).get("version").asString
+        release = envelope
     }
-    private fun post(path: String, body: Any): JsonObject {
-        val response = http.send(request(path, body), HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), 32768))
-        val bytes = response.body()
-        require(bytes.size <= 32768)
-        if (response.statusCode() in setOf(408, 429) || response.statusCode() >= 500) throw java.io.IOException("Backend temporarily unavailable")
-        if (response.statusCode() in 400..499) {
-            val code = runCatching { JsonParser.parseString(String(bytes)).asJsonObject.get("error").asString }.getOrDefault("unauthorized")
-            throw Denied(code)
-        }
-        if (response.statusCode() != 200) throw java.io.IOException("Backend unavailable")
-        return JsonParser.parseString(String(bytes, Charsets.UTF_8)).asJsonObject
-    }
-    private fun challenge(purpose: String): JsonObject {
-        val clientNonce = UUID.randomUUID().toString()
-        return post("/auth/challenge", mapOf("purpose" to purpose, "clientNonce" to clientNonce,
-            "installationId" to installation.id, "publicKey" to installation.publicKey, "deviceHash" to installation.deviceHash,
-            "minecraftVersion" to config.getProperty("minecraft"), "loaderVersion" to config.getProperty("loaderVersion"), "modVersion" to version))
-            .also { it.addProperty("clientNonce", clientNonce) } // Retain our nonce, never trust an echoed value.
-    }
-    private fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v1\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}")
+    private fun post(path: String, body: Any) = api().post(path, body)
+    private fun challenge(purpose: String) = api().challenge(purpose)
+    private fun signature(purpose: String, challenge: JsonObject) = api().signature(purpose, challenge)
     fun confirmActivation(key: String) {
         if (busy || !::installation.isInitialized) return
         if (!key.matches(Regex("[A-Za-z0-9_-]{43}"))) { status = "Paste the complete activation code from your Sky-Myce DM, then click Confirm."; return }
@@ -276,30 +249,11 @@ object LoaderClient {
         val epoch = generation
         status = "Verifying the current Sky-Myce release…"
         work({
-            val manifestChallenge = challenge("manifest")
-            val envelope = post("/loader/manifest", mapOf("challengeId" to manifestChallenge.get("challengeId").asString,
-                "lease" to authorization.lease, "signature" to signature("manifest", manifestChallenge)))
-            val manifest = SignedFiles.manifest(envelope, config, System.currentTimeMillis())
-            require(SignedFiles.compareVersion(manifest.get("version").asString, version) >= 0)
-            val nonce = challenge("artifact")
-            Files.createDirectories(stateDirectory)
-            val temporary = Files.createTempFile(stateDirectory, "release-", ".tmp")
+            api().download(requireNotNull(authorization.lease), stateDirectory) { generation == epoch && authorization.onlineAllowed }
             try {
-                val response = http.send(request("/loader/artifact", mapOf("challengeId" to nonce.get("challengeId").asString,
-                    "lease" to authorization.lease, "signature" to signature("artifact", nonce))),
-                    HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofFile(temporary), 128L * 1024 * 1024))
-                if (response.statusCode() in setOf(408, 429) || response.statusCode() >= 500) throw java.io.IOException("Artifact temporarily unavailable")
-                if (response.statusCode() != 200) throw SecurityException("Artifact unavailable")
-                SignedFiles.verifyArtifact(temporary, manifest)
-                check(generation == epoch && authorization.onlineAllowed) { "Authorization changed" }
-                val pending = stateDirectory.resolve("Sky-Myce.pending.jar")
-                Files.move(temporary, pending, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                SignedFiles.atomicWrite(stateDirectory.resolve("pending-manifest.json"), gson.toJson(envelope).toByteArray())
-                try {
-                    if (!hasPayload) LoaderInstaller.apply(FabricLoader.getInstance().gameDir)
-                    else ensureInstaller()
-                } catch (failure: Exception) { throw InstallFailure(failure) }
-            } finally { Files.deleteIfExists(temporary) }
+                if (!hasPayload) LoaderInstaller.apply(FabricLoader.getInstance().gameDir)
+                else ensureInstaller()
+            } catch (failure: Exception) { throw InstallFailure(failure) }
         }) {
             downloadedVersion = version; restartRequired = true; showAuthorization = true
             status = if (canRestart) "Download verified. Click Restart Minecraft to finish; this instance will reopen automatically."
@@ -321,7 +275,7 @@ object LoaderClient {
                     return@execute
                 }
                 when (cause) {
-                    is Denied -> {
+                    is AuthorizationDenied -> {
                         if (cause.code == "approval_required") {
                             status = "This loader needs a fresh activation code. Ask an admin to use /authorise with reissue:true."
                             nextAttempt = Long.MAX_VALUE

@@ -14,9 +14,10 @@ are required. Version values live in `gradle.properties`.
    existing Minecraft instance directory (not its `mods` subfolder). It installs
    itself into `mods`, keeps one loader copy, and backs up old unverified or
    duplicate Sky-Myce JARs under `.sky-myce/replaced/`. Other mods are untouched.
-3. Start the instance with Fabric. The loader uses the launcher's signed-in
-   Minecraft account; it never requests a Microsoft password or access token.
-4. Paste the code from the DM into the **local screen** and click **Confirm**.
+3. Start the instance normally with Fabric. Loader 1.0.4 opens a desktop window
+   before Minecraft's main initialization and rendering. It uses the launcher's
+   signed-in Minecraft account; it never requests a Microsoft password or access token.
+4. Paste the code from the DM into this **startup window** and click **Confirm and start**.
    No second Discord command is needed. Do not enter the code in Minecraft or
    Discord chat. The backend resolves the account from the code's stored hash;
    the client cannot supply a Discord identity to redirect activation.
@@ -24,28 +25,37 @@ are required. Version values live in `gradle.properties`.
    proof and installation Ed25519 proof, consumes the activation key atomically,
    and returns a signed lease. The loader downloads and verifies the protected
    release, then installs `mods/Sky-Myce.jar`.
-6. Click **Restart Minecraft**. The helper waits for the game to close,
-   applies any verified pending update and reopens the same Minecraft instance.
-   Fabric now discovers the protected mod's mixin
-   configuration during normal startup. No classes or mixins are added after
-   Minecraft has started.
+6. Minecraft starts automatically. When the mod changes, the helper closes only
+   the initial bootstrap process, applies the verified update, and starts a fresh
+   JVM for the same instance before Minecraft's main initialization. Fabric then
+   discovers the protected mod and its mixins normally. This happens at most once
+   per startup; no classes or mixins are added to an already running game.
 
-First activation needs **one restart after the download**. The first launch is
-the bootstrap; the second loads the protected mod. You do not need to remove
-JARs or run the installer between those launches. The authorization screen
-can be dismissed to play vanilla/other mods with Sky-Myce disabled. Open it
-again using the **Sky-Myce Loader** button in Minecraft's main menu or
-`/skymyce-auth`. The screen also checks for updates and restarts Minecraft.
+First activation and startup updates need **no manual game restart**. Fabric's
+discovery phase still runs before the desktop window, but Minecraft's expensive
+initialization runs only after setup succeeds. An unchanged verified installation
+continues in the same process. No JAR removal or launcher-specific setup is needed.
+The desktop window uses Swing with the loader's colors; owo-lib requires Minecraft's
+renderer and remains the UI for the in-game **Sky-Myce Loader** button and
+`/skymyce-auth`. Updates requested after Minecraft has started still need a restart
+or normal exit. The startup window offers Retry, Start without Sky-Myce, and Close;
+skipping setup grants no access. The in-game menu can retry later.
 A new alternate Minecraft account uses a fresh admin-issued code; existing
 activated installations renew automatically without entering a code again.
 The old explicit Discord approval endpoint remains for older loaders.
 Reconnection and restart first try signed renewal, so a lost
 activation response does not require redeeming the consumed key again.
 
-The unchanged Mojang trust roots remain on the backend. The bootstrap copies
-the existing domain-separated RSA proof format and preserves the account-key
-accessor used with No Chat Reports. No UUID or display name is accepted as
-proof by itself.
+The unchanged Mojang trust roots remain on the backend. Startup uses the existing
+Mojang Authlib session and account-key APIs directly, without loading Minecraft.
+It shares the domain-separated RSA proof encoder and backend/download client with
+the in-game path, which retains its No Chat Reports account-key accessor. Session
+tokens and certificate private keys stay in memory. No UUID or display name is
+accepted as proof by itself. Startup does not read a launcher's account database.
+Launches without an online session or with an authenticated SOCKS proxy can use the
+existing in-game sign-in path. A headless environment also retains that fallback.
+An early lease keeps its original monotonic deadline through game initialization;
+starting Minecraft cannot extend its lifetime or authorize an offline restart.
 
 ## Updates and cached artifacts
 
@@ -64,15 +74,15 @@ Downloads are capped at 128 MiB; redirects are disabled. Failure leaves the
 previous JAR intact. All HTTP, key protection, disk access and payload hashing
 run away from Minecraft's render thread.
 
-Loader 1.0.3 stages updates under `.sky-myce` because Windows cannot reliably
+The loader stages updates under `.sky-myce` because Windows cannot reliably
 replace an open JAR. A single helper using Minecraft's Java runtime waits for
 the exact Minecraft process to exit, verifies the download again, backs up
 old Sky-Myce payloads (including renamed copies), then installs the replacement.
-Choose **Restart Minecraft** to install and reopen the same Minecraft instance.
+From the in-game menu, choose **Restart Minecraft** to install and reopen the same instance.
 Normal Minecraft exit also triggers installation; it is not tied to the button.
 The helper retries transient file locks at most 20 times, 250 ms apart. It never
-authorizes the account. It only relaunches after an explicit
-Restart click; a normal quit never relaunches. Its safe result is recorded in
+authorizes the account. It relaunches for the pre-game update handoff or an explicit
+in-game Restart click; a normal quit never relaunches. Its safe result is recorded in
 `.sky-myce/update.log`. Preparation errors report a fixed stage identifier,
 never launch arguments or credentials. Recovery appends to this log instead of
 erasing the failure; logs over 64 KiB rotate to `update.previous.log`.
@@ -116,8 +126,8 @@ files; backups are retained and no other mod is replaced. Restart afterward.
 The pending JAR/manifest pair remains available until both replacements finish;
 if installation is interrupted, rerun the installer with Minecraft closed.
 
-Install the new trusted loader once to upgrade from 1.0.0–1.0.2; an older
-loader cannot gain the new restart behavior from a protected-mod update.
+Install the new trusted loader once to upgrade from 1.0.0–1.0.3; an older
+loader cannot gain the pre-game window from a protected-mod update.
 The loader includes owo and its dependencies, so its themed setup screen
 works before the protected mod exists. Activation input is masked and never
 placed in chat, command history or screen-reader narration.
