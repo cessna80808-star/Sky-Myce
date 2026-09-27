@@ -40,6 +40,7 @@ object StartupLoader {
     internal var skipped = false
         private set
     private const val RELAUNCH = "skymyce.startup.relaunch"
+    private const val LOADER_RELAUNCH = "skymyce.startup.loaderRelaunch"
 
     @JvmStatic fun run() {
         // No desktop session: retain the existing in-game sign-in path, with no authorization granted.
@@ -54,6 +55,23 @@ object StartupLoader {
                     val config = SignedFiles.configuration()
                     val account = StartupAccount.parse(loader.getLaunchArguments(false))
                     val installation = Installation()
+                    val loaderRelease = LoaderApi.loaderRelease(config)
+                    if (loaderRelease != null && SignedFiles.compareVersion(
+                            SignedFiles.loaderManifest(loaderRelease, config, System.currentTimeMillis()).get("version").asString,
+                            config.getProperty("loaderVersion")) > 0) {
+                        requireStartupHandoffAllowed(System.getProperty(LOADER_RELAUNCH))
+                        window.status("Updating the Sky-Myce Loader…\nSetup will restart automatically, then continue into Minecraft.")
+                        val updateApi = LoaderApi(config, installation, config.getProperty("modVersion"))
+                        val purpose = if (activation == null) "bootstrap-renew" else "bootstrap-activate"
+                        val challenge = updateApi.challenge(purpose)
+                        val body = mutableMapOf<String, Any>("challengeId" to challenge.get("challengeId").asString,
+                            "minecraftProof" to account.proof(challenge.get("nonce").asString), "signature" to updateApi.signature(purpose, challenge))
+                        activation?.let { body["activationKey"] = it }
+                        try { updateApi.downloadLoader(purpose, body, loaderRelease, loader.gameDir.resolve(".sky-myce")) }
+                        finally { activation = null; body.remove("activationKey") }
+                        handoff(LOADER_RELAUNCH)
+                        return
+                    }
                     val existing = loader.getModContainer("skymyce").orElse(null)
                     val envelope = LoaderApi.release(config, existing?.metadata?.version?.friendlyString ?: config.getProperty("modVersion"))
                     val manifest = SignedFiles.manifest(envelope, config, System.currentTimeMillis())
@@ -81,12 +99,13 @@ object StartupLoader {
                         window.status("Downloading and verifying Sky-Myce $version…\nMinecraft will start automatically when setup finishes.")
                         api.download(token, loader.gameDir.resolve(".sky-myce")) { authorization.onlineAllowed }
                         window.status("Applying the verified update and continuing startup…")
-                        handoff()
+                        handoff(RELAUNCH)
                         return
                     }
                     SignedFiles.atomicWrite(loader.gameDir.resolve(".sky-myce/manifest.json"), Gson().toJson(envelope).toByteArray())
                     ready = Ready(installation, uuid, version, envelope, renewAt)
                     System.clearProperty(RELAUNCH)
+                    System.clearProperty(LOADER_RELAUNCH)
                     window.status("Sky-Myce is ready. Starting Minecraft…")
                     return
                 } catch (failure: Exception) {
@@ -103,15 +122,15 @@ object StartupLoader {
         }
     }
 
-    private fun handoff() {
+    private fun handoff(marker: String) {
         val loader = FabricLoader.getInstance()
         val jar = loader.getModContainer("skymyce-loader").orElseThrow().origin.paths.single()
         val helper = LoaderInstaller.applyAfterExit(loader.gameDir, jar)
         try {
             val properties = System.getProperties().stringPropertyNames()
-                .filter { it.startsWith("fabric.") || it in setOf("java.library.path", "org.lwjgl.librarypath", "java.io.tmpdir") }
+                .filter { it.startsWith("fabric.") || it in setOf("java.library.path", "org.lwjgl.librarypath", "java.io.tmpdir", RELAUNCH, LOADER_RELAUNCH) }
                 .associateWith { System.getProperty(it) }.toMutableMap()
-            properties[RELAUNCH] = "1"
+            properties[marker] = "1"
             LoaderRestart.request(helper, Path.of(System.getProperty("user.dir")), ManagementFactory.getRuntimeMXBean().inputArguments,
                 FabricLauncherBase.getLauncher().classPath.toList(), properties, loader.getLaunchArguments(false))
             LoaderRestart.commit(helper)

@@ -15,7 +15,7 @@ import java.util.jar.JarOutputStream
 import javax.tools.ToolProvider
 
 /** Real updater/relaunch processes, synthetic session data, and no Minecraft or launcher installation. */
-fun checkRestart(root: Path, helperJar: Path) {
+fun checkRestart(root: Path, helperJar: Path, loaderUpdate: Pair<ByteArray, String>? = null) {
     Files.createDirectories(root)
     check(LoaderRestart.failureStage(IOException("synthetic-secret")) == "REQUEST")
     check(LoaderRestart.failureStage(IOException("restart:synthetic-secret")) == "REQUEST")
@@ -174,7 +174,14 @@ fun checkRestart(root: Path, helperJar: Path) {
     JarOutputStream(Files.newOutputStream(extra)).use { }
     val java = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
     for (mode in listOf("commit", "cancel", "invalid")) {
+        if (loaderUpdate != null && mode != "commit") continue
         val game = Files.createDirectories(root.resolve("Any launcher Ω $mode"))
+        if (loaderUpdate != null) {
+            Files.createDirectories(game.resolve("mods")); Files.createDirectories(game.resolve(".sky-myce"))
+            Files.copy(helperJar, game.resolve("mods/Sky-Myce-Loader.jar"))
+            Files.write(game.resolve(".sky-myce/Loader.pending.jar"), loaderUpdate.first)
+            Files.writeString(game.resolve(".sky-myce/loader-pending-manifest.json"), loaderUpdate.second)
+        }
         val natives = Files.createDirectories(game.resolve("temporary natives Ω"))
         Files.write(natives.resolve("fixture.dll"), byteArrayOf(77, 90, 0, 0, 42))
         Files.copy(extra, game.resolve("game marker.jar"))
@@ -237,6 +244,10 @@ fun checkRestart(root: Path, helperJar: Path) {
                 waitUntil { Files.exists(game.resolve("restarted")) || Files.exists(game.resolve("failed")) }
                 check(!Files.exists(game.resolve("failed"))) { "Restarted fixture failed check ${Files.readString(game.resolve("failed"))}" }
                 check(Files.readString(game.resolve("restarted")) == "PASS")
+                if (loaderUpdate != null) {
+                    check(Files.readAllBytes(game.resolve("mods/Sky-Myce-Loader.jar")).contentEquals(loaderUpdate.first))
+                    check(!Files.exists(game.resolve(".sky-myce/Loader.pending.jar")))
+                }
                 val restarted = ProcessHandle.of(Files.readString(game.resolve("restarted.pid")).toLong()).orElse(null)
                 waitUntil { restarted?.isAlive != true }
             } else check(!Files.exists(game.resolve("restarted.pid")))

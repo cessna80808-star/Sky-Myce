@@ -72,6 +72,7 @@ fun main() {
         reject { LoaderInstaller.apply(game, config) }
         check(Files.readString(game.resolve("mods/Sky-Myce.jar")) == "verified payload")
         checkInstaller(temporary.resolve("installer"), config, manifest, ::envelope)
+        checkLoaderUpdate(temporary.resolve("loader-update"), config, ::envelope)
         checkRestartNatives(temporary.resolve("native-restart"))
         val uuid = "a".repeat(32)
         check(activationRequestCurrent(7, 7, uuid, uuid, uuid))
@@ -261,7 +262,7 @@ object InstallerCheckChild {
     }
 }
 
-private fun installerHelperJar(file: Path, config: Properties): Path {
+internal fun installerHelperJar(file: Path, config: Properties): Path {
     val manifest = Manifest().apply {
         mainAttributes[Attributes.Name.MANIFEST_VERSION] = "1.0"
         mainAttributes[Attributes.Name.MAIN_CLASS] = LoaderInstaller::class.java.name
@@ -293,14 +294,21 @@ private fun installerHelperJar(file: Path, config: Properties): Path {
         jar.putNextEntry(JarEntry("sky-myce-loader.properties"))
         config.store(jar, "Ephemeral installer test trust")
         jar.closeEntry()
+        jar.putNextEntry(JarEntry("fabric.mod.json"))
+        jar.write("""{"schemaVersion":1,"id":"skymyce-loader","version":"${config.getProperty("loaderVersion")}"}""".toByteArray())
+        jar.closeEntry()
     }
     return file
 }
 
-private fun checkPostExit(game: Path, helperJar: Path, expected: ByteArray) {
+internal fun checkPostExit(game: Path, helperJar: Path, expected: ByteArray, loaderUpdate: Boolean = false) {
     val java = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
     val kotlinRuntime = Path.of(Unit::class.java.protectionDomain.codeSource.location.toURI())
     val ready = game.resolve("helper-ready")
+    val pending = game.resolve(if (loaderUpdate) ".sky-myce/Loader.pending.jar" else ".sky-myce/Sky-Myce.pending.jar")
+    val metadata = game.resolve(if (loaderUpdate) ".sky-myce/loader-pending-manifest.json" else ".sky-myce/pending-manifest.json")
+    val target = game.resolve(if (loaderUpdate) "mods/Sky-Myce-Loader.jar" else "mods/Sky-Myce.jar")
+    val before = if (Files.exists(target)) Files.readAllBytes(target) else null
     val child = ProcessBuilder(java.toString(), "-cp", "$helperJar${File.pathSeparator}$kotlinRuntime",
         InstallerCheckChild::class.java.name, game.toString(), helperJar.toString(), ready.toString())
         .directory(game.toFile())
@@ -317,14 +325,13 @@ private fun checkPostExit(game: Path, helperJar: Path, expected: ByteArray) {
         helper = waitingHelper
         Thread.sleep(350)
         check(child.isAlive && waitingHelper.isAlive)
-        check(Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar")))
-        check(!Files.exists(game.resolve("mods/Sky-Myce.jar")))
+        check(Files.exists(pending))
+        check(if (before == null) !Files.exists(target) else Files.readAllBytes(target).contentEquals(before))
         child.outputStream.use { it.write('\n'.code); it.flush() }
         check(child.waitFor(15, TimeUnit.SECONDS) && child.exitValue() == 0)
         waitUntil { !waitingHelper.isAlive }
-        check(Files.readAllBytes(game.resolve("mods/Sky-Myce.jar")).contentEquals(expected))
-        check(!Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar")))
-        check(!Files.exists(game.resolve(".sky-myce/pending-manifest.json")))
+        check(Files.readAllBytes(target).contentEquals(expected))
+        check(!Files.exists(pending) && !Files.exists(metadata))
     } finally {
         if (child.isAlive) { child.destroyForcibly(); child.waitFor(5, TimeUnit.SECONDS) }
         helper?.takeIf { it.isAlive }?.let { it.destroyForcibly(); it.onExit().get(5, TimeUnit.SECONDS) }

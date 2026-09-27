@@ -28,7 +28,11 @@ public final class LoaderInstaller {
                     parent.get().onExit().get();
                 // Windows may briefly retain a file handle after the game process exits.
                 for (int attempt = 0; ; attempt++) {
-                    try { if (Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar"))) apply(game); break; }
+                    try {
+                        boolean loaderChanged = Files.exists(game.resolve(".sky-myce/Loader.pending.jar")) && applyLoader(game, SignedFiles.configuration());
+                        if (!loaderChanged && Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar"))) apply(game);
+                        break;
+                    }
                     catch (FileSystemException locked) { if (attempt == 19) throw locked; Thread.sleep(250); }
                 }
                 System.err.println("Sky-Myce updater finished.");
@@ -68,7 +72,8 @@ public final class LoaderInstaller {
         var state = game.toAbsolutePath().normalize().resolve(".sky-myce");
         Files.createDirectories(state);
         var directory = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
-        var wrapper = LoaderRestart.wrapper(directory, List.of(loaderJar.toAbsolutePath()));
+        // The helper must not hold the installed loader open while replacing it on Windows.
+        var wrapper = LoaderRestart.wrapper(directory, List.of(LoaderRestart.retainJar(game, loaderJar)));
         var log = state.resolve("update.log");
         if (Files.exists(log) && Files.size(log) > 65536)
             Files.move(log, state.resolve("update.previous.log"), StandardCopyOption.REPLACE_EXISTING);
@@ -100,7 +105,8 @@ public final class LoaderInstaller {
         }
         return result;
     }
-    static void installBootstrap(Path game, Path source) throws Exception {
+    static void installBootstrap(Path game, Path source) throws Exception { installBootstrap(game, source, null); }
+    private static void installBootstrap(Path game, Path source, byte[] metadata) throws Exception {
         game = game.toAbsolutePath().normalize(); source = source.toAbsolutePath().normalize();
         var existing = mods(game, "skymyce-loader");
         // A loader run from mods is already installed, even under a different filename.
@@ -120,11 +126,58 @@ public final class LoaderInstaller {
                 Files.move(file, destination, StandardCopyOption.ATOMIC_MOVE); moved.put(file, destination);
             }
             if (temporary != null) { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE); installed = true; }
+            if (metadata != null) SignedFiles.atomicWrite(game.resolve(".sky-myce/loader-manifest.json"), metadata);
         } catch (Exception failure) {
             if (installed) Files.deleteIfExists(target);
             for (var entry : moved.entrySet()) Files.move(entry.getValue(), entry.getKey(), StandardCopyOption.ATOMIC_MOVE);
             throw failure;
         } finally { if (temporary != null) Files.deleteIfExists(temporary); }
+    }
+    /** Only the already trusted helper verifies and installs a downloaded loader; never execute it first. */
+    static boolean applyLoader(Path game, java.util.Properties config) throws Exception {
+        game = game.toAbsolutePath().normalize();
+        var state = game.resolve(".sky-myce");
+        try (var channel = FileChannel.open(state.resolve("install.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             var lock = channel.tryLock()) {
+            if (lock == null) throw new java.io.IOException("Another installer is running");
+            var metadata = state.resolve("loader-pending-manifest.json");
+            if (Files.size(metadata) > 16384) throw new SecurityException("Manifest too large");
+            var manifest = SignedFiles.loaderManifest(JsonParser.parseString(Files.readString(metadata)).getAsJsonObject(), config, System.currentTimeMillis());
+            var version = manifest.get("version").getAsString();
+            int comparison = SignedFiles.compareVersion(version, config.getProperty("loaderVersion"));
+            if (comparison < 0) throw new SecurityException("Loader downgrade rejected");
+            var pending = state.resolve("Loader.pending.jar");
+            verifyLoader(pending, manifest);
+            var loaders = mods(game, "skymyce-loader");
+            // Recover a crash after replacement but before pending-file cleanup. Never reinstall different bytes at the same version.
+            if (comparison == 0) {
+                if (loaders.size() != 1) throw new SecurityException("Ambiguous installed loader");
+                verifyLoader(loaders.getFirst(), manifest);
+                Files.delete(pending); Files.delete(metadata);
+                return false;
+            }
+            // Another process may already have installed a newer loader. Never roll it back.
+            for (var existing : loaders) {
+                try (var jar = new JarFile(existing.toFile()); var input = jar.getInputStream(jar.getJarEntry("fabric.mod.json"))) {
+                    var installedVersion = JsonParser.parseString(new String(input.readNBytes(16384), java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject().get("version").getAsString();
+                    if (SignedFiles.compareVersion(version, installedVersion) < 0) throw new SecurityException("Loader downgrade rejected");
+                }
+            }
+            installBootstrap(game, pending, Files.readAllBytes(metadata));
+            Files.delete(pending); Files.delete(metadata);
+            return true;
+        }
+    }
+    public static void verifyLoader(Path file, com.google.gson.JsonObject manifest) throws Exception {
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) != manifest.get("size").getAsLong()) throw new SecurityException("Loader size mismatch");
+        SignedFiles.verifyArtifact(file, manifest);
+        try (var jar = new JarFile(file.toFile()); var input = jar.getInputStream(jar.getJarEntry("fabric.mod.json"))) {
+            var bytes = input.readNBytes(16385);
+            if (bytes.length > 16384) throw new SecurityException("Loader metadata too large");
+            var mod = JsonParser.parseString(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
+            if (!mod.get("id").getAsString().equals("skymyce-loader") || !mod.get("version").getAsString().equals(manifest.get("version").getAsString()))
+                throw new SecurityException("Loader identity mismatch");
+        }
     }
     private static Path backup(Path game) throws Exception {
         var directory = game.resolve(".sky-myce/replaced").resolve(UUID.randomUUID().toString());

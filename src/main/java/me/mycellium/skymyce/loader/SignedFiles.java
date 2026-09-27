@@ -30,11 +30,30 @@ public final class SignedFiles {
         verifier.initVerify(key); verifier.update(bytes);
         if (!verifier.verify(Base64.getUrlDecoder().decode(signature))) throw new SecurityException("Invalid signature");
     }
-    public static JsonObject manifest(JsonObject envelope, Properties config, long now) throws Exception {
+    private static JsonObject signedPayload(JsonObject envelope, Properties config) throws Exception {
+        if (envelope.toString().length() > 16384) throw new SecurityException("Manifest too large");
         byte[] payload = Base64.getUrlDecoder().decode(envelope.get("payload").getAsString());
         if (payload.length > 8192) throw new SecurityException("Manifest too large");
         verify(key(config, envelope.get("kid").getAsString()), payload, envelope.get("signature").getAsString());
-        var manifest = JsonParser.parseString(new String(payload, StandardCharsets.UTF_8)).getAsJsonObject();
+        return JsonParser.parseString(new String(payload, StandardCharsets.UTF_8)).getAsJsonObject();
+    }
+    public static JsonObject loaderManifest(JsonObject envelope, Properties config, long now) throws Exception {
+        var manifest = signedPayload(envelope, config);
+        var version = manifest.get("version").getAsString();
+        if (!manifest.get("product").getAsString().equals("sky-myce-loader") || manifest.get("protocol").getAsInt() != 1
+                || !manifest.get("minecraft").getAsString().equals(config.getProperty("minecraft"))
+                || !version.matches("[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}")
+                || !manifest.get("artifact").getAsString().equals("loaders/Sky-Myce-Loader-" + version + ".jar")
+                || !manifest.get("sha256").getAsString().matches("[a-f0-9]{64}")
+                || manifest.get("size").getAsLong() < 1 || manifest.get("size").getAsLong() > 64L * 1024 * 1024
+                || manifest.get("issuedAt").getAsLong() > now + 60000 || manifest.get("expiresAt").getAsLong() <= now
+                || manifest.get("expiresAt").getAsLong() <= manifest.get("issuedAt").getAsLong()
+                || manifest.get("expiresAt").getAsLong() - manifest.get("issuedAt").getAsLong() > 7L * 86400000)
+            throw new SecurityException("Unsupported or expired loader manifest");
+        return manifest;
+    }
+    public static JsonObject manifest(JsonObject envelope, Properties config, long now) throws Exception {
+        var manifest = signedPayload(envelope, config);
         if (!manifest.get("product").getAsString().equals("sky-myce") || manifest.get("protocol").getAsInt() != 3
                 || !manifest.get("minecraft").getAsString().equals(config.getProperty("minecraft"))
                 || compareVersion(config.getProperty("loaderVersion"), manifest.get("minimumLoaderVersion").getAsString()) < 0

@@ -35,9 +35,21 @@ internal class LoaderApi(private val config: Properties, private val installatio
             require(SignedFiles.compareVersion(manifest.get("version").asString, baseline) >= 0)
             return envelope
         }
+        fun loaderRelease(config: Properties): JsonObject? {
+            // A temporary update-service outage must not disable an otherwise supported loader.
+            val response = try {
+                http.send(HttpRequest.newBuilder(endpoint(config, "/loader/bootstrap-release")).timeout(Duration.ofSeconds(20)).GET().build(),
+                    HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), 16384))
+            } catch (_: java.io.IOException) { return null }
+            if (response.statusCode() in setOf(404, 408, 429) || response.statusCode() >= 500) return null
+            check(response.statusCode() == 200) { "Loader release unavailable" }
+            val envelope = JsonParser.parseString(String(response.body(), Charsets.UTF_8)).asJsonObject
+            SignedFiles.loaderManifest(envelope, config, System.currentTimeMillis())
+            return envelope
+        }
     }
     private fun request(path: String, body: Any): HttpRequest = HttpRequest.newBuilder(endpoint(config, path))
-        .timeout(Duration.ofSeconds(if (path == "/loader/artifact") 90 else 20))
+        .timeout(Duration.ofSeconds(if (path == "/loader/artifact" || path.startsWith("/loader/bootstrap/")) 90 else 20))
         .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(gson.toJson(body))).build()
 
     fun post(path: String, body: Any): JsonObject {
@@ -58,6 +70,29 @@ internal class LoaderApi(private val config: Properties, private val installatio
             .also { it.addProperty("clientNonce", nonce) }
     }
     fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v1\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}")
+
+    fun downloadLoader(purpose: String, body: Map<String, Any>, envelope: JsonObject, directory: Path) {
+        require(purpose in setOf("bootstrap-renew", "bootstrap-activate"))
+        val manifest = SignedFiles.loaderManifest(envelope, config, System.currentTimeMillis())
+        check(SignedFiles.compareVersion(manifest.get("version").asString, config.getProperty("loaderVersion")) > 0)
+        Files.createDirectories(directory)
+        val temporary = Files.createTempFile(directory, "loader-", ".tmp")
+        try {
+            val response = http.send(request("/loader/bootstrap/${purpose.removePrefix("bootstrap-")}", body + ("version" to manifest.get("version").asString)),
+                HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofFile(temporary), 64L * 1024 * 1024))
+            if (response.statusCode() in setOf(408, 429) || response.statusCode() >= 500) throw java.io.IOException("Loader unavailable")
+            if (response.statusCode() in 400..499) {
+                val code = if (Files.size(temporary) <= 32768) runCatching {
+                    JsonParser.parseString(Files.readString(temporary)).asJsonObject.get("error").asString
+                }.getOrDefault("unauthorized") else "unauthorized"
+                throw AuthorizationDenied(code)
+            }
+            check(response.statusCode() == 200)
+            LoaderInstaller.verifyLoader(temporary, manifest)
+            Files.move(temporary, directory.resolve("Loader.pending.jar"), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            SignedFiles.atomicWrite(directory.resolve("loader-pending-manifest.json"), gson.toJson(envelope).toByteArray())
+        } finally { Files.deleteIfExists(temporary) }
+    }
 
     fun download(lease: String, directory: Path, stillAuthorized: () -> Boolean) {
         val challenge = challenge("manifest")

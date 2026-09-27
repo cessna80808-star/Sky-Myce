@@ -196,7 +196,7 @@ public final class LoaderRestart {
         return new Plan(original.directory(), vm, rewritten, properties, original.arguments());
     }
 
-    private static Path retainJar(Path game, Path source) throws Exception {
+    static Path retainJar(Path game, Path source) throws Exception {
         // Bounded, immutable cache; only executable library JARs are retained, never launcher account files.
         if (!Files.isRegularFile(source) || Files.size(source) > 128L * 1024 * 1024) throw new IOException("Runtime JAR unavailable");
         try (var jar = new JarFile(source.toFile())) {

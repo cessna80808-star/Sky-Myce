@@ -59,6 +59,42 @@ starting Minecraft cannot extend its lifetime or authorize an offline restart.
 
 ## Updates and cached artifacts
 
+Loader **1.0.5** checks Cloudflare for a newer loader before normal account/mod
+setup. It verifies a separate Ed25519-signed manifest, downloads the loader,
+and verifies its SHA-256, size, mod ID and version. A helper running from a
+cached copy waits for this process to exit, backs up the old loader, installs
+the new one and restarts the same instance. The updated loader resumes setup
+automatically. A loader update and a protected-mod update may each restart the
+small bootstrap once; Minecraft initializes after both are ready. Further
+handoffs in the same launch are rejected to prevent loops.
+
+`GET /loader/bootstrap-release` exposes signed metadata only; loader bytes
+remain private. `/loader/bootstrap/renew` and `/loader/bootstrap/activate`
+require a fresh, single-use installation challenge plus verified Minecraft
+identity and the existing account/device/license checks. First-time activation
+also requires the DM code and consumes it atomically. These endpoints can
+update an outdated loader but issue **no feature lease**; normal authorization
+runs again in the updated loader without requiring a second code. Protected
+artifact and relay minimum-version checks remain enforced.
+
+Loader downloads are limited to **64 MiB** over HTTPS with redirects disabled
+and a **90-second** deadline. Same/older releases are ignored, failed verification
+does not replace the installed JAR, and installation failures restore backed-up
+JARs. Loader **1.0.7** also recovers leftover staging files after a completed
+replacement without reinstalling different bytes at the same version or
+blocking a pending protected-mod update.
+A temporary metadata-service outage leaves the current loader available
+subject to normal authorization. Loader signing keys are pinned locally.
+
+Operators sign the bootstrap with `node relay/scripts/release.mjs sign-loader
+<loader.jar> <private.pem> <key-id> <minecraft-version> <loader-version>
+<manifest.json>`. Upload the immutable `loaders/Sky-Myce-Loader-<version>.jar`
+first, then its signed manifest; set backend `LOADER_MANIFEST_KEY` to that
+manifest and `SKYMYCE_LOADER_R2_KEY` to the same JAR for new Discord deliveries.
+Manifests expire after **seven days** and must be refreshed with the release
+signer if that release is still offered. Never replace an existing version's
+JAR with different bytes. The private R2 bucket remains nonpublic.
+
 `GET /loader/release` exposes only an Ed25519-signed release manifest. Its
 object name is metadata, not a public download capability. The loader verifies
 its bundled public key and discovers the target version before authorization.
@@ -126,8 +162,9 @@ files; backups are retained and no other mod is replaced. Restart afterward.
 The pending JAR/manifest pair remains available until both replacements finish;
 if installation is interrupted, rerun the installer with Minecraft closed.
 
-Install the new trusted loader once to upgrade from 1.0.0–1.0.3; an older
-loader cannot gain the pre-game window from a protected-mod update.
+Install loader 1.0.5 once to upgrade from 1.0.0–1.0.4. Those older loaders
+cannot gain self-updating from a protected-mod update. Later compatible loader
+releases install automatically through the startup window.
 The loader includes owo and its dependencies, so its themed setup screen
 works before the protected mod exists. Activation input is masked and never
 placed in chat, command history or screen-reader narration.
