@@ -71,6 +71,7 @@ fun main() {
         reject { LoaderInstaller.apply(game, config) }
         check(Files.readString(game.resolve("mods/Sky-Myce.jar")) == "verified payload")
         checkInstaller(temporary.resolve("installer"), config, manifest, ::envelope)
+        checkRestartNatives(temporary.resolve("native-restart"))
         val uuid = "a".repeat(32)
         check(activationRequestCurrent(7, 7, uuid, uuid, uuid))
         check(!activationRequestCurrent(7, 8, uuid, uuid, uuid)) // A retry/revocation invalidates an in-flight confirmation.
@@ -229,20 +230,6 @@ private fun checkInstaller(root: Path, config: Properties, template: JsonObject,
     check(!Files.exists(loaderGame.resolve("mods/duplicate-loader.jar")))
     check(!Files.exists(loaderGame.resolve("mods/Sky-Myce-Loader.jar")))
 
-    val prism = root.resolve("Portable Prism With Spaces")
-    val prismGame = prism.resolve("instances/Sky Myce Main/minecraft")
-    Files.createDirectories(prismGame)
-    for (file in listOf(prism.resolve("prismlauncher.cfg"), prismGame.parent.resolve("instance.cfg"), prismGame.parent.resolve("mmc-pack.json"))) Files.writeString(file, "test fixture")
-    val prismExecutable = prism.resolve(if (System.getProperty("os.name").startsWith("Windows")) "prismlauncher.exe" else "prismlauncher")
-    Files.writeString(prismExecutable, "fixture only; never executed")
-    check(LoaderInstaller.canRestart(prismGame))
-    check(LoaderInstaller.restartCommand(prismGame, "Player_123") == listOf(prismExecutable.toString(), "--dir", prism.toString(), "--launch", "Sky Myce Main", "--profile", "Player_123"))
-    for (profile in listOf("", "--profile", "Name;start", "a".repeat(17), "Name\nOther"))
-        check(runCatching { LoaderInstaller.restartCommand(prismGame, profile) }.isFailure)
-    check(!LoaderInstaller.canRestart(loaderGame))
-    Files.delete(prismExecutable)
-    check(!LoaderInstaller.canRestart(prismGame))
-
     // A read-only destination makes the manifest commit fail after the payload has been replaced.
     if (System.getProperty("os.name").startsWith("Windows")) {
         val rollback = instance("rollback")
@@ -259,7 +246,9 @@ private fun checkInstaller(root: Path, config: Properties, template: JsonObject,
     }
     val waiting = instance("post-exit")
     stage(waiting)
-    checkPostExit(waiting, installerHelperJar(root.resolve("helper.jar"), config), updated)
+    val helper = installerHelperJar(root.resolve("helper.jar"), config)
+    checkPostExit(waiting, helper, updated)
+    checkRestart(root.resolve("launcher-independent-restart"), helper)
 }
 
 /** Standalone child whose lifetime represents Minecraft, with no game or production credentials. */
@@ -277,10 +266,19 @@ private fun installerHelperJar(file: Path, config: Properties): Path {
         mainAttributes[Attributes.Name.MAIN_CLASS] = LoaderInstaller::class.java.name
     }
     JarOutputStream(Files.newOutputStream(file), manifest).use { jar ->
-        for (type in listOf(LoaderInstaller::class.java, SignedFiles::class.java, InstallerCheckChild::class.java)) {
+        val types = listOf(LoaderInstaller::class.java, LoaderRestart::class.java, RestartNatives::class.java,
+            SignedFiles::class.java, InstallerCheckChild::class.java)
+        for (type in types + types.flatMap { it.declaredClasses.toList() }) {
             val name = type.name.replace('.', '/') + ".class"
             jar.putNextEntry(JarEntry(name))
             requireNotNull(type.getResourceAsStream("/$name")).use { it.copyTo(jar) }
+            jar.closeEntry()
+        }
+        // File-tree visitor anonymous classes are part of the standalone native-preservation helper.
+        for (suffix in listOf("1", "2")) {
+            val name = RestartNatives::class.java.name.replace('.', '/') + "$$suffix.class"
+            jar.putNextEntry(JarEntry(name))
+            requireNotNull(RestartNatives::class.java.getResourceAsStream("/$name")).use { it.copyTo(jar) }
             jar.closeEntry()
         }
         JarFile(Path.of(Gson::class.java.protectionDomain.codeSource.location.toURI()).toFile()).use { gson ->
@@ -304,6 +302,7 @@ private fun checkPostExit(game: Path, helperJar: Path, expected: ByteArray) {
     val ready = game.resolve("helper-ready")
     val child = ProcessBuilder(java.toString(), "-cp", "$helperJar${File.pathSeparator}$kotlinRuntime",
         InstallerCheckChild::class.java.name, game.toString(), helperJar.toString(), ready.toString())
+        .directory(game.toFile())
         .redirectErrorStream(true).redirectOutput(game.resolve("child.log").toFile()).start()
     var helper: ProcessHandle? = null
     fun waitUntil(condition: () -> Boolean) {

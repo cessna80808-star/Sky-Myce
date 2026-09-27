@@ -8,6 +8,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands
 import net.fabricmc.loader.api.FabricLoader
+import net.fabricmc.loader.impl.launch.FabricLauncherBase
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.screens.TitleScreen
 import java.net.URI
@@ -20,6 +21,7 @@ import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.UUID
+import java.lang.management.ManagementFactory
 
 class LoaderEntrypoint : ClientModInitializer { override fun onInitializeClient() = LoaderClient.initialize() }
 
@@ -39,7 +41,8 @@ object LoaderClient {
     private var nextAttempt = 0L
     private var failures = 0
     private var busy = false
-    val isBusy get() = busy
+    private var restartPreparing = false
+    val isBusy get() = busy || restartPreparing
     var restartRequired = false
         private set
     private var updateInstaller: Process? = null
@@ -67,7 +70,7 @@ object LoaderClient {
             dispatcher.register(ClientCommands.literal("skymyce-auth").executes { Minecraft.getInstance().setScreen(AuthorizationScreen()); 1 })
         }
         ClientTickEvents.END_CLIENT_TICK.register { tick() }
-        work({ installation = Installation(); LoaderInstaller.canRestart(FabricLoader.getInstance().gameDir) }) { canRestart = it; nextAttempt = 0 }
+        work({ installation = Installation() }) { canRestart = restartRuntimeAvailable(); nextAttempt = 0 }
     }
     private fun tick() {
         val minecraft = Minecraft.getInstance()
@@ -192,25 +195,66 @@ object LoaderClient {
         if (busy) return
         authorization.invalidatePending(); nextAttempt = 0
         status = "Checking your Sky-Myce account again…"
-        if (!::installation.isInitialized) work({ installation = Installation(); LoaderInstaller.canRestart(FabricLoader.getInstance().gameDir) }) { canRestart = it; nextAttempt = 0 }
+        if (!::installation.isInitialized) work({ installation = Installation() }) { canRestart = restartRuntimeAvailable(); nextAttempt = 0 }
     }
-    fun quitForUpdate() {
-        if (!busy) Minecraft.getInstance().stop()
-    }
+    private fun restartRuntimeAvailable() = runCatching { FabricLauncherBase.getLauncher().classPath.isNotEmpty() }.getOrDefault(false)
     fun requestRestart() {
-        if (busy) return
-        if (!canRestart) { status = "Close Minecraft and launch this instance again from your launcher."; return }
-        status = "Preparing to restart this instance through Prism Launcher…"
-        val profile = Minecraft.getInstance().user.name
-        work({ runCatching {
-            val helper = ensureInstaller()
-            helper.outputStream.use { it.write("restart:$profile\n".toByteArray(Charsets.UTF_8)) }
-        } }) { result ->
-            if (result.isSuccess) Minecraft.getInstance().stop()
-            else status = "Automatic restart could not start. Close Minecraft, wait for any update to finish, then launch this instance again from Prism."
+        if (busy || restartPreparing) return
+        if (!canRestart) { status = "This instance's restart settings are unavailable. Minecraft has been left open."; return }
+        val minecraft = Minecraft.getInstance()
+        val account = minecraft.user.profileId
+        val epoch = generation
+        // Launchers may pass their original arguments through stdin, so capture Fabric's parsed
+        // game arguments instead of replaying the launcher-specific JVM entry point.
+        val user = minecraft.user
+        val current = linkedMapOf("username" to user.name, "uuid" to user.profileId.toString(),
+            "accessToken" to user.accessToken, "clientId" to user.clientId.orElse(""), "xuid" to user.xuid.orElse(""),
+            "gameDir" to FabricLoader.getInstance().gameDir.toAbsolutePath().toString())
+        val original = FabricLoader.getInstance().getLaunchArguments(false)
+        val arguments = mutableListOf<String>()
+        var index = 0
+        while (index < original.size) {
+            val argument = original[index++]
+            val key = argument.removePrefix("--").substringBefore('=')
+            if (argument.startsWith("--") && key in current) {
+                if ('=' !in argument && index < original.size) index++
+            } else arguments += argument
         }
+        current.forEach { (key, value) -> arguments += "--$key"; arguments += value }
+        val properties = System.getProperties().stringPropertyNames()
+            .filter { it.startsWith("fabric.") || it in setOf("java.library.path", "org.lwjgl.librarypath", "java.io.tmpdir") }
+            .associateWith { System.getProperty(it) }
+        val classPath = FabricLauncherBase.getLauncher().classPath.toList()
+        val vmArguments = ManagementFactory.getRuntimeMXBean().inputArguments.toList()
+        status = "Preparing to restart this Minecraft instance…"
+        restartPreparing = true
+        busy = true
+        var preparingInstaller: Process? = null
+        CompletableFuture.supplyAsync {
+            val helper = ensureInstaller().also { preparingInstaller = it }
+            LoaderRestart.request(helper, Path.of(System.getProperty("user.dir")), vmArguments, classPath, properties, arguments.toTypedArray())
+            helper
+        }.whenComplete { _, failure -> minecraft.execute {
+            val helper = preparingInstaller
+            restartPreparing = false
+            if (epoch != generation || account != minecraft.user.profileId) {
+                helper?.destroyForcibly() // Never restart later with a now-stale account.
+                if (updateInstaller === helper) updateInstaller = null
+                CompletableFuture.runAsync { runCatching { ensureInstaller() } }
+                return@execute
+            }
+            busy = false
+            if (failure == null && helper != null && runCatching { LoaderRestart.commit(helper) }.isSuccess) minecraft.stop()
+            else {
+                helper?.destroyForcibly()
+                if (updateInstaller === helper) updateInstaller = null
+                status = "Restart preparation failed. Minecraft is still open; any verified update has been kept. You can retry Restart Minecraft."
+                // Preserve normal quit-to-update behavior if a restart attempt could not be prepared.
+                CompletableFuture.runAsync { runCatching { ensureInstaller() } }
+            }
+        } }
     }
-    private fun ensureInstaller(): Process {
+    @Synchronized private fun ensureInstaller(): Process {
         if (updateInstaller?.isAlive != true) {
             val loader = FabricLoader.getInstance().getModContainer("skymyce-loader").orElseThrow().origin.paths.single()
             updateInstaller = LoaderInstaller.applyAfterExit(FabricLoader.getInstance().gameDir, loader)
@@ -250,7 +294,7 @@ object LoaderClient {
             } finally { Files.deleteIfExists(temporary) }
         }) {
             downloadedVersion = version; restartRequired = true; showAuthorization = true
-            status = if (canRestart) "Download verified. Click Restart Minecraft to finish; your instance will reopen through Prism."
+            status = if (canRestart) "Download verified. Click Restart Minecraft to finish; this instance will reopen automatically."
                 else "Download verified. Quit and start Minecraft once to finish setup. You do not need to delete any mod files."
         }
     }
@@ -271,7 +315,7 @@ object LoaderClient {
                 when (cause) {
                     is Denied -> {
                         if (cause.code == "approval_required") {
-                            status = "This loader needs a fresh activation code. Ask an admin to use /authenticate with reissue:true."
+                            status = "This loader needs a fresh activation code. Ask an admin to use /authorise with reissue:true."
                             nextAttempt = Long.MAX_VALUE
                             return@execute
                         }
@@ -284,7 +328,7 @@ object LoaderClient {
                             "challenge_expired", "invalid_challenge" -> "The sign-in request expired. Paste the same code again and click Confirm."
                             "activation_invalid", "invalid_activation", "invalid_activation_key" -> "The activation code was not accepted. Use the code from your latest Sky-Myce DM, or ask an admin for a replacement."
                             "approval_pending" -> "Enter the activation code from your Sky-Myce DM and click Confirm."
-                            else -> "Enter the code from your Sky-Myce DM and click Confirm. If you need a new code, ask an admin to use /authenticate."
+                            else -> "Enter the code from your Sky-Myce DM and click Confirm. If you need a new code, ask an admin to use /authorise."
                         }
                     }
                     is SecurityException, is IllegalArgumentException -> deny()

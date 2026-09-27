@@ -27,16 +27,16 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
     }
 
     private lateinit var activation: ActivationField
-    private lateinit var summary: LabelComponent
     private lateinit var status: LabelComponent
     private lateinit var activate: ButtonComponent
     private lateinit var retry: ButtonComponent
     private lateinit var update: ButtonComponent
-    private lateinit var quit: ButtonComponent
+    private lateinit var restartButton: ButtonComponent
     private lateinit var restartHint: LabelComponent
     private lateinit var done: ButtonComponent
     private lateinit var steps: FlowLayout
     private lateinit var content: FlowLayout
+    private lateinit var actions: FlowLayout
     private lateinit var viewport: ScrollContainer<FlowLayout>
     private var stepsShown = true
     private var displayedState: List<Any?> = emptyList()
@@ -59,24 +59,25 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         }
         root.child(viewport)
         content.child(label("SKY-MYCE / LOADER", 0x67CCF2))
-        summary = label(""); content.child(summary)
         status = label("", 0x91A2AF); content.child(status)
         steps = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7) }
         steps.child(label("ACTIVATION CODE", 0x67CCF2))
-        steps.child(label("Paste the code sent with your loader in Discord, then press Confirm. Use the Minecraft account you want to activate. Never put the code in chat.", 0x91A2AF))
+        steps.child(label("Paste the code from your Discord DM and press Confirm. Sky-Myce downloads automatically, then needs one restart. Keep the loader installed for updates. Never put the code in chat.", 0x91A2AF))
         activation = ActivationField(); steps.child(activation)
         activate = button("Confirm") {
             val key = activation.value.trim(); activation.value = ""; LoaderClient.confirmActivation(key)
         }; steps.child(activate)
         content.child(steps)
-        retry = button("Retry existing authorization") { LoaderClient.retry() }; content.child(retry)
-        update = button("Check for update") { LoaderClient.retry() }; content.child(update)
-        quit = button("Restart Minecraft") {
+        retry = button("Retry authorization") { LoaderClient.retry() }
+        update = button("Check for update") { LoaderClient.retry() }
+        restartButton = button("Restart Minecraft") {
             activation.value = ""
-            if (LoaderClient.canRestart) LoaderClient.requestRestart() else LoaderClient.quitForUpdate()
-        }; content.child(quit)
-        restartHint = label("", 0x91A2AF); content.child(restartHint)
-        done = button("Continue without Sky-Myce") { onClose() }; content.child(done)
+            LoaderClient.requestRestart()
+        }
+        restartHint = label("", 0x91A2AF)
+        done = button("Continue without Sky-Myce") { onClose() }
+        actions = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(8) }
+        content.child(actions)
         refresh()
     }
 
@@ -85,31 +86,27 @@ class AuthorizationScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Myc
         val busy = LoaderClient.isBusy
         val restart = LoaderClient.restartRequired
         val ready = LoaderClient.onlineAllowed && !restart
-        val state = listOf(busy, restart, ready, LoaderClient.hasPayload, LoaderClient.status, LoaderClient.canRestart, activation.value.isNotBlank())
+        val state = listOf(busy, restart, ready, LoaderClient.status, LoaderClient.canRestart, activation.value.isNotBlank())
         if (state == displayedState) return
         displayedState = state
-        summary.text(Component.literal(when {
-            restart && LoaderClient.hasPayload -> "Update ready. Restart to install it automatically. Keep both the loader and mod installed."
-            restart -> "First installation is ready. Restart once to load Sky-Myce. Keep the loader installed."
-            ready -> "Sky-Myce is ready. You can return to Minecraft."
-            LoaderClient.hasPayload -> "Your existing installation authorizes automatically. Retry if needed, or enter a new activation code."
-            else -> "Enter your code and confirm. Sky-Myce downloads automatically, then needs one restart. Keep the loader installed for future updates."
-        }).withColor(if (ready || restart) 0x87D6A2 else 0xEDF3F7))
-        status.text(Component.literal(LoaderClient.status).withColor(0x91A2AF))
+        status.text(Component.literal(LoaderClient.status).withColor(if (ready || restart) 0x87D6A2 else 0x91A2AF))
         val showSteps = !restart && !ready
         if (stepsShown != showSteps) {
-            if (showSteps) content.child(3, steps) else { activation.value = ""; content.removeChild(steps) }
+            if (showSteps) content.child(2, steps) else { activation.value = ""; content.removeChild(steps) }
             stepsShown = showSteps
         }
         activate.active(!busy && showSteps && activation.value.isNotBlank())
         activation.setEditable(!busy && showSteps)
         retry.active(!busy && !restart && !ready)
         update.active(!busy && ready)
-        quit.active(!busy)
-        quit.message = Component.literal(if (LoaderClient.canRestart) "Restart Minecraft" else "Quit Minecraft").withColor(0xEDF3F7)
-        restartHint.text(Component.literal(if (LoaderClient.canRestart) "Restarts this instance through Prism Launcher. Updates apply after Minecraft closes."
-            else "Automatic restart is unavailable for this launcher. Quit, wait for any update to finish, then launch this instance again.").withColor(0x91A2AF))
+        restartButton.active(!busy && LoaderClient.canRestart)
+        restartHint.text(Component.literal(if (LoaderClient.canRestart) "Restarts this Minecraft instance after applying any verified update."
+            else "Restart is not ready yet. Minecraft stays open if preparation fails.").withColor(0x91A2AF))
         done.message = Component.literal(if (ready) "Continue to Minecraft" else "Continue without Sky-Myce").withColor(0xEDF3F7)
+        actions.clearChildren()
+        if (showSteps) actions.child(retry)
+        if (ready) actions.child(update)
+        actions.child(restartButton).child(restartHint).child(done)
     }
 
     override fun removed() { if (::activation.isInitialized) activation.value = ""; super.removed() }

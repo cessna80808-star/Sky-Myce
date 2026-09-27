@@ -7,9 +7,9 @@ are required. Version values live in `gradle.properties`.
 
 ## Loading and first activation
 
-1. An existing Sky-Myce admin runs `/authenticate user:@person`. The bot DMs
-   that person a one-time activation code and the loader. `/authorise` remains
-   a compatible alias; `reissue:true` explicitly replaces an outstanding code.
+1. An existing Sky-Myce admin runs `/authorise user:@person`. The bot DMs
+   that person a one-time activation code and the loader. `reissue:true`
+   explicitly replaces an outstanding code.
 2. Close Minecraft. Run the trusted loader JAR with Java 25 and select the
    existing Minecraft instance directory (not its `mods` subfolder). It installs
    itself into `mods`, keeps one loader copy, and backs up old unverified or
@@ -24,9 +24,9 @@ are required. Version values live in `gradle.properties`.
    proof and installation Ed25519 proof, consumes the activation key atomically,
    and returns a signed lease. The loader downloads and verifies the protected
    release, then installs `mods/Sky-Myce.jar`.
-6. Click **Restart Minecraft**. For a detected Prism portable instance, the
-   helper waits for the game to close, applies any verified pending update and
-   asks Prism to reopen the same instance and Minecraft profile. Fabric now discovers the protected mod's mixin
+6. Click **Restart Minecraft**. The helper waits for the game to close,
+   applies any verified pending update and reopens the same Minecraft instance.
+   Fabric now discovers the protected mod's mixin
    configuration during normal startup. No classes or mixins are added after
    Minecraft has started.
 
@@ -64,24 +64,38 @@ Downloads are capped at 128 MiB; redirects are disabled. Failure leaves the
 previous JAR intact. All HTTP, key protection, disk access and payload hashing
 run away from Minecraft's render thread.
 
-Loader 1.0.1 stages updates under `.sky-myce` because Windows cannot reliably
-replace an open JAR. A single helper using the bundled Java runtime waits for
+Loader 1.0.2 stages updates under `.sky-myce` because Windows cannot reliably
+replace an open JAR. A single helper using Minecraft's Java runtime waits for
 the exact Minecraft process to exit, verifies the download again, backs up
 old Sky-Myce payloads (including renamed copies), then installs the replacement.
-Choose **Restart Minecraft** to install and reopen the same Prism instance.
+Choose **Restart Minecraft** to install and reopen the same Minecraft instance.
 Normal Minecraft exit also triggers installation; it is not tied to the button.
 The helper retries transient file locks at most 20 times, 250 ms apart. It never
-authorizes the account. It only asks Prism to relaunch after an explicit
+authorizes the account. It only relaunches after an explicit
 Restart click; a normal quit never relaunches. Its safe result is recorded in
 `.sky-myce/update.log`.
 
-Prism restart uses its documented `--dir`, `--launch` and `--profile` options.
-The portable launcher and instance are detected from `instance.cfg`,
-`mmc-pack.json`, `prismlauncher.cfg` and the adjacent executable. No launcher
-account files, access tokens or JVM launch arguments are read or copied.
-Unsupported launcher layouts show **Quit Minecraft** and explain manual
-relaunch instead of claiming automatic restart.
-See [Prism's command-line interface](https://prismlauncher.org/wiki/getting-started/command-line-interface/).
+Restart is independent of the launcher brand. It reuses the same Java runtime,
+VM settings, Fabric classpath, instance directory and current Minecraft account.
+Session/game arguments pass through anonymous pipes to the helper and new JVM;
+they are never saved in argument files or diagnostic logs. The loader does not
+read a launcher's account database or require a launcher-specific directory layout.
+Before Minecraft closes, the helper verifies that its restart configuration can
+be prepared. If preparation fails, Minecraft stays open and the screen explains
+the failure. The Restart button never silently changes into a Quit action;
+normal Quit remains available from Minecraft's own menus.
+
+Preparation preserves temporary runtime JARs and native libraries that a launcher
+may remove when its original game process exits. The `.sky-myce` cache in the
+game's original working directory stores
+executable libraries, not account files. Native copying is bounded to 4,096 libraries
+and 256 MiB per preparation and verifies the copied contents before reuse. The
+new JVM starts Fabric normally only after the original Minecraft process exits
+and any pending signed update has been verified and installed.
+Windows instance names, including characters outside the active system code page,
+travel through encoded file references and the private pipe. Special JVM options
+that cannot be replayed safely, or temporary agent JARs with relative manifest
+dependencies, fail during preparation with Minecraft left open.
 
 If automatic installation fails, the pending download is retained. Close
 Minecraft and run the loader JAR again for that instance, or run:
@@ -97,9 +111,9 @@ files; backups are retained and no other mod is replaced. Restart afterward.
 The pending JAR/manifest pair remains available until both replacements finish;
 if installation is interrupted, rerun the installer with Minecraft closed.
 
-Install the new trusted loader once to upgrade from 1.0.0; that older loader
-cannot gain the automatic installer or new screen from a protected-mod update.
-The 1.0.1 loader includes owo and its dependencies, so its themed setup screen
+Install the new trusted loader once to upgrade from 1.0.0 or 1.0.1; an older
+loader cannot gain the new restart behavior from a protected-mod update.
+The loader includes owo and its dependencies, so its themed setup screen
 works before the protected mod exists. Activation input is masked and never
 placed in chat, command history or screen-reader narration.
 

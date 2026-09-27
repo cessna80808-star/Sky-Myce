@@ -13,24 +13,26 @@ public final class LoaderInstaller {
     public static void main(String[] arguments) {
         try {
             if (arguments.length == 4 && arguments[0].equals("--apply-after")) {
+                var game = Path.of(java.net.URI.create(arguments[1])).toAbsolutePath().normalize();
+                var restart = LoaderRestart.read(System.in);
+                Path wrapper = null;
+                if (restart != null) {
+                    restart = LoaderRestart.preserveRuntime(restart);
+                    wrapper = LoaderRestart.prepare(restart);
+                    LoaderRestart.acknowledge();
+                    // A stale/account-switched request is never armed by the client.
+                    if (!LoaderRestart.committed()) restart = null;
+                }
                 var parent = ProcessHandle.of(Long.parseLong(arguments[2]));
                 if (parent.isPresent() && parent.get().info().startInstant().orElseThrow().toEpochMilli() == Long.parseLong(arguments[3]))
                     parent.get().onExit().get();
-                var game = Path.of(arguments[1]).toAbsolutePath().normalize();
                 // Windows may briefly retain a file handle after the game process exits.
                 for (int attempt = 0; ; attempt++) {
                     try { if (Files.exists(game.resolve(".sky-myce/Sky-Myce.pending.jar"))) apply(game); break; }
                     catch (FileSystemException locked) { if (attempt == 19) throw locked; Thread.sleep(250); }
                 }
-                System.out.println("Sky-Myce update installed. You can start Minecraft.");
-                // Only a profile name travels through this pipe. Launcher credentials are never read or copied.
-                var request = new String(System.in.readNBytes(64), java.nio.charset.StandardCharsets.UTF_8);
-                if (request.startsWith("restart:")) {
-                    var command = restartCommand(game, request.substring(8).trim());
-                    Thread.sleep(1000); // Let Prism observe the completed game process before the launch request.
-                    new ProcessBuilder(command).directory(game.getParent().getParent().getParent().toFile())
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start();
-                }
+                System.err.println("Sky-Myce update installed.");
+                if (restart != null) LoaderRestart.launch(wrapper, restart);
                 return;
             }
             Path game;
@@ -57,33 +59,21 @@ public final class LoaderInstaller {
             System.exit(1);
         }
     }
-    public static boolean canRestart(Path game) {
-        try { restartCommand(game, "Player"); return true; }
-        catch (Exception unavailable) { return false; }
-    }
-    static List<String> restartCommand(Path game, String profile) {
-        if (!profile.matches("[A-Za-z0-9_]{1,16}")) throw new IllegalArgumentException("Invalid Minecraft profile");
-        game = game.toAbsolutePath().normalize();
-        var instance = game.getParent();
-        if (instance == null || instance.getParent() == null || instance.getParent().getParent() == null
-                || !Set.of("minecraft", ".minecraft").contains(game.getFileName().toString())
-                || !Files.isRegularFile(instance.resolve("instance.cfg"))
-                || !Files.isRegularFile(instance.resolve("mmc-pack.json"))) throw new IllegalArgumentException("Prism instance unavailable");
-        var root = instance.getParent().getParent();
-        var executable = root.resolve(System.getProperty("os.name").startsWith("Windows") ? "prismlauncher.exe" : "prismlauncher");
-        if (!Files.isRegularFile(executable) || !Files.isRegularFile(root.resolve("prismlauncher.cfg"))) throw new IllegalArgumentException("Prism launcher unavailable");
-        return List.of(executable.toString(), "--dir", root.toString(), "--launch", instance.getFileName().toString(), "--profile", profile);
-    }
     /** One helper per Minecraft process; waits outside the game so open JARs can be replaced safely. */
     public static Process applyAfterExit(Path game, Path loaderJar) throws Exception {
         var current = ProcessHandle.current();
         long started = current.info().startInstant().orElseThrow().toEpochMilli();
-        var java = Path.of(System.getProperty("java.home"), "bin", System.getProperty("os.name").startsWith("Windows") ? "javaw.exe" : "java");
+        var java = LoaderRestart.javaExecutable();
         var state = game.toAbsolutePath().normalize().resolve(".sky-myce");
         Files.createDirectories(state);
-        return new ProcessBuilder(java.toString(), "-jar", loaderJar.toAbsolutePath().toString(), "--apply-after",
-            game.toAbsolutePath().normalize().toString(), Long.toString(current.pid()), Long.toString(started))
-            .redirectErrorStream(true).redirectOutput(state.resolve("update.log").toFile()).start();
+        var directory = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        var wrapper = LoaderRestart.wrapper(directory, List.of(loaderJar.toAbsolutePath()));
+        var builder = new ProcessBuilder(java.toString(), "-cp", directory.relativize(wrapper).toString(), LoaderInstaller.class.getName(), "--apply-after",
+            game.toAbsolutePath().normalize().toUri().toASCIIString(), Long.toString(current.pid()), Long.toString(started))
+            .directory(directory.toFile())
+            .redirectError(state.resolve("update.log").toFile());
+        LoaderRestart.clearInjectedOptions(builder);
+        return builder.start();
     }
     /** Identify our mod by metadata, never by a filename substring that could match someone else's mod. */
     static List<Path> payloads(Path game) throws Exception {

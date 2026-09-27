@@ -12,7 +12,7 @@ The integrated **2.4.2** upgrade adds a paged auction index and item browser (`/
 
 **2.4.3** discovers cosmetic names from cached friends, party members and chat senders across lobbies. Apply the signed update through the [Sky-Myce Loader](docs/LOADER.md#updates-and-cached-artifacts).
 
-**2.4.4** keeps cosmetic sizes stable during lease renewal and background lookups. Loader **1.0.1** adds code → Confirm → Restart setup, automatic update installation, and a main-menu Loader button with Prism restart support.
+**2.4.4** keeps cosmetic sizes stable during lease renewal and background lookups. Loader **1.0.2** provides code → Confirm → Restart setup, automatic update installation, and a main-menu Loader button that restarts the current Fabric instance independently of its launcher.
 
 ## Why play with Sky-Hawk?
 
