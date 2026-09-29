@@ -1,188 +1,116 @@
-# Sky-Hawk Feature Overview
+# Sky-Hawk: The Best Features
 
-This document gives a concise overview of the current feature set in Sky-Hawk, organized by gameplay area.
+Sky-Hawk is built to make SkyBlock smoother, faster, and easier to play. It focuses on the things that normally waste time or make group play harder: dungeon prep, party coordination, tracking progress, and keeping key information visible without clutter.
 
-## General Quality of Life
+This is the feature set that matters most.
 
-### Daily Digest
-- Cached daily overview for skyblock news, mayor/event updates, personal dailies, and optional RNG activity.
-- Accessible through `/sm digest`.
-- Designed to keep useful daily information in one place without opening several menus.
-
-### Client Info Overlay
-- Displays session and client-side information in a compact HUD widget.
-- Keeps useful status information visible while playing.
-
-### Skill XP Widget
-- Moves XP gain notifications out of the action bar and into a cleaner widget.
-- Makes leveling progress easier to monitor at a glance.
-
-### Ability Cooldown Widget
-- Shows the cooldown for the currently held item.
-- Helps with rotation timing and combat efficiency.
-
-### Auto Refill
-- Automatically refills item stacks from your sack when low.
-- Reduces interruptions during grinding and progression.
-
-### Party Commands
-- Adds party-oriented commands using `!` prefixed actions.
-- Makes coordination faster and more consistent in group play.
-
-### Stash Helper
-- Highlights low-value or junk stash items.
-- Prevents accidental clicks on worthless items and speeds up sorting.
-
-### Wardrobe and Loadout Keybinds
-- Lets you bind rapid equipment swaps while in Wardrobe or Loadout screens.
-- Speeds up setup changes between builds.
-
-### Waypoints
-- Adds utility waypoints for useful in-game locations or navigation aids.
-- Helps players move more efficiently through the world.
-
-### Personal Best Command
-- Provides local personal-best lookup support via `/m7pb [player]` or `/sm m7pb`.
-- Uses cached stats and existing SkyBlock providers where available.
-
-### Auction House Tools
-- Includes auction browsing and indexing features.
-- Supports better searching, filtering, and browsing of auction data.
-
-## Dungeons and Instance Features
+## 1) Dungeon tools that are actually useful
 
 ### Party Finder Matcher
-- Dims chest listings that do not match your selected classes or floor-specific personal best requirements.
-- Keeps rows visible and clickable without auto-joining parties.
+Find the right party faster without wasting time on obvious mismatches. This feature helps highlight dungeon listings that do not fit your class needs or floor/PB requirements, while keeping everything visible and clickable.
 
-### Missing Players Notification
-- Warns when players are missing when entering or joining an instance.
-- Helps avoid poorly organized runs.
+### Missing Player Alerts
+If someone is missing when you join an instance, Sky-Hawk warns you before the run gets messy. That helps avoid bad party setups and wasted runs.
 
 ### Auto Requeue
-- Requeues you automatically after an instance ends.
-- Reduces friction when immediately farming or chaining runs.
-
-### Dungeon Win Screen
-- Shows a cleaner, animated post-run summary when a dungeon ends.
-- Makes run completion more readable and satisfying.
-
-### Dungeon Chat Filtering
-- Filters distracting or noisy dungeon chat messages.
-- Helps you focus on useful instructions and progress updates.
+When a dungeon ends, you can get back into the action immediately instead of fighting the menu flow. It’s a small feature, but it saves a lot of repetitive time over the course of a session.
 
 ### Safe Chest Reroll Protection
-- Prevents accidental rerolls on valuable dungeon chests.
-- Provides configurable safeguards for chest safety.
+This is one of the most practical safety features. If a chest contains something valuable, Sky-Hawk can block an accidental reroll so you do not lose a good drop because of a slip.
 
 ### Dungeon Chest Profit Calculator
-- Displays chest item values while opening dungeon chests.
-- Helps players make quicker and more informed decisions.
+During chest openings, you get a quick idea of the value of what is being revealed. It helps you make better decisions without pausing to estimate everything manually.
 
-### Chest Protection / Safety Checks
-- Implements checks that protect chest interactions when valuable loot is present.
-- Reduces avoidable mistakes during dungeon progression.
-
-### Dungeon Friends and Party Coordination
-- Lets players track online friends, class coverage, Catacombs levels, floor eligibility, and PB information.
-- Adds quick party invites and message flows for dungeon coordination.
-
-### Dungeon Finder / LFG
-- Provides an in-mod flow for checking friend and party availability.
-- Supports easier dungeon group planning without manual chat spam.
+### Dungeon Win Screen
+At the end of a run, you get a cleaner, more readable post-dungeon summary. It makes the finish feel more polished and easier to track.
 
 ### Dungeon Tracker
-- Tracks dungeon runs, loot, RNG, and progression data.
-- Includes overview, loot tables, timeline, and collection views.
-- Supports floor, mode, date, and session filters.
+This is the big one for long-term players. Sky-Hawk tracks dungeon runs, loot, RNG, and progression data in one place. You can review floor data, mode filters, dates, timelines, and loot history without digging through scattered information.
 
-### Dungeon Tracker Widget
-- Shows summary information for the dungeon tracker while in the dungeon hub or after a run.
-- Keeps key stats visible without opening extra menus.
+### Tracker Widget
+Keep your important dungeon stats visible without opening extra screens. It is perfect for checking your run data while in the dungeon hub or right after a run.
 
-### Chest Tracker
-- Tracks chest-related progression and rewards.
-- Helps monitor what has been acquired during dungeon runs.
+## 2) Better party and friend coordination
 
-### Floor Tracking and Dungeon Timing
-- Tracks floors and timing data for dungeon progress and performance analysis.
-- Useful for run review and optimization.
+### Dungeon Friends and LFG Support
+Sky-Hawk helps you see who is online, who is eligible, which classes they can cover, and what floors they can do. It makes entering or planning a run far less chaotic.
 
-## Social and Party Planning
+### Quick Party Coordination
+The mod supports faster group planning by making it easier to check availability and coordinate with your friends or party without constant manual messaging.
 
-### Friend-Based Dungeon Coordination
-- Tracks who is online, who is eligible for which floors, and what classes they can cover.
-- Helps streamline group formation and run planning.
+### Relay-Backed Private Messages
+Sky-Hawk adds private friend conversation tools through `/sm msg`, `/sm reply`, and `/sm chat`. This keeps friend communication cleaner and more reliable, especially when you are coordinating a run.
 
-### Relay-Backed Messaging
-- Supports `/sm msg <ign> <message>` and `/sm reply` / `/sm r` for private friend conversations.
-- Adds acknowledgement handling and chat routing features.
-- Supports `/sm chat <ign>` to route typed chat to a specific friend until a channel switch occurs.
+### Cosmetic Names and Social Styling
+For supported setups, the mod can show cosmetic names and visual customization for players, while keeping the underlying identity authoritative. It adds a more polished social feel without breaking the real system.
 
-### Cosmetic Names and Visual Cosmetics
-- Displays cosmetic names from cached friends, party members, and chat senders.
-- Supports authenticated visual player cosmetics with configurable size and positioning.
-- Requires proper relay/Discord setup in supporting environments.
+## 3) Quality-of-life features that reduce grind friction
 
-### Social Screen Features
-- Includes friend and social UI support for coordinating with party members and friends.
-- Combines status, invite, and messaging flows in one place.
+### Daily Digest
+This gives you a daily snapshot of the information you actually care about: news, event updates, mayor info, personal dailies, and optional RNG tracking. It keeps the important stuff in one tidy place.
 
-## HUD and Visual Utility
+### Auto Refill
+When your item stacks run low, Sky-Hawk can refill them automatically from your sack. It saves a ton of annoying clicks during grinding, runs, and progression.
 
-### HUD Components
-- Provides modular HUD widgets for tracking information while playing.
-- Supports display customization and layout controls.
+### Stash Helper
+Sorting stash tabs is much less painful when the mod highlights junk and blocks accidental clicks on worthless items. It is a simple feature, but it saves a lot of wasted time.
+
+### Wardrobe and Loadout Keybinds
+Changing gear becomes much faster when you can bind quick swaps for wardrobe or loadout screens. This is especially useful for players who frequently swap builds.
+
+### Personal Best Lookup
+The mod can access local PB info for dungeon runs and other relevant content without opening a complicated menu. That makes it a cleaner and faster way to check your recent performance.
+
+### Auction House Tools
+Sky-Hawk includes auction browsing and indexing support so players can search and inspect auction data more efficiently. It helps gather value information without endless manual tabbing.
+
+## 4) HUD and customization features
+
+### Client Info Widget
+Sky-Hawk displays useful client-side information in a compact widget, so you can keep an eye on your session without opening menu after menu.
+
+### Skill XP Widget
+Instead of burying leveling progress in the action bar, this widget keeps XP gains readable and easier to track.
+
+### Ability Cooldown Widget
+This shows the cooldown of your currently held item so you can manage timing and rotations more effectively.
 
 ### HUD Theme System
-- Lets players customize HUD colors, opacity, and layout behavior.
-- Includes inherited global and widget themes.
+The mod includes a theme system for colors, opacity, and consistent widget styling, so your HUD feels more personalized and readable.
 
-### Theme Editor
-- Gives players a visual editor for adjusting HUD appearance.
-- Helps create more readable, personalized interfaces.
+### Theme and Widget Editors
+You can tune the layout and appearance of your HUD to fit your play style. That makes it easier to keep important information visible without making the screen crowded.
 
-### Widget Editor
-- Lets users edit and manage widget placement and properties.
-- Supports easier UI tuning without manually editing config.
+## 5) The best overall experience
 
-## Mining and Miscellaneous Features
+Sky-Hawk is strongest when all of these work together:
 
-### Mining Features
-- Includes mining-related utilities and tracking for relevant gameplay loops.
-- Helps keep mining activity easier to monitor and optimize.
+- dungeon safety and profit awareness
+- automatic run flow improvements
+- friend and party coordination tools
+- persistent tracking of progression and RNG
+- cleaner HUD information
+- less menu clutter and less repetitive clicking
 
-### Cosmetics System
-- Adds user-facing cosmetic and styling controls for social features.
-- Includes cosmetic profile management and display customizations.
+That combination makes it feel less like a collection of random mods and more like a practical SkyBlock companion tool.
 
-### Troll / Experimental Features
-- Includes minor playful or experimental utilities in the mod codebase.
-- These are not core gameplay features and are kept isolated.
+## 6) Best features at a glance
 
-## Loader and Startup Experience
+If you only care about the most impactful features, these are the standouts:
 
-### Sky-Myce Loader
-- Provides a loader flow for account setup and verified installation.
-- Helps ensure the game launches with the correct setup and environment.
+- Dungeon Tracker
+- Dungeon Chest Profit Calculator
+- Safe Chest Reroll Protection
+- Party Finder Matcher
+- Auto Requeue
+- Relay-backed message and chat tools
+- Daily Digest
+- Auto Refill
+- HUD widgets and theme customisation
+- Dungeon Friends / LFG coordination
 
-### Startup Authentication and Setup
-- During startup, the loader can confirm installation and launch state.
-- Supports automatic updates without manual restart in the configured flow.
+## 7) Why people like it
 
-### Authorization and Installation Workflow
-- Handles verified setup and account flow for game startup.
-- Keeps mod installation and updating more stable and self-guided.
+Sky-Hawk is designed for players who want their game to feel smoother, not louder. It surfaces the information you need, cuts down repetitive tasks, makes dungeon coordination easier, and keeps your progress easier to track.
 
-## Feature Summary
-
-Sky-Hawk combines:
-- dungeon automation and safety tools,
-- party and friend coordination features,
-- HUD and overlay utilities,
-- daily tracking and personal progress views,
-- auction and listing tools,
-- cosmetic and social customization,
-- startup / loader support to keep the mod experience smooth and reliable.
-
-The overall goal is to reduce friction in SkyBlock by surfacing important information, automating repetitive actions, and improving communication and efficiency without cluttering the game experience.
+The goal is simple: help you play faster, make fewer avoidable mistakes, and keep useful information in sight without cluttering the screen.
