@@ -9,5 +9,6 @@ data class DungeonChestOpenEvent(
     val floor: DungeonFloor,
     val chest: DungeonChest,
     val contents: Map<SkyBlockId, Int>,
-    val cost: Long
+    val cost: Long,
+    val costKnown: Boolean = true
 ): CancellableSkyBlockEvent()

@@ -47,6 +47,18 @@ object DungeonsConfig : CategoryKt("Dungeons") {
         description = TranslatableValue.literal("Shows the profit and value of all items while in a dungeon chest")
     }
 
+    val dungeonChestProfitProtection by boolean(true) {
+        name = TranslatableValue.literal("Dungeon Chest Profit Protection")
+        description = TranslatableValue.literal("Blocks opening a dungeon reward chest when its estimated rewards are below the opening cost (hold CTRL to override)")
+    }
+
+    val negativeProfitThreshold by double(0.0) {
+        name = TranslatableValue.literal("Negative Profit Threshold")
+        description = TranslatableValue.literal("Block only when the estimated loss is greater than this many coins; zero blocks every negative-profit chest")
+
+        range = 0.0..1_000_000_000_000.0
+    }
+
     enum class BazaarType {
         INSTANT_BUY,
         INSTANT_SELL

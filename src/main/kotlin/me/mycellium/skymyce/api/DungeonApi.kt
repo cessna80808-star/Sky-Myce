@@ -5,6 +5,7 @@ import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.events.DungeonChestInitializedEvent
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
+import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import net.minecraft.ChatFormatting
 import net.minecraft.core.component.DataComponents
@@ -26,9 +27,6 @@ import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSky
 import tech.thatgravyboat.skyblockapi.utils.extentions.isSkyblockFiller
 import tech.thatgravyboat.skyblockapi.utils.regex.RegexUtils.contains
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
-import java.text.NumberFormat
-import java.util.*
-
 object DungeonApi : SkyMyceModule() {
     val secretDrops = setOf(
         "ARCHITECT_FIRST_DRAFT",
@@ -68,6 +66,7 @@ object DungeonApi : SkyMyceModule() {
     private val rerollRegex = Regex("^Click to reroll this chest!$")
     private val chestKeyRegex = Regex("^Dungeon Chest Key$")
     private val openedRegex = Regex("(.+) CHEST REWARDS$")
+    private val chestControlItems = setOf("Open Reward Chest", "Reroll Chest")
 
     private var chestFloor: DungeonFloor? = null
     private var chestType: DungeonChest? = null
@@ -83,14 +82,26 @@ object DungeonApi : SkyMyceModule() {
         }
 
         chestType = DungeonChest.fromName(event.title)
+        DungeonChestProtection.resetWarning()
         if (chestType != null) {
-            chestSlots =
-                event.containerSlots.filter { it.container !is Inventory && !it.item.isSkyblockFiller() && it.item.getSkyBlockId() != null }
-            chestContents = chestSlots.mapNotNull { slot ->
-                slot.item.getSkyBlockId()?.let { id ->
-                    id to slot.item.skyblockCount()
+            try {
+                chestSlots = event.containerSlots.filter {
+                    it.container !is Inventory && !it.item.isSkyblockFiller() && it.item.getSkyBlockId() != null
                 }
-            }.toMap()
+                chestContents = buildMap {
+                    chestSlots.filterNot { slot ->
+                        slot.item.customName?.stripped in chestControlItems
+                    }.forEach { slot ->
+                        val id = slot.item.getSkyBlockId() ?: return@forEach
+                        val count = slot.item.skyblockCount()
+                        if (count > 0) put(id, (get(id) ?: 0) + count)
+                    }
+                }
+            } catch (exception: Exception) {
+                SkyMyce.logger.warn("Could not parse dungeon chest rewards; protection will allow the interaction", exception)
+                chestSlots = emptyList()
+                chestContents = emptyMap()
+            }
             displayDevMessage("chest floor: $chestFloor")
             displayDevMessage("chest type: $chestType")
             displayDevMessage("chest contents: $chestContents")
@@ -105,26 +116,32 @@ object DungeonApi : SkyMyceModule() {
     @Subscription
     @OnlyIn(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS)
     fun slotClicked(event: SlotClickEvent) {
-        val floor = chestFloor ?: return
         val dungeonChest = chestType ?: return
 
         val lore = event.item.get(DataComponents.LORE)?.lines
         when (event.item.customName?.stripped) {
             "Open Reward Chest" -> {
-                displayDevMessage("Floor: $floor, chest: $dungeonChest")
-                val cost = lore?.firstNotNullOfOrNull { costRegex.find(it.string) }?.groupValues[1] ?: "0"
-                val costValue = NumberFormat.getNumberInstance(Locale.US).parse(cost).toLong()
+                displayDevMessage("Chest: $dungeonChest")
+                val cost = lore?.firstNotNullOfOrNull { costRegex.find(it.string) }?.groupValues?.getOrNull(1)
+                    ?.replace(",", "")?.toLongOrNull()?.takeIf { it >= 0 }
+                if (DungeonChestProtection.shouldBlock(dungeonChest, chestContents, cost)) {
+                    event.cancel()
+                    return
+                }
+                val floor = chestFloor ?: return
                 lore?.any { chestKeyRegex.contains(it.string) }
                 if (DungeonChestOpenEvent(
                         floor,
                         dungeonChest,
                         chestContents,
-                        costValue
+                        cost ?: 0,
+                        costKnown = cost != null
                     ).post(SkyBlockAPI.eventBus)
                 ) event.cancel()
             }
 
             "Reroll Chest" -> {
+                val floor = chestFloor ?: return
                 val reroll = lore?.firstOrNull { rerollRegex.matches(it.string) }
                 if (reroll != null) {
                     if (DungeonChestRerollEvent(
@@ -143,10 +160,10 @@ object DungeonApi : SkyMyceModule() {
         val name = this.customName?.string
         if (name != null) {
             essenceRegex.find(name)?.let {
-                return it.groupValues[2].toInt()
+                return it.groupValues[2].toIntOrNull() ?: this.count
             }
             shardRegex.find(name)?.let {
-                return it.groupValues[2].toInt()
+                return it.groupValues[2].toIntOrNull() ?: this.count
             }
         }
         return this.count

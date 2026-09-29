@@ -139,7 +139,7 @@ object DungeonTracker : SkyMyceModule() {
             System.currentTimeMillis(), price(SkyBlockId.item("KISMET_FEATHER")))
     }
     @Subscription fun onChestOpen(event: DungeonChestOpenEvent) {
-        if (!DungeonTrackerConfig.dungeonTracker || event.cost < 0 || event.contents.size > 64 || event.contents.values.any { it !in 1..100000 }) return
+        if (!DungeonTrackerConfig.dungeonTracker || !event.costKnown || event.cost < 0 || event.contents.size > 64 || event.contents.values.any { it !in 1..100000 }) return
         val context = AcquisitionRepository.currentContext() ?: return
         currentFloor = event.floor
         pendingChest = PendingChest(event, context, DigestRng.inventoryCounts(), System.currentTimeMillis())

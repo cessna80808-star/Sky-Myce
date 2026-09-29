@@ -164,6 +164,14 @@ val dungeonFriendsCheck by tasks.registering(JavaExec::class) {
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsCheckKt"
 }
 
+val dungeonChestProfitCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks dungeon chest reward estimates and loss thresholds"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonChestProfitCheckKt"
+}
+
 val hudCheck by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Checks dynamic owo HUD layout and saved widget configuration"
@@ -181,7 +189,7 @@ val loaderCheck by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.loader.LoaderCheckKt"
 }
-tasks.check { dependsOn(dungeonFriendsCheck, hudCheck, loaderCheck) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

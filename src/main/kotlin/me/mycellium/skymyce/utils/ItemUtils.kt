@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.utils
 
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig.AuctionType
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig.BazaarType
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
@@ -18,24 +19,32 @@ object ItemUtils {
     }
 
     fun SkyBlockId.getPrice(bazaar: BazaarType, auction: AuctionType): Double {
-        val bazaarProduct = BazaarAPI.getProduct(this.bazaarId)
-        if (bazaarProduct != null) {
-            return when (bazaar) {
-                BazaarType.INSTANT_BUY -> bazaarProduct.buyPrice
-                BazaarType.INSTANT_SELL -> bazaarProduct.sellPrice
+        return getPriceOrNull(bazaar, auction) ?: 0.0
+    }
+
+    fun SkyBlockId.getPriceOrNull(bazaar: BazaarType, auction: AuctionType): Double? {
+        return try {
+            val bazaarProduct = BazaarAPI.getProduct(this.bazaarId)
+            if (bazaarProduct != null) {
+                return when (bazaar) {
+                    BazaarType.INSTANT_BUY -> bazaarProduct.buyPrice
+                    BazaarType.INSTANT_SELL -> bazaarProduct.sellPrice
+                }.takeIf { it.isFinite() && it > 0.0 }
             }
-        }
 
-        val auctionProduct = LowestBinAPI.getPrice(this.bazaarId)
-        if (auctionProduct != null) {
-            return when (auction) {
-                AuctionType.LOWEST -> auctionProduct.lowest
-                AuctionType.HIGHEST -> auctionProduct.highest
-                AuctionType.MEAN -> auctionProduct.mean
-                AuctionType.MEDIAN -> auctionProduct.median
-            }.toDouble()
+            val auctionProduct = LowestBinAPI.getPrice(this.bazaarId)
+            if (auctionProduct != null) {
+                return when (auction) {
+                    AuctionType.LOWEST -> auctionProduct.lowest
+                    AuctionType.HIGHEST -> auctionProduct.highest
+                    AuctionType.MEAN -> auctionProduct.mean
+                    AuctionType.MEDIAN -> auctionProduct.median
+                }.toDouble().takeIf { it.isFinite() && it > 0.0 }
+            }
+            null
+        } catch (exception: Exception) {
+            SkyMyce.logger.warn("Could not retrieve a SkyBlock item price for {}", this.bazaarId, exception)
+            null
         }
-
-        return 0.0
     }
 }

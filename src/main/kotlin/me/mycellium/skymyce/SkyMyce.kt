@@ -20,6 +20,7 @@ import me.mycellium.skymyce.features.general.overlays.SkillXpOverlay
 import me.mycellium.skymyce.features.instances.InstanceRequeue
 import me.mycellium.skymyce.features.instances.MissingPlayers
 import me.mycellium.skymyce.features.instances.dungeons.DungeonChestOverlay
+import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
 import me.mycellium.skymyce.features.instances.dungeons.DungeonCleanChat
 import me.mycellium.skymyce.features.instances.dungeons.DungeonWinOverlay
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
@@ -79,7 +80,7 @@ object SkyMyce : ClientModInitializer {
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
-            StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
+            StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng,
             me.mycellium.skymyce.features.social.CosmeticsClient
         )
