@@ -1,6 +1,6 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
-import io.wispforest.owo.ui.base.BaseOwoScreen
+import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.UIComponents
@@ -20,7 +20,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<FlowLayout>() {
+class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Component.literal("Friends & loans"), MenuPage.FRIENDS) {
     enum class Tab(val label: String) { FRIENDS("Friends"), LENDING("Lending log"), WEALTH("Friend wealth") }
     private var search = ""
     private var outstanding = false
@@ -31,17 +31,16 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<Fl
     private lateinit var results: ScrollContainer<FlowLayout>
     private lateinit var refreshButton: ButtonComponent
     private lateinit var scanStatus: LabelComponent
-    private val panelWidth get() = minOf(700, width - 24)
+    private val panelWidth get() = menuWidth
 
-    override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
 
-    override fun build(root: FlowLayout) {
+    override fun buildContent(root: FlowLayout) {
         DungeonFriendsSettings.load()
-        root.surface(HudTheme.backdrop)
+        root.surface(Surface.BLANK)
         root.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
-        root.child(UIContainers.verticalFlow(Sizing.fixed(panelWidth), Sizing.fixed(minOf(430, height - 24))).apply {
+        root.child(UIContainers.verticalFlow(Sizing.fixed(panelWidth), Sizing.fixed(menuHeight)).apply {
             padding(Insets.of(12)); gap(8)
-            surface(HudTheme.panel())
+            surface(MenuTheme.panel())
             child(row().apply {
                 child(label(when (tab) { Tab.FRIENDS -> "§lFriends"; Tab.LENDING -> "§lWho Has My Gear?"; Tab.WEALTH -> "§lFriend Wealth" }, CYAN)
                     .horizontalSizing(Sizing.expand()))
@@ -52,16 +51,16 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<Fl
                 child(refreshButton)
                 child(button("Close", 44) { onClose() })
             })
-            child(row().apply {
-                Tab.entries.forEach { value ->
+            Tab.entries.chunked(if (panelWidth < 310) 2 else 3).forEach { tabs -> child(row().apply {
+                tabs.forEach { value ->
                     child(button("${if (tab == value) "§b" else ""}${value.label}", if (value == Tab.FRIENDS) 62 else 94) {
                         tab = value; rebuild()
                     })
                 }
-            })
+            }) }
             child(row().apply {
                 child(label("Username", MUTED))
-                val field = UIComponents.textBox(Sizing.expand()).apply {
+                val field = MenuTextBox(Sizing.expand()).apply {
                     setMaxLength(16); text(search); setHint(Component.literal("Search usernames..."))
                     onChanged().subscribe { search = it; updateRows() }
                 }
@@ -236,21 +235,21 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : BaseOwoScreen<Fl
     }
 
     private fun values(data: FriendWealth?) = listOf(data?.networth, data?.purse, data?.bank, data?.wardrobe)
-    private fun label(text: String, color: Int = WHITE) = UIComponents.label(Component.literal(text)).color(Color.ofRgb(color)).shadow(HudTheme.SHADOW)
+    private fun label(text: String, color: Int = WHITE) = MenuLabel(Component.literal(text)).color(Color.ofRgb(color)).shadow(MenuTheme.SHADOW)
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(6); verticalAlignment(VerticalAlignment.CENTER) }
     private fun card() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
-        gap(6); padding(Insets.of(6)); surface(HudTheme.panel(true))
+        gap(6); padding(Insets.of(6)); surface(MenuTheme.panel(true))
     }
-    private fun button(text: String, width: Int, action: () -> Unit) = UIComponents.button(Component.literal(text)) { action() }.apply {
+    private fun button(text: String, width: Int, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply {
         sizing(Sizing.fixed(width), Sizing.fixed(18)); textShadow(false)
         themed()
     }
     private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
     companion object {
-        private val CYAN get() = HudTheme.ACCENT
-        private val WHITE get() = HudTheme.TEXT
-        private val MUTED get() = HudTheme.MUTED
-        private val RED get() = HudTheme.RED
+        private val CYAN get() = MenuTheme.ACCENT
+        private val WHITE get() = MenuTheme.TEXT
+        private val MUTED get() = MenuTheme.MUTED
+        private val RED get() = MenuTheme.RED
         private val DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     }
 }

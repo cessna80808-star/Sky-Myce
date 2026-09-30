@@ -87,6 +87,7 @@ class ThemeSlider : SliderComponent(Sizing.fill()) {
 }
 
 fun ButtonComponent.themed(): ButtonComponent = apply {
+    if (this is me.mycellium.skymyce.ui.MenuButton) { textShadow(false); return@apply }
     renderer(HudTheme.buttonRenderer); textShadow(HudTheme.SHADOW)
     if (message.style.color == null) message = message.copy().withColor(HudTheme.TEXT)
 }

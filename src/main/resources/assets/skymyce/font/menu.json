@@ -1,0 +1,12 @@
+{
+  "providers": [
+    {
+      "type": "ttf",
+      "file": "skymyce:lato-regular.ttf",
+      "size": 10,
+      "oversample": 4,
+      "shift": [0, 0]
+    },
+    { "type": "reference", "id": "minecraft:default" }
+  ]
+}

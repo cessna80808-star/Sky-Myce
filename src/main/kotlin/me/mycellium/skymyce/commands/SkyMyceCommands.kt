@@ -3,6 +3,7 @@ package me.mycellium.skymyce.commands
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import com.mojang.brigadier.arguments.StringArgumentType
 import me.mycellium.skymyce.config.SettingsScreen
+import me.mycellium.skymyce.ui.openMenu
 import me.mycellium.skymyce.config.Config
 import com.mojang.blaze3d.platform.InputConstants
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
@@ -43,9 +44,9 @@ object SkyMyceCommands : SkyMyceModule() {
     }
 
     override fun init() {
-        settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Hawk Settings", Config.openConfigKey, KeyMapping.Category.MISC))
+        settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Myce Menu", Config.openConfigKey, KeyMapping.Category.MISC))
         ClientTickEvents.END_CLIENT_TICK.register { client ->
-            while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) client.setScreen(SettingsScreen())
+            while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) openMenu()
             // One shared scheduler, including explicit lookups without the party-finder module or Hypixel.
             if (isEnabled() && client.player != null) DungeonFriendStatsCache.tick()
             PersonalBestCommand.tick(isEnabled())
@@ -62,13 +63,15 @@ object SkyMyceCommands : SkyMyceModule() {
             .requires { me.mycellium.skymyce.loader.LoaderClient.localAllowed }
             .executes {
                 MC.instance.execute {
-                    MC.instance.setScreen(
-                        SettingsScreen()
-                    )
+                    openMenu()
                 }
                 1
             }
             .then(dungeon())
+            .then(literal("settings").executes {
+                MC.instance.execute { MC.instance.setScreen(SettingsScreen()) }
+                1
+            })
             .then(m7PbCommand())
             .then(literal("digest").executes {
                 MC.instance.execute { DailyDigest.open() }

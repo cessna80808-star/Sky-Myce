@@ -12,6 +12,8 @@
     "CosmeticFontMixin",
     "CosmeticTooltipMixin",
     "CosmeticEditBoxMixin",
+    "MenuEditBoxAccessor",
+    "MenuTextTooltipAccessor",
     "LabelComponentMixin",
     "ResourcefulConfigScreenBuilderMixin"
   ],

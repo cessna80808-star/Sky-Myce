@@ -4,6 +4,13 @@ import me.mycellium.skymyce.config.*
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.digest.DigestEntry
 import me.mycellium.skymyce.features.digest.digestShareText
+import me.mycellium.skymyce.ui.MenuCanvas
+import me.mycellium.skymyce.ui.MenuViewport
+import me.mycellium.skymyce.ui.menuCaretIndex
+import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.client.input.MouseButtonInfo
+import java.io.File
+import javax.imageio.ImageIO
 
 fun checkSettings() {
     val row = settingsRow().horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(400)) as io.wispforest.owo.ui.container.FlowLayout
@@ -25,6 +32,49 @@ fun checkSettings() {
     check(rows.isNotEmpty() && rows.map { it.path }.distinct().size == rows.size)
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
     check(rows.map { settingsTab(it.path) }.toSet() == SettingsTab.entries.toSet())
+    SettingsTab.entries.forEach { tab ->
+        val groups = settingGroups(rows, tab)
+        check(groups.values.flatten().map { it.path }.toSet() == rows.filter { settingsTab(it.path) == tab }.map { it.path }.toSet())
+        groups.forEach { (name, settings) ->
+            check(settingGroups(rows, tab, name.uppercase())[name] == settings) { "Searching a feature must retain all its controls" }
+        }
+    }
+    check(settingGroups(rows, SettingsTab.GENERAL, "no feature has this name").isEmpty())
+    val resources = me.mycellium.skymyce.ui.MenuLayout::class.java.classLoader
+    val font = resources.getResourceAsStream("assets/skymyce/font/menu.json")!!.bufferedReader().use { com.google.gson.JsonParser.parseReader(it).asJsonObject }
+    val fontProvider = font.getAsJsonArray("providers")[0].asJsonObject
+    net.minecraft.client.gui.font.providers.TrueTypeGlyphProviderDefinition.CODEC.codec().parse(com.mojang.serialization.JsonOps.INSTANCE, fontProvider).getOrThrow()
+    check(resources.getResource("assets/skymyce/font/${fontProvider.get("file").asString.substringAfter(':')}") != null) { "Menu font resource is missing" }
+    for ((width, height) in listOf(320 to 180, 480 to 270, 640 to 360, 960 to 540, 1920 to 1080)) {
+        val layout = me.mycellium.skymyce.ui.MenuLayout.fit(width, height)
+        check(layout.width <= width && layout.height <= height && layout.contentWidth > 0)
+        check(layout.sidebar in 1 until layout.width && layout.contentWidth + layout.sidebar == layout.width)
+        val shell = io.wispforest.owo.ui.container.UIContainers.horizontalFlow(io.wispforest.owo.ui.core.Sizing.fixed(layout.width), io.wispforest.owo.ui.core.Sizing.fixed(layout.height))
+        val sidebar = io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(layout.sidebar), io.wispforest.owo.ui.core.Sizing.fill())
+        val content = io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(layout.contentWidth), io.wispforest.owo.ui.core.Sizing.fill())
+        shell.children(listOf(sidebar, content)); shell.inflate(io.wispforest.owo.ui.core.Size.of(width, height)); shell.mount(null, 8, 8)
+        check(content.x() == sidebar.x() + sidebar.width() && content.y() == sidebar.y())
+        check(content.x() + content.width() == shell.x() + shell.width()) { "Menu content overlaps or escapes the sidebar" }
+    }
+    check(settingsCardColumns(279) == 1 && settingsCardColumns(280) == 2)
+    val drawerSize = io.wispforest.owo.ui.core.AnimatableProperty.of(io.wispforest.owo.ui.core.Sizing.fixed(0))
+    drawerSize.animate(200, io.wispforest.owo.ui.core.Easing.CUBIC, io.wispforest.owo.ui.core.Sizing.fixed(190)).forwards()
+    drawerSize.update(1f)
+    check(drawerSize.get().value > 0)
+    drawerSize.animate(1, io.wispforest.owo.ui.core.Easing.CUBIC, io.wispforest.owo.ui.core.Sizing.fixed(0)).forwards()
+    drawerSize.set(io.wispforest.owo.ui.core.Sizing.fixed(0)); drawerSize.update(1f)
+    check(drawerSize.get().value == 0) { "An interrupted drawer animation reopened the closed pane" }
+    for (width in listOf(100, 216, 394, 700, 1100)) {
+        val drawer = settingsDrawerWidth(width)
+        check(drawer in 1..width && drawer <= 240) { "Settings drawer escapes the menu" }
+        val columns = settingsCardColumns(width)
+        val gap = 8
+        val cardWidth = (width - gap * (columns - 1)) / columns
+        val grid = io.wispforest.owo.ui.container.UIContainers.horizontalFlow(io.wispforest.owo.ui.core.Sizing.fixed(width), io.wispforest.owo.ui.core.Sizing.content()).gap(gap)
+        val cards = List(columns) { io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(cardWidth), io.wispforest.owo.ui.core.Sizing.fixed(45)) }
+        grid.children(cards); grid.inflate(io.wispforest.owo.ui.core.Size.of(width, 100)); grid.mount(null, 0, 0)
+        check(cards.all { it.x() >= 0 && it.x() + it.width() <= width }) { "Settings module cards overlap the drawer or menu edge" }
+    }
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.GENERAL)
     check(settingsTab("General/Daily Digest/shareRng") == SettingsTab.SOCIAL)
@@ -43,6 +93,7 @@ fun checkSettings() {
     val primary = ThemeConfig.primary
     ThemeConfig.primary = 0x123456
     check(HudTheme.ACCENT == 0x123456 && HudTheme.HUD_ACCENT == 0x123456)
+    check(me.mycellium.skymyce.ui.MenuTheme.ACCENT == 0x123456) { "Custom menus lost the user's accent override" }
     ThemeConfig.primary = primary
     check(HudTheme.alpha(0x123456, 0) == 0x123456 && HudTheme.alpha(0x123456, 100) == 0xFF123456.toInt())
     check(HudTheme.blend(0, 0xFFFFFF, 100) == 0xFFFFFF)
@@ -51,5 +102,152 @@ fun checkSettings() {
     check(digestShareText(DigestEntry("id", "x".repeat(500))).length <= 240)
     val longReport = digestShareText(DigestEntry("id", "x".repeat(500), community = true))
     check(longReport.length <= 240 && longReport.endsWith("[unverified]"))
-    println("Settings checks passed: category coverage, config paths, tooltips, theme validation and safe share drafts")
+    checkMenuViewport()
+    checkMenuCanvas()
+    println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
+}
+
+private fun checkMenuViewport() {
+    val info = MouseButtonInfo(2, 1 or 4) // Middle button, Shift and Alt.
+    for (nativeScale in 1..4) {
+        val viewport = MenuViewport.fit(1920, 1080, 1920 / nativeScale, 1080 / nativeScale)
+        check(viewport.width == 960 && viewport.height == 540) { "Minecraft GUI scale changed custom menu density" }
+        check(viewport.x(viewport.screenWidth / 2.0) == 480.0 && viewport.y(viewport.screenHeight / 2.0) == 270.0)
+        val event = viewport.mouse(MouseButtonEvent(viewport.screenWidth / 2.0, viewport.screenHeight / 2.0, info))
+        check(event.x() == 480.0 && event.y() == 270.0 && event.buttonInfo() === info)
+        check(event.button() == 2 && event.modifiers() == 5 && event.hasShiftDown() && event.hasAltDown()) { "Mapping custom pointer coordinates lost modifiers" }
+        check(viewport.x(-viewport.screenWidth / 10.0) == -96.0 && viewport.y(viewport.screenHeight / 10.0) == 54.0) { "Pointer drag deltas changed direction or scale" }
+    }
+    for ((width, height) in listOf(0 to 0, 1 to 1, 80 to 4096, 8192 to 80, Int.MAX_VALUE to Int.MAX_VALUE)) {
+        val viewport = MenuViewport.fit(width, height, width / 4, height / 4)
+        check(viewport.width > 0 && viewport.height > 0 && viewport.x(1.0).isFinite() && viewport.y(1.0).isFinite()) { "Extreme window dimensions broke menu coordinate mapping" }
+    }
+}
+
+private fun checkMenuCanvas() {
+    val canvas = MenuCanvas()
+    val white = -1
+    val red = 0xFFFF3344.toInt()
+    canvas.begin()
+    listOf(20.0 to 20.0, 60.0 to 20.0, 20.0 to 60.0, 60.0 to 60.0).forEachIndexed { index, (x, y) ->
+        canvas.arc(x, y, 8.0, index * 90.0, (index + 1) * 90.0, red)
+    }
+    canvas.arc(100.0, 20.0, 8.0, 0.0, 360.0, white, 5.0)
+    canvas.fill(90.0, 50.0, 20.0, 10.0, 0x804080C0.toInt())
+    var image = canvas.finish(120, 80, 2.0)
+    fun pixel(x: Int, y: Int) = image.getRGB(x * 2, y * 2)
+    listOf(16 to 16, 64 to 16, 24 to 64, 56 to 64).forEach { (x, y) -> check(pixel(x, y) == red) { "Arc painted the wrong quadrant" } }
+    listOf(24 to 24, 56 to 24, 16 to 56, 64 to 56).forEach { (x, y) -> check(pixel(x, y) == 0) { "Arc escaped its quadrant" } }
+    check(pixel(100, 20) == 0 && pixel(106, 20) == white) { "Ring lost its hollow center or border" }
+    check(pixel(95, 55) == 0x804080BF.toInt() || pixel(95, 55) == 0x804080C0.toInt()) { "Canvas changed straight alpha or RGB channels" }
+    check((0 until image.height).any { y -> (0 until image.width).any { x -> (image.getRGB(x, y) ushr 24) in 1..254 && x < 176 && y < 90 } }) { "Curved edges are not antialiased" }
+
+    canvas.begin()
+    canvas.clip = MenuCanvas.Clip(25, 8, 5, 10)
+    canvas.transform = MenuCanvas.Transform(a = 2.0, d = 1.0, x = 20.0, y = 5.0)
+    canvas.fill(0.0, 0.0, 10.0, 20.0, red)
+    image = canvas.finish(50, 30, 2.0)
+    check(pixel(27, 10) == red && pixel(24, 10) == 0 && pixel(30, 10) == 0 && pixel(27, 7) == 0) { "Canvas clip must remain in screen coordinates through transforms" }
+
+    fun textFrame(text: String) {
+        canvas.begin()
+        canvas.text(listOf(MenuCanvas.Run(text, white)), 4.25, 3.5)
+    }
+    textFrame("Smooth Wi glyphs")
+    image = canvas.finish(140, 30, 2.0)
+    val firstRevision = canvas.revision
+    val firstPixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+    check(firstPixels.any { (it ushr 24) in 1..254 }) { "Custom font lacks smooth fractional glyph coverage" }
+    check(MenuCanvas.textWidth("WWW") > MenuCanvas.textWidth("iii") * 2) { "Custom text must use proportional font metrics" }
+    textFrame("Smooth Wi glyphs")
+    check(canvas.finish(140, 30, 2.0) === image && canvas.revision == firstRevision) { "Unchanged frame rerasterized" }
+    textFrame("Changed Wi glyphs")
+    canvas.finish(140, 30, 2.0)
+    check(canvas.revision == firstRevision + 1 && !firstPixels.contentEquals(image.getRGB(0, 0, image.width, image.height, null, 0, image.width))) { "Changed text failed to invalidate the canvas" }
+    textFrame("Changed Wi glyphs")
+    image = canvas.finish(160, 40, 2.0)
+    check(image.width == 320 && image.height == 80 && canvas.revision == firstRevision + 2) { "Resize failed to invalidate the canvas" }
+
+    val measure: (String) -> Double = { text -> text.codePoints().toArray().sumOf { if (it == 'W'.code) 12.0 else if (it > 0xFFFF) 10.0 else 3.0 } }
+    check(menuCaretIndex("WiW", -1.0, measure) == 0)
+    check(menuCaretIndex("WiW", 5.9, measure) == 0 && menuCaretIndex("WiW", 6.1, measure) == 1)
+    check(menuCaretIndex("WiW", 13.4, measure) == 1 && menuCaretIndex("WiW", 13.6, measure) == 2)
+    check(menuCaretIndex("WiW", 999.0, measure) == 3)
+    val astral = "i\uD83D\uDE00W"
+    check(menuCaretIndex(astral, 7.9, measure) == 1 && menuCaretIndex(astral, 8.1, measure) == 3) { "Pointer caret split a surrogate pair" }
+    val long = "Wi".repeat(40)
+    val originAfterScroll = 12.0 - measure(long.substring(0, 60))
+    check(menuCaretIndex(long, 12.0 - originAfterScroll, measure) == 60) { "Scrolled field caret failed to map screen position to text position" }
+    writeMenuCanvasArtifact()
+}
+
+/** Visual artifact exercises the production rasterizer, including the reference card/switch shape. */
+private fun writeMenuCanvasArtifact() {
+    val canvas = MenuCanvas()
+    canvas.begin()
+    val panel = 0xFF201116.toInt()
+    val card = 0xFF29171D.toInt()
+    val sidebar = 0xFF10090C.toInt()
+    val border = 0xFF4A2B35.toInt()
+    val accent = 0xFFDF8196.toInt()
+    val white = 0xFFF2E9EC.toInt()
+    val muted = 0xFFAF929C.toInt()
+    fun rounded(x: Double, y: Double, width: Double, height: Double, radius: Double, color: Int) {
+        canvas.fill(x + radius, y, width - radius * 2, height, color)
+        canvas.fill(x, y + radius, width, height - radius * 2, color)
+        canvas.arc(x + radius, y + radius, radius, 0.0, 90.0, color)
+        canvas.arc(x + width - radius, y + radius, radius, 90.0, 180.0, color)
+        canvas.arc(x + width - radius, y + height - radius, radius, 180.0, 270.0, color)
+        canvas.arc(x + radius, y + height - radius, radius, 270.0, 360.0, color)
+    }
+    fun label(text: String, x: Double, y: Double, size: Double = 16.0, color: Int = white) =
+        canvas.text(listOf(MenuCanvas.Run(text, color)), x, y, size)
+    fun switch(x: Double, y: Double, enabled: Boolean) {
+        rounded(x, y, 42.0, 24.0, 12.0, if (enabled) accent else border)
+        canvas.arc(x + if (enabled) 30.0 else 12.0, y + 12.0, 8.0, 0.0, 360.0, if (enabled) white else muted)
+    }
+    rounded(0.0, 0.0, 1100.0, 650.0, 10.0, border)
+    rounded(1.0, 1.0, 1098.0, 648.0, 9.0, panel)
+    canvas.fill(2.0, 2.0, 198.0, 646.0, sidebar)
+    label("SKY-MYCE", 28.0, 30.0, 20.0)
+    canvas.fill(18.0, 75.0, 162.0, 1.0, border)
+    listOf("Daily Digest", "Party Finder", "Friends & loans", "Dungeons", "Auctions", "Cosmetics", "HUD editor").forEachIndexed { index, text ->
+        if (index == 1) rounded(14.0, 92.0 + index * 43, 172.0, 37.0, 7.0, card)
+        label(text, 28.0, 100.0 + index * 43, 15.0, if (index == 1) white else muted)
+    }
+    canvas.fill(18.0, 590.0, 162.0, 1.0, border)
+    label("Settings", 28.0, 609.0, 15.0, muted)
+    label("CATEGORY", 230.0, 28.0, 11.0, muted)
+    label("Party Finder", 230.0, 49.0, 26.0)
+    rounded(585.0, 35.0, 212.0, 34.0, 6.0, border)
+    rounded(586.0, 36.0, 210.0, 32.0, 5.0, card)
+    label("Search modules", 600.0, 43.0, 13.0, muted)
+    val titles = listOf("Dungeon Friends", "Class matching", "Party Commands", "Missing roles", "Friends & loans", "Recent parties", "Level requirements", "Accepted invites", "Sort by speed", "Remember filters", "Compact view", "Notifications")
+    titles.forEachIndexed { index, title ->
+        val x = 230.0 + index % 2 * 291
+        val y = 99.0 + index / 2 * 79
+        rounded(x, y, 277.0, 66.0, 7.0, if (index == 0) accent else border)
+        rounded(x + 1, y + 1, 275.0, 64.0, 6.0, card)
+        label(title, x + 15, y + 23, 15.0)
+        switch(x + 220, y + 21, index % 3 != 1)
+    }
+    canvas.fill(826.0, 2.0, 1.0, 646.0, border)
+    label("FEATURE SETTINGS", 850.0, 28.0, 11.0, muted)
+    label("Dungeon Friends", 850.0, 49.0, 21.0)
+    label("Find the right party with", 850.0, 94.0, 13.0, muted)
+    label("friends and saved filters.", 850.0, 113.0, 13.0, muted)
+    listOf("Show friends first", "Require class match", "Hide offline friends", "Save party filters").forEachIndexed { index, title ->
+        val y = 180.0 + index * 69
+        label(title, 850.0, y, 14.0)
+        switch(1033.0, y - 3, index != 2)
+        canvas.fill(850.0, y + 43, 225.0, 1.0, border)
+    }
+    label("Minimum level", 850.0, 470.0, 14.0)
+    label("30", 1056.0, 470.0, 14.0, muted)
+    rounded(850.0, 510.0, 225.0, 4.0, 2.0, border)
+    rounded(850.0, 510.0, 112.0, 4.0, 2.0, accent)
+    canvas.arc(962.0, 512.0, 5.0, 0.0, 360.0, white)
+    val output = File("custom-menu-renderer.png")
+    check(ImageIO.write(canvas.finish(1100, 650, 1.0), "png", output))
+    println("Custom canvas checks passed; visual artifact: ${output.absolutePath}")
 }

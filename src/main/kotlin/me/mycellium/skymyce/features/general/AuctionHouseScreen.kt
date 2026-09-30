@@ -1,6 +1,6 @@
 package me.mycellium.skymyce.features.general
 
-import io.wispforest.owo.ui.base.BaseOwoScreen
+import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
@@ -26,7 +26,7 @@ import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Retained cards, bounded visible item decoding and background filtering. No render-thread I/O. */
-class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Auction House")) {
+class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"), MenuPage.AUCTIONS) {
     private var search = AuctionPreferences.value.search
     private var expanded = false
     private var selected: AuctionAPI.ActiveAuction? = null
@@ -45,24 +45,23 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
     private lateinit var count: LabelComponent
     private lateinit var pages: LabelComponent
     private val clocks = mutableListOf<Pair<LabelComponent, AuctionAPI.ActiveAuction>>()
-    private val panelWidth get() = (width - 16).coerceIn(220, 950)
+    private val panelWidth get() = menuWidth
     private val contentWidth get() = panelWidth - 28
 
-    override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
     override fun init() { closed = false; super.init(); AuctionAPI.beginBrowserSession() }
     override fun removed() { closed = true; cardsRevision++; AuctionAPI.stopBrowserSession(); super.removed() }
 
-    override fun build(root: FlowLayout) {
-        root.surface(HudTheme.backdrop).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
-        root.child(column(Sizing.fixed(panelWidth), Sizing.fixed((height - 16).coerceAtLeast(140))).apply {
-            surface(HudTheme.panel()); padding(Insets.of(8)); gap(5)
+    override fun buildContent(root: FlowLayout) {
+        root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
+        root.child(column(Sizing.fixed(panelWidth), Sizing.fixed(menuHeight)).apply {
+            surface(MenuTheme.panel()); padding(Insets.of(8)); gap(5)
             child(row().apply {
-                child(label("SKY-HAWK / AUCTIONS", HudTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
+                child(label("SKY-HAWK / AUCTIONS", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
                 child(button("Close", 42) { onClose() })
             })
             child(row().apply {
-                child(UIComponents.textBox(Sizing.expand()).apply {
+                child(MenuTextBox(Sizing.expand()).apply {
                     setMaxLength(160); text(search.query); setHint(Component.literal("Search name, enchantment or lore…"))
                     wrappedTooltip(Component.literal("Search the item name and available auction lore. All words must match."))
                     onChanged().subscribe { change(search.withQuery(it)) }
@@ -83,10 +82,10 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
                 child(button("Reset", 45) { change(AuctionSearch()); rebuild() })
             })
             if (expanded && height >= 340) child(UIContainers.verticalScroll(Sizing.fill(), Sizing.fixed(76), filters()).apply { scrollStep(20) })
-            status = label("", HudTheme.MUTED); child(status)
-            count = label("Searching cached auctions…", HudTheme.MUTED); child(count)
+            status = label("", MenuTheme.MUTED); child(status)
+            count = label("Searching cached auctions…", MenuTheme.MUTED); child(count)
             scroll = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), column()).apply {
-                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(HudTheme.ACCENT))); scrollbarThiccness(2); scrollStep(30)
+                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(30)
             }
             child(scroll)
             child(row().apply {
@@ -123,14 +122,14 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
         })
     }
 
-    private fun priceField(minimum: Boolean) = UIComponents.textBox(Sizing.fill(48)).apply {
+    private fun priceField(minimum: Boolean) = MenuTextBox(Sizing.fill(48)).apply {
         setMaxLength(16); text((if (minimum) search.minPrice else search.maxPrice)?.toString().orEmpty())
         setHint(Component.literal(if (minimum) "Minimum coins" else "Maximum coins"))
         wrappedTooltip(Component.literal("Whole coins. Leave blank for no limit. Bid filters use the displayed bid, not a guaranteed purchase price."))
         onChanged().subscribe { input ->
             val value = input.toLongOrNull()?.takeIf { it in 0..9007199254740991L }
             if (input.isBlank() || value != null) change(if (minimum) search.copy(minPrice = value, page = 0) else search.copy(maxPrice = value, page = 0))
-            else count.text(Component.literal("Enter a valid non-negative whole coin amount").withColor(HudTheme.RED))
+            else count.text(Component.literal("Enter a valid non-negative whole coin amount").withColor(MenuTheme.RED))
         }
     }
 
@@ -161,7 +160,7 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
         }
         if (now / 1000 != lastSecond) {
             lastSecond = now / 1000
-            clocks.forEach { (label, auction) -> label.text(Component.literal(remaining(auction)).withColor(if (auction.expired) HudTheme.RED else HudTheme.MUTED)) }
+            clocks.forEach { (label, auction) -> label.text(Component.literal(remaining(auction)).withColor(if (auction.expired) MenuTheme.RED else MenuTheme.MUTED)) }
             // Expired listings are removed off-thread, without rebuilding the list every second.
             if (lastSecond % 15 == 0L) queryRevision++
         }
@@ -169,22 +168,22 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
 
     private fun updateStatus() {
         val view = AuctionAPI.index.view
-        status.text(Component.literal("${if (view.stale) "Stale • " else ""}${view.coverage}\n${view.message}").withColor(if (view.stale) HudTheme.YELLOW else HudTheme.MUTED))
+        status.text(Component.literal("${if (view.stale) "Stale • " else ""}${view.coverage}\n${view.message}").withColor(if (view.stale) MenuTheme.YELLOW else MenuTheme.MUTED))
     }
 
     private fun renderResults() {
         cardsRevision++; clocks.clear()
         val pageCount = ((matches.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
         search = search.copy(page = search.page.coerceIn(0, pageCount - 1))
-        count.text(Component.literal("${matches.size} matches in ${AuctionAPI.index.view.auctions.size} indexed listings").withColor(HudTheme.MUTED))
-        pages.text(Component.literal("${search.page + 1} / $pageCount").withColor(HudTheme.TEXT))
+        count.text(Component.literal("${matches.size} matches in ${AuctionAPI.index.view.auctions.size} indexed listings").withColor(MenuTheme.MUTED))
+        pages.text(Component.literal("${search.page + 1} / $pageCount").withColor(MenuTheme.TEXT))
         if (expanded && height < 340) {
-            scroll.child(filters()); pages.text(Component.literal("Collapse filters for results").withColor(HudTheme.MUTED)); return
+            scroll.child(filters()); pages.text(Component.literal("Collapse filters for results").withColor(MenuTheme.MUTED)); return
         }
         val content = column()
         val detail = selected
         if (detail != null) content.child(details(detail))
-        else if (matches.isEmpty()) content.child(label(if (AuctionAPI.index.view.loading) "No matches yet • other API pages are still loading." else "No active matches. Adjust filters or refresh.", HudTheme.MUTED))
+        else if (matches.isEmpty()) content.child(label(if (AuctionAPI.index.view.loading) "No matches yet • other API pages are still loading." else "No active matches. Adjust filters or refresh.", MenuTheme.MUTED))
         else {
             val columns = (contentWidth / 230).coerceIn(1, 3)
             val cardWidth = (contentWidth - (columns - 1) * 6) / columns
@@ -196,23 +195,23 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
     }
 
     private fun card(auction: AuctionAPI.ActiveAuction, cardWidth: Int) = column(Sizing.fixed(cardWidth)).apply {
-        surface(HudTheme.panel(true)); padding(Insets.of(7)); gap(4)
+        surface(MenuTheme.panel(true)); padding(Insets.of(7)); gap(4)
         child(row().apply { child(icon(auction)); child(label(auction.name).apply { horizontalSizing(Sizing.expand()); wrappedTooltip(Component.literal(auction.name)) }) })
-        child(label("${auction.rarity.replace('_', ' ')} • ${if (auction.isBin) "BIN" else "AUCTION"}", HudTheme.MUTED))
-        child(label("${auction.priceLabel}: ${NumberUtils.condense(auction.price)}", HudTheme.GREEN))
+        child(label("${auction.rarity.replace('_', ' ')} • ${if (auction.isBin) "BIN" else "AUCTION"}", MenuTheme.MUTED))
+        child(label("${auction.priceLabel}: ${NumberUtils.condense(auction.price)}", MenuTheme.GREEN))
         child(clock(auction))
         child(button("Inspect listing", cardWidth - 14) { selected = auction; rebuild() }.wrappedTooltip(Component.literal("Inspect seller, lore and available item data before opening Hypixel's listing.")))
     }
 
     private fun details(auction: AuctionAPI.ActiveAuction) = column().apply {
-        surface(HudTheme.panel(true)); padding(Insets.of(8)); gap(6)
-        child(row().apply { child(icon(auction)); child(label(auction.name, HudTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) }) })
-        child(label("${auction.priceLabel}: ${NumberUtils.condense(auction.price)} coins", HudTheme.GREEN))
+        surface(MenuTheme.panel(true)); padding(Insets.of(8)); gap(6)
+        child(row().apply { child(icon(auction)); child(label(auction.name, MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) }) })
+        child(label("${auction.priceLabel}: ${NumberUtils.condense(auction.price)} coins", MenuTheme.GREEN))
         child(clock(auction))
-        child(label("Seller UUID: ${auction.auctioneer}", HudTheme.MUTED))
+        child(label("Seller UUID: ${auction.auctioneer}", MenuTheme.MUTED))
         child(label("${auction.category} • ${auction.rarity}"))
         child(label(auction.lore.ifBlank { "Item lore unavailable." }))
-        child(label("Hover the icon for available enchantments and upgrades. Seller identity is shown as its API UUID.", HudTheme.MUTED))
+        child(label("Hover the icon for available enchantments and upgrades. Seller identity is shown as its API UUID.", MenuTheme.MUTED))
         child(button("Open in Hypixel", 130) {
             if (LocationAPI.isOnSkyBlock && !auction.expired) sendCommand("viewauction ${auction.uuid}", false)
         }.apply { active(LocationAPI.isOnSkyBlock && !auction.expired) }.wrappedTooltip(Component.literal("Opens the server's normal listing. Purchases and bids still require Hypixel's confirmation.")))
@@ -220,9 +219,9 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
 
     private fun icon(auction: AuctionAPI.ActiveAuction): FlowLayout = column(Sizing.fixed(32)).apply {
         verticalSizing(Sizing.fixed(32))
-        surface(HudTheme.tintedPanel { HudTheme.blend(HudTheme.CARD, HudTheme.ACCENT, 12) })
+        surface(MenuTheme.tintedPanel { MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 12) })
         padding(Insets.of(2))
-        fun item(stack: net.minecraft.world.item.ItemStack) = UIComponents.item(me.mycellium.skymyce.utils.ItemUtils.displayStack(stack)).apply { sizing(Sizing.fixed(28), Sizing.fixed(28)) }
+        fun item(stack: net.minecraft.world.item.ItemStack) = MenuItem(me.mycellium.skymyce.utils.ItemUtils.displayStack(stack)).apply { sizing(Sizing.fixed(28), Sizing.fixed(28)) }
         val fallback = runCatching { Items.PAPER.defaultInstance }.getOrDefault(net.minecraft.world.item.ItemStack.EMPTY)
         child(item(fallback).wrappedTooltip(Component.literal("Loading item data…")))
         val revision = cardsRevision
@@ -237,7 +236,7 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
         if (auction.encodedItem == null) { clearChildren(); child(item(fallback).wrappedTooltip(Component.literal("Item definition unavailable"))) }
     }
 
-    private fun clock(auction: AuctionAPI.ActiveAuction) = label(remaining(auction), HudTheme.MUTED).also { clocks += it to auction }
+    private fun clock(auction: AuctionAPI.ActiveAuction) = label(remaining(auction), MenuTheme.MUTED).also { clocks += it to auction }
     private fun remaining(auction: AuctionAPI.ActiveAuction): String {
         val seconds = (auction.remaining / 1000).coerceAtLeast(0)
         return if (seconds == 0L) "Expired" else "Ends in ${seconds / 3600}h ${seconds / 60 % 60}m ${seconds % 60}s"
@@ -245,10 +244,10 @@ class AuctionHouseScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk
     private fun changePage(delta: Int) { if (selected == null) { search = search.copy(page = (search.page + delta).coerceAtLeast(0)); renderResults() } }
     private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
     private fun menu(button: ButtonComponent, entries: (DropdownComponent) -> Unit) = DropdownComponent.openContextMenu(this, uiAdapter.rootComponent,
-        { root, drop -> root.child(drop) }, button.x.toDouble(), (button.y + button.height).toDouble(), { it.surface(HudTheme.panel()); entries(it) })
+        { root, drop -> root.child(drop) }, button.x.toDouble(), (button.y + button.height).toDouble(), { it.surface(MenuTheme.panel()); entries(it) })
     private fun column(w: Sizing = Sizing.fill(), h: Sizing = Sizing.content()) = UIContainers.verticalFlow(w, h).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
-    private fun label(text: String, color: Int = HudTheme.TEXT) = UIComponents.label(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(HudTheme.SHADOW) }
-    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = UIComponents.button(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
+    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
     companion object { private const val PAGE_SIZE = 24 }
 }

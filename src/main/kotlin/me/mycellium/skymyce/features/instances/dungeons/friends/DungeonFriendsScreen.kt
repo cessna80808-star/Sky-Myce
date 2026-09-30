@@ -1,6 +1,6 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
-import io.wispforest.owo.ui.base.BaseOwoScreen
+import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
@@ -18,7 +18,7 @@ import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 
-class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
+class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuPage.PARTY) {
     private val floor get() = DungeonFriends.hostingFloor
     private var sort = FriendSort.CATACOMBS
     private var ascending = false
@@ -48,10 +48,9 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     private var reconnectButton: ButtonComponent? = null
     private val joinActions = mutableListOf<Pair<ButtonComponent, OnlineDungeonFriend>>()
     private var renderedState: List<Any?> = emptyList()
-    private val panelWidth get() = minOf(700, width - 24)
+    private val panelWidth get() = menuWidth
     private val compact get() = panelWidth < 600
 
-    override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
 
     override fun init() {
         if (!opened) { opened = true; DungeonFriends.refreshPartyFinder(automatic = true) }
@@ -60,9 +59,9 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
 
     override fun removed() { opened = false; super.removed() }
 
-    override fun build(root: FlowLayout) {
+    override fun buildContent(root: FlowLayout) {
         sortHeaders.clear()
-        root.surface(HudTheme.backdrop)
+        root.surface(Surface.BLANK)
         root.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         root.child(if (settingsOpen) settingsPanel() else friendsPanel())
         if (!settingsOpen) updateResults()
@@ -117,11 +116,11 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         }))
     }
 
-    private fun label(text: String, color: Int = WHITE) = UIComponents.label(Component.literal(text))
-        .color(Color.ofRgb(color)).shadow(HudTheme.SHADOW)
+    private fun label(text: String, color: Int = WHITE) = MenuLabel(Component.literal(text))
+        .color(Color.ofRgb(color)).shadow(MenuTheme.SHADOW)
 
     private fun button(text: String, size: Int, onPress: (ButtonComponent) -> Unit) =
-        object : ButtonComponent(Component.literal(text), onPress) {
+        object : MenuButton(Component.literal(text), onPress) {
             // owo's vanilla wrapper suppresses disabled-widget tooltips, including the reason Join is blocked.
             override fun shouldDrawTooltip(mouseX: Double, mouseY: Double): Boolean =
                 visible && isInBoundingBox(mouseX, mouseY) && !tooltip().isNullOrEmpty()
@@ -136,17 +135,17 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     }
 
     private fun separator() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.fixed(1))
-        .surface(Surface.flat(0xFF2C3944.toInt()))
+        .surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER)))
 
-    private fun panel() = UIContainers.verticalFlow(Sizing.fixed(panelWidth), Sizing.fixed(minOf(430, height - 24))).apply {
-        surface(HudTheme.panel())
+    private fun panel() = UIContainers.verticalFlow(Sizing.fixed(panelWidth), Sizing.fixed(menuHeight)).apply {
+        surface(MenuTheme.panel())
         padding(Insets.of(12))
         gap(8)
     }
 
     private fun title(text: String) = row().apply {
         gap(8)
-        child(UIContainers.verticalFlow(Sizing.fixed(3), Sizing.fixed(18)).surface(HudTheme.tintedPanel { HudTheme.ACCENT }))
+        child(UIContainers.verticalFlow(Sizing.fixed(3), Sizing.fixed(18)).surface(MenuTheme.tintedPanel { MenuTheme.ACCENT }))
         child(label("§l$text").horizontalSizing(Sizing.expand()))
     }
 
@@ -167,7 +166,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         })
         child(row().apply {
             gap(6)
-            sortButton = button("Sort: ${sort.label}", 116) { button ->
+            sortButton = button("Sort: ${sort.label}", if (panelWidth < 350) 90 else 116) { button ->
                 menu(button) { dropdown ->
                     FriendSort.entries.forEach { value ->
                         dropdown.button(Component.literal(value.label)) { changeSort(value) }
@@ -176,7 +175,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             }
             sortButton.tooltip(Component.literal("Choose Cata, a class, or S+ PB. Select it again to reverse the order."))
             child(sortButton)
-            classButton = button("Missing", 104) { button ->
+            classButton = button("Missing", if (panelWidth < 350) 90 else 104) { button ->
                 menu(button) { dropdown ->
                     DungeonClass.entries.forEach { value ->
                         dropdown.checkbox(Component.literal(value.displayName), value in wantedClasses()) { checked ->
@@ -190,22 +189,21 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             }
             classButton.tooltip(Component.literal("Check the classes you need. Clear all boxes to show every class."))
             child(classButton)
-            child(button(if (showLowCata) "§aLow Cata" else "Low Cata", 70) {
-                showLowCata = !showLowCata
-                updateResults()
-            }.tooltip(Component.literal("Show friends whose profile is available but does not meet the selected floor's Catacombs or completion requirement.")))
+            if (panelWidth >= 350) child(lowCataButton())
             if (!compact) {
                 child(UIContainers.horizontalFlow(Sizing.expand(), Sizing.fixed(1)))
                 toolbarActions(this)
             }
         })
+        if (panelWidth < 350) child(lowCataButton())
         child(row().apply {
             gap(6)
             partyStatus = label(DungeonFriends.partyStatus, CYAN)
             child(partyStatus.horizontalSizing(Sizing.expand()))
-            if (compact) toolbarActions(this)
+            if (compact && panelWidth >= 350) toolbarActions(this)
             else child(label("PARTY FINDER", MUTED))
         })
+        if (panelWidth < 350) child(row().apply { gap(6); toolbarActions(this) })
         child(separator())
         child(row().apply {
             listStatus = label("ONLINE FRIENDS", CYAN)
@@ -233,14 +231,18 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         child(results)
     }
 
+    private fun lowCataButton() = button(if (showLowCata) "§aLow Cata" else "Low Cata", 70) {
+        showLowCata = !showLowCata; updateResults()
+    }.tooltip(Component.literal("Show friends with stats who do not meet the selected floor's Catacombs or completion requirement."))
+
     private fun toolbarActions(row: FlowLayout) {
-        row.child(button(if (DungeonFriendsSettings.availability.enabled) "§aAvailable" else "Available", 76) { openSettings(null) })
-        refreshButton = button("Refresh", 82) {
+        row.child(button(if (DungeonFriendsSettings.availability.enabled) "§aAvailable" else "Available", if (panelWidth < 350) 60 else 76) { openSettings(null) })
+        refreshButton = button("Refresh", if (panelWidth < 350) 68 else 82) {
             DungeonFriends.refreshPartyFinder()
             it.active(false)
         }
         row.child(refreshButton)
-        row.child(button("Settings", 54) { openSettings(null) })
+        row.child(button("Settings", if (panelWidth < 350) 48 else 54) { openSettings(null) })
     }
 
     private fun wantedClasses(): Set<DungeonClass> = missingClasses ?: DungeonFriends.openClasses
@@ -302,10 +304,10 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             val pendingInvite = reply?.status in setOf(LfgReplyStatus.WAITING, LfgReplyStatus.INVITED)
             val declined = reply?.status == LfgReplyStatus.DECLINED
             val activity = friend.activity
-            surface(HudTheme.tintedPanel { when {
-                declined -> 0xFF2D1B20.toInt()
-                pendingInvite -> 0xFF29231C.toInt()
-                else -> 0xFF17212A.toInt()
+            surface(MenuTheme.tintedPanel { when {
+                declined -> MenuTheme.blend(MenuTheme.CARD, MenuTheme.RED, 14)
+                pendingInvite -> MenuTheme.blend(MenuTheme.CARD, MenuTheme.YELLOW, 14)
+                else -> MenuTheme.CARD
             } }.and(Surface { graphics, component ->
                 graphics.fill(component.x(), component.y(), component.x() + 2, component.y() + component.height(),
                     0xFF000000.toInt() or activity.color)
@@ -327,12 +329,12 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             child(row().apply {
                 child(identity)
                 if (!compact) statColumns(this, stats, false)
-                child(row().apply {
-                    horizontalSizing(Sizing.fixed(ACTIONS_WIDTH))
+                child((if (panelWidth < 350) UIContainers.verticalFlow(Sizing.fixed(88), Sizing.content()) else row()).apply {
+                    horizontalSizing(Sizing.fixed(if (panelWidth < 350) 88 else ACTIONS_WIDTH))
                     margins(Insets.left(ACTIONS_GAP))
                     gap(3)
                     val invite = button("Party", 40) { DungeonFriends.invite(friend) }.active(DungeonFriends.canAct)
-                    if (accepted) invite.renderer { g, b, _ -> HudTheme.rounded(g, b.x, b.y, b.width, b.height, HudTheme.alpha(if (b.isHovered) 0x34865C else 0x246545)) }
+                    if (accepted) invite.renderer { g, b, _ -> MenuTheme.rounded(g, b.x, b.y, b.width, b.height, MenuTheme.alpha(if (b.isHovered) 0x34865C else 0x246545)) }
                     val inviteTooltip = "Send ${friend.name} a party invite to accept manually"
                     invite.tooltip(Component.literal(DungeonFriends.actionUnavailable ?: inviteTooltip))
                     val message = button("Invite", 44) { DungeonFriends.message(friend, floor, messageClass(friend)) }.active(DungeonFriends.canAct)
@@ -340,12 +342,13 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
                     message.tooltip(Component.literal(DungeonFriends.actionUnavailable ?: messageTooltip))
                     actions += invite to inviteTooltip
                     actions += message to messageTooltip
-                    child(invite)
-                    child(message)
                     val join = button("Join", 34) { DungeonFriends.join(friend, floor) }.active(DungeonFriends.joinUnavailable(friend, floor) == null)
                     joinActions += join to friend
-                    child(join)
-                    child(button("Edit", 30) { openSettings(friend.name) }.tooltip(Component.literal("Edit secondary classes")))
+                    val edit = button("Edit", 30) { openSettings(friend.name) }.tooltip(Component.literal("Edit secondary classes"))
+                    if (panelWidth < 350) {
+                        child(row().apply { gap(3); children(listOf(invite, message)) })
+                        child(row().apply { gap(3); children(listOf(join, edit)) })
+                    } else children(listOf(invite, message, join, edit))
                 })
             })
             if (compact) {
@@ -426,7 +429,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
             child(row().apply {
                 gap(8)
                 child(label("Join PB limit", CYAN))
-                child(UIComponents.textBox(Sizing.fixed(100)).apply {
+                child(MenuTextBox(Sizing.fixed(100)).apply {
                     setMaxLength(10)
                     text(pbLimitDraft)
                     setHint(Component.literal("No limit"))
@@ -437,7 +440,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
         }
         child(label("MESSAGE TEMPLATE", CYAN))
         child(label("Use {name}, {class} and {floor}.", MUTED).horizontalSizing(Sizing.fill()))
-        child(UIComponents.textBox(Sizing.fill()).apply {
+        child(MenuTextBox(Sizing.fill()).apply {
             setMaxLength(220)
             text(templateDraft)
             setHint(Component.literal("Message sent by the Invite button"))
@@ -488,7 +491,7 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
 
     private fun menu(button: ButtonComponent, entries: (DropdownComponent) -> Unit) {
         DropdownComponent.openContextMenu(this, uiAdapter.rootComponent, { root, dropdown -> root.child(dropdown) },
-            button.x.toDouble(), (button.y + button.height).toDouble()) { menu -> menu.surface(HudTheme.panel()); entries(menu) }
+            button.x.toDouble(), (button.y + button.height).toDouble()) { menu -> menu.surface(MenuTheme.panel()); entries(menu) }
     }
 
     private fun rebuild() {
@@ -500,9 +503,9 @@ class DungeonFriendsScreen : BaseOwoScreen<FlowLayout>() {
     companion object {
         private const val ACTIONS_WIDTH = 157 // Party + Invite + Join + Edit, with three 3px gaps.
         private const val ACTIONS_GAP = 12
-        private val CYAN get() = HudTheme.ACCENT
-        private val WHITE get() = HudTheme.TEXT
-        private val MUTED get() = HudTheme.MUTED
+        private val CYAN get() = MenuTheme.ACCENT
+        private val WHITE get() = MenuTheme.TEXT
+        private val MUTED get() = MenuTheme.MUTED
         private val displayedClasses = listOf(
             DungeonClass.HEALER to "HEAL", DungeonClass.MAGE to "MAGE", DungeonClass.BERSERKER to "BERS",
             DungeonClass.ARCHER to "ARCH", DungeonClass.TANK to "TANK",

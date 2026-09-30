@@ -2,7 +2,7 @@ package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import com.google.gson.JsonPrimitive
 import com.mojang.serialization.JsonOps
-import io.wispforest.owo.ui.base.BaseOwoScreen
+import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.*
 import io.wispforest.owo.ui.container.*
 import io.wispforest.owo.ui.core.*
@@ -25,7 +25,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.time.Duration.Companion.milliseconds
 
 /** View filters never write DungeonTracker.currentFloor; the detector alone owns recording context. */
-class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dungeon Tracker")) {
+class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), MenuPage.DUNGEONS) {
     private var filter = AcquisitionRepository.preferences
     private var view = TrackerView()
     private var page = 0
@@ -43,29 +43,28 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
     private lateinit var results: ScrollContainer<FlowLayout>
     private lateinit var status: LabelComponent
     private lateinit var pageLabel: LabelComponent
-    private val panelWidth get() = (width - 16).coerceIn(220, 960)
+    private val panelWidth get() = menuWidth
     private val bodyWidth get() = panelWidth - 24
     private val history get() = filter.page == TrackerPage.TIMELINE || filter.page == TrackerPage.MUSEUM
-    override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
     override fun init() { closed = false; super.init() }
     override fun removed() { closed = true; generation++; super.removed() }
-    override fun build(root: FlowLayout) {
-        root.surface(HudTheme.backdrop).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
+    override fun buildContent(root: FlowLayout) {
+        root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         root.child(column().apply {
-            sizing(Sizing.fixed(panelWidth), Sizing.fixed((height - 16).coerceAtLeast(150))); padding(Insets.of(8)); surface(HudTheme.panel())
+            sizing(Sizing.fixed(panelWidth), Sizing.fixed(menuHeight)); padding(Insets.of(8)); surface(MenuTheme.panel())
             child(row().apply {
-                child(label("SKY-HAWK / DUNGEONS", HudTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
+                child(label("SKY-HAWK / DUNGEONS", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
                 child(button("Close", 42) { onClose() })
             })
             val perRow = if (panelWidth < 420) 2 else 4
             if (!more || height >= 340) TrackerPage.entries.chunked(perRow).forEach { tabs -> child(row().apply { tabs.forEach { tab ->
                 child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) { change(filter.copy(page = tab)); rebuild() }
-                    .apply { if (filter.page == tab) message = message.copy().withColor(HudTheme.ACCENT) }
+                    .apply { if (filter.page == tab) message = message.copy().withColor(MenuTheme.ACCENT) }
                     .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
             } }) }
             child(row().apply {
-                child(button(filter.floor ?: "All tracked floors", 113) { b -> menu(b) { d ->
+                child(button(filter.floor ?: "All tracked floors", minOf(113, bodyWidth - 84)) { b -> menu(b) { d ->
                     d.button(Component.literal("All tracked floors")) { change(filter.copy(floor = null)); rebuild() }
                     DungeonFloor.entries.forEach { floor -> d.button(Component.literal(floor.name)) { change(filter.copy(floor = floor.name, mode = null)); rebuild() } }
                 } }.wrappedTooltip(Component.literal("Select a viewing floor. This never changes an ongoing run's recording floor.")))
@@ -76,16 +75,17 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
             child(row().apply {
                 child(button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() })
                 child(button("Clear all", 65) { change(TrackerFilter(page = filter.page)); rebuild() })
-                if (filter.page == TrackerPage.TIMELINE) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
+                if (filter.page == TrackerPage.TIMELINE && bodyWidth >= 220) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
             })
-            if (filter.page != TrackerPage.OVERVIEW && (!more || height >= 340)) child(UIComponents.textBox(Sizing.fill()).apply {
+            if (filter.page == TrackerPage.TIMELINE && bodyWidth < 220) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
+            if (filter.page != TrackerPage.OVERVIEW && (!more || height >= 340)) child(MenuTextBox(Sizing.fill()).apply {
                 setMaxLength(100); text(this@DungeonScreen.filter.query); setHint(Component.literal("Search item name or ID…"))
                 onChanged().subscribe { change(this@DungeonScreen.filter.copy(query = it)) }
             })
             if (more && height >= 340) child(UIContainers.verticalScroll(Sizing.fill(), Sizing.fixed(if (height < 400) 58 else 100), filters()).apply { scrollStep(20); scrollbarThiccness(2) })
-            status = label("Loading saved records…", HudTheme.MUTED); child(status)
+            status = label("Loading saved records…", MenuTheme.MUTED); child(status)
             results = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), column()).apply {
-                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(HudTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
+                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
             }; child(results)
             child(row().apply {
                 child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView() })
@@ -120,7 +120,7 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
             child(button(if (filter.valuableOnly) "1m+ ✓" else "1m+ value", 86) { change(filter.copy(valuableOnly = !filter.valuableOnly)); rebuild() }.wrappedTooltip(Component.literal("Only recorded values of at least one million coins. Unknown historical values do not qualify.")))
         })
         if (filter.page == TrackerPage.LOOT) child(row().apply {
-            child(button("Sort: ${filter.sort.name.replace('_', ' ')}", 140) { change(filter.copy(sort = LootOrder.entries[(filter.sort.ordinal + 1) % LootOrder.entries.size])); rebuild() })
+            child(button("Sort: ${filter.sort.name.replace('_', ' ')}", minOf(140, bodyWidth - 64)) { change(filter.copy(sort = LootOrder.entries[(filter.sort.ordinal + 1) % LootOrder.entries.size])); rebuild() })
             child(button(if (filter.ascending) "↑ Asc" else "↓ Desc", 60) { change(filter.copy(ascending = !filter.ascending)); rebuild() })
         })
         if (history) child(button(filter.activity ?: "All activities", 145) { b -> menu(b) { d ->
@@ -129,15 +129,15 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
             }
         } })
     }
-    private fun dateField(start: Boolean) = UIComponents.textBox(Sizing.fill(48)).apply {
+    private fun dateField(start: Boolean) = MenuTextBox(Sizing.fill(48)).apply {
         setMaxLength(10); text(if (start) this@DungeonScreen.filter.from else this@DungeonScreen.filter.until); setHint(Component.literal(if (start) "From YYYY-MM-DD" else "To YYYY-MM-DD"))
         wrappedTooltip(Component.literal("Inclusive local calendar date. Date filters require timestamped records; old aggregate totals stay available separately."))
         onChanged().subscribe { value ->
             if (value.isBlank() || runCatching { LocalDate.parse(value) }.isSuccess) {
                 val next = if (start) this@DungeonScreen.filter.copy(from = value, legacyTotals = false) else this@DungeonScreen.filter.copy(until = value, legacyTotals = false)
                 if (next.from.isEmpty() || next.until.isEmpty() || next.from <= next.until) change(next)
-                else status.text(Component.literal("Start date must not follow end date").withColor(HudTheme.RED))
-            } else status.text(Component.literal("Use a valid YYYY-MM-DD date").withColor(HudTheme.YELLOW))
+                else status.text(Component.literal("Start date must not follow end date").withColor(MenuTheme.RED))
+            } else status.text(Component.literal("Use a valid YYYY-MM-DD date").withColor(MenuTheme.YELLOW))
         }
     }
     private fun change(next: TrackerFilter) { preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis(); AcquisitionRepository.remember(filter) }
@@ -159,7 +159,7 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
                 val computed = runCatching { trackerView(archive, legacy, query, context) }
                 MC.instance.execute {
                     busy = false
-                    if (!closed && token == generation) computed.fold({ view = it; renderView() }, { status.text(Component.literal("Some saved records could not be displayed").withColor(HudTheme.RED)) })
+                    if (!closed && token == generation) computed.fold({ view = it; renderView() }, { status.text(Component.literal("Some saved records could not be displayed").withColor(MenuTheme.RED)) })
                 }
             }
         }
@@ -170,10 +170,10 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
             filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
             if (filter.rareOnly) "RNG" else null, if (filter.valuableOnly) "1m+" else null)
         val source = if (!history && view.usingLegacy) "All-time totals • unscoped" else filter.scope.name.replace('_', ' ')
-        status.text(Component.literal("$source${if (filters.isEmpty()) " • no filters" else " • ${filters.joinToString(" / ")}"}").withColor(HudTheme.MUTED))
+        status.text(Component.literal("$source${if (filters.isEmpty()) " • no filters" else " • ${filters.joinToString(" / ")}"}").withColor(MenuTheme.MUTED))
         if (more && height < 340) {
-            status.text(Component.literal("Filters • changes apply immediately").withColor(HudTheme.MUTED))
-            results.child(filters()); pageLabel.text(Component.literal("Collapse filters for results").withColor(HudTheme.MUTED)); return
+            status.text(Component.literal("Filters • changes apply immediately").withColor(MenuTheme.MUTED))
+            results.child(filters()); pageLabel.text(Component.literal("Collapse filters for results").withColor(MenuTheme.MUTED)); return
         }
         val content = column()
         when (filter.page) {
@@ -185,7 +185,7 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
         results.child(content)
     }
     private fun overview(content: FlowLayout) {
-        pageLabel.text(Component.literal("Overview").withColor(HudTheme.MUTED))
+        pageLabel.text(Component.literal("Overview").withColor(MenuTheme.MUTED))
         val s = view.summary
         val values = listOf("Runs" to s.runs.toString(), "Tracked time${if (s.timedRuns < s.runs) " (partial)" else ""}" to
             (if (s.timedRuns == 0L && s.runs > 0) "Unknown" else duration(s.time)), "Average run" to (s.average?.toLong()?.let(::duration) ?: "Unknown"),
@@ -193,27 +193,27 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
             "Chest costs" to money(s.chestCost), "Reroll costs" to money(s.rerollCost), "Catacombs XP" to money(s.cataXp), "Chests / rerolls" to "${s.chests} / ${s.rerolls}")
         val columns = (bodyWidth / 180).coerceIn(1, 3)
         values.chunked(columns).forEach { group -> content.child(row().apply { group.forEach { (name, value) ->
-            child(column().apply { horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns)); surface(HudTheme.panel(true)); padding(Insets.of(HudTheme.PADDING))
-                child(label(name, HudTheme.MUTED)); child(label(value, HudTheme.ACCENT))
+            child(column().apply { horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns)); surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
+                child(label(name, MenuTheme.MUTED)); child(label(value, MenuTheme.ACCENT))
             })
         } }) }
-        s.classXp.forEach { (name, xp) -> content.child(label("$name XP: ${money(xp)}", HudTheme.MUTED)) }
-        if (s.timedRuns < s.runs) content.child(label("Time known for ${s.timedRuns}/${s.runs} completed runs. Average uses only timed runs; missing historical durations are not estimated.", HudTheme.YELLOW))
+        s.classXp.forEach { (name, xp) -> content.child(label("$name XP: ${money(xp)}", MenuTheme.MUTED)) }
+        if (s.timedRuns < s.runs) content.child(label("Time known for ${s.timedRuns}/${s.runs} completed runs. Average uses only timed runs; missing historical durations are not estimated.", MenuTheme.YELLOW))
         content.child(label(if (view.usingLegacy) "Legacy totals preserve the original save. Account, date, session and per-acquisition prices were not recorded. Average uses aggregate time/runs; observed loot rates are unavailable." else
-            "Only confirmed inventory receipts appear as chest acquisitions. Average uses completed runs with known duration. Values are estimates recorded at acquisition; unknown values remain unknown. Reroll costs cannot be split by chest type.", HudTheme.MUTED))
-        content.child(label(AcquisitionRepository.status, HudTheme.MUTED)); content.child(label(DungeonTracker.storageStatus, HudTheme.MUTED))
+            "Only confirmed inventory receipts appear as chest acquisitions. Average uses completed runs with known duration. Values are estimates recorded at acquisition; unknown values remain unknown. Reroll costs cannot be split by chest type.", MenuTheme.MUTED))
+        content.child(label(AcquisitionRepository.status, MenuTheme.MUTED)); content.child(label(DungeonTracker.storageStatus, MenuTheme.MUTED))
     }
     private fun loot(content: FlowLayout) {
         val visible = slice(view.loot)
-        content.child(label("Item  /  Count  /  Recorded value  /  Observed rate", HudTheme.SECONDARY))
-        if (visible.isEmpty()) content.child(label("No loot matches these filters. All-time totals remain available under Filters.", HudTheme.MUTED))
+        content.child(label("Item  /  Count  /  Recorded value  /  Observed rate", MenuTheme.SECONDARY))
+        if (visible.isEmpty()) content.child(label("No loot matches these filters. All-time totals remain available under Filters.", MenuTheme.MUTED))
         visible.forEach { item -> content.child(column().apply {
-            surface(HudTheme.panel(true)); padding(Insets.of(HudTheme.PADDING))
+            surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
             child(row().apply { child(icon(item.item)); child(label(itemName(item.item)).apply { horizontalSizing(Sizing.expand()) }) })
             child(row().apply {
                 child(label("× ${item.count}").horizontalSizing(Sizing.fill(25)))
-                child(label(money(item.value), HudTheme.GREEN).horizontalSizing(Sizing.fill(35)))
-                child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "Unknown", HudTheme.SECONDARY).horizontalSizing(Sizing.expand())
+                child(label(money(item.value), MenuTheme.GREEN).horizontalSizing(Sizing.fill(35)))
+                child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "Unknown", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
                     .wrappedTooltip(Component.literal(if (item.observedRate == null) "Legacy aggregates do not record which chests contained this item. No theoretical chance is inferred." else
                         "Observed in ${item.acquiredChests} of ${item.sampledChests} confirmed chests in this tracked sample. This is not an official drop chance.")))
             })
@@ -221,20 +221,20 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
     }
     private fun timeline(content: FlowLayout) {
         val visible = slice(view.events)
-        if (visible.isEmpty()) content.child(label("No acquisitions match. Offline, choose All local profiles; older tracker events are under Unscoped legacy.", HudTheme.MUTED))
+        if (visible.isEmpty()) content.child(label("No acquisitions match. Offline, choose All local profiles; older tracker events are under Unscoped legacy.", MenuTheme.MUTED))
         var date = ""
         visible.forEach { event ->
             val local = Instant.ofEpochMilli(event.occurredAt).atZone(ZoneId.systemDefault())
-            if (date != local.toLocalDate().toString()) { date = local.toLocalDate().toString(); content.child(label(date, HudTheme.SECONDARY)) }
+            if (date != local.toLocalDate().toString()) { date = local.toLocalDate().toString(); content.child(label(date, MenuTheme.SECONDARY)) }
             content.child(column().apply {
-                surface(HudTheme.panel(true)); padding(Insets.of(HudTheme.PADDING))
-                child(row().apply { child(icon(event.item)); child(label("${itemName(event.item)} ×${event.quantity}", HudTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) }) })
-                child(label("${local.format(DateTimeFormatter.ofPattern("HH:mm:ss"))} • ${event.floor ?: event.activity} • ${event.chest ?: "Chest unknown"}", HudTheme.MUTED))
-                child(label("${event.player ?: "Player not recorded"} • ${event.context?.profileName ?: "Unscoped legacy"} • ${event.origin}", HudTheme.MUTED))
-                child(label("Recorded value: ${money(event.value)} • Chest cost: ${money(event.chestCost)}", HudTheme.MUTED))
-                if (event.rerollCost != null) child(label("Reroll estimate: ${money(event.rerollCost)}", HudTheme.MUTED))
-                if (event.run != null) child(label("Linked run ${event.run.take(8)}", HudTheme.MUTED))
-                if (event.origin.startsWith("legacy")) child(label("Legacy report • no matching receipt to reconcile across old sources", HudTheme.YELLOW))
+                surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
+                child(row().apply { child(icon(event.item)); child(label("${itemName(event.item)} ×${event.quantity}", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) }) })
+                child(label("${local.format(DateTimeFormatter.ofPattern("HH:mm:ss"))} • ${event.floor ?: event.activity} • ${event.chest ?: "Chest unknown"}", MenuTheme.MUTED))
+                child(label("${event.player ?: "Player not recorded"} • ${event.context?.profileName ?: "Unscoped legacy"} • ${event.origin}", MenuTheme.MUTED))
+                child(label("Recorded value: ${money(event.value)} • Chest cost: ${money(event.chestCost)}", MenuTheme.MUTED))
+                if (event.rerollCost != null) child(label("Reroll estimate: ${money(event.rerollCost)}", MenuTheme.MUTED))
+                if (event.run != null) child(label("Linked run ${event.run.take(8)}", MenuTheme.MUTED))
+                if (event.origin.startsWith("legacy")) child(label("Legacy report • no matching receipt to reconcile across old sources", MenuTheme.YELLOW))
             })
         }
     }
@@ -243,16 +243,16 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
         val catalog = DigestRngParser.catalog.filter { (item, entry) -> (filter.activity == null || entry.activity == filter.activity) &&
             (filter.query.isBlank() || "$item ${entry.name}".contains(filter.query, true)) && (!filter.valuableOnly || item in grouped) }
             .keys.sortedWith(compareByDescending<String> { AcquisitionRepository.pinned(it, seenContext) }.thenBy { itemName(it) })
-        content.child(label("Personal rare-drop collection • not Hypixel's donation Museum", HudTheme.MUTED))
+        content.child(label("Personal rare-drop collection • not Hypixel's donation Museum", MenuTheme.MUTED))
         val columns = (bodyWidth / 260).coerceIn(1, 3)
         slice(catalog).chunked(columns).forEach { group -> content.child(row().apply { group.forEach { item ->
             val events = grouped[item].orEmpty()
             child(column().apply {
                 horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns))
-                surface(HudTheme.panel(true)); padding(Insets.of(HudTheme.PADDING))
-                child(row().apply { child(icon(item)); child(label(itemName(item), if (events.isEmpty()) HudTheme.MUTED else HudTheme.SECONDARY).apply { horizontalSizing(Sizing.expand()) }) })
-                child(label(if (events.isEmpty()) "Not recorded" else "Obtained: ${events.sumOf { it.quantity }} • ${events.mapNotNull { it.floor }.distinct().joinToString().ifEmpty { events.first().activity }}", HudTheme.MUTED))
-                if (events.isNotEmpty()) child(label("First: ${date(events.minOf { it.occurredAt })} • Latest: ${date(events.maxOf { it.occurredAt })}", HudTheme.MUTED))
+                surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
+                child(row().apply { child(icon(item)); child(label(itemName(item), if (events.isEmpty()) MenuTheme.MUTED else MenuTheme.SECONDARY).apply { horizontalSizing(Sizing.expand()) }) })
+                child(label(if (events.isEmpty()) "Not recorded" else "Obtained: ${events.sumOf { it.quantity }} • ${events.mapNotNull { it.floor }.distinct().joinToString().ifEmpty { events.first().activity }}", MenuTheme.MUTED))
+                if (events.isNotEmpty()) child(label("First: ${date(events.minOf { it.occurredAt })} • Latest: ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED))
                 child(row().apply {
                     child(button("History", 68) { change(filter.copy(page = TrackerPage.TIMELINE, query = item, valuableOnly = false)); rebuild() }.apply { active(events.isNotEmpty()) })
                     child(button(if (AcquisitionRepository.pinned(item, seenContext)) "Unpin" else "Pin", 55) { AcquisitionRepository.pin(item, seenContext); renderView() }
@@ -263,14 +263,14 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
     }
     private fun <T> slice(values: List<T>): List<T> {
         val pages = ((values.size + 19) / 20).coerceAtLeast(1); page = page.coerceIn(0, pages - 1)
-        pageLabel.text(Component.literal("${page + 1} / $pages • ${values.size} entries").withColor(HudTheme.MUTED))
+        pageLabel.text(Component.literal("${page + 1} / $pages • ${values.size} entries").withColor(MenuTheme.MUTED))
         return values.drop(page * 20).take(20)
     }
     private fun itemName(item: String) = DigestRngParser.catalog[item]?.name ?: item.substringAfter(':').replace('_', ' ').take(100)
     private fun icon(item: String): UIComponent {
         val stack = runCatching { if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase())).result().orElse(null)?.toItem() else SkyBlockId.item(item).toItem() }.getOrNull()
         val display = stack?.takeUnless { it.isEmpty } ?: runCatching { Items.PAPER.defaultInstance }.getOrDefault(net.minecraft.world.item.ItemStack.EMPTY)
-        return UIComponents.item(me.mycellium.skymyce.utils.ItemUtils.displayStack(display)).apply {
+        return MenuItem(me.mycellium.skymyce.utils.ItemUtils.displayStack(display)).apply {
             if (stack != null && !stack.isEmpty) setTooltipFromStack(true) else wrappedTooltip(Component.literal("$item • item definition unavailable"))
         }
     }
@@ -278,10 +278,10 @@ class DungeonScreen : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Dung
     private fun duration(value: Long) = "${value / 3600000}h ${value / 60000 % 60}m ${value / 1000 % 60}s"
     private fun date(value: Long) = Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     private fun menu(button: ButtonComponent, options: (DropdownComponent) -> Unit) = DropdownComponent.openContextMenu(this, uiAdapter.rootComponent,
-        { root, d -> root.child(d) }, button.x.toDouble(), (button.y + button.height).toDouble(), { it.surface(HudTheme.panel()); options(it) })
+        { root, d -> root.child(d) }, button.x.toDouble(), (button.y + button.height).toDouble(), { it.surface(MenuTheme.panel()); options(it) })
     private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
-    private fun label(text: String, color: Int = HudTheme.TEXT) = UIComponents.label(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(HudTheme.SHADOW) }
-    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = UIComponents.button(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
+    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
 }

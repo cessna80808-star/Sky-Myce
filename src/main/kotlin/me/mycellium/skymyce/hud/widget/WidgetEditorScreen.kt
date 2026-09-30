@@ -11,6 +11,7 @@ import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.ThemeEditorScreen
 import me.mycellium.skymyce.hud.themed
+import me.mycellium.skymyce.ui.*
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.events.GuiEventListener
 import net.minecraft.client.gui.screens.Screen
@@ -37,6 +38,8 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
     private var snapPosition = false
     private var anchorSelect = false
     private var ui: OwoUIAdapter<FlowLayout>? = null
+    private val canvas = MenuCanvas()
+    private val texture = MenuTexture()
 
     override fun init() {
         ui?.dispose()
@@ -49,7 +52,9 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
 
         val adapter = OwoUIAdapter.create(this, UIContainers::verticalFlow)
         ui = adapter
-        val resetButton = UIComponents.button(Component.literal("Reset HUD Positions")) {
+        adapter.rootComponent.child(menuSidebar(MenuLayout.fit(width, height), MenuPage.HUD, parent = this)
+            .positioning(Positioning.absolute(8, 8)))
+        val resetButton = MenuButton(Component.literal("Reset HUD Positions")) {
             screenWidgets.forEach { widget ->
                 widget.x = width / 2
                 widget.y = height / 2
@@ -68,21 +73,20 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
     }
 
     override fun removed() {
+        texture.close()
+        WidgetManager.save()
         ui?.dispose()
         ui = null
         super.removed()
     }
 
-    override fun onClose() {
-        WidgetManager.save()
-        super.onClose()
-    }
-
     override fun extractBackground(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
-        HudTheme.rounded(graphics, 0, 0, width, height, HudTheme.alpha(HudTheme.PANEL))
     }
 
-    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
+        canvas.begin()
+        val graphics = MenuGraphics(canvas, mouseX, mouseY)
+        graphics.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, 85))
         screenWidgets.forEach { widget ->
             val backgroundColor = if (clickedWidget == widget) 0x88FFFF55.toInt() else if (selectedWidget == widget) 0x55FFFFFF.toInt() else 0x55000000.toInt()
             val outlineColor = 0xFF000000.toInt() or if (clickedWidget == widget) HudTheme.SECONDARY else HudTheme.ACCENT
@@ -109,12 +113,14 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         graphics.text(MC.font, "§e[RIGHT CLICK]§7 Widget theme", 10, height - 10 - (MC.font.lineHeight * 4) - 6, 0xFFFFFFFF.toInt())
 
         super.extractRenderState(graphics, mouseX, mouseY, a)
+        ui?.drawTooltip(graphics, mouseX, mouseY, a)
+        texture.render(output, canvas.finish(width, height), width, height, canvas.revision)
     }
 
 
     override fun mouseMoved(mouseX: Double, mouseY: Double) {
         selectedWidget = screenWidgets.asReversed().firstOrNull {
-            it.inBounds(mouseX.toInt(), mouseY.toInt())
+            !hudEditorControlAt(ui?.rootComponent, mouseX, mouseY) && it.inBounds(mouseX.toInt(), mouseY.toInt())
         }
 
         if (anchorSelect) {
@@ -189,6 +195,7 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmt: Double, verticalAmt: Double): Boolean {
+        if (hudEditorControlAt(ui?.rootComponent, mouseX, mouseY)) return super.mouseScrolled(mouseX, mouseY, horizontalAmt, verticalAmt)
         selectedWidget?.let {
             it.scale += verticalAmt.toFloat() * 0.1f
             it.scale = (round(it.scale * 10) / 10).coerceIn(0.1f, 3f) // get rid of weird floating point errors

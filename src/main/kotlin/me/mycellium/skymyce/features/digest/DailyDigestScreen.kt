@@ -5,7 +5,7 @@ import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.hud.themed
 import io.wispforest.owo.ui.component.DropdownComponent
 import net.minecraft.client.gui.screens.ChatScreen
-import io.wispforest.owo.ui.base.BaseOwoScreen
+import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.UIComponents
@@ -17,8 +17,6 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.utils.MC
-import net.minecraft.client.gui.screens.ConfirmLinkScreen
-import net.minecraft.client.gui.screens.ConfirmScreen
 import net.minecraft.network.chat.Component
 import java.time.Instant
 import java.time.LocalDate
@@ -26,7 +24,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /** Retained owo UI: rendering reads snapshots; refresh and storage belong to DailyDigest. */
-class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLayout>(Component.literal("Sky-Hawk Daily Digest")) {
+class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component.literal("Sky-Hawk Daily Digest"), MenuPage.DIGEST) {
     private var opened = false
     private var returningFromSettings = false
     private var previous = DigestView()
@@ -45,12 +43,11 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
     private lateinit var context: LabelComponent
     private lateinit var footer: LabelComponent
     private lateinit var refresh: ButtonComponent
-    private val layout get() = DigestLayout.fit(width, height, DailyDigestConfig.compact)
-    private val accent get() = HudTheme.ACCENT
+    private val layout get() = DigestLayout.fit(menuWidth + 24, menuHeight + 24, DailyDigestConfig.compact).copy(width = menuWidth, height = menuHeight)
+    private val accent get() = MenuTheme.ACCENT
     private val compactOverview get() = page == null && (DailyDigestConfig.compact || height < 300)
     private val mergedHeader get() = compactOverview && layout.width >= 400
 
-    override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
 
     override fun init() {
         val restyle = returningFromSettings
@@ -67,29 +64,30 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
 
     override fun isPauseScreen() = false
 
-    override fun build(root: FlowLayout) {
+    override fun buildContent(root: FlowLayout) {
         builtLayout = layout
         previous = DailyDigest.view()
         cards.clear()
         clocks.clear()
-        root.surface(HudTheme.backdrop)
+        root.surface(Surface.BLANK)
         root.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         root.child(UIContainers.verticalFlow(Sizing.fixed(layout.width), Sizing.fixed(layout.height)).apply {
             padding(Insets.of(layout.padding)); gap(layout.gap)
-            surface(HudTheme.panel())
+            surface(MenuTheme.panel())
             child(row().apply {
                 child(label("SKY-HAWK  /  ${if (mergedHeader) "DIGEST" else pageTitle()}", accent).apply { horizontalSizing(Sizing.expand()) })
                 if (mergedHeader) { child(refreshButton()); child(settingsButton()) }
                 if (page != null) child(button("Back", 42) { navigate(null) }.tip("Return to the daily overview"))
                 child(button("Close", 44) { onClose() })
             })
-            context = label("${DATE.format(LocalDate.now())}  •  ${digestText(previous.context, 100)}", HudTheme.MUTED)
+            context = label("${DATE.format(LocalDate.now())}  •  ${digestText(previous.context, 100)}", MenuTheme.MUTED)
             child(context)
             if (!mergedHeader) child(row().apply {
                 child(refreshButton())
                 child(settingsButton())
-                if (page == "rng") child(button("Clear local", 76) { confirmClear() })
+                if (page == "rng" && menuWidth >= 280) child(button("Clear local", 76) { confirmClear() })
             })
+            if (page == "rng" && menuWidth < 280) child(button("Clear local", 76) { confirmClear() })
             if (page == "news") child(newsFilters())
             if (page == "rng") {
                 child(row().apply {
@@ -98,7 +96,7 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
                         .tip("Opt-in community reports are unverified. Enable receiving in Daily Digest settings."))
                 })
                 child(row().apply {
-                    child(UIComponents.textBox(Sizing.expand()).apply {
+                    child(MenuTextBox(Sizing.expand()).apply {
                         setMaxLength(80); text(search); setHint(Component.literal("Search drop or player..."))
                         onChanged().subscribe { search = it; resetList() }
                     })
@@ -115,7 +113,7 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
                 scrollbarThiccness(2); padding(Insets.right(4)); scrollStep(20)
             }
             child(results)
-            footer = label(footerText(previous), HudTheme.MUTED)
+            footer = label(footerText(previous), MenuTheme.MUTED)
             child(footer)
         })
         updateContent()
@@ -210,7 +208,7 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
         } else if (compactOverview && state.id == "global" && nextEvent == null) state.summary + "\n" + digestText(state.status, 52) else state.summary
         panel.child(label(digestText(summary.ifBlank { "No information available yet." }, 240)))
         if (!compactOverview && state.id == "news" && state.entries.isNotEmpty()) state.entries.take(2).forEach { entry ->
-            panel.child(label("• ${digestText(entry.title, 90)}", HudTheme.MUTED))
+            panel.child(label("• ${digestText(entry.title, 90)}", MenuTheme.MUTED))
         }
         if (nextEvent != null) panel.child(clock(tone(state.tone), nextEvent.until, state.id) {
             val title = digestText(nextEvent.title, 22).let { if (nextEvent.title.length > 22) "$it…" else it }
@@ -224,18 +222,18 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
             state.entries.take(6).forEach { task -> child(UIContainers.verticalFlow(Sizing.fixed(segmentWidth), Sizing.fixed(3))
                 .surface(Surface.flat(0xFF000000.toInt() or tone(task.tone))).tip("${task.title}: ${task.meta.ifBlank { task.summary }}")) }
         })
-        if (!compactOverview) state.updatedAt?.let { updated -> panel.child(label("Updated ${digestRelativeTime(updated, System.currentTimeMillis())}", HudTheme.MUTED)) }
+        if (!compactOverview) state.updatedAt?.let { updated -> panel.child(label("Updated ${digestRelativeTime(updated, System.currentTimeMillis())}", MenuTheme.MUTED)) }
     }
 
     private fun details(target: FlowLayout, state: DigestCardState?) {
         if (state == null) { target.child(empty("Waiting for information", "This source will appear when available.")); return }
         if (page != "rng") target.child(label(digestText(state.summary, 500)))
         if (state.status.isNotBlank()) target.child(label(digestText(state.status, 300), tone(state.tone)))
-        state.updatedAt?.let { stamp -> target.child(clock(HudTheme.MUTED) {
+        state.updatedAt?.let { stamp -> target.child(clock(MenuTheme.MUTED) {
             "Last successful update ${digestRelativeTime(stamp, System.currentTimeMillis())}  •  ${timestamp(stamp)}"
         }) }
         if (page == "rng") {
-            target.child(label(if (community) "Community-reported • unverified" else "Detected on this account and profile • stored locally", HudTheme.PURPLE))
+            target.child(label(if (community) "Community-reported • unverified" else "Detected on this account and profile • stored locally", MenuTheme.PURPLE))
             if (community && !DailyDigestConfig.receiveRng) {
                 target.child(empty("Community feed is off", "Enable receiving in Settings → Social & Sharing. Sharing your own drops is a separate option."))
                 return
@@ -264,21 +262,21 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
         entries.drop(historyPage * perPage).take(perPage).forEach { entry -> target.child(entryCard(entry)) }
         if (pages > 1) target.child(row().apply {
             child(button("Previous", 70) { historyPage--; updateContent() }.apply { active(historyPage > 0) })
-            child(label("${historyPage + 1} / $pages", HudTheme.MUTED).apply { horizontalSizing(Sizing.expand()) })
+            child(label("${historyPage + 1} / $pages", MenuTheme.MUTED).apply { horizontalSizing(Sizing.expand()) })
             child(button("Next", 50) { historyPage++; updateContent() }.apply { active(historyPage + 1 < pages) })
         })
     }
 
     private fun entryCard(entry: DigestEntry) = card().apply {
         child(label(digestText(entry.title, 300), tone(entry.tone)))
-        if (entry.meta.isNotBlank()) child(label(digestText(entry.meta, 500), HudTheme.MUTED))
+        if (entry.meta.isNotBlank()) child(label(digestText(entry.meta, 500), MenuTheme.MUTED))
         if (entry.summary.isNotBlank()) child(label(digestText(entry.summary, 1200)))
-        entry.timestamp?.let { stamp -> child(clock(HudTheme.MUTED) { "${timestamp(stamp)}  •  ${digestRelativeTime(stamp, System.currentTimeMillis())}" }) }
+        entry.timestamp?.let { stamp -> child(clock(MenuTheme.MUTED) { "${timestamp(stamp)}  •  ${digestRelativeTime(stamp, System.currentTimeMillis())}" }) }
         entry.until?.let { until -> child(clock(tone(entry.tone), until) { digestTimeRemaining(until, System.currentTimeMillis()) }) }
         entry.slots.take(7).forEach { slot -> child(column().apply {
-            padding(Insets.of(7)); gap(4); surface(HudTheme.panel(true))
+            padding(Insets.of(7)); gap(4); surface(MenuTheme.panel(true))
             child(label(digestText(slot.title, 200), tone(slot.tone)))
-            if (slot.summary.isNotBlank()) child(label(digestText(slot.summary, 200), HudTheme.MUTED))
+            if (slot.summary.isNotBlank()) child(label(digestText(slot.summary, 200), MenuTheme.MUTED))
             slot.until?.let { until -> child(clock(tone(slot.tone), until) { digestTimeRemaining(until, System.currentTimeMillis()) }) }
         }) }
         if (entry.detail.isNotBlank()) {
@@ -298,13 +296,15 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
             DailyDigest.setManual(id, !entry.manualComplete)
         }.tip("A local note for this profile, clearly labelled as manual. It does not change the game or claim automatic verification.")) }
         digestLink(entry.url)?.let { uri -> child(button("Open source", 90) {
-            ConfirmLinkScreen.confirmLinkNow(this@DailyDigestScreen, uri)
+            MC.instance.setScreen(MenuConfirmScreen(this@DailyDigestScreen, "Open source in your browser?", uri.toString(), "Open browser") {
+                net.minecraft.util.Util.getPlatform().openUri(uri)
+            })
         }.tip("Open ${uri.host} in your browser after confirmation")) }
-        if (page == "rng") child(UIComponents.button(Component.literal("Share…")) { anchor ->
+        if (page == "rng") child(MenuButton(Component.literal("Share…")) { anchor ->
             val report = digestShareText(entry)
             DropdownComponent.openContextMenu(this@DailyDigestScreen, uiAdapter.rootComponent, { root, menu -> root.child(menu) },
                 anchor.x.toDouble(), (anchor.y + anchor.height).toDouble()) { menu ->
-                menu.surface(HudTheme.panel())
+                menu.surface(MenuTheme.panel())
                 menu.button(Component.literal("Party chat…")) { MC.instance.setScreen(ChatScreen("/pc $report", false)) }
                 menu.button(Component.literal("Guild chat…")) { MC.instance.setScreen(ChatScreen("/gc $report", false)) }
                 menu.button(Component.literal("Copy report")) { MC.instance.keyboardHandler.clipboard = report; menu.parent()?.removeChild(menu) }
@@ -312,17 +312,19 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
     }
 
-    private fun newsFilters() = row().apply {
-        listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").forEach { (value, title) ->
+    private fun newsFilters() = column().apply {
+        listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").chunked(if (menuWidth < 280) 2 else 3).forEach { filters -> child(row().apply {
+        filters.forEach { (value, title) ->
             child(button("${if (newsFilter == value) "§b" else ""}$title", if (value.isEmpty()) 34 else 96) { newsFilter = value; historyPage = 0; rebuild() })
         }
+        }) }
     }
 
     private fun confirmClear() {
-        MC.instance.setScreen(ConfirmScreen({ confirmed ->
-            if (confirmed) DailyDigest.clearHistory()
-            MC.instance.setScreen(this)
-        }, Component.literal("Clear local RNG history?"), Component.literal("Remove the history saved for this account and profile. Already shared community reports are unaffected.")))
+        MC.instance.setScreen(MenuConfirmScreen(this, "Clear local RNG history?",
+            "Remove the history saved for this account and profile. Already shared community reports are unaffected.", "Clear history") {
+            DailyDigest.clearHistory()
+        })
     }
 
     private fun refreshButton() = button("Refresh", if (mergedHeader) 54 else 64) { DailyDigest.refresh(page) }
@@ -341,14 +343,14 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
     private fun timestamp(value: Long) = TIME.format(Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()))
     private fun icon(id: String) = when (id) { "news" -> "≡"; "global" -> "◈"; "dailies" -> "✓"; else -> "✦" }
     private fun tone(value: DigestTone) = when (value) {
-        DigestTone.POSITIVE -> HudTheme.GREEN; DigestTone.WAITING -> HudTheme.YELLOW; DigestTone.ATTENTION -> HudTheme.RED
-        DigestTone.INFO -> accent; DigestTone.SPECIAL -> HudTheme.PURPLE; DigestTone.MUTED -> HudTheme.MUTED
+        DigestTone.POSITIVE -> MenuTheme.GREEN; DigestTone.WAITING -> MenuTheme.YELLOW; DigestTone.ATTENTION -> MenuTheme.RED
+        DigestTone.INFO -> accent; DigestTone.SPECIAL -> MenuTheme.PURPLE; DigestTone.MUTED -> MenuTheme.MUTED
     }
     private fun clock(color: Int, until: Long? = null, owner: String? = null, value: () -> String): LabelComponent = label(value(), color).also { label ->
         var currentColor = color
         clocks += owner to {
             setText(label, value())
-            val nextColor = if (until != null && until <= System.currentTimeMillis()) HudTheme.GREEN else color
+            val nextColor = if (until != null && until <= System.currentTimeMillis()) MenuTheme.GREEN else color
             if (currentColor != nextColor) { currentColor = nextColor; label.color(Color.ofRgb(nextColor)) }
         }
     }
@@ -357,15 +359,15 @@ class DailyDigestScreen(private var page: String? = null) : BaseOwoScreen<FlowLa
             .map { net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipComponent.create(it) })
     }
     private fun setText(label: LabelComponent, value: String) { if (label.text().string != value) label.text(Component.literal(value)) }
-    private fun label(text: String, color: Int = HudTheme.TEXT) = UIComponents.label(Component.literal(text)).apply {
-        color(Color.ofRgb(color)); shadow(HudTheme.SHADOW); horizontalSizing(Sizing.fill()); lineSpacing(3)
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text)).apply {
+        color(Color.ofRgb(color)); shadow(MenuTheme.SHADOW); horizontalSizing(Sizing.fill()); lineSpacing(3)
     }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(layout.gap) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(6); verticalAlignment(VerticalAlignment.CENTER) }
-    private fun cardSurface(): Surface = HudTheme.panel(true)
+    private fun cardSurface(): Surface = MenuTheme.panel(true)
     private fun card() = column().apply { padding(Insets.of(if (DailyDigestConfig.compact) 8 else 11)); gap(7); surface(cardSurface()) }
-    private fun empty(title: String, body: String) = card().apply { child(label(title, HudTheme.MUTED)); child(label(body, HudTheme.MUTED)) }
-    private fun button(text: String, width: Int, action: () -> Unit) = UIComponents.button(Component.literal(text)) { action() }.apply {
+    private fun empty(title: String, body: String) = card().apply { child(label(title, MenuTheme.MUTED)); child(label(body, MenuTheme.MUTED)) }
+    private fun button(text: String, width: Int, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply {
         sizing(Sizing.fixed(width), Sizing.fixed(20)); textShadow(false)
         themed()
     }
