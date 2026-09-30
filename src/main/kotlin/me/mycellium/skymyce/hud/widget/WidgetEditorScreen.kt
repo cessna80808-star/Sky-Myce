@@ -36,7 +36,7 @@ internal fun hudEditorCoordinate(pointer: Double, grabOffset: Int, anchor: Float
 }
 
 internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
-    val toolbarWidth = (screenWidth - 16).coerceIn(1, 256)
+    val toolbarWidth = (screenWidth - 16).coerceIn(1, 208)
     val helpHeight = hudEditorHelp(screenWidth).size * MenuCanvas.lineHeight()
     return UIContainers.horizontalFlow(Sizing.fixed(toolbarWidth), Sizing.fixed(28)).apply {
         padding(Insets.of(4)); gap(5); surface(MenuTheme.panel(true))
@@ -58,7 +58,6 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
     private var snapPosition = false
     private var anchorSelect = false
     private var ui: OwoUIAdapter<FlowLayout>? = null
-    private var sidebar: FlowLayout? = null
     private var controlsVisible = true
     private val canvas = MenuCanvas()
     private val texture = MenuTexture()
@@ -71,23 +70,11 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         snapPosition = false
         anchorSelect = false
         controlsVisible = true
-        sidebar = null
         screenWidgets = WidgetManager.getActiveWidgets()
 
         val adapter = OwoUIAdapter.create(this, UIContainers::verticalFlow)
         ui = adapter
-        val toolbar = hudEditorToolbar(width, height).apply {
-            child(MenuButton(Component.literal("Menus")) {
-                sidebar?.let { adapter.rootComponent.removeChild(it); sidebar = null } ?: run {
-                    sidebar = menuSidebar(MenuLayout.fit(this@WidgetEditorScreen.width, this@WidgetEditorScreen.height), MenuPage.HUD, parent = this@WidgetEditorScreen)
-                        .positioning(Positioning.absolute(8, 8)) as FlowLayout
-                    adapter.rootComponent.child(sidebar!!)
-                }
-            }.apply {
-                sizing(Sizing.fixed(48), Sizing.fill())
-                tooltip(Component.literal("Show or hide the menu sidebar. H hides all editor controls."))
-            })
-        }
+        val toolbar = hudEditorToolbar(width, height)
         val resetButton = MenuButton(Component.literal("Reset positions")) {
             screenWidgets.forEach { widget ->
                 widget.x = width / 2
@@ -113,7 +100,6 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         WidgetManager.save()
         ui?.dispose()
         ui = null
-        sidebar = null
         super.removed()
     }
 

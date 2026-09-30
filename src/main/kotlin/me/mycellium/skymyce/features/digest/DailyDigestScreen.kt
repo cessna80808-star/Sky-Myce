@@ -302,9 +302,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         }.tip("Open ${uri.host} in your browser after confirmation")) }
         if (page == "rng") child(MenuButton(Component.literal("Share…")) { anchor ->
             val report = digestShareText(entry)
-            DropdownComponent.openContextMenu(this@DailyDigestScreen, uiAdapter.rootComponent, { root, menu -> root.child(menu) },
-                anchor.x.toDouble(), (anchor.y + anchor.height).toDouble()) { menu ->
-                menu.surface(MenuTheme.panel())
+            openMenuDropdown(anchor) { menu ->
                 menu.button(Component.literal("Party chat…")) { MC.instance.setScreen(ChatScreen("/pc $report", false)) }
                 menu.button(Component.literal("Guild chat…")) { MC.instance.setScreen(ChatScreen("/gc $report", false)) }
                 menu.button(Component.literal("Copy report")) { MC.instance.keyboardHandler.clipboard = report; menu.parent()?.removeChild(menu) }

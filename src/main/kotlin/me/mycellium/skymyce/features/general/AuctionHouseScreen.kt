@@ -243,8 +243,7 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
     }
     private fun changePage(delta: Int) { if (selected == null) { search = search.copy(page = (search.page + delta).coerceAtLeast(0)); renderResults() } }
     private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
-    private fun menu(button: ButtonComponent, entries: (DropdownComponent) -> Unit) = DropdownComponent.openContextMenu(this, uiAdapter.rootComponent,
-        { root, drop -> root.child(drop) }, button.x.toDouble(), (button.y + button.height).toDouble(), { it.surface(MenuTheme.panel()); entries(it) })
+    private fun menu(button: ButtonComponent, entries: (DropdownComponent) -> Unit) = openMenuDropdown(button, entries)
     private fun column(w: Sizing = Sizing.fill(), h: Sizing = Sizing.content()) = UIContainers.verticalFlow(w, h).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }

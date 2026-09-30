@@ -13,6 +13,8 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.commands.SkyMyceCommands
 import me.mycellium.skymyce.config.instances.dungeons.PartyFinder
+import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
+import me.mycellium.skymyce.features.instances.dungeons.friends.*
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.hud.*
 import me.mycellium.skymyce.hud.widget.WidgetEditorScreen
@@ -22,6 +24,7 @@ import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
 import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import kotlin.math.roundToInt
 import kotlin.time.Duration
 
@@ -32,9 +35,9 @@ enum class SettingsTab(val title: String) {
 /** Navigation only: the persisted Resourceful Config paths and existing consumers stay intact. */
 fun settingsTab(path: String): SettingsTab = when {
     path.startsWith("Theme & Appearance/") -> SettingsTab.THEME
-    path.startsWith("Party Finder/") -> SettingsTab.PARTY
+    path.startsWith("Party Finder/") || path.contains("Dungeon Friends/") -> SettingsTab.PARTY
     path.contains("/Daily Digest/") && path.substringAfterLast('/') in setOf("receiveRng", "shareRng", "publicRngName", "retainedRngEvents") -> SettingsTab.SOCIAL
-    path.contains("Dungeon Friends/") || path.contains("Party Commands/") || path.startsWith("Cosmetics/") -> SettingsTab.SOCIAL
+    path.contains("Party Commands/") || path.startsWith("Cosmetics/") -> SettingsTab.SOCIAL
     path.startsWith("Dungeons/") || path.startsWith("Instances/") || path.contains("Loadout Keybinds/") ||
         path.contains("Wardrobe Keybinds/") || path.contains("Wardrobe/") || path.substringAfterLast('/').startsWith("displayAbility") -> SettingsTab.COMBAT
     else -> SettingsTab.GENERAL
@@ -58,10 +61,18 @@ fun settingRows(config: ResourcefulConfig, prefix: String = ""): List<SettingRow
     config.categories().forEach { (id, child) -> addAll(settingRows(child, "$prefix$id/")) }
 }
 
-fun settingGroups(rows: List<SettingRow>, tab: SettingsTab, query: String = ""): Map<String, List<SettingRow>> = rows
-    .filter { settingsTab(it.path) == tab }
-    .groupBy { it.path.substringBeforeLast('/', "Basics").substringAfterLast('/') }
-    .filter { (group, settings) -> query.isBlank() || group.contains(query, true) || settings.any { "${it.title} ${it.tip}".contains(query, true) } }
+private val friendPreferenceSearch = mapOf(
+    "Availability" to "Available floor classes join PB limit personal best",
+    "Dungeon Friends" to "LFG settings message template title notifications reconnect secondary classes",
+)
+
+fun settingGroups(rows: List<SettingRow>, tab: SettingsTab, query: String = ""): Map<String, List<SettingRow>> {
+    val groups = rows.filter { settingsTab(it.path) == tab }
+        .groupBy { it.path.substringBeforeLast('/', "Basics").substringAfterLast('/') }.toMutableMap()
+    if (tab == SettingsTab.PARTY) groups["Availability"] = emptyList()
+    return groups.filter { (group, settings) -> query.isBlank() || group.contains(query, true) ||
+        settings.any { "${it.title} ${it.tip}".contains(query, true) } || friendPreferenceSearch[group]?.contains(query, true) == true }
+}
 
 fun parseThemeHex(value: String): Int? = value.removePrefix("#").takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }?.toInt(16)
 internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
@@ -79,8 +90,11 @@ internal fun settingsCardRow(columns: Int): FlowLayout =
         }
     }.apply { gap(8); verticalAlignment(VerticalAlignment.CENTER) }
 
-class SettingsScreen(private val parent: Screen? = null, private var tab: SettingsTab = SettingsTab.GENERAL) :
-    MenuScreen(Component.literal("Sky-Myce Settings")) {
+class SettingsScreen @JvmOverloads constructor(
+    private val parent: Screen? = null,
+    private var tab: SettingsTab = SettingsTab.GENERAL,
+    dungeonFriend: String? = null,
+) : MenuScreen(Component.literal("Sky-Myce Settings")) {
     private val rows by lazy { settingRows(SkyMyce.config) }
     private var keyCapture: Pair<SettingRow, ButtonComponent>? = null
     private var changed = false
@@ -94,9 +108,19 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
     public override val menuParent get() = parent.takeIf { it is MenuScreen || it === WidgetEditorScreen }
     override val settingsCategory get() = tab
     override fun selectSettings(tab: SettingsTab) {
-        this.tab = tab; query = ""; selectedGroup = null; keyCapture = null; rebuild()
+        this.tab = tab; query = ""; selectedGroup = null; editingDungeonFriend = null; friendDraft = null; keyCapture = null; rebuild()
     }
-    private var selectedGroup: String? = null
+    private var selectedGroup: String? = dungeonFriend?.let { "Dungeon Friends" }
+    private var editingDungeonFriend = dungeonFriend
+    private var friendDraft: FriendPreferenceDraft? = null
+    private class FriendPreferenceDraft(val group: String?, val friend: String?) {
+        var floor = DungeonFriendsSettings.availability.floor
+        var classes = if (group == "Availability") DungeonFriendsSettings.availability.classes
+            else friend?.let { DungeonFriendsSettings.secondaryClasses[it.lowercase()] }.orEmpty()
+        var pb = DungeonFriendsSettings.availability.maxPbMillis?.let(::formatDungeonTime).orEmpty()
+        var template = DungeonFriendsSettings.messageTemplate
+        var titles = DungeonFriendsSettings.titleNotifications
+    }
     private lateinit var details: FlowLayout
     private val detailWidth get() = settingsDrawerWidth(menuWidth)
 
@@ -126,7 +150,7 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
             })
             child(settingsRow().apply {
-                child(label("Changes save on close", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
+                child(label(if (tab == SettingsTab.PARTY) "Friend preferences use Save" else "Changes save on close", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
                 child(button("Done", 42, "Save settings and return") { onClose() })
             })
         }
@@ -175,10 +199,10 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
         groups.entries.chunked(columns).forEach { line -> body.child(settingsCardRow(columns).apply {
             line.forEach { (group, settings) ->
                 val title = MenuButton(Component.literal(group)) {
-                    selectedGroup = group; keyCapture = null; populateDetails(groups); openDetails()
+                    selectedGroup = group; editingDungeonFriend = null; keyCapture = null; populateDetails(groups); openDetails()
                 }.apply {
                     sizing(Sizing.expand(), Sizing.fill()); navigation = true; background = false
-                    tip("Open all ${settings.size} $group settings")
+                    tip(if (group in friendPreferenceSearch) "Open $group preferences" else "Open all ${settings.size} $group settings")
                 }
                 val quickToggle = settings.firstOrNull { it.entry.type() == EntryType.BOOLEAN && it.element.id() in setOf("enabled", "automatic", "dungeonTracker") }
                     ?.let { toggle(it).apply { background = false } }
@@ -213,17 +237,101 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
             child(button("Close", 42, "Close feature settings") { closeDetails() })
         })
         val settings = groups[selectedGroup].orEmpty()
-        drawerHeading.child(label("${settings.size} options", MenuTheme.MUTED, 9f))
-        drawerHeading.child(button("Reset feature", 88, "Restore the default values for this feature") {
+        drawerHeading.child(label(if (selectedGroup in friendPreferenceSearch) "Save preferences below" else "${settings.size} options", MenuTheme.MUTED, 9f))
+        if (settings.isNotEmpty() && editingDungeonFriend == null) drawerHeading.child(button(
+            if (selectedGroup == "Dungeon Friends") "Reset scan setting" else "Reset feature",
+            if (selectedGroup == "Dungeon Friends") 110 else 88,
+            "Restore the default values for these scan or feature controls",
+        ) {
             settings.forEach { it.entry.reset() }
             if (settings.any { it.path == "openConfigKey" }) SkyMyceCommands.updateSettingsKey()
             keyCapture = null; edited(); populateDetails(groups)
         })
-        settings.forEach { setting ->
+        if (editingDungeonFriend == null) settings.forEach { setting ->
             details.child(editor(setting))
             details.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(1)).surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER))))
         }
+        if (selectedGroup in friendPreferenceSearch) details.child(friendPreferences(selectedGroup == "Availability"))
         drawerScroll.scrollTo(0.0)
+    }
+
+    private fun friendPreferences(availabilityOnly: Boolean): FlowLayout = column().apply {
+        padding(Insets.vertical(10)); gap(8)
+        DungeonFriendsSettings.load()
+        val friend = editingDungeonFriend
+        val friendStats = friend?.let(DungeonFriendStatsCache::get)
+        val draft = friendDraft?.takeIf { it.group == selectedGroup && it.friend == friend }
+            ?: FriendPreferenceDraft(selectedGroup, friend).also { friendDraft = it }
+        if (availabilityOnly) {
+            child(label("Choose the floor and classes you offer when joining a party.", MenuTheme.MUTED))
+            child(button("Floor: ${draft.floor.name}", detailWidth - 28, "Your available dungeon floor") { anchor ->
+                menu(anchor) { dropdown -> FRIEND_FLOORS.forEach { option ->
+                    dropdown.button(MenuTheme.text(Component.literal(option.name))) {
+                        draft.floor = option; anchor.message = Component.literal("Floor: ${draft.floor.name}"); it.parent()?.removeChild(it)
+                    }
+                } }
+            })
+        }
+        if (availabilityOnly || friend != null) {
+            if (friend != null) child(label("Secondary classes: $friend", MenuTheme.ACCENT))
+            DungeonClass.entries.chunked(2).forEach { options -> child(settingsRow().apply {
+                options.forEach { clazz -> child(MenuButton(Component.literal(clazz.displayName)) {
+                    draft.classes = if (clazz in draft.classes) draft.classes - clazz else draft.classes + clazz
+                }.apply {
+                    selected = { clazz in draft.classes }; sizing(Sizing.fixed((detailWidth - 33) / 2), Sizing.fixed(24))
+                    tip(if (availabilityOnly) "Offer ${clazz.displayName} when joining" else
+                        "Include ${clazz.displayName} in $friend's class matching. Level: ${friendStats?.classes?.get(clazz) ?: "Unknown"}")
+                }) }
+            }) }
+        }
+        if (availabilityOnly) {
+            child(label("Join PB limit"))
+            child(MenuTextBox(Sizing.fill()).apply {
+                setMaxLength(10); text(draft.pb); setHint(Component.literal("No limit (m:ss)"))
+                tip("Your requirement for players using Join. Leave blank for no limit; invitations bypass it.")
+                onChanged().subscribe { draft.pb = it }
+            })
+            child(label("Clear every class to stop offering availability.", MenuTheme.MUTED, 9f))
+        } else if (friend == null) {
+            child(settingsRow().apply {
+                child(label("Title notifications").horizontalSizing(Sizing.expand()))
+                child(MenuButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
+                    toggled = { draft.titles }; sizing(Sizing.fixed(32), Sizing.fixed(22))
+                    tip("Show invitations and joining players as titles")
+                })
+            })
+            child(label("LFG message template"))
+            child(label("Use {name}, {class} and {floor}.", MenuTheme.MUTED, 9f))
+            child(MenuTextBox(Sizing.fill()).apply {
+                setMaxLength(220); text(draft.template); onChanged().subscribe { draft.template = it }
+                tip("Message sent by the Message action")
+            })
+            child(button("Reconnect", 88, "Reconnect the friend service: ${DungeonFriendRelay.status}") { DungeonFriendRelay.reconnect() })
+        }
+        val feedback = label(DungeonFriendsSettings.error.orEmpty(), MenuTheme.MUTED, 9f)
+        child(feedback)
+        child(settingsRow().apply {
+            child(button("Save", 58, "Apply these friend preferences") {
+                feedback.color(Color.ofRgb(MenuTheme.RED))
+                val limit = parsePbLimit(draft.pb)
+                if (availabilityOnly && draft.pb.isNotBlank() && limit == null) {
+                    feedback.text(Component.literal("Use m:ss (for example 5:30), or leave the limit blank.")); return@button
+                }
+                val available = if (availabilityOnly) DungeonAvailability(draft.floor, draft.classes, limit) else DungeonFriendsSettings.availability
+                val secondary = DungeonFriendsSettings.secondaryClasses.toMutableMap()
+                friend?.lowercase()?.let { name -> if (draft.classes.isEmpty()) secondary.remove(name) else secondary[name] = draft.classes }
+                val availabilityChanged = available != DungeonFriendsSettings.availability
+                if (DungeonFriendsSettings.save(
+                    template = if (!availabilityOnly && friend == null) draft.template else DungeonFriendsSettings.messageTemplate,
+                    classes = secondary, available = available,
+                    titles = if (!availabilityOnly && friend == null) draft.titles else DungeonFriendsSettings.titleNotifications,
+                )) {
+                    if (availabilityChanged) DungeonFriends.joining.clear()
+                    feedback.text(Component.literal("Saved")); feedback.color(Color.ofRgb(MenuTheme.ACCENT))
+                } else feedback.text(Component.literal(DungeonFriendsSettings.error ?: "Use a nonempty message of up to 220 characters."))
+            })
+            child(button("Cancel", 58, "Discard unapplied preferences and close") { closeDetails() })
+        })
     }
 
     private fun openDetails(animate: Boolean = true) {
@@ -233,6 +341,7 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
     }
 
     private fun closeDetails(animate: Boolean = true) {
+        if (animate) friendDraft = null
         selectedGroup = null; keyCapture = null
         if (!::drawerClip.isInitialized) return
         val animation = drawerClip.horizontalSizing().animate(if (animate) 200 else 1, Easing.CUBIC, Sizing.fixed(0))
@@ -312,6 +421,7 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
     }
 
     override fun keyPressed(event: KeyEvent): Boolean {
+        if (event.isEscape && closeMenuDropdown()) return true
         keyCapture?.let { (setting, button) ->
             if (event.key != GLFW.GLFW_KEY_ESCAPE && setting.entry.setInt(if (event.key == GLFW.GLFW_KEY_BACKSPACE) GLFW.GLFW_KEY_UNKNOWN else event.key)) edited()
             if (setting.path == "openConfigKey") SkyMyceCommands.updateSettingsKey()
@@ -352,9 +462,6 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
         sizing(Sizing.fixed(width), Sizing.fixed(20)); tip(tooltip)
     }
     private fun <T : UIComponent> T.tip(text: String): T = wrappedTooltip(Component.literal(text))
-    private fun menu(anchor: ButtonComponent, options: (DropdownComponent) -> Unit) = DropdownComponent.openContextMenu(this, uiAdapter.rootComponent,
-        { root, dropdown -> root.child(dropdown) }, anchor.x.toDouble(), (anchor.y + anchor.height).toDouble(), {
-            it.surface(MenuTheme.panel()); options(it)
-        })
+    private fun menu(anchor: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(anchor, options)
     companion object { private val SAVE_LOCK = Any() }
 }

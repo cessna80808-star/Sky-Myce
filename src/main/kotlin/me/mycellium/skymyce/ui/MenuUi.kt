@@ -2,12 +2,14 @@ package me.mycellium.skymyce.ui
 
 import io.wispforest.owo.ui.base.BaseOwoScreen
 import io.wispforest.owo.ui.component.ButtonComponent
+import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.SliderComponent
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import io.wispforest.owo.ui.util.UISounds
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.misc.ThemeConfig
@@ -25,6 +27,9 @@ import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.FontDescription
 import net.minecraft.resources.Identifier
 import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.client.input.KeyEvent
+import org.lwjgl.glfw.GLFW
+import java.util.function.Consumer
 
 /** Menu density is independent of Minecraft's GUI scale. */
 data class MenuViewport(val width: Int, val height: Int, val screenWidth: Int, val screenHeight: Int) {
@@ -181,7 +186,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = visible && isInBoundingBox(mouseX, mouseY) && !tooltip().isNullOrEmpty()
 }
 
-class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
+open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     var fontSize = 10f
         set(value) { field = value; lineHeight(MenuCanvas.lineHeight(value.toDouble())) }
     init { lineHeight(MenuCanvas.lineHeight()) }
@@ -219,6 +224,125 @@ class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     }
 }
 
+/** Keep owo's popup layout, but give its entries the same font, paint and input as the menus. */
+internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : DropdownComponent(Sizing.fixed(minimumWidth)) {
+    private var entryWidth = minimumWidth.coerceAtLeast(32)
+    init { entries.padding(Insets.of(5)); surface(MenuTheme.panel()); allowOverflow(true) }
+
+    private fun entry(text: Component, indicator: (() -> Boolean)? = null, nested: Boolean = false, action: () -> Unit): MenuDropdownEntry {
+        entryWidth = maxOf(entryWidth, menuDropdownWidth(text, indicator != null || nested))
+        entries.horizontalSizing(Sizing.fixed(entryWidth))
+        return MenuDropdownEntry(text, indicator, nested, action).apply {
+            sizing(Sizing.fill(), Sizing.fixed(menuDropdownRowHeight()))
+            margins(Insets.horizontal(3))
+            entries.child(this)
+            mouseEnter().subscribe { queue { children().filterIsInstance<MenuDropdown>().toList().forEach(::removeChild) } }
+        }
+    }
+    override fun text(text: Component): DropdownComponent {
+        entryWidth = maxOf(entryWidth, menuDropdownWidth(text, false))
+        entries.horizontalSizing(Sizing.fixed(entryWidth))
+        entries.child(MenuLabel(text).color(Color.ofRgb(MenuTheme.MUTED)).apply {
+            sizing(Sizing.fill(), Sizing.fixed(menuDropdownRowHeight())); margins(Insets.horizontal(3))
+            verticalTextAlignment(VerticalAlignment.CENTER)
+        })
+        return this
+    }
+    override fun button(text: Component, onClick: Consumer<DropdownComponent>): DropdownComponent {
+        entry(text) { close(); onClick.accept(this); UISounds.playButtonSound() }
+        return this
+    }
+    override fun checkbox(text: Component, state: Boolean, onClick: Consumer<Boolean>): DropdownComponent {
+        var checked = state
+        entry(text, { checked }) { checked = !checked; onClick.accept(checked); UISounds.playInteractionSound() }
+        return this
+    }
+    override fun nested(text: Component, horizontalSizing: Sizing, builder: Consumer<DropdownComponent>): DropdownComponent {
+        val child = MenuDropdown(if (horizontalSizing.isContent) 32 else horizontalSizing.value, close)
+        builder.accept(child)
+        lateinit var row: MenuDropdownEntry
+        val open: () -> Unit = {
+            children().filterIsInstance<MenuDropdown>().toList().forEach(::removeChild)
+            child.positioning(Positioning.absolute(entries.width() - 1, row.y() - y()))
+            child(child)
+            val root = generateSequence(parent()) { it.parent() }.lastOrNull()
+            root?.let {
+                child.positioning(Positioning.absolute(
+                    (child.x() - x()).coerceAtMost(it.x() + it.width() - x() - child.width()).coerceAtLeast(it.x() - x()),
+                    (child.y() - y()).coerceAtMost(it.y() + it.height() - y() - child.height()).coerceAtLeast(it.y() - y())))
+            }
+        }
+        row = entry(text, nested = true) { open(); child.focusFirst() }
+        row.mouseEnter().subscribe { queue(open) }
+        return this
+    }
+    fun focusFirst() {
+        entries.children().firstOrNull { it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }?.let {
+            focusHandler()?.focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE)
+        }
+    }
+    override fun isInBoundingBox(x: Double, y: Double): Boolean = super.isInBoundingBox(x, y) ||
+        children().filterIsInstance<MenuDropdown>().any { it.isInBoundingBox(x, y) }
+    fun cycleFocus(forward: Boolean) {
+        val rows = ArrayList<UIComponent>()
+        collectDescendants(rows)
+        rows.removeAll { !it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }
+        if (rows.isEmpty()) return
+        val current = rows.indexOf(focusHandler()?.focused())
+        val next = Math.floorMod(current + if (forward) 1 else -1, rows.size)
+        focusHandler()?.focus(rows[next], UIComponent.FocusSource.KEYBOARD_CYCLE)
+    }
+}
+
+internal fun menuDropdownRowHeight() = MenuCanvas.lineHeight() + 8
+internal fun menuDropdownWidth(text: Component, indicator: Boolean) =
+    kotlin.math.ceil(menuTextLines(text, Int.MAX_VALUE).maxOfOrNull { menuTextWidth(it) } ?: 0.0).toInt() + 26 + if (indicator) 22 else 0
+
+private class MenuDropdownEntry(value: Component, private val checked: (() -> Boolean)?, private val nested: Boolean,
+                                private val action: () -> Unit) : MenuLabel(value) {
+    init { color(Color.ofRgb(MenuTheme.TEXT)); verticalTextAlignment(VerticalAlignment.CENTER); cursorStyle(CursorStyle.HAND) }
+    override fun canFocus(source: UIComponent.FocusSource) = true
+    override fun onMouseDown(click: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (click.button() != GLFW.GLFW_MOUSE_BUTTON_LEFT) return false
+        action(); return true
+    }
+    override fun onKeyPress(input: KeyEvent): Boolean {
+        if (input.key() !in listOf(GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER, GLFW.GLFW_KEY_SPACE) && !(nested && input.key() == GLFW.GLFW_KEY_RIGHT)) return super.onKeyPress(input)
+        action(); return true
+    }
+    override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        if (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) || focusHandler()?.focused() === this)
+            MenuTheme.rounded(g, x() - 3, y(), width() + 6, height(), MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 14))
+        super.draw(g, mouseX, mouseY, partialTicks, delta)
+        checked?.let {
+            val left = x() + width() - 18; val top = y() + (height() - 10) / 2
+            MenuTheme.rounded(g, left, top, 18, 10, if (it()) MenuTheme.ACCENT else MenuTheme.BORDER, 5)
+            g.drawCircle(left + if (it()) 13 else 5, top + 5, 20, 3.0, Color.ofRgb(MenuTheme.TEXT))
+        }
+        if (nested) {
+            val left = x() + width() - 5; val top = y() + height() / 2
+            for (i in 0..3) g.fill(left + i, top - 3 + i, left + i + 1, top + 4 - i, MenuTheme.alpha(MenuTheme.MUTED))
+        }
+    }
+    override fun drawFocusHighlight(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {}
+}
+
+/** Mount and hit-test in the custom viewport, never Fabric's native GUI coordinates. */
+internal fun mountMenuDropdown(root: FlowLayout, dropdown: ParentUIComponent, x: Int, y: Int) {
+    dropdown.positioning(Positioning.absolute(0, 0))
+    root.child(dropdown)
+    dropdown.positioning(Positioning.absolute(
+        (x - root.x()).coerceIn(0, (root.width() - dropdown.width()).coerceAtLeast(0)),
+        (y - root.y()).coerceIn(0, (root.height() - dropdown.height()).coerceAtLeast(0))))
+}
+
+internal fun dismissMenuDropdownOutside(dropdown: ParentUIComponent, event: MouseButtonEvent): Boolean {
+    if (dropdown.parent() == null || dropdown.isInBoundingBox(event.x(), event.y()) ||
+        dropdown.children().any { it.isInBoundingBox(event.x(), event.y()) }) return false
+    dropdown.parent()?.removeChild(dropdown)
+    return true
+}
+
 class MenuSlider : SliderComponent(Sizing.fill()) {
     override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
@@ -243,6 +367,26 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private val canvas = MenuCanvas()
     private val texture = MenuTexture()
     private lateinit var viewport: MenuViewport
+    private var dropdown: MenuDropdown? = null
+    private var dropdownAnchor: ButtonComponent? = null
+
+    protected fun openMenuDropdown(anchor: ButtonComponent, options: (DropdownComponent) -> Unit): DropdownComponent {
+        closeMenuDropdown()
+        val popup = MenuDropdown(anchor.width, ::closeMenuDropdown)
+        options(popup)
+        dropdown = popup; dropdownAnchor = anchor
+        mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x, anchor.y + anchor.height)
+        popup.focusFirst()
+        return popup
+    }
+    protected fun closeMenuDropdown(): Boolean {
+        val popup = dropdown ?: return false
+        dropdown = null
+        popup.parent()?.removeChild(popup)
+        uiAdapter?.rootComponent?.focusHandler()?.focus(dropdownAnchor?.takeIf { it.parent() != null }, UIComponent.FocusSource.KEYBOARD_CYCLE)
+        dropdownAnchor = null
+        return true
+    }
     override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
     override fun init() {
@@ -255,6 +399,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         }
     }
     final override fun build(root: FlowLayout) {
+        closeMenuDropdown()
         builtLayout = menuLayout
         builtTheme = me.mycellium.skymyce.hud.HudTheme.revision
         root.surface(MenuTheme.backdrop).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
@@ -283,9 +428,23 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     // The adapter tooltip is already painted into the same canvas above the content.
     final override fun drawComponentTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {}
-    override fun removed() { texture.close(); super.removed() }
+    override fun removed() { closeMenuDropdown(); texture.close(); super.removed() }
     override fun mouseMoved(x: Double, y: Double) = super.mouseMoved(viewport.x(x), viewport.y(y))
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean) = super.mouseClicked(viewport.mouse(event), doubled)
+    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        val mapped = viewport.mouse(event)
+        dropdown?.let { if (dismissMenuDropdownOutside(it, mapped)) closeMenuDropdown() }
+        return super.mouseClicked(mapped, doubled)
+    }
+    override fun keyPressed(event: KeyEvent): Boolean {
+        if (event.isEscape && closeMenuDropdown()) return true
+        dropdown?.let {
+            if (event.key() in listOf(GLFW.GLFW_KEY_TAB, GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN)) {
+                it.cycleFocus(event.key() == GLFW.GLFW_KEY_DOWN || event.key() == GLFW.GLFW_KEY_TAB && !event.hasShiftDown())
+                return true
+            }
+        }
+        return super.keyPressed(event)
+    }
     override fun mouseReleased(event: MouseButtonEvent) = super.mouseReleased(viewport.mouse(event))
     override fun mouseDragged(event: MouseButtonEvent, dx: Double, dy: Double) = super.mouseDragged(viewport.mouse(event), viewport.x(dx), viewport.y(dy))
     override fun mouseScrolled(x: Double, y: Double, horizontal: Double, vertical: Double) = super.mouseScrolled(viewport.x(x), viewport.y(y), horizontal, vertical)

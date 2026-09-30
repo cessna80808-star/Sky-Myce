@@ -82,6 +82,13 @@ fun checkSettings() {
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.GENERAL)
     check(settingsTab("General/Daily Digest/shareRng") == SettingsTab.SOCIAL)
     check(settingsTab("Party Finder/matchPb") == SettingsTab.PARTY)
+    check(settingsTab("Dungeons/Dungeon Friends/enabled") == SettingsTab.PARTY)
+    val friendSettings = settingGroups(rows, SettingsTab.PARTY)
+    check("Availability" in friendSettings && "Dungeon Friends" in friendSettings)
+    check("Availability" in settingGroups(rows, SettingsTab.PARTY, "PB limit"))
+    check("Dungeon Friends" in settingGroups(rows, SettingsTab.PARTY, "message template"))
+    check("Dungeon Friends" in settingGroups(rows, SettingsTab.PARTY, "notifications"))
+    check("Availability" !in settingGroups(rows, SettingsTab.SOCIAL))
     check(settingsTab("Dungeons/Dungeon Tracker/dungeonTracker") == SettingsTab.COMBAT)
     check(settingsTab("Theme & Appearance/opacity") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
@@ -106,6 +113,7 @@ fun checkSettings() {
     val longReport = digestShareText(DigestEntry("id", "x".repeat(500), community = true))
     check(longReport.length <= 240 && longReport.endsWith("[unverified]"))
     checkMenuViewport()
+    checkMenuDropdownInput()
     checkMenuCanvas()
     checkMenuTextMetrics()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
@@ -134,6 +142,58 @@ private fun checkMenuTextMetrics() {
         check(lines.all { line -> var bold = true; line.accept { _, style, _ -> bold = bold && style.isBold; true }; bold }) { "Wrapping lost text styles" }
     }
     check(MenuCanvas.lineHeight(16.0) > MenuCanvas.lineHeight()) { "Larger headings do not reserve more space" }
+}
+
+internal fun checkMenuDropdownInput() {
+    val text = net.minecraft.network.chat.Component.literal("Clear (show all)").withStyle(net.minecraft.ChatFormatting.BOLD)
+    val popupWidth = me.mycellium.skymyce.ui.menuDropdownWidth(text, false)
+    val rowHeight = me.mycellium.skymyce.ui.menuDropdownRowHeight()
+    val line = menuTextLines(text, Int.MAX_VALUE).single()
+    check(popupWidth >= kotlin.math.ceil(menuTextWidth(line)).toInt() + 16)
+    check(rowHeight >= MenuCanvas.lineHeight() + 8)
+    for (scale in 1..4) {
+        val viewport = MenuViewport.fit(1920, 1080, 1920 / scale, 1080 / scale)
+        val root = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
+            io.wispforest.owo.ui.core.Sizing.fixed(viewport.width), io.wispforest.owo.ui.core.Sizing.fixed(viewport.height))
+        root.inflate(io.wispforest.owo.ui.core.Size.of(viewport.width, viewport.height)); root.mount(null, 0, 0)
+        val popup = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
+            io.wispforest.owo.ui.core.Sizing.fixed(maxOf(116, popupWidth)), io.wispforest.owo.ui.core.Sizing.content())
+        val entries = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
+            io.wispforest.owo.ui.core.Sizing.fill(), io.wispforest.owo.ui.core.Sizing.content()).apply {
+            padding(io.wispforest.owo.ui.core.Insets.of(5))
+        }
+        popup.child(entries)
+        var selected = 0
+        val row = io.wispforest.owo.ui.component.UIComponents.box(
+            io.wispforest.owo.ui.core.Sizing.fill(), io.wispforest.owo.ui.core.Sizing.fixed(rowHeight))
+        row.mouseDown().subscribe { _, _ -> selected++; true }
+        entries.child(row)
+        me.mycellium.skymyce.ui.mountMenuDropdown(root, popup, viewport.width - 2, viewport.height - 2)
+        check(popup.width() >= 116 && popup.x() >= 0 && popup.y() >= 0)
+        check(popup.x() + popup.width() <= viewport.width && popup.y() + popup.height() <= viewport.height)
+        fun click(x: Double, y: Double) = viewport.mouse(MouseButtonEvent(
+            x * viewport.screenWidth / viewport.width, y * viewport.screenHeight / viewport.height, MouseButtonInfo(0, 0)))
+        val inside = click(row.x() + row.width() / 2.0, row.y() + row.height() / 2.0)
+        check(!me.mycellium.skymyce.ui.dismissMenuDropdownOutside(popup, inside))
+        check(popup.parent() === root && root.onMouseDown(inside, false) && selected == 1) {
+            "Mounted dropdown selection was dismissed before dispatch at Minecraft GUI scale $scale"
+        }
+        val outside = click(1.0, 1.0)
+        check(me.mycellium.skymyce.ui.dismissMenuDropdownOutside(popup, outside))
+        check(popup.parent() == null && popup !in root.children() && selected == 1)
+    }
+    val white = 0xFFFFFFFF.toInt()
+    fun paint(clipped: Boolean): java.awt.image.BufferedImage = MenuCanvas().run {
+        begin()
+        if (clipped) clip = MenuCanvas.Clip(0, 0, popupWidth, rowHeight)
+        text(listOf(MenuCanvas.Run(text.string, white, bold = true)), 8.0, (rowHeight - MenuCanvas.lineHeight()) / 2.0)
+        finish(popupWidth, rowHeight + 10, 2.0)
+    }
+    val clipped = paint(true); val whole = paint(false)
+    check(clipped.getRGB(0, 0, clipped.width, clipped.height, null, 0, clipped.width)
+        .contentEquals(whole.getRGB(0, 0, whole.width, whole.height, null, 0, whole.width))) {
+        "Dropdown row clips custom font glyphs"
+    }
 }
 
 private fun checkMenuViewport() {

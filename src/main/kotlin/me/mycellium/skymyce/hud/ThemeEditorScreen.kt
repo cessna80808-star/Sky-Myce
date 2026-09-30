@@ -44,8 +44,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
             val controls = column()
             child(UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), controls).apply { scrollbarThiccness(2); scrollStep(20) })
             if (widget == null) controls.child(button("Preset: ${draft.preset.title}", 190) { b ->
-                DropdownComponent.openContextMenu(this@ThemeEditorScreen, uiAdapter.rootComponent, { r, d -> r.child(d) }, b.x.toDouble(), (b.y + b.height).toDouble()) { d ->
-                    d.surface(MenuTheme.panel())
+                openMenuDropdown(b) { d ->
                     ThemePreset.entries.forEach { preset -> d.button(Component.literal(preset.title)) {
                         draft = draft.copy(preset = preset); applyDraft(); rebuild()
                     } }

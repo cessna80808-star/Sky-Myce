@@ -31,6 +31,7 @@ fun main() {
     checkJoinLookups()
     checkFullFriendRoster()
     checkMenuRefresh()
+    checkFriendActionLayout()
     checkWealthRefresh()
     checkUserMessages()
     me.mycellium.skymyce.features.social.checkCosmetics()
@@ -978,6 +979,37 @@ private fun checkFullFriendRoster() {
         check(presence("""{"success":true,"profiles":[null]}""") == null)
     } finally {
         Files.deleteIfExists(rosterPath); Files.deleteIfExists(wealthPath); Files.deleteIfExists(folder)
+    }
+}
+
+private fun checkFriendActionLayout() {
+    for (title in listOf("CATA", "HEAL", "MAGE", "BERS", "ARCH", "TANK")) {
+        check(dungeonFriendStatWidth(title) - 12 >= me.mycellium.skymyce.ui.MenuCanvas.textWidth(title)) {
+            "Party Finder stat heading $title is clipped"
+        }
+    }
+    for (width in listOf(60, 100, 109, 110, 189, 190, 354, 560, 851)) {
+        val controls = listOf(46, 60, 38, 34).map { size ->
+            io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(size), io.wispforest.owo.ui.core.Sizing.fixed(22))
+        }
+        val layout = dungeonFriendActions(width, controls)
+        layout.horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(width))
+        layout.inflate(io.wispforest.owo.ui.core.Size.of(width, 300)); layout.mount(null, 10, 20)
+        check(controls.all { it.x() >= layout.x() && it.x() + it.width() <= layout.x() + width }) {
+            "Party Finder actions escape a $width-pixel card"
+        }
+        check(controls.all { it.y() >= layout.y() && it.y() + it.height() <= layout.y() + layout.height() })
+        check(controls.zipWithNext().all { (a, b) -> a.y() != b.y() || a.x() + a.width() + 4 <= b.x() })
+        check(controls.map { it.y() }.distinct().size == when { width >= 190 -> 1; width >= 110 -> 2; else -> 4 })
+        val cells = List(5) {
+            io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.content(), io.wispforest.owo.ui.core.Sizing.fixed(28))
+        }
+        val stats = dungeonFriendClassGrid(width, cells)
+        stats.horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(width))
+        stats.inflate(io.wispforest.owo.ui.core.Size.of(width, 300)); stats.mount(null, 10, 20)
+        check(cells.all { it.x() >= stats.x() && it.x() + it.width() <= stats.x() + width }) { "Party Finder class stats escape width $width" }
+        check(cells.zipWithNext().all { (a, b) -> a.y() != b.y() || a.x() + a.width() <= b.x() }) { "Party Finder class stats overlap" }
+        check(cells.all { it.width() >= 60 }) { "Class headings have no room for their labels" }
     }
 }
 

@@ -43,11 +43,13 @@ fun main() {
     for ((width, height) in listOf(320 to 180, 640 to 360, 1280 to 720)) {
         val toolbarRoot = io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.fill())
         val toolbar = hudEditorToolbar(width, height)
-        toolbar.children(listOf(Sizing.fixed(48), Sizing.expand(), Sizing.fixed(40)).map { sizing -> UIComponents.box(sizing, Sizing.fill()) })
+        toolbar.children(listOf(Sizing.expand(), Sizing.fixed(40)).map { sizing -> UIComponents.box(sizing, Sizing.fill()) })
         toolbarRoot.child(toolbar); toolbarRoot.inflate(Size.of(width, height)); toolbarRoot.mount(null, 0, 0)
         val help = hudEditorHelp(width)
         check(toolbar.x() == (width - toolbar.width()) / 2 && toolbar.y() == height - help.size * MenuCanvas.lineHeight() - 40)
         check(help.all { menuTextWidth(it) <= width - 16 }) { "HUD editor help text extends beyond the viewport" }
+        check(toolbar.children().size == 2 && toolbar.width() == 208) { "HUD editor toolbar must contain only Reset positions and Done" }
+        check(toolbar.children()[1].width() == 40 && toolbar.children()[1].x() + 40 == toolbar.x() + toolbar.width() - 4)
         check(toolbar.children().all { it.x() >= toolbar.x() && it.x() + it.width() <= toolbar.x() + toolbar.width() })
         check(!hudEditorControlAt(toolbarRoot, 20.0, 20.0)) { "HUD editor still covers top-left widgets by default" }
     }
