@@ -102,7 +102,8 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
         updateScroll()
         if (isBordered) MenuTheme.drawField(g, x, y, width, height, isFocused)
         val left = origin().roundToInt()
-        val top = y + (height - 10) / 2
+        val lineHeight = MenuCanvas.lineHeight()
+        val top = y + (height - lineHeight) / 2
         val text = value
         val cursor = cursorPosition.coerceIn(0, text.length)
         val highlight = (this as Any as MenuEditBoxAccessor).`skymyce$getHighlightPosition`().coerceIn(0, text.length)
@@ -111,7 +112,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
         if (cursor != highlight) {
             val first = (left + measure(text.substring(0, minOf(cursor, highlight)))).roundToInt()
             val last = (left + measure(text.substring(0, maxOf(cursor, highlight)))).roundToInt()
-            g.fill(first, top - 1, last, top + 11, MenuTheme.alpha(MenuTheme.ACCENT, 40))
+            g.fill(first, top, last, top + lineHeight, MenuTheme.alpha(MenuTheme.ACCENT, 40))
         }
         // MenuGraphics captures these calls into Java2D; Minecraft's glyph renderer is never invoked.
         if (text.isEmpty()) hintText?.let { g.text(MC.font, it, left, top, MenuTheme.alpha(MenuTheme.MUTED), false) }
@@ -121,7 +122,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
         }
         if (isFocused && editable && (System.nanoTime() - caretEpoch) / 500_000_000L % 2L == 0L) {
             val caret = (left + measure(text.substring(0, cursor))).roundToInt()
-            g.fill(caret, top - 1, caret + 1, top + 11, MenuTheme.alpha(MenuTheme.TEXT))
+            g.fill(caret, top, caret + 1, top + lineHeight, MenuTheme.alpha(MenuTheme.TEXT))
         }
         g.disableScissor()
         composition?.takeIf { isFocused && it.fullText().isNotEmpty() }?.let { preedit ->

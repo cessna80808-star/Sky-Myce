@@ -7,6 +7,11 @@ import io.wispforest.owo.ui.core.Sizing
 import me.mycellium.skymyce.hud.widget.Anchor
 import me.mycellium.skymyce.hud.widget.WidgetConfig
 import me.mycellium.skymyce.hud.widget.hudEditorControlAt
+import me.mycellium.skymyce.hud.widget.hudEditorCoordinate
+import me.mycellium.skymyce.hud.widget.hudEditorToolbar
+import me.mycellium.skymyce.hud.widget.hudEditorHelp
+import me.mycellium.skymyce.ui.MenuCanvas
+import me.mycellium.skymyce.ui.menuTextWidth
 
 /** Exercises retained owo layout without a Minecraft window or a test framework. */
 fun main() {
@@ -21,6 +26,31 @@ fun main() {
     check(hudEditorControlAt(editorRoot, 250.0, 335.0)) // Reset control retains native handling.
     check(!hudEditorControlAt(editorRoot, 395.0, 335.0)) // Right edge is outside the button.
     check(!hudEditorControlAt(null, 100.0, 100.0))
+    check(!hudEditorControlAt(editorRoot, 250.0, 335.0, visible = false)) { "Hidden editor controls still intercept a widget" }
+    // Native GUI positions must survive dragging at every Minecraft GUI scale and anchor.
+    for (guiScale in 1..4) {
+        val nativeWidth = 1920 / guiScale
+        for (anchor in Anchor.entries) {
+            val size = 120 / guiScale
+            val anchoredEdge = (anchor.x * size).toInt()
+            check(hudEditorCoordinate(200.0, 20, anchor.x, size, nativeWidth, false) == 180)
+            check(hudEditorCoordinate(203.0, 20, anchor.x, size, nativeWidth, true) == 180)
+            check(hudEditorCoordinate(-1000.0, 20, anchor.x, size, nativeWidth, false) == anchoredEdge)
+            check(hudEditorCoordinate(10000.0, 20, anchor.x, size, nativeWidth, false) == anchoredEdge + nativeWidth - size)
+        }
+    }
+    check(hudEditorCoordinate(50.0, 10, .5f, 800, 640, false) == 240) { "Oversized widget drag range became invalid" }
+    for ((width, height) in listOf(320 to 180, 640 to 360, 1280 to 720)) {
+        val toolbarRoot = io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.fill())
+        val toolbar = hudEditorToolbar(width, height)
+        toolbar.children(listOf(Sizing.fixed(48), Sizing.expand(), Sizing.fixed(40)).map { sizing -> UIComponents.box(sizing, Sizing.fill()) })
+        toolbarRoot.child(toolbar); toolbarRoot.inflate(Size.of(width, height)); toolbarRoot.mount(null, 0, 0)
+        val help = hudEditorHelp(width)
+        check(toolbar.x() == (width - toolbar.width()) / 2 && toolbar.y() == height - help.size * MenuCanvas.lineHeight() - 40)
+        check(help.all { menuTextWidth(it) <= width - 16 }) { "HUD editor help text extends beyond the viewport" }
+        check(toolbar.children().all { it.x() >= toolbar.x() && it.x() + it.width() <= toolbar.x() + toolbar.width() })
+        check(!hudEditorControlAt(toolbarRoot, 20.0, 20.0)) { "HUD editor still covers top-left widgets by default" }
+    }
     val first = UIComponents.box(Sizing.fixed(40), Sizing.fixed(9))
     val second = UIComponents.box(Sizing.fixed(20), Sizing.fixed(9))
     val panel = hudPanel(padding = 6).children(listOf(first, second))

@@ -129,6 +129,7 @@ object MenuTheme {
 open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : ButtonComponent(message, action) {
     var selected: () -> Boolean = { false }
     var navigation = false
+    var background = true
     var toggled: (() -> Boolean)? = null
     private var toggleProgress = -1.0
     private var lastPaint = System.nanoTime()
@@ -151,13 +152,13 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             MenuTheme.rounded(graphics, left, top, w, h, MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (toggleProgress * 100).toInt()), h / 2)
             graphics.drawCircle(left + h / 2 + (toggleProgress * (w - h)).toInt(), top + h / 2, 24,
                 (h / 2 - 2).toDouble(), Color.ofRgb(if (on) MenuTheme.TEXT else MenuTheme.MUTED))
-            if (isFocused) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.TEXT))
+            if (isFocused && background) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
             return
         }
         val chosen = selected()
-        if (renderer() !== Renderer.VANILLA) {
+        if (background && renderer() !== Renderer.VANILLA) {
             renderer().draw(graphics, this, delta)
-        } else if (!navigation || chosen || hover) {
+        } else if (background && (!navigation || chosen || hover)) {
             MenuTheme.box(graphics, x, y, width, height,
                 if (chosen || hover) MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 14) else MenuTheme.CARD,
                 if (isFocused || chosen) MenuTheme.ACCENT else MenuTheme.BORDER)
@@ -165,22 +166,52 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         }
         val message = MenuTheme.text(message)
         val available = (width - 12).coerceAtLeast(1)
-        val lines = MC.font.split(message, available).take(if (navigation) 2 else 1)
+        val lines = menuTextLines(message, available).take(if (navigation) 2 else 1)
+        val lineHeight = MenuCanvas.lineHeight()
         g.enableScissor(x + 3, y + 1, x + width - 3, y + height - 1)
         lines.forEachIndexed { index, line ->
-            val left = if (navigation) x + 8 else x + (width - MC.font.width(line)) / 2
-            g.text(MC.font, line, left, y + (height - lines.size * 10) / 2 + index * 10,
+            val left = if (navigation) x + 8 else x + (width - kotlin.math.ceil(menuTextWidth(line)).toInt()) / 2
+            g.text(MC.font, line, left, y + (height - lines.size * lineHeight) / 2 + index * lineHeight,
                 MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED), false)
         }
         g.disableScissor()
     }
+    // Focus is painted with the button/card, so owo must not add a second rectangle after it.
+    override fun drawFocusHighlight(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {}
     override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = visible && isInBoundingBox(mouseX, mouseY) && !tooltip().isNullOrEmpty()
 }
 
 class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     var fontSize = 10f
-        set(value) { field = value; lineHeight(value.toInt().coerceAtLeast(9)) }
+        set(value) { field = value; lineHeight(MenuCanvas.lineHeight(value.toDouble())) }
+    init { lineHeight(MenuCanvas.lineHeight()) }
     override fun text(value: Component): LabelComponent = super.text(MenuTheme.text(value))
+    private fun wrap() {
+        wrappedText = menuTextLines(text(), if (horizontalSizing().get().isContent) maxWidth() else width(), fontSize.toDouble())
+    }
+    override fun determineHorizontalContentSize(sizing: Sizing): Int =
+        kotlin.math.ceil(menuTextLines(text(), maxWidth(), fontSize.toDouble()).maxOfOrNull { menuTextWidth(it, fontSize.toDouble()) } ?: 0.0).toInt()
+    override fun determineVerticalContentSize(sizing: Sizing): Int { wrap(); return textHeight() }
+    override fun inflate(space: Size) { super.inflate(space); wrap() }
+    // Owo's default drawing adds a Minecraft baseline offset. Canvas positions are top-of-line.
+    override fun drawText(draw: LabelDrawFunction) {
+        val left = x() + if (horizontalSizing().get().isContent) horizontalSizing().get().value else 0
+        var top = y() + if (verticalSizing().get().isContent) verticalSizing().get().value else 0
+        top += when (verticalTextAlignment()) {
+            VerticalAlignment.CENTER -> (height() - textHeight()) / 2
+            VerticalAlignment.BOTTOM -> height() - textHeight()
+            else -> 0
+        }
+        wrappedText.forEachIndexed { index, line ->
+            val lineWidth = kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()
+            val offset = when (horizontalTextAlignment()) {
+                HorizontalAlignment.CENTER -> (width() - lineWidth) / 2
+                HorizontalAlignment.RIGHT -> width() - lineWidth
+                else -> 0
+            }
+            draw.draw(left + offset, top + index * (lineHeight() + lineSpacing()), line, shadow(), color().get())
+        }
+    }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         drawText { x, y, text, _, color ->
             (g as MenuGraphics).styledText(text, x.toDouble(), y.toDouble(), color.argb(), fontSize.toDouble())
@@ -271,12 +302,6 @@ internal fun menuSidebar(layout: MenuLayout, page: MenuPage?, settingsCategory: 
         })
         child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(7); verticalAlignment(VerticalAlignment.CENTER); margins(Insets.vertical(9))
-            child(UIContainers.verticalFlow(Sizing.fixed(14), Sizing.fixed(18)).surface(Surface { g, c ->
-                val color = Color.ofRgb(MenuTheme.TEXT)
-                g.drawLine(c.x() + 1, c.y() + 15, c.x() + 9, c.y() + 1, 1.5, color)
-                g.drawLine(c.x() + 9, c.y() + 1, c.x() + 13, c.y() + 15, 1.5, color)
-                g.drawLine(c.x() + 1, c.y() + 15, c.x() + 9, c.y() + 10, 1.5, color)
-            }))
             child(MenuLabel(Component.literal("SKY-MYCE")).color(Color.ofRgb(MenuTheme.TEXT)).horizontalSizing(Sizing.expand()))
         })
         child(UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(1)).surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER))))

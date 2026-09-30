@@ -69,6 +69,15 @@ internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill
 }
 internal fun settingsCardColumns(width: Int) = if (width >= 280) 2 else 1
 internal fun settingsDrawerWidth(width: Int) = minOf((width / 3).coerceIn(190, 240), width.coerceAtLeast(1))
+internal fun settingsCardRow(columns: Int): FlowLayout =
+    object : FlowLayout(Sizing.fill(), Sizing.content(), FlowLayout.Algorithm.HORIZONTAL) {
+        override fun calculateChildSpace(space: Size): Size {
+            val available = super.calculateChildSpace(space)
+            // owo rounds both 50% widths up at odd widths; reserve that pixel before expansion.
+            val width = available.width().coerceAtLeast(0)
+            return Size.of(width - width % columns, available.height())
+        }
+    }.apply { gap(8); verticalAlignment(VerticalAlignment.CENTER) }
 
 class SettingsScreen(private val parent: Screen? = null, private var tab: SettingsTab = SettingsTab.GENERAL) :
     MenuScreen(Component.literal("Sky-Myce Settings")) {
@@ -163,23 +172,34 @@ class SettingsScreen(private val parent: Screen? = null, private var tab: Settin
         if (selectedGroup !in groups) closeDetails(false)
         if (groups.isEmpty()) { body.child(label("No matching settings", MenuTheme.MUTED)); return }
         val columns = settingsCardColumns(menuWidth)
-        groups.entries.chunked(columns).forEach { line -> body.child(settingsRow().apply {
-            gap(8)
-            line.forEach { (group, settings) -> child(UIContainers.horizontalFlow(Sizing.expand(), Sizing.fixed(43)).apply {
-                padding(Insets.of(4)); gap(2); verticalAlignment(VerticalAlignment.CENTER)
-                surface(Surface { g, c -> MenuTheme.box(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.CARD,
-                    if (selectedGroup == group) MenuTheme.ACCENT else MenuTheme.BORDER) })
-                child(MenuButton(Component.literal(group)) {
+        groups.entries.chunked(columns).forEach { line -> body.child(settingsCardRow(columns).apply {
+            line.forEach { (group, settings) ->
+                val title = MenuButton(Component.literal(group)) {
                     selectedGroup = group; keyCapture = null; populateDetails(groups); openDetails()
                 }.apply {
-                    sizing(Sizing.expand(), Sizing.fill()); navigation = true
+                    sizing(Sizing.expand(), Sizing.fill()); navigation = true; background = false
                     tip("Open all ${settings.size} $group settings")
-                })
-                settings.firstOrNull { it.entry.type() == EntryType.BOOLEAN && it.element.id() in setOf("enabled", "automatic", "dungeonTracker") }?.let { setting ->
-                    child(toggle(setting))
                 }
-            }) }
-            repeat(columns - line.size) { child(UIContainers.verticalFlow(Sizing.expand(), Sizing.fixed(43))) }
+                val quickToggle = settings.firstOrNull { it.entry.type() == EntryType.BOOLEAN && it.element.id() in setOf("enabled", "automatic", "dungeonTracker") }
+                    ?.let { toggle(it).apply { background = false } }
+                child(UIContainers.horizontalFlow(Sizing.expand(100 / columns), Sizing.fixed(43)).apply {
+                    padding(Insets.of(4)); gap(2); verticalAlignment(VerticalAlignment.CENTER)
+                    surface(Surface { g, c ->
+                        val focused = title.isFocused || quickToggle?.isFocused == true
+                        val hover = title.isHovered || quickToggle?.isHovered == true
+                        val border = when {
+                            selectedGroup == group || focused -> MenuTheme.ACCENT
+                            hover -> MenuTheme.blend(MenuTheme.BORDER, MenuTheme.TEXT, 18)
+                            else -> MenuTheme.BORDER
+                        }
+                        MenuTheme.box(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.CARD, border)
+                        if (focused && !MenuTheme.BORDERS) g.drawRectOutline(c.x(), c.y(), c.width(), c.height(), MenuTheme.alpha(border))
+                    })
+                    child(title)
+                    quickToggle?.let { child(it) }
+                })
+            }
+            repeat(columns - line.size) { child(UIContainers.verticalFlow(Sizing.expand(100 / columns), Sizing.fixed(43))) }
         }) }
         if (selectedGroup != null) { populateDetails(groups); openDetails(false) }
     }

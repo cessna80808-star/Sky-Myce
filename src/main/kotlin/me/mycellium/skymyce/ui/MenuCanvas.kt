@@ -91,13 +91,17 @@ class MenuCanvas {
             }
             3 -> {
                 var left = v[0]
+                val baseline = v[1] + ascent(v[2])
                 p.runs.forEach { run ->
-                    g.font = fontFor(run.text).deriveFont((if (run.bold) Font.BOLD else 0) or (if (run.italic) Font.ITALIC else 0), v[2].toFloat())
                     g.color = Color(run.color, true)
-                    g.drawString(run.text, left.toFloat(), (v[1] + g.font.getLineMetrics(run.text, frc).ascent).toFloat())
-                    val advance = g.font.getStringBounds(run.text, frc).width
-                    if (run.underline) g.fill(Rectangle2D.Double(left, v[1] + v[2], advance, .6))
-                    left += advance
+                    val start = left
+                    run.text.codePoints().forEach { codepoint ->
+                        val glyph = String(Character.toChars(codepoint))
+                        g.font = styledFont(glyph, run.bold, run.italic, v[2])
+                        g.drawString(glyph, left.toFloat(), baseline.toFloat())
+                        left += g.font.getStringBounds(glyph, frc).width
+                    }
+                    if (run.underline) g.fill(Rectangle2D.Double(start, baseline + 1, left - start, .6))
                 }
             }
             4 -> {
@@ -115,8 +119,20 @@ class MenuCanvas {
         private val font: Font = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")!!.use { Font.createFont(Font.TRUETYPE_FONT, it) }.deriveFont(10f)
         private val fallback = Font(Font.SANS_SERIF, Font.PLAIN, 10)
         private val frc = FontRenderContext(null, true, true)
-        private fun fontFor(text: String) = if (font.canDisplayUpTo(text) < 0) font else fallback
-        fun textWidth(text: String, bold: Boolean = false): Double = fontFor(text).deriveFont(if (bold) Font.BOLD else Font.PLAIN).getStringBounds(text, frc).width
+        private fun styledFont(text: String, bold: Boolean, italic: Boolean, size: Double) =
+            (if (font.canDisplayUpTo(text) < 0) font else fallback).deriveFont((if (bold) Font.BOLD else 0) or (if (italic) Font.ITALIC else 0), size.toFloat())
+        private fun ascent(size: Double) = maxOf(font.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent,
+            fallback.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent).toDouble()
+        fun lineHeight(size: Double = 10.0): Int {
+            val a = font.deriveFont(size.toFloat()).getLineMetrics("Ag", frc)
+            val b = fallback.deriveFont(size.toFloat()).getLineMetrics("Ag", frc)
+            return kotlin.math.ceil(ascent(size) + maxOf(a.descent, b.descent) + maxOf(a.leading, b.leading) + 1).toInt()
+        }
+        fun textWidth(text: String, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double =
+            text.codePoints().toArray().sumOf { codepoint ->
+                val glyph = String(Character.toChars(codepoint))
+                styledFont(glyph, bold, italic, size).getStringBounds(glyph, frc).width
+            }
         private fun mix(a: Int, b: Int, f: Double): Int {
             var result = 0
             for (shift in listOf(0, 8, 16, 24)) result = result or ((((a ushr shift and 255) * (1 - f) + (b ushr shift and 255) * f).toInt()) shl shift)

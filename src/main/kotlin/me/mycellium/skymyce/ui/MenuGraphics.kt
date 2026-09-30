@@ -12,6 +12,25 @@ import me.mycellium.mixin.MenuTextTooltipAccessor
 import net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipComponent
 import net.minecraft.resources.Identifier
 import java.awt.image.BufferedImage
+import net.minecraft.client.StringSplitter
+import net.minecraft.locale.Language
+import net.minecraft.network.chat.Style
+
+internal fun menuTextWidth(text: FormattedCharSequence, size: Double = 10.0): Double {
+    var width = 0.0
+    text.accept { _, style, codepoint ->
+        width += MenuCanvas.textWidth(String(Character.toChars(codepoint)), style.isBold, style.isItalic, size)
+        true
+    }
+    return width
+}
+
+internal fun menuTextLines(text: Component, width: Int, size: Double = 10.0): List<FormattedCharSequence> {
+    val splitter = StringSplitter { codepoint, style ->
+        MenuCanvas.textWidth(String(Character.toChars(codepoint)), style.isBold, style.isItalic, size).toFloat()
+    }
+    return Language.getInstance().getVisualOrder(splitter.splitLines(text, width.coerceAtLeast(1), Style.EMPTY))
+}
 
 /** Owo supplies retained layout/input; all paint goes to our canvas, never its native render state. */
 class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val menuWidth: Int = Minecraft.getInstance().window.guiScaledWidth,
@@ -60,13 +79,14 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
     override fun drawTooltip(font: Font, x: Int, y: Int, components: List<ClientTooltipComponent>, texture: Identifier?) {
         val lines = components.mapNotNull { (it as? MenuTextTooltipAccessor)?.`skymyce$text`() }
         if (lines.isEmpty()) return
-        val width = lines.maxOf { font.width(it) }.coerceAtMost(guiWidth() - 20) + 14
-        val height = lines.size * 12 + 12
+        val lineHeight = MenuCanvas.lineHeight()
+        val width = kotlin.math.ceil(lines.maxOf { menuTextWidth(it) }).toInt().coerceAtMost(guiWidth() - 20) + 14
+        val height = lines.size * lineHeight + 12
         val left = (x + 10).coerceAtMost(guiWidth() - width - 4).coerceAtLeast(4)
         val top = (y + 12).coerceAtMost(guiHeight() - height - 4).coerceAtLeast(4)
         pose().pushMatrix(); pose().identity()
         MenuTheme.box(this, left, top, width, height, MenuTheme.SIDEBAR)
-        lines.forEachIndexed { i, line -> styledText(line, (left + 7).toDouble(), (top + 6 + i * 12).toDouble(), MenuTheme.alpha(MenuTheme.TEXT)) }
+        lines.forEachIndexed { i, line -> styledText(line, (left + 7).toDouble(), (top + 6 + i * lineHeight).toDouble(), MenuTheme.alpha(MenuTheme.TEXT)) }
         pose().popMatrix()
     }
     fun styledText(text: FormattedCharSequence, x: Double, y: Double, color: Int, size: Double = 10.0) {

@@ -7,6 +7,8 @@ import me.mycellium.skymyce.features.digest.digestShareText
 import me.mycellium.skymyce.ui.MenuCanvas
 import me.mycellium.skymyce.ui.MenuViewport
 import me.mycellium.skymyce.ui.menuCaretIndex
+import me.mycellium.skymyce.ui.menuTextLines
+import me.mycellium.skymyce.ui.menuTextWidth
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.input.MouseButtonInfo
 import java.io.File
@@ -64,16 +66,17 @@ fun checkSettings() {
     drawerSize.animate(1, io.wispforest.owo.ui.core.Easing.CUBIC, io.wispforest.owo.ui.core.Sizing.fixed(0)).forwards()
     drawerSize.set(io.wispforest.owo.ui.core.Sizing.fixed(0)); drawerSize.update(1f)
     check(drawerSize.get().value == 0) { "An interrupted drawer animation reopened the closed pane" }
-    for (width in listOf(100, 216, 394, 700, 1100)) {
+    for (width in listOf(100, 216, 394, 592, 891, 1100).flatMap { listOf(it, (it - settingsDrawerWidth(it) - 10).coerceAtLeast(100)) }) {
         val drawer = settingsDrawerWidth(width)
         check(drawer in 1..width && drawer <= 240) { "Settings drawer escapes the menu" }
         val columns = settingsCardColumns(width)
         val gap = 8
-        val cardWidth = (width - gap * (columns - 1)) / columns
-        val grid = io.wispforest.owo.ui.container.UIContainers.horizontalFlow(io.wispforest.owo.ui.core.Sizing.fixed(width), io.wispforest.owo.ui.core.Sizing.content()).gap(gap)
-        val cards = List(columns) { io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(cardWidth), io.wispforest.owo.ui.core.Sizing.fixed(45)) }
+        val grid = settingsCardRow(columns).horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(width)) as io.wispforest.owo.ui.container.FlowLayout
+        // Exercise the actual expansion mode: expand() gives every child 100%, not flex weights.
+        val cards = List(columns) { io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.expand(100 / columns), io.wispforest.owo.ui.core.Sizing.fixed(45)) }
         grid.children(cards); grid.inflate(io.wispforest.owo.ui.core.Size.of(width, 100)); grid.mount(null, 0, 0)
-        check(cards.all { it.x() >= 0 && it.x() + it.width() <= width }) { "Settings module cards overlap the drawer or menu edge" }
+        check(cards.all { it.x() >= 0 && it.x() + it.width() <= width }) { "Settings module cards escape width $width: ${cards.map { it.x() to it.width() }}" }
+        check(cards.zipWithNext().all { (a, b) -> a.x() + a.width() + gap == b.x() }) { "Settings module columns overlap" }
     }
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.GENERAL)
@@ -104,7 +107,33 @@ fun checkSettings() {
     check(longReport.length <= 240 && longReport.endsWith("[unverified]"))
     checkMenuViewport()
     checkMenuCanvas()
+    checkMenuTextMetrics()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
+}
+
+private fun checkMenuTextMetrics() {
+    val text = "Updated 2026-09-30 20:47 | SkyBlock profile: Lemon | Agjy \u272a"
+    for (size in listOf(8.0, 9.0, 10.0, 12.0, 16.0, 24.0)) {
+        val height = MenuCanvas.lineHeight(size)
+        for ((bold, italic) in listOf(false to false, true to false, false to true)) {
+            val canvas = MenuCanvas()
+            fun paint(clipped: Boolean): IntArray {
+                canvas.begin()
+                if (clipped) canvas.clip = MenuCanvas.Clip(0, 0, 1000, height)
+                canvas.text(listOf(MenuCanvas.Run(text, -1, bold, italic, underline = true)), 4.0, 0.0, size)
+                val image = canvas.finish(1000, height + 12, 2.0)
+                return image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+            }
+            val full = paint(false)
+            check(full.any { it ushr 24 != 0 })
+            check(full.contentEquals(paint(true))) { "Menu line height clips glyphs at size $size" }
+        }
+        val styled = net.minecraft.network.chat.Component.literal(text).withStyle(net.minecraft.ChatFormatting.BOLD)
+        val lines = menuTextLines(styled, 96, size)
+        check(lines.size > 1 && lines.all { menuTextWidth(it, size) <= 96.01 }) { "Wrapping uses different metrics than custom paint" }
+        check(lines.all { line -> var bold = true; line.accept { _, style, _ -> bold = bold && style.isBold; true }; bold }) { "Wrapping lost text styles" }
+    }
+    check(MenuCanvas.lineHeight(16.0) > MenuCanvas.lineHeight()) { "Larger headings do not reserve more space" }
 }
 
 private fun checkMenuViewport() {
