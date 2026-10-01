@@ -5,6 +5,7 @@ import java.awt.Color
 import java.awt.Font
 import java.awt.Graphics2D
 import java.awt.RenderingHints
+import java.awt.Rectangle
 import java.awt.font.FontRenderContext
 import java.awt.font.GlyphVector
 import java.awt.geom.AffineTransform
@@ -25,7 +26,13 @@ class MenuCanvas {
     private var previous = emptyList<Paint>()
     private var previousScale = Double.NaN
     private var image: BufferedImage? = null
+    private val gradients = object : LinkedHashMap<Paint, Pair<Rectangle, BufferedImage>>(4, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Paint, Pair<Rectangle, BufferedImage>>?) = size > 4
+    }
     var revision = 0L
+        private set
+    /** Physical pixels changed by the last finish; null means no rasterization or upload is needed. */
+    var dirtyRegion: Rectangle? = null
         private set
 
     fun begin() { pending.clear(); transform = Transform(); clip = null }
@@ -45,14 +52,22 @@ class MenuCanvas {
         pending += Paint(5, listOf(x, y, width, height), emptyList(), emptyList(), transform, clip, image)
     }
 
-    /** Identical frames do no rasterization or upload. Animation and data changes invalidate naturally. */
+    /** Hover/tooltips only repaint their old and new bounds, including the underlying menu layers. */
     fun finish(width: Int, height: Int, scale: Double = 2.0): BufferedImage {
         val w = (width * scale).toInt().coerceAtLeast(1)
         val h = (height * scale).toInt().coerceAtLeast(1)
-        if (image?.width == w && image?.height == h && scale == previousScale && pending == previous) return image!!
+        val resized = image?.width != w || image?.height != h
+        if (!resized && scale == previousScale && pending == previous) { dirtyRegion = null; return image!! }
+        dirtyRegion = if (resized || scale != previousScale) Rectangle(0, 0, w, h) else damage(w, h, scale)
+        if (dirtyRegion == null) {
+            previous = pending.toList()
+            return image!!
+        }
         // Straight ARGB lets the compositor read our pixels without a full-frame unpremultiplication pass.
-        if (image?.width != w || image?.height != h) image = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
+        if (resized) image = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
+        if (resized || scale != previousScale) gradients.clear()
         val g = image!!.createGraphics()
+        g.clip = dirtyRegion
         g.composite = AlphaComposite.Clear; g.fillRect(0, 0, w, h); g.composite = AlphaComposite.SrcOver
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
@@ -63,20 +78,108 @@ class MenuCanvas {
             command.clip?.let { paint.clip(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
             val t = command.transform
             paint.transform(AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y))
-            draw(paint, command)
+            draw(paint, command, scale)
             paint.dispose()
         }
         g.dispose()
+        gradients.keys.retainAll(pending.filter { it.kind == 2 }.toSet())
         previous = pending.toList(); previousScale = scale; revision++
         return image!!
     }
-    private fun draw(g: Graphics2D, p: Paint) {
+
+    private fun damage(width: Int, height: Int, scale: Double): Rectangle? {
+        var first = 0
+        while (first < minOf(previous.size, pending.size) && previous[first] == pending[first]) first++
+        var oldLast = previous.lastIndex
+        var newLast = pending.lastIndex
+        while (oldLast >= first && newLast >= first && previous[oldLast] == pending[newLast]) { oldLast--; newLast-- }
+        var area: Rectangle? = null
+        fun include(paint: Paint) {
+            val region = physicalBounds(paint, width, height, scale) ?: return
+            area = area?.union(region) ?: region
+        }
+        var oldIndex = first
+        var newIndex = first
+        while (oldIndex <= oldLast && newIndex <= newLast) {
+            if (previous[oldIndex] == pending[newIndex]) { oldIndex++; newIndex++; continue }
+            if (previous.size == pending.size) {
+                include(previous[oldIndex++]); include(pending[newIndex++]); continue
+            }
+            // Bound lookahead so large, entirely changed lists cannot turn hover work quadratic.
+            val oldMatch = (oldIndex + 1..minOf(oldLast, oldIndex + 32)).firstOrNull { previous[it] == pending[newIndex] }
+            val newMatch = (newIndex + 1..minOf(newLast, newIndex + 32)).firstOrNull { pending[it] == previous[oldIndex] }
+            when {
+                oldMatch != null && (newMatch == null || oldMatch - oldIndex <= newMatch - newIndex) ->
+                    while (oldIndex < oldMatch) include(previous[oldIndex++])
+                newMatch != null -> while (newIndex < newMatch) include(pending[newIndex++])
+                else -> { include(previous[oldIndex++]); include(pending[newIndex++]) }
+            }
+        }
+        while (oldIndex <= oldLast) include(previous[oldIndex++])
+        while (newIndex <= newLast) include(pending[newIndex++])
+        return area
+    }
+
+    private fun physicalBounds(paint: Paint, width: Int, height: Int, scale: Double): Rectangle? {
+        val t = paint.transform
+        var bounds = AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y).createTransformedShape(bounds(paint)).bounds2D
+        // Fractional clip edges may include a pixel just beyond the exact logical shape bounds.
+        val margin = 2.0 / scale
+        bounds = Rectangle2D.Double(bounds.x - margin, bounds.y - margin, bounds.width + margin * 2, bounds.height + margin * 2)
+        paint.clip?.let { bounds = bounds.createIntersection(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
+        if (bounds.isEmpty) return null
+        val x = kotlin.math.floor(bounds.minX * scale - 2).coerceIn(0.0, width.toDouble()).toInt()
+        val y = kotlin.math.floor(bounds.minY * scale - 2).coerceIn(0.0, height.toDouble()).toInt()
+        val right = kotlin.math.ceil(bounds.maxX * scale + 2).coerceIn(0.0, width.toDouble()).toInt()
+        val bottom = kotlin.math.ceil(bounds.maxY * scale + 2).coerceIn(0.0, height.toDouble()).toInt()
+        return if (right > x && bottom > y) Rectangle(x, y, right - x, bottom - y) else null
+    }
+
+    private fun bounds(paint: Paint): Rectangle2D {
+        val v = paint.values
+        return when (paint.kind) {
+            0, 2, 5 -> Rectangle2D.Double(v[0], v[1], v[2], v[3])
+            1 -> Rectangle2D.Double(v[0] - v[2], v[1] - v[2], v[2] * 2, v[2] * 2)
+            4 -> Rectangle2D.Double(minOf(v[0], v[2]) - v[4] / 2, minOf(v[1], v[3]) - v[4] / 2,
+                kotlin.math.abs(v[2] - v[0]) + v[4], kotlin.math.abs(v[3] - v[1]) + v[4])
+            else -> {
+                var area: Rectangle2D? = null
+                var left = v[0]
+                val baseline = v[1] + ascent(v[2])
+                fun include(region: Rectangle2D) { if (!region.isEmpty) area = area?.createUnion(region) ?: region }
+                paint.runs.forEach { run ->
+                    val start = left
+                    var index = 0
+                    while (index < run.text.length) {
+                        val codepoint = run.text.codePointAt(index)
+                        val glyph = glyph(codepoint, run.bold, run.italic, v[2])
+                        val b = glyph.bounds
+                        include(Rectangle2D.Double(left + b.x, baseline + b.y, b.width, b.height))
+                        left += glyph.width
+                        index += Character.charCount(codepoint)
+                    }
+                    if (run.underline) include(Rectangle2D.Double(start, baseline + 1, left - start, .6))
+                }
+                area ?: Rectangle2D.Double()
+            }
+        }
+    }
+
+    private fun visible(g: Graphics2D, x: Double, y: Double, width: Double, height: Double): Boolean =
+        width > 0 && height > 0 && g.hitClip(kotlin.math.floor(x).toInt() - 2, kotlin.math.floor(y).toInt() - 2,
+            kotlin.math.ceil(width).toInt() + 4, kotlin.math.ceil(height).toInt() + 4)
+
+    private fun draw(g: Graphics2D, p: Paint, scale: Double) {
         val v = p.values
         when (p.kind) {
-            0 -> { g.color = Color(p.colors[0], true); g.fill(Rectangle2D.Double(v[0], v[1], v[2], v[3])) }
+            0 -> {
+                if (!visible(g, v[0], v[1], v[2], v[3])) return
+                g.color = Color(p.colors[0], true); g.fill(Rectangle2D.Double(v[0], v[1], v[2], v[3]))
+            }
             1 -> {
                 g.color = Color(p.colors[0], true)
                 val r = v[2]
+                if (!visible(g, v[0] - r, v[1] - r, r * 2, r * 2)) return
                 val outer = if (v[4] - v[3] >= 360.0) Ellipse2D.Double(v[0] - r, v[1] - r, r * 2, r * 2)
                     else Arc2D.Double(v[0] - r, v[1] - r, r * 2, r * 2, 180.0 - v[3], -(v[4] - v[3]), Arc2D.PIE)
                 val area = java.awt.geom.Area(outer)
@@ -84,13 +187,23 @@ class MenuCanvas {
                 g.fill(area)
             }
             2 -> {
-                if (v[2] <= 0 || v[3] <= 0) return
-                for (row in 0 until kotlin.math.ceil(v[3]).toInt()) {
-                    val amount = row / v[3]
-                    g.paint = java.awt.GradientPaint(v[0].toFloat(), 0f, Color(mix(p.colors[0], p.colors[3], amount), true),
-                        (v[0] + v[2]).toFloat(), 0f, Color(mix(p.colors[1], p.colors[2], amount), true))
-                    g.fill(Rectangle2D.Double(v[0], v[1] + row, v[2], minOf(1.0, v[3] - row)))
+                if (!visible(g, v[0], v[1], v[2], v[3])) return
+                // Java2D's gradient interpolation depends on the raster origin; reuse a stable layer.
+                val (region, layer) = gradients.getOrPut(p) {
+                    val region = physicalBounds(p, image!!.width, image!!.height, scale) ?: return
+                    val layer = BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB)
+                    val paint = layer.createGraphics()
+                    paint.setRenderingHints(g.renderingHints)
+                    paint.translate(-region.x.toDouble(), -region.y.toDouble()); paint.scale(scale, scale)
+                    p.clip?.let { paint.clip(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
+                    val t = p.transform
+                    paint.transform(AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y))
+                    drawGradient(paint, p)
+                    paint.dispose()
+                    region to layer
                 }
+                g.transform = AffineTransform()
+                g.drawImage(layer, region.x, region.y, null)
             }
             3 -> {
                 var left = v[0]
@@ -118,9 +231,23 @@ class MenuCanvas {
                 g.draw(java.awt.geom.Line2D.Double(v[0], v[1], v[2], v[3]))
             }
             5 -> {
+                if (!visible(g, v[0], v[1], v[2], v[3])) return
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
                 g.drawImage(p.picture, AffineTransform(v[2] / p.picture!!.width, 0.0, 0.0, v[3] / p.picture.height, v[0], v[1]), null)
             }
+        }
+    }
+
+    private fun drawGradient(g: Graphics2D, p: Paint) {
+        val v = p.values
+        val clip = g.clipBounds
+        val first = kotlin.math.floor((clip?.minY ?: v[1]) - v[1] - 1).toInt().coerceAtLeast(0)
+        val last = kotlin.math.ceil((clip?.maxY ?: (v[1] + v[3])) - v[1] + 1).toInt().coerceAtMost(kotlin.math.ceil(v[3]).toInt())
+        for (row in first until last) {
+            val amount = row / v[3]
+            g.paint = java.awt.GradientPaint(v[0].toFloat(), 0f, Color(mix(p.colors[0], p.colors[3], amount), true),
+                (v[0] + v[2]).toFloat(), 0f, Color(mix(p.colors[1], p.colors[2], amount), true))
+            g.fill(Rectangle2D.Double(v[0], v[1] + row, v[2], minOf(1.0, v[3] - row)))
         }
     }
     companion object {

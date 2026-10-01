@@ -118,6 +118,8 @@ fun checkSettings() {
     checkMenuTextMetrics()
     checkMenuTextureAndRuns()
     checkMenuPerformance()
+    checkMenuLabelHover()
+    checkMenuDamage()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
 }
 

@@ -146,7 +146,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             ui?.drawTooltip(graphics, mouseX, mouseY, a)
         }
         val rasterScale = minOf(2.0, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
-        texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision)
+        texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision, canvas.dirtyRegion)
     }
 
 

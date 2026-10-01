@@ -25,6 +25,7 @@ import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.FontDescription
+import net.minecraft.network.chat.Style
 import net.minecraft.resources.Identifier
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.input.KeyEvent
@@ -233,6 +234,28 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
             (g as MenuGraphics).styledText(text, x.toDouble(), y.toDouble(), color.argb(), fontSize.toDouble())
         }
     }
+    override fun styleAt(mouseX: Int, mouseY: Int): Style? {
+        val targetX = x() + mouseX
+        val targetY = y() + mouseY
+        var result: Style? = null
+        drawText { left, top, text, _, _ ->
+            if (result == null) result = menuTextStyleAt(text, (targetX - left).toDouble(), (targetY - top).toDouble(), fontSize.toDouble(), lineHeight())
+        }
+        return result
+    }
+}
+
+/** Hover and click hit tests use painted advances; no Minecraft glyph preparation is needed. */
+internal fun menuTextStyleAt(text: net.minecraft.util.FormattedCharSequence, x: Double, y: Double,
+                             size: Double = 10.0, lineHeight: Int = MenuCanvas.lineHeight(size)): Style? {
+    if (x < 0 || y < 0 || y >= lineHeight) return null
+    var left = 0.0
+    var result: Style? = null
+    text.accept { _, style, codepoint ->
+        val right = left + MenuCanvas.textWidth(codepoint, style.isBold, style.isItalic, size)
+        if (x < right) { result = style; false } else { left = right; true }
+    }
+    return result
 }
 
 /** Keep owo's popup layout, but give its entries the same font, paint and input as the menus. */
@@ -435,7 +458,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         uiAdapter.extractRenderState(custom, mx, my, partialTicks)
         uiAdapter.drawTooltip(custom, mx, my, partialTicks)
         val scale = minOf(2.0, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
-        texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision)
+        texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision, canvas.dirtyRegion)
     }
     // The adapter tooltip is already painted into the same canvas above the content.
     final override fun drawComponentTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {}
