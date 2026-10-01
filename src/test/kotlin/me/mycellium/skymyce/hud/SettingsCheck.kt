@@ -120,6 +120,7 @@ fun checkSettings() {
     checkMenuPerformance()
     checkMenuLabelHover()
     checkMenuDamage()
+    checkMenuSkullArt()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
 }
 
