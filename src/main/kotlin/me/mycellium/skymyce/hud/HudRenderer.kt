@@ -5,6 +5,7 @@ import me.mycellium.skymyce.SkyMyceModule
 import io.wispforest.owo.ui.core.CursorStyle
 import me.mycellium.skymyce.hud.widget.Widget
 import me.mycellium.skymyce.hud.widget.WidgetManager
+import me.mycellium.skymyce.hud.widget.WidgetEditorScreen
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents
@@ -66,7 +67,7 @@ object HudRenderer : SkyMyceModule() {
         WidgetManager.widgets.asReversed().firstOrNull { it.isRenderable && it.inBounds(mouseX, mouseY) }
 
     fun render(context: GuiGraphicsExtractor, partialTicks: Float) {
-        if (!isEnabled() || MC.instance.options.hideGui || MC.instance.player == null) return
+        if (!isEnabled() || MC.instance.options.hideGui || MC.instance.player == null || MC.screen is WidgetEditorScreen) return
         val window = MC.instance.window
         val mouseX = if (interactive) (MC.instance.mouseHandler.xpos() * window.guiScaledWidth / window.screenWidth).toInt() else -1000000
         val mouseY = if (interactive) (MC.instance.mouseHandler.ypos() * window.guiScaledHeight / window.screenHeight).toInt() else -1000000

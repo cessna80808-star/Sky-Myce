@@ -116,7 +116,41 @@ fun checkSettings() {
     checkMenuDropdownInput()
     checkMenuCanvas()
     checkMenuTextMetrics()
+    checkMenuTextureAndRuns()
+    checkMenuPerformance()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
+}
+
+private fun checkMenuTextureAndRuns() {
+    val colors = intArrayOf(0, 0xFF123456.toInt(), 0x8020A0E0.toInt(), 0x01336699)
+    val images = listOf(java.awt.image.BufferedImage.TYPE_INT_ARGB, java.awt.image.BufferedImage.TYPE_INT_ARGB_PRE,
+        java.awt.image.BufferedImage.TYPE_4BYTE_ABGR).flatMap { type ->
+        val full = java.awt.image.BufferedImage(4, 2, type)
+        full.setRGB(0, 0, 4, 2, colors + colors.reversedArray(), 0, 4)
+        listOf(full, full.getSubimage(1, 0, 2, 2))
+    }
+    for (image in images) {
+        val target = IntArray(image.width * image.height)
+        me.mycellium.skymyce.ui.menuTexturePixels(image, target)
+        check(target.contentEquals(image.getRGB(0, 0, image.width, image.height, null, 0, image.width).map(net.minecraft.util.ARGB::toABGR).toIntArray())) {
+            "Texture upload changed alpha/channels or read the wrong subimage stride"
+        }
+        val direct = java.nio.ByteBuffer.allocateDirect(target.size * 4).order(java.nio.ByteOrder.nativeOrder()).asIntBuffer()
+        direct.put(target); direct.clear().put(target)
+        check(IntArray(target.size) { direct.get(it) }.contentEquals(target)) { "Bulk upload failed on a repeated frame" }
+    }
+    val base = net.minecraft.network.chat.Style.EMPTY
+    val colored = base.withColor(0xAABBCC).withBold(true).withItalic(true).withUnderlined(true)
+    val sequence = net.minecraft.util.FormattedCharSequence.composite(listOf(
+        net.minecraft.util.FormattedCharSequence.forward("Long label ", base),
+        net.minecraft.util.FormattedCharSequence.forward("keeps one run", base.withInsertion("irrelevant")),
+        net.minecraft.util.FormattedCharSequence.forward(" \uD83D\uDE00\u272A", colored),
+        net.minecraft.util.FormattedCharSequence.forward(" tail", base)))
+    check(me.mycellium.skymyce.ui.menuTextRuns(sequence, 0x80123456.toInt()) == listOf(
+        MenuCanvas.Run("Long label keeps one run", 0x80123456.toInt()),
+        MenuCanvas.Run(" \uD83D\uDE00\u272A", 0x80AABBCC.toInt(), bold = true, italic = true, underline = true),
+        MenuCanvas.Run(" tail", 0x80123456.toInt()))) { "Text capture split Unicode, lost styles/alpha, or failed to merge adjacent styles" }
+    check(me.mycellium.skymyce.ui.menuTextRuns(net.minecraft.util.FormattedCharSequence.EMPTY, -1).isEmpty())
 }
 
 private fun checkMenuTextMetrics() {

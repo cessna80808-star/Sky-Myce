@@ -9,18 +9,37 @@ import me.mycellium.skymyce.utils.NumberUtils
 import me.mycellium.skymyce.utils.TextUtils
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
-import kotlin.collections.get
-import kotlin.math.round
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+internal fun dungeonTrackerWidgetVisible(enabled: Boolean, inDungeonArea: Boolean, started: Boolean, completed: Boolean) =
+    enabled && inDungeonArea && (!started || completed)
+
+/** Fixed example data belongs only to the editor, never the recorded dungeon totals. */
+private val dungeonTrackerPreview = listOf(
+    "§b§lF7 Dungeon Tracker",
+    "§8Editor preview",
+    "",
+    "§7Time: §e1h§7 (§e6m§7/run)",
+    "§7Runs: §a10§7 (§a10§7/h)",
+    "§7Chests: §a10§7 (§b2 rerolls§7)",
+    "",
+    "§7Profit: §a12M§7 (§a12M§7/h)",
+    "§7Cata Exp: §b400K §7(§b400K§7/h)",
+)
+
+internal fun dungeonTrackerPreviewLines(enabled: Boolean): List<String>? = dungeonTrackerPreview.takeIf { enabled }
+
 object DungeonTrackerWidget : SkyMyceModule() {
     private val content by lazy { hudPanel(padding = 6) }
+    private val previewContent by lazy { hudPanel(padding = 6) }
 
-    val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100) {
-        if (!DungeonTrackerConfig.dungeonTrackerWidget) return@Widget null
-        if (!SkyBlockIsland.inAnyIsland(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS)) return@Widget null
-        if (DungeonAPI.started && !DungeonAPI.completed) return@Widget null
+    val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
+        dungeonTrackerPreviewLines(DungeonTrackerConfig.dungeonTrackerWidget)?.let { previewContent.updateTextLines(it) }
+    }) {
+        if (!dungeonTrackerWidgetVisible(DungeonTrackerConfig.dungeonTrackerWidget,
+                SkyBlockIsland.inAnyIsland(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS),
+                DungeonAPI.started, DungeonAPI.completed)) return@Widget null
 
         val stats = DungeonTracker.profitData[DungeonTracker.currentFloor]
         val title = DungeonTracker.currentFloor?.name ?: "?"

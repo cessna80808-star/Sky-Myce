@@ -6,6 +6,7 @@ import java.awt.Font
 import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.font.FontRenderContext
+import java.awt.font.GlyphVector
 import java.awt.geom.AffineTransform
 import java.awt.geom.Arc2D
 import java.awt.geom.Ellipse2D
@@ -22,6 +23,7 @@ class MenuCanvas {
     var clip: Clip? = null
     private val pending = ArrayList<Paint>()
     private var previous = emptyList<Paint>()
+    private var previousScale = Double.NaN
     private var image: BufferedImage? = null
     var revision = 0L
         private set
@@ -47,8 +49,9 @@ class MenuCanvas {
     fun finish(width: Int, height: Int, scale: Double = 2.0): BufferedImage {
         val w = (width * scale).toInt().coerceAtLeast(1)
         val h = (height * scale).toInt().coerceAtLeast(1)
-        if (image?.width == w && image?.height == h && pending == previous) return image!!
-        if (image?.width != w || image?.height != h) image = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB_PRE)
+        if (image?.width == w && image?.height == h && scale == previousScale && pending == previous) return image!!
+        // Straight ARGB lets the compositor read our pixels without a full-frame unpremultiplication pass.
+        if (image?.width != w || image?.height != h) image = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
         val g = image!!.createGraphics()
         g.composite = AlphaComposite.Clear; g.fillRect(0, 0, w, h); g.composite = AlphaComposite.SrcOver
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
@@ -64,7 +67,7 @@ class MenuCanvas {
             paint.dispose()
         }
         g.dispose()
-        previous = pending.toList(); revision++
+        previous = pending.toList(); previousScale = scale; revision++
         return image!!
     }
     private fun draw(g: Graphics2D, p: Paint) {
@@ -95,11 +98,16 @@ class MenuCanvas {
                 p.runs.forEach { run ->
                     g.color = Color(run.color, true)
                     val start = left
-                    run.text.codePoints().forEach { codepoint ->
-                        val glyph = String(Character.toChars(codepoint))
-                        g.font = styledFont(glyph, run.bold, run.italic, v[2])
-                        g.drawString(glyph, left.toFloat(), baseline.toFloat())
-                        left += g.font.getStringBounds(glyph, frc).width
+                    var index = 0
+                    while (index < run.text.length) {
+                        val codepoint = run.text.codePointAt(index)
+                        val glyph = glyph(codepoint, run.bold, run.italic, v[2])
+                        val bounds = glyph.bounds
+                        if (g.hitClip(kotlin.math.floor(left + bounds.x).toInt() - 1, kotlin.math.floor(baseline + bounds.y).toInt() - 1,
+                                kotlin.math.ceil(bounds.width).toInt() + 3, kotlin.math.ceil(bounds.height).toInt() + 3))
+                            g.drawGlyphVector(glyph.vector, left.toFloat(), baseline.toFloat())
+                        left += glyph.width
+                        index += Character.charCount(codepoint)
                     }
                     if (run.underline) g.fill(Rectangle2D.Double(start, baseline + 1, left - start, .6))
                 }
@@ -119,20 +127,50 @@ class MenuCanvas {
         private val font: Font = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")!!.use { Font.createFont(Font.TRUETYPE_FONT, it) }.deriveFont(10f)
         private val fallback = Font(Font.SANS_SERIF, Font.PLAIN, 10)
         private val frc = FontRenderContext(null, true, true)
-        private fun styledFont(text: String, bold: Boolean, italic: Boolean, size: Double) =
-            (if (font.canDisplayUpTo(text) < 0) font else fallback).deriveFont((if (bold) Font.BOLD else 0) or (if (italic) Font.ITALIC else 0), size.toFloat())
-        private fun ascent(size: Double) = maxOf(font.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent,
-            fallback.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent).toDouble()
-        fun lineHeight(size: Double = 10.0): Int {
+        private data class FontKey(val size: Float, val style: Int, val fallback: Boolean)
+        private data class GlyphKey(val codepoint: Int, val size: Float, val style: Int)
+        private data class Glyph(val vector: GlyphVector, val width: Double, val bounds: Rectangle2D)
+        private data class LineMetrics(val ascent: Double, val height: Int)
+        // User input can contain arbitrary Unicode and sizes; retain no whole strings and bound every cache.
+        private val fonts = object : LinkedHashMap<FontKey, Font>(64, .75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<FontKey, Font>?) = size > 64
+        }
+        private val glyphs = object : LinkedHashMap<GlyphKey, Glyph>(4096, .75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<GlyphKey, Glyph>?) = size > 4096
+        }
+        private val lines = object : LinkedHashMap<Float, LineMetrics>(32, .75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Float, LineMetrics>?) = size > 32
+        }
+        private fun glyph(codepoint: Int, bold: Boolean, italic: Boolean, size: Double): Glyph {
+            val key = GlyphKey(codepoint, size.toFloat(), (if (bold) Font.BOLD else 0) or (if (italic) Font.ITALIC else 0))
+            return glyphs.getOrPut(key) {
+                val text = String(Character.toChars(codepoint))
+                val fontKey = FontKey(key.size, key.style, font.canDisplayUpTo(text) >= 0)
+                val styled = fonts.getOrPut(fontKey) { (if (fontKey.fallback) fallback else font).deriveFont(key.style, key.size) }
+                val vector = styled.createGlyphVector(frc, text)
+                Glyph(vector, styled.getStringBounds(text, frc).width, vector.visualBounds)
+            }
+        }
+        private fun metrics(size: Double): LineMetrics = lines.getOrPut(size.toFloat()) {
             val a = font.deriveFont(size.toFloat()).getLineMetrics("Ag", frc)
             val b = fallback.deriveFont(size.toFloat()).getLineMetrics("Ag", frc)
-            return kotlin.math.ceil(ascent(size) + maxOf(a.descent, b.descent) + maxOf(a.leading, b.leading) + 1).toInt()
+            val ascent = maxOf(a.ascent, b.ascent).toDouble()
+            LineMetrics(ascent, kotlin.math.ceil(ascent + maxOf(a.descent, b.descent) + maxOf(a.leading, b.leading) + 1).toInt())
         }
-        fun textWidth(text: String, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double =
-            text.codePoints().toArray().sumOf { codepoint ->
-                val glyph = String(Character.toChars(codepoint))
-                styledFont(glyph, bold, italic, size).getStringBounds(glyph, frc).width
+        private fun ascent(size: Double) = metrics(size).ascent
+        fun lineHeight(size: Double = 10.0): Int = metrics(size).height
+        fun textWidth(codepoint: Int, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double =
+            glyph(codepoint, bold, italic, size).width
+        fun textWidth(text: String, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double {
+            var width = 0.0
+            var index = 0
+            while (index < text.length) {
+                val codepoint = text.codePointAt(index)
+                width += glyph(codepoint, bold, italic, size).width
+                index += Character.charCount(codepoint)
             }
+            return width
+        }
         private fun mix(a: Int, b: Int, f: Double): Int {
             var result = 0
             for (shift in listOf(0, 8, 16, 24)) result = result or ((((a ushr shift and 255) * (1 - f) + (b ushr shift and 255) * f).toInt()) shl shift)

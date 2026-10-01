@@ -47,7 +47,8 @@ internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
 internal fun hudEditorHelp(screenWidth: Int) = menuTextLines(Component.literal(
     "Drag: move | Scroll: scale | Right click: theme\nCtrl: anchor | Shift: snap | H: hide controls"), screenWidth - 16)
 
-object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widget Editor")) {
+/** Keep the exact opening screen, including its selected settings tab and draft state. */
+class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instance, MC.font, Component.literal("Widget Editor")) {
     private var selectedWidget: Widget? = null
     private var clickedWidget: Widget? = null
     private var selectedAnchor: Anchor? = null
@@ -70,7 +71,7 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         snapPosition = false
         anchorSelect = false
         controlsVisible = true
-        screenWidgets = WidgetManager.getActiveWidgets()
+        screenWidgets = WidgetManager.widgets.filter { it.prepareEditor() }
 
         val adapter = OwoUIAdapter.create(this, UIContainers::verticalFlow)
         ui = adapter
@@ -103,16 +104,20 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         super.removed()
     }
 
+    override fun onClose() { MC.instance.setScreen(parent) }
+
     override fun extractBackground(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
     }
 
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
+        output.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, 25))
         canvas.begin()
         val graphics = MenuGraphics(canvas, mouseX, mouseY)
         // Widgets and their stored positions use Minecraft GUI coordinates, exactly like the live HUD.
         // Keep that one coordinate space for outlines, pointer input and saved positions.
-        graphics.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, 25))
         screenWidgets.forEach { widget ->
+            // Preview the actual HUD renderer and its measured bounds; editor controls use our canvas.
+            if (!widget.render(output, mouseX, mouseY, a, editor = true)) return@forEach
             val outlineColor = MenuTheme.alpha(if (clickedWidget == widget || selectedWidget == widget) MenuTheme.ACCENT else MenuTheme.MUTED)
             graphics.outline(widget.renderX, widget.renderY, widget.width, widget.height, outlineColor)
             if (selectedWidget == widget || clickedWidget == widget) {
@@ -140,7 +145,8 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
             super.extractRenderState(graphics, mouseX, mouseY, a)
             ui?.drawTooltip(graphics, mouseX, mouseY, a)
         }
-        texture.render(output, canvas.finish(width, height), width, height, canvas.revision)
+        val rasterScale = minOf(2.0, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision)
     }
 
 
@@ -210,6 +216,7 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
     }
 
     override fun keyPressed(input: KeyEvent): Boolean {
+        if (input.isEscape) { onClose(); return true }
         if (input.key == GLFW.GLFW_KEY_H && !input.hasControlDown() && !input.hasAltDown()) {
             controlsVisible = !controlsVisible
             if (!controlsVisible) { setFocused(null); ui?.cursorAdapter?.applyStyle(CursorStyle.NONE) }
@@ -217,10 +224,7 @@ object WidgetEditorScreen : Screen(MC.instance, MC.font, Component.literal("Widg
         }
         snapPosition = input.hasShiftDown()
         anchorSelect = input.hasControlDown()
-        if (!controlsVisible) {
-            if (input.isEscape) { onClose(); return true }
-            return false
-        }
+        if (!controlsVisible) return false
         return super.keyPressed(input)
     }
 

@@ -10,6 +10,9 @@ import me.mycellium.skymyce.hud.widget.hudEditorControlAt
 import me.mycellium.skymyce.hud.widget.hudEditorCoordinate
 import me.mycellium.skymyce.hud.widget.hudEditorToolbar
 import me.mycellium.skymyce.hud.widget.hudEditorHelp
+import me.mycellium.skymyce.hud.widget.hudEditorContent
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLines
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetVisible
 import me.mycellium.skymyce.ui.MenuCanvas
 import me.mycellium.skymyce.ui.menuTextWidth
 
@@ -18,6 +21,24 @@ fun main() {
     checkSettings()
     checkThemes()
     me.mycellium.skymyce.features.digest.digestUiCheck()
+    // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
+    val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
+    check(trackerPreview.any { it.contains("Editor preview") } && trackerPreview.size > 3)
+    check(dungeonTrackerPreviewLines(enabled = false) == null)
+    val firstEditorContent = hudEditorContent({ dungeonTrackerPreviewLines(true) },
+        { error("A deterministic preview must not depend on live dungeon state") }, null, sinceActive = 0, now = 100_000)
+    check(firstEditorContent === trackerPreview) { "A never-active tracker did not initialize its editor preview" }
+    check(!dungeonTrackerWidgetVisible(true, false, false, false))
+    check(!dungeonTrackerWidgetVisible(false, true, false, false))
+    check(!dungeonTrackerWidgetVisible(true, true, true, false))
+    check(dungeonTrackerWidgetVisible(true, true, false, false))
+    check(dungeonTrackerWidgetVisible(true, true, true, true))
+    check(hudEditorContent<List<String>>(null, { null }, null, 0, 100_000) == null)
+    check(hudEditorContent(null, { null }, trackerPreview, 99_000, 100_000) === trackerPreview)
+    check(hudEditorContent(null, { null }, trackerPreview, 90_000, 100_000) == null)
+    check(hudEditorContent({ dungeonTrackerPreviewLines(false) }, { trackerPreview }, trackerPreview, 99_000, 100_000) == null) {
+        "A disabled tracker reappeared through recently retained live content"
+    }
     val editorRoot = io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.fill())
     val resetControl = UIComponents.box(Sizing.fixed(150), Sizing.fixed(20)).positioning(io.wispforest.owo.ui.core.Positioning.absolute(245, 330))
     editorRoot.child(resetControl)

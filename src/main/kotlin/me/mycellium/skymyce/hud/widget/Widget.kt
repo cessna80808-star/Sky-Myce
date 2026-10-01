@@ -15,6 +15,10 @@ import net.minecraft.client.input.MouseButtonEvent
 import kotlin.math.ceil
 import kotlin.math.floor
 
+/** A preview works before the widget has ever appeared; recent live content still helps arrange transient HUDs. */
+internal fun <T> hudEditorContent(preview: (() -> T?)?, current: () -> T?, retained: T?, sinceActive: Long, now: Long): T? =
+    if (preview != null) preview() else current() ?: retained.takeIf { sinceActive > 0 && now - sinceActive in 0L until 10_000L }
+
 class Widget(
     val id: String,
     val title: String,
@@ -22,6 +26,8 @@ class Widget(
     var y: Int = 0,
     var scale: Float = 1f,
     var anchor: Anchor = Anchor.TOP_LEFT,
+    /** Editor-only example; never changes gameplay visibility or recorded activity. */
+    val previewBuilder: (Widget.() -> UIComponent?)? = null,
     /** Update and return retained owo components; null hides the widget without discarding its UI state. */
     val builder: Widget.() -> UIComponent? = { null }
 ) {
@@ -77,17 +83,27 @@ class Widget(
     internal fun localY(mouseY: Double) = (mouseY - renderY) / scale
     internal fun localClick(click: MouseButtonEvent) = MouseButtonEvent(localX(click.x), localY(click.y), click.buttonInfo())
 
-    fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
-        HudTheme.withWidget(theme) { renderThemed(graphics, mouseX, mouseY, partialTicks) }
+    internal fun prepareEditor(): Boolean = HudTheme.withWidget(theme) {
+        editorContent()?.let { prepare(it); true } ?: false
     }
 
-    private fun renderThemed(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
-        val element = builder()
-        isRenderable = (element != null)
+    private fun editorContent() = hudEditorContent(previewBuilder?.let { preview -> { preview(this) } }, { builder() }, lastRenderable,
+        sinceActive, System.currentTimeMillis())
 
-        if (element == null) return
-        sinceActive = System.currentTimeMillis()
+    fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float, editor: Boolean = false): Boolean =
+        HudTheme.withWidget(theme) {
+            val element = if (editor) editorContent() else builder()
+            if (!editor) {
+                isRenderable = element != null
+                if (element != null) sinceActive = System.currentTimeMillis()
+            }
+            if (element == null) return@withWidget false
+            val ui = prepare(element)
+            ui.extractRenderState(graphics, floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
+            true
+        }
 
+    private fun prepare(element: UIComponent): OwoUIAdapter<FlowLayout> {
         val window = MC.instance.window
         val availableWidth = ceil(window.guiScaledWidth / scale).toInt()
         val availableHeight = ceil(window.guiScaledHeight / scale).toInt()
@@ -123,7 +139,7 @@ class Widget(
             ui.moveAndResize(0, 0, availableWidth, availableHeight)
         }
 
-        ui.extractRenderState(graphics, floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
+        return ui
     }
 
     fun drawTooltip(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {

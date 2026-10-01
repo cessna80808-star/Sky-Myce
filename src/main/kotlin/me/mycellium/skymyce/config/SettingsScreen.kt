@@ -105,7 +105,7 @@ class SettingsScreen @JvmOverloads constructor(
     private lateinit var drawerClip: FlowLayout
     private lateinit var drawerHeading: FlowLayout
     private lateinit var drawerScroll: ScrollContainer<FlowLayout>
-    public override val menuParent get() = parent.takeIf { it is MenuScreen || it === WidgetEditorScreen }
+    public override val menuParent get() = parent.takeIf { it is MenuScreen || it is WidgetEditorScreen }
     override val settingsCategory get() = tab
     override fun selectSettings(tab: SettingsTab) {
         this.tab = tab; query = ""; selectedGroup = null; editingDungeonFriend = null; friendDraft = null; keyCapture = null; rebuild()
@@ -187,7 +187,7 @@ class SettingsScreen @JvmOverloads constructor(
                 MC.instance.setScreen(ThemeEditorScreen(this))
             }.apply { verticalSizing(Sizing.fixed(38)) })
             body.child(button("Per-widget themes", minOf(190, menuWidth - 28), "Open the HUD editor and right-click a widget to customize its theme") {
-                MC.instance.setScreen(WidgetEditorScreen)
+                MC.instance.setScreen(WidgetEditorScreen(this))
             }.apply { verticalSizing(Sizing.fixed(38)) })
             body.child(label("Presets and global overrides apply to your HUD. Widgets can inherit them or use their own overrides.", MenuTheme.MUTED))
             return

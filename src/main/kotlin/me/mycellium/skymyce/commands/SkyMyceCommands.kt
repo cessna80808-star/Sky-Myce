@@ -154,7 +154,7 @@ object SkyMyceCommands : SkyMyceModule() {
         return literal("hud")
             .executes {
                 MC.instance.execute {
-                    MC.instance.setScreen(WidgetEditorScreen)
+                    MC.instance.setScreen(WidgetEditorScreen(MC.screen.takeIf { it is me.mycellium.skymyce.ui.MenuScreen }))
                 }
                 1
             }

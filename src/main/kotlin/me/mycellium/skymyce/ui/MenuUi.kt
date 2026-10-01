@@ -138,6 +138,12 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     var toggled: (() -> Boolean)? = null
     private var toggleProgress = -1.0
     private var lastPaint = System.nanoTime()
+    private var wrappedMessage: Component? = null
+    private var wrappedWidth = -1
+    private var wrappedNavigation = false
+    private var wrappedLanguage: net.minecraft.locale.Language? = null
+    private var lines = emptyList<net.minecraft.util.FormattedCharSequence>()
+    private var lineWidths = IntArray(0)
 
     override fun extractContents(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
@@ -169,13 +175,19 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
                 if (isFocused || chosen) MenuTheme.ACCENT else MenuTheme.BORDER)
             if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
         }
-        val message = MenuTheme.text(message)
         val available = (width - 12).coerceAtLeast(1)
-        val lines = menuTextLines(message, available).take(if (navigation) 2 else 1)
+        val language = net.minecraft.locale.Language.getInstance()
+        if (message != wrappedMessage || available != wrappedWidth || navigation != wrappedNavigation || language !== wrappedLanguage) {
+            wrappedMessage = message.copy()
+            wrappedWidth = available; wrappedNavigation = navigation
+            wrappedLanguage = language
+            lines = menuTextLines(wrappedMessage!!, available).take(if (navigation) 2 else 1)
+            lineWidths = IntArray(lines.size) { kotlin.math.ceil(menuTextWidth(lines[it])).toInt() }
+        }
         val lineHeight = MenuCanvas.lineHeight()
         g.enableScissor(x + 3, y + 1, x + width - 3, y + height - 1)
         lines.forEachIndexed { index, line ->
-            val left = if (navigation) x + 8 else x + (width - kotlin.math.ceil(menuTextWidth(line)).toInt()) / 2
+            val left = if (navigation) x + 8 else x + (width - lineWidths[index]) / 2
             g.text(MC.font, line, left, y + (height - lines.size * lineHeight) / 2 + index * lineHeight,
                 MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED), false)
         }
@@ -208,10 +220,9 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
             else -> 0
         }
         wrappedText.forEachIndexed { index, line ->
-            val lineWidth = kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()
             val offset = when (horizontalTextAlignment()) {
-                HorizontalAlignment.CENTER -> (width() - lineWidth) / 2
-                HorizontalAlignment.RIGHT -> width() - lineWidth
+                HorizontalAlignment.CENTER -> (width() - kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()) / 2
+                HorizontalAlignment.RIGHT -> width() - kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()
                 else -> 0
             }
             draw.draw(left + offset, top + index * (lineHeight() + lineSpacing()), line, shadow(), color().get())
@@ -495,6 +506,6 @@ fun openMenu(page: MenuPage = MenuPage.DIGEST) {
         MenuPage.DUNGEONS -> DungeonScreen()
         MenuPage.AUCTIONS -> AuctionHouseScreen()
         MenuPage.COSMETICS -> CosmeticsScreen()
-        MenuPage.HUD -> WidgetEditorScreen
+        MenuPage.HUD -> WidgetEditorScreen(MC.screen)
     })
 }

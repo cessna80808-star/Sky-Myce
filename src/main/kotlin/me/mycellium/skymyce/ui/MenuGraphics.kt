@@ -19,7 +19,7 @@ import net.minecraft.network.chat.Style
 internal fun menuTextWidth(text: FormattedCharSequence, size: Double = 10.0): Double {
     var width = 0.0
     text.accept { _, style, codepoint ->
-        width += MenuCanvas.textWidth(String(Character.toChars(codepoint)), style.isBold, style.isItalic, size)
+        width += MenuCanvas.textWidth(codepoint, style.isBold, style.isItalic, size)
         true
     }
     return width
@@ -27,9 +27,35 @@ internal fun menuTextWidth(text: FormattedCharSequence, size: Double = 10.0): Do
 
 internal fun menuTextLines(text: Component, width: Int, size: Double = 10.0): List<FormattedCharSequence> {
     val splitter = StringSplitter { codepoint, style ->
-        MenuCanvas.textWidth(String(Character.toChars(codepoint)), style.isBold, style.isItalic, size).toFloat()
+        MenuCanvas.textWidth(codepoint, style.isBold, style.isItalic, size).toFloat()
     }
     return Language.getInstance().getVisualOrder(splitter.splitLines(text, width.coerceAtLeast(1), Style.EMPTY))
+}
+
+internal fun menuTextRuns(text: FormattedCharSequence, color: Int): List<MenuCanvas.Run> {
+    val runs = ArrayList<MenuCanvas.Run>()
+    val content = StringBuilder()
+    var tint = color
+    var bold = false
+    var italic = false
+    var underline = false
+    fun flush() {
+        if (content.isNotEmpty()) {
+            runs += MenuCanvas.Run(content.toString(), tint, bold, italic, underline)
+            content.setLength(0)
+        }
+    }
+    text.accept { _, style, codepoint ->
+        val nextTint = (color and -0x1000000) or (style.color?.value ?: (color and 0xFFFFFF))
+        if (nextTint != tint || style.isBold != bold || style.isItalic != italic || style.isUnderlined != underline) {
+            flush()
+            tint = nextTint; bold = style.isBold; italic = style.isItalic; underline = style.isUnderlined
+        }
+        content.appendCodePoint(codepoint)
+        true
+    }
+    flush()
+    return runs
 }
 
 /** Owo supplies retained layout/input; all paint goes to our canvas, never its native render state. */
@@ -90,13 +116,6 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
         pose().popMatrix()
     }
     fun styledText(text: FormattedCharSequence, x: Double, y: Double, color: Int, size: Double = 10.0) {
-        val runs = ArrayList<MenuCanvas.Run>()
-        text.accept { _, style, codepoint ->
-            val run = MenuCanvas.Run(String(Character.toChars(codepoint)), (color and -0x1000000) or (style.color?.value ?: (color and 0xFFFFFF)), style.isBold, style.isItalic, style.isUnderlined)
-            val last = runs.lastOrNull()
-            if (last != null && last.copy(text = run.text) == run) runs[runs.lastIndex] = last.copy(text = last.text + run.text) else runs += run
-            true
-        }
-        sync(); canvas.text(runs, x, y, size)
+        sync(); canvas.text(menuTextRuns(text, color), x, y, size)
     }
 }
