@@ -193,6 +193,40 @@ restore it through fresh authorization; never disable verification to
 recover. Fabric discovery happens before this hook, so another malicious mod
 or a modified Fabric loader is outside the host trust boundary.
 
+## Linux launch authorization
+
+Loader **1.0.10** gives each game process a new random authorization session ID.
+The ID stays in memory and is reused across retries, activation and lease renewal;
+it is never saved or carried into a restarted process. Each launch still requires
+the existing fresh Minecraft and installation proofs before protected features load.
+The standalone installer only installs verified files; it grants no authorization.
+
+Backend `LINUX_REQUIRE_REAUTH_ON_EVERY_LAUNCH=true` enables automatic Linux launch
+reauthorization. A successfully authorized new Linux session replaces the previous
+session. Old leases and renewal requests are rejected by the backend, including
+relay and artifact access. Retries within the active process renew the same session.
+This policy can be disabled with `false` without rebuilding the mod or loader.
+Missing configuration preserves the standard policy; invalid values fail closed.
+Windows, macOS and other platforms retain the standard authorization policy.
+Enabling the policy while an untracked Linux session is already running requires
+that instance to close and relaunch before it can authorize under the new policy.
+
+Launch authorization never clears or changes the persistent HWID, installation
+key or seven-day hardware-transfer cooldown. Boot, shutdown, suspend and login
+events do not affect this identity. A fresh game process requires reauthorization
+regardless of whether the operating system restarted. Genuine device transfers
+still use the existing authorized reset and activation flow.
+
+The platform and session are bound into the installation signature and returned
+signed lease. The backend pins the first authenticated platform per installation
+and rejects a platform change. As with the existing device identity, a compromised
+host can spoof software-reported metadata; this is not hardware or OS attestation.
+
+Sky-Myce **2.4.12** requires loader **1.0.10** on every platform, because older
+loaders cannot supply this signed session metadata. Loader self-updates remain
+opt-in and off by default. Users who keep them disabled must install the compatible
+loader manually; the bootstrap-only authenticated upgrade path remains available.
+
 ## Device privacy and local key storage
 
 Identity is shared by Minecraft instances belonging to the same OS user in

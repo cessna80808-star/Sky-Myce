@@ -95,7 +95,7 @@ object LoaderClient {
         release = envelope
     }
     private fun post(path: String, body: Any) = api().post(path, body)
-    private fun challenge(purpose: String) = api().challenge(purpose)
+    private fun challenge(purpose: String, startSession: Boolean = false) = api().challenge(purpose, startSession)
     private fun signature(purpose: String, challenge: JsonObject) = api().signature(purpose, challenge)
     fun confirmActivation(key: String) {
         if (busy || !::installation.isInitialized) return
@@ -105,7 +105,7 @@ object LoaderClient {
         val epoch = generation
         work({
             discoverRelease()
-            val pending = challenge("activate")
+            val pending = challenge("activate", startSession = !LaunchSession.authorized)
             val proof = MinecraftProof.create(pending.get("nonce").asString).get(30, TimeUnit.SECONDS)
             check(activationRequestCurrent(epoch, generation, account,
                 Minecraft.getInstance().user.profileId.toString().replace("-", ""), proof["uuid"])) { "Minecraft account changed" }
@@ -118,7 +118,7 @@ object LoaderClient {
         val account = uuid
         work({
             discoverRelease()
-            val nonce = challenge("renew")
+            val nonce = challenge("renew", startSession = !LaunchSession.authorized)
             val proof = MinecraftProof.create(nonce.get("nonce").asString).get(30, TimeUnit.SECONDS)
             post("/auth/renew", mapOf("challengeId" to nonce.get("challengeId").asString,
                 "minecraftProof" to proof, "signature" to signature("renew", nonce))) to nonce
@@ -147,6 +147,7 @@ object LoaderClient {
             if (uuid != account) return@work
             checkedPayload = matches
             authorization.accept(token, claims, response.get("serverTime").asLong, epoch)
+            LaunchSession.accept()
             failures = 0
             nextAttempt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(((claims.get("exp").asLong - response.get("serverTime").asLong) / 2).coerceAtMost(120000))
             status = if (restartRequired) "Sky-Myce is ready. Click Restart Minecraft to finish installation." else "Sky-Myce is ready. You can continue to Minecraft."
@@ -158,11 +159,11 @@ object LoaderClient {
         val lease = authorization.lease ?: error("Authorization required")
         return mapOf("lease" to lease, "installationSignature" to installation.sign("Sky-Myce relay v3\n$nonce\n$lease"))
     }
-    fun deny(revoked: Boolean = false) {
+    fun deny(revoked: Boolean = false, code: String? = null) {
         busy = false
         authorization.deny()
         nextAttempt = Long.MAX_VALUE
-        status = (if (revoked) "Your Sky-Myce license has been revoked. " else "") + "Sky-Myce has been disabled. Please contact the Sky-Myce owners if you believe this was a mistake."
+        status = code?.let(::accountAccessError) ?: ((if (revoked) "Your Sky-Myce license has been revoked. " else "") + "Sky-Myce has been disabled. Please contact the Sky-Myce owners if you believe this was a mistake.")
         observers.toList().forEach { it(false) }; lastAllowed = false
         val minecraft = Minecraft.getInstance()
         minecraft.setScreen(AuthorizationScreen())
@@ -294,7 +295,7 @@ object LoaderClient {
                             return@execute
                         }
                         if (cause.code in setOf("license_revoked", "account_suspended", "installation_revoked", "authorization_revoked")) {
-                            deny(cause.code == "license_revoked"); return@execute
+                            deny(cause.code == "license_revoked", cause.code); return@execute
                         }
                         authorization.deny(); nextAttempt = Long.MAX_VALUE
                         showAuthorization = true

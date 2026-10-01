@@ -78,7 +78,7 @@ object StartupLoader {
                     val version = manifest.get("version").asString
                     val api = LoaderApi(config, installation, version)
                     val purpose = if (activation == null) "renew" else "activate"
-                    val challenge = api.challenge(purpose)
+                    val challenge = api.challenge(purpose, startSession = !LaunchSession.authorized)
                     val proof = account.proof(challenge.get("nonce").asString)
                     val body = mutableMapOf<String, Any>("challengeId" to challenge.get("challengeId").asString,
                         "minecraftProof" to proof, "signature" to api.signature(purpose, challenge))
@@ -89,6 +89,7 @@ object StartupLoader {
                     val claims = verifyLease(token, config, installation, uuid, version,
                         challenge.get("challengeId").asString, challenge.get("clientNonce").asString)
                     authorization.accept(token, claims, response.get("serverTime").asLong)
+                    LaunchSession.accept()
                     val renewAt = System.nanoTime() + ((claims.get("exp").asLong - response.get("serverTime").asLong) / 2).coerceAtMost(120000) * 1_000_000
                     installation.persistBoundary(token)
                     val matches = existing?.metadata?.version?.friendlyString == version && runCatching {

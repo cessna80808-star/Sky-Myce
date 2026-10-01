@@ -8,9 +8,12 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyPairGenerator
+import java.security.KeyFactory
 import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import java.util.Properties
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.jar.Attributes
 import java.util.jar.JarEntry
@@ -34,6 +37,7 @@ fun main() {
         val installation = Installation(temporary.resolve("identity"))
         val reload = Installation(temporary.resolve("identity"))
         check(installation.id == reload.id && installation.publicKey == reload.publicKey && installation.deviceHash == reload.deviceHash)
+        checkLaunchProof(installation, config)
         if (Files.getFileStore(temporary).supportsFileAttributeView("posix")) {
             val identity = temporary.resolve("identity")
             check(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(identity)) == "rwx------")
@@ -100,6 +104,7 @@ fun main() {
             addProperty("exp", now + 300000); addProperty("offlineUntil", now + 900000); addProperty("generation", 0); addProperty("jti", "unique")
             addProperty("challengeId", "request-1"); add("features", com.google.gson.JsonArray().apply { add("relay"); add("irc") })
             addProperty("clientNonce", "fresh-client-nonce")
+            addProperty("platform", LaunchSession.platform); addProperty("launchSessionId", LaunchSession.id)
         }
         fun token(value: JsonObject): String {
             val header = encode.encodeToString("{\"alg\":\"EdDSA\",\"kid\":\"test\",\"typ\":\"JWT\"}".toByteArray())
@@ -116,9 +121,16 @@ fun main() {
         reject { verifyLease(lease, config, installation, uuid, "2.4.2", "different-request", "fresh-client-nonce") }
         // Even replaying both the old challenge response and its matching lease cannot match a new local nonce.
         reject { verifyLease(lease, config, installation, uuid, "2.4.2", "request-1", "another-fresh-client-nonce") }
-        listOf("product" to "other", "deviceHash" to "b".repeat(64), "keyFingerprint" to "b".repeat(64), "minecraft" to "26.3").forEach { (key, value) ->
+        listOf("product" to "other", "deviceHash" to "b".repeat(64), "keyFingerprint" to "b".repeat(64), "minecraft" to "26.3",
+            "platform" to "invalid", "launchSessionId" to UUID.randomUUID().toString()).forEach { (key, value) ->
             reject { verifyLease(token(claims.deepCopy().apply { addProperty(key, value) }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         }
+        for (key in listOf("platform", "launchSessionId")) {
+            reject { verifyLease(token(claims.deepCopy().apply { remove(key) }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
+            reject { verifyLease(token(claims.deepCopy().apply { addProperty(key, 42) }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
+        }
+        installation.persistBoundary(lease)
+        checkLaunchProcesses(temporary.resolve("identity"), installation)
         var nanos = 0L
         val state = AuthorizationState { nanos }
         check(!state.onlineAllowed && !state.localAllowed)
@@ -135,6 +147,9 @@ fun main() {
         state.deny(); state.unavailable(); check(!state.localAllowed && !state.onlineAllowed)
         reject { state.accept(lease, claims, now, beforeRevocation) }
         check(!state.localAllowed) // An in-flight pre-revoke renewal cannot re-enable the mod.
+        LaunchSession.accept()
+        state.deny(); state.unavailable()
+        check(LaunchSession.authorized) // Retry/denial never turns this JVM into a fresh launch.
         val irc = IrcMode(); val sent = mutableListOf<String>()
         check(irc.chat("public", sent::add)); check(sent.isEmpty())
         check(!irc.command("chat irc")); check(irc.selected)
@@ -143,8 +158,75 @@ fun main() {
         check(irc.command("sm msg Alice hello") && irc.selected)
         check(irc.command("chat p") && !irc.selected && irc.chat("party", sent::add))
         check(!irc.command(" CHAT   IRC ")); check(irc.command("chat a") && !irc.selected)
-        println("Sky-Myce loader checks passed: signatures, artifact tamper, duplicate repair, install rollback, post-exit helper, pinned keys, bindings, privacy identity persistence, monotonic grace, revoke and sticky IRC")
+        println("Sky-Myce loader checks passed: signatures, artifact tamper, duplicate repair, install rollback, post-exit helper, pinned keys, launch/session bindings, stable device across fresh JVMs, monotonic grace, revoke and sticky IRC")
     } finally { Files.walk(temporary).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::delete) } }
+}
+
+private fun checkLaunchProof(installation: Installation, config: Properties) {
+    val nonce = UUID.randomUUID().toString()
+    val api = LoaderApi(config, installation, "2.4.2")
+    val first = api.challengeInput("renew", true, nonce)
+    val renewal = LoaderApi(config, installation, "2.4.2").challengeInput("renew", false, nonce)
+    check(first["launchSessionId"] == LaunchSession.id && first["platform"] == LaunchSession.platform && first["startSession"] == true)
+    check(renewal["launchSessionId"] == first["launchSessionId"] && renewal["startSession"] == false)
+    check(UUID.fromString(LaunchSession.id).version() == 4)
+    check(!LaunchSession.authorized)
+    val publicKey = KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(installation.publicKey)))
+    for (purpose in listOf("renew", "activate", "manifest", "artifact", "bootstrap-renew", "bootstrap-activate")) {
+        for (start in listOf(true, false)) {
+            val challenge = JsonObject().apply {
+                addProperty("nonce", "a".repeat(43)); addProperty("clientNonce", nonce); addProperty("startSession", start)
+                // Server-echoed platform/ID cannot replace this process's signed metadata.
+                addProperty("platform", "invalid"); addProperty("launchSessionId", UUID.randomUUID().toString())
+            }
+            val message = "Sky-Myce installation v2\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n26.1.2\n1.0.0\n2.4.2\n$nonce\n${LaunchSession.platform}\n${LaunchSession.id}\n$start"
+            val signature = Base64.getDecoder().decode(api.signature(purpose, challenge))
+            fun verifies(text: String) = Signature.getInstance("Ed25519").run {
+                initVerify(publicKey); update(text.toByteArray()); verify(signature)
+            }
+            check(verifies(message))
+            check(!verifies(message.substringBeforeLast('\n') + "\n${!start}"))
+            check(!verifies(message.replace(LaunchSession.id, UUID.randomUUID().toString())))
+            check(!verifies(message.replace("\n${LaunchSession.platform}\n", "\ninvalid\n")))
+        }
+    }
+    check(launchPlatform("Linux") == "linux" && launchPlatform("LINUX") == "linux")
+    check(launchPlatform("Windows 11") == "windows" && launchPlatform("Mac OS X") == "macos")
+    check(launchPlatform("Darwin") == "macos" && launchPlatform("FreeBSD") == "other")
+}
+
+private fun checkLaunchProcesses(identity: Path, expected: Installation) {
+    val java = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
+    val classpath = listOf(LaunchSessionCheckChild::class.java, Installation::class.java, SignedFiles::class.java, Unit::class.java, Gson::class.java)
+        .map { Path.of(it.protectionDomain.codeSource.location.toURI()).toString() }.distinct().joinToString(File.pathSeparator)
+    val ids = mutableSetOf(LaunchSession.id)
+    repeat(3) {
+        val child = ProcessBuilder(java.toString(), "-cp", classpath, LaunchSessionCheckChild::class.java.name, identity.toString())
+            .redirectErrorStream(true).start()
+        try {
+            check(child.waitFor(30, TimeUnit.SECONDS)) { "Launch session child timed out" }
+            val output = child.inputStream.bufferedReader().readText()
+            check(child.exitValue() == 0) { "Launch session child failed: $output" }
+            val result = com.google.gson.JsonParser.parseString(output).asJsonObject
+            check(result.get("id").asString == expected.id && result.get("deviceHash").asString == expected.deviceHash && result.get("publicKey").asString == expected.publicKey)
+            check(result.get("platform").asString == LaunchSession.platform)
+            check(ids.add(result.get("launchSessionId").asString))
+            check(!result.get("authorized").asBoolean && !result.get("localAllowed").asBoolean)
+        } finally { if (child.isAlive) { child.destroyForcibly(); child.waitFor(5, TimeUnit.SECONDS) } }
+    }
+}
+
+/** Independent game/loader JVMs, synthetic identity only; output never contains a private key. */
+object LaunchSessionCheckChild {
+    @JvmStatic fun main(arguments: Array<String>) {
+        val installation = Installation(Path.of(arguments.single()))
+        val again = Installation(Path.of(arguments.single()))
+        check(installation.id == again.id && installation.deviceHash == again.deviceHash && installation.publicKey == again.publicKey)
+        check(Files.exists(Path.of(arguments.single()).resolve("last-signed-lease")))
+        println(Gson().toJson(mapOf("id" to installation.id, "deviceHash" to installation.deviceHash, "publicKey" to installation.publicKey,
+            "launchSessionId" to LaunchSession.id, "platform" to LaunchSession.platform, "authorized" to LaunchSession.authorized,
+            "localAllowed" to AuthorizationState().localAllowed)))
+    }
 }
 
 private fun checkInstaller(root: Path, config: Properties, template: JsonObject, envelope: (JsonObject) -> JsonObject) {

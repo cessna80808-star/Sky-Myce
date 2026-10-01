@@ -48,16 +48,21 @@ fun checkStartup() {
     val deviceHelp = requireNotNull(accountAccessError("device_reset_required"))
     check("/hwid reset" in deviceHelp && "new code alone cannot switch devices" in deviceHelp)
     check(startupError(AuthorizationDenied("device_reset_required")) == deviceHelp)
-    for (code in listOf("device_reset_required", "device_owned", "device_revoked", "minecraft_account_owned", "minecraft_proof_invalid", "version_denied")) {
+    for (code in listOf("device_reset_required", "device_owned", "device_revoked", "minecraft_account_owned", "minecraft_proof_invalid", "version_denied",
+        "loader_update_required", "launch_authorization_required", "platform_changed", "authorization_revoked")) {
         check(!startupActivationAllowed(code)) // Another code must never bypass an account/device restriction.
         check(code in requireNotNull(accountAccessError(code)))
     }
+    val launchHelp = requireNotNull(accountAccessError("launch_authorization_required"))
+    check("relaunch this instance" in launchHelp && "new activation code is not needed" in launchHelp)
+    check("session was replaced" in requireNotNull(accountAccessError("authorization_revoked")))
+    check("Keep its device identity" in requireNotNull(accountAccessError("platform_changed")))
     check(accountAccessError(token) == null)
     for (failure in listOf(IllegalStateException(token), AuthorizationDenied(token), SecurityException(token), IllegalArgumentException(token))) {
         check(token !in startupError(failure))
     }
     // Catch accidentally adding Minecraft render/game dependencies to the pre-game path.
-    for (name in listOf("StartupLoader", "StartupAccount", "StartupWindow", "LoaderApi", "MinecraftProofDataKt", "Installation", "AuthorizationState", "SignedFiles")) {
+    for (name in listOf("StartupLoader", "StartupAccount", "StartupWindow", "LoaderApi", "MinecraftProofDataKt", "Installation", "LaunchSession", "LaunchSessionKt", "AuthorizationState", "SignedFiles")) {
         val resource = "/me/mycellium/skymyce/loader/$name.class"
         val bytes = requireNotNull(StartupAccount::class.java.getResourceAsStream(resource)).use { it.readBytes() }
         check("net/minecraft/" !in String(bytes, Charsets.ISO_8859_1)) { "$name depends on Minecraft initialization" }

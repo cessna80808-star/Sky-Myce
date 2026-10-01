@@ -24,6 +24,10 @@ internal fun accountAccessError(code: String): String? = when (code) {
     "minecraft_account_owned" -> "This Minecraft account is linked to another Sky-Myce account. Ask an admin to review the link. (minecraft_account_owned)"
     "minecraft_proof_invalid", "minecraft_proof_required" -> "Minecraft sign-in could not be verified. Close the game, sign in again through your launcher, then retry. (minecraft_proof_invalid)"
     "version_denied" -> "These Minecraft or Loader versions are not supported by the current release. Ask an admin for the current loader and required Minecraft version. (version_denied)"
+    "loader_update_required" -> "This backend requires the current Sky-Myce Loader to verify launch sessions. Update the loader, then close and relaunch Minecraft. (loader_update_required)"
+    "launch_authorization_required" -> "This launch needs fresh authorization. Close Minecraft and relaunch this instance. Your registered device stays the same; a new activation code is not needed for launch reauthorization. (launch_authorization_required)"
+    "platform_changed" -> "This installation's operating system differs from its registered platform. Keep its device identity and ask a Sky-Myce admin to review an intended operating-system transfer. (platform_changed)"
+    "authorization_revoked" -> "This Sky-Myce session was replaced or access was revoked. Close Minecraft and relaunch. If access remains restricted, contact a Sky-Myce admin. (authorization_revoked)"
     else -> null
 }
 
@@ -74,14 +78,20 @@ internal class LoaderApi(private val config: Properties, private val installatio
         if (response.statusCode() != 200) throw java.io.IOException("Backend unavailable")
         return JsonParser.parseString(String(response.body(), Charsets.UTF_8)).asJsonObject
     }
-    fun challenge(purpose: String): JsonObject {
-        val nonce = UUID.randomUUID().toString()
-        return post("/auth/challenge", mapOf("purpose" to purpose, "clientNonce" to nonce,
+    internal fun challengeInput(purpose: String, startSession: Boolean, clientNonce: String): Map<String, Any> =
+        mapOf("purpose" to purpose, "clientNonce" to clientNonce,
             "installationId" to installation.id, "publicKey" to installation.publicKey, "deviceHash" to installation.deviceHash,
-            "minecraftVersion" to config.getProperty("minecraft"), "loaderVersion" to config.getProperty("loaderVersion"), "modVersion" to version))
-            .also { it.addProperty("clientNonce", nonce) }
+            "minecraftVersion" to config.getProperty("minecraft"), "loaderVersion" to config.getProperty("loaderVersion"), "modVersion" to version,
+            "platform" to LaunchSession.platform, "launchSessionId" to LaunchSession.id, "startSession" to startSession)
+
+    fun challenge(purpose: String, startSession: Boolean = false): JsonObject {
+        val nonce = UUID.randomUUID().toString()
+        return post("/auth/challenge", challengeInput(purpose, startSession, nonce)).also {
+            // Bind our outgoing request, never a server-echoed nonce or session intent.
+            it.addProperty("clientNonce", nonce); it.addProperty("startSession", startSession)
+        }
     }
-    fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v1\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}")
+    fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v2\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}\n${LaunchSession.platform}\n${LaunchSession.id}\n${challenge.get("startSession").asBoolean}")
 
     fun downloadLoader(purpose: String, body: Map<String, Any>, envelope: JsonObject, directory: Path) {
         require(purpose in setOf("bootstrap-renew", "bootstrap-activate"))

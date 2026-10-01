@@ -52,6 +52,8 @@ fun verifyLease(token: String, config: Properties, installation: Installation, u
         require(it.get("jti").asString.isNotBlank() && it.get("generation").asLong >= 0)
         require(it.get("challengeId").asString == challengeId)
         require(it.get("clientNonce").asString == clientNonce)
+        require(it.get("platform")?.let { value -> value.isJsonPrimitive && value.asJsonPrimitive.isString && value.asString == LaunchSession.platform } == true)
+        require(it.get("launchSessionId")?.let { value -> value.isJsonPrimitive && value.asJsonPrimitive.isString && value.asString == LaunchSession.id } == true)
         require(it.getAsJsonArray("features").all { feature -> feature.isJsonPrimitive && feature.asJsonPrimitive.isString })
     }
 }

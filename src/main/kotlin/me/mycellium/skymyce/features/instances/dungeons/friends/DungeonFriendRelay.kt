@@ -308,7 +308,10 @@ object DungeonFriendRelay {
                                     }
                                     "irc_message" -> { check(connected && ircAvailable); RelayMessages.receiveIrc(json) }
                                     "irc_result" -> { check(connected); if (json.has("error")) RelayMessages.ircError() }
-                                    "authorization_revoked" -> { LoaderClient.deny(json.get("reason")?.asString == "license_revoked"); disconnect() }
+                                    "authorization_revoked" -> {
+                                        val reason = json.get("reason")?.asString ?: "authorization_revoked"
+                                        LoaderClient.deny(reason == "license_revoked", reason); disconnect()
+                                    }
                                     "message", "user_message", "ack" -> {
                                         check(connected)
                                         val id = json.get("id").asString
@@ -396,7 +399,7 @@ object DungeonFriendRelay {
                         4004 -> "Minecraft proof rejected; restart Minecraft or update the mod, then use Reconnect in Settings"
                         else -> "Relay closed ($statusCode); reconnecting"
                     }, pause = relayNeedsReconnect(statusCode), graceful = true)
-                    if (statusCode == 4005) LoaderClient.deny()
+                    if (statusCode == 4005) LoaderClient.deny(code = "authorization_revoked")
                 } }
                 return null
             }
