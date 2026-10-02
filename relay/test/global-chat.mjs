@@ -3,6 +3,13 @@ import { createHash, createHmac, generateKeyPairSync, randomUUID, sign } from 'n
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 export async function checkGlobalChat(script, proof) {
+  // Expose alarm state only in this in-memory fixture bundle, never in production code.
+  const anchor = 'async globalChatMinecraft(sender, input) {';
+  assert.equal(script.split(anchor).length, 2, 'Exactly one production coordinator method is instrumented');
+  script = script.replace(anchor, `async testOnlyGlobalAlarm(remove = false) {
+    if (remove) await this.ctx.storage.deleteAlarm();
+    return await this.ctx.storage.getAlarm();
+  }\n  ${anchor}`);
   const signing = generateKeyPairSync('ed25519'), secret = 'global-chat-test-only-bridge-secret-32bytes';
   const channelId = '100000000000000001';
   const publicKey = key => key.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
@@ -192,6 +199,11 @@ export async function checkGlobalChat(script, proof) {
     assert.ok((await globalSql.exec('SELECT * FROM global_chat_messages WHERE id=?', offline.packet.id)).length);
     assert.equal((await globalSql.exec("SELECT attempts FROM global_chat_outbox WHERE id=? AND destination='discord'", offline.packet.id))[0].attempts, 0);
     await mf.unsafeEvictDurableObject('global-chat-check', 'RelayRoom', { name: 'global-chat', webSockets: 'hibernate' });
+    assert.equal(await coordinator.testOnlyGlobalAlarm(true), null);
+    alice.ws.send(JSON.stringify({ type: 'irc_send', scope: 'global', id: offline.requestId, text: offline.packet.text }));
+    const recovered = await alice.next(); assert.equal(recovered.error, 'duplicate_message'); assert.equal(recovered.scope, 'global');
+    assert.ok(await coordinator.testOnlyGlobalAlarm(), 'Retry restores a missing alarm for already-persisted work');
+    await ping(alice); await ping(bob); await ping(otherAlice);
     bot = await bridge(); const retry = await bot.next(); assert.equal(retry.id, offline.packet.id);
     await ping(alice); await ping(bob); // Retry reaches Discord only, not already-delivered clients.
     const unackedClose = closeEvent(bot.ws); bot.ws.close(); await unackedClose;

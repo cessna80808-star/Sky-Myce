@@ -265,7 +265,8 @@ export class RoomIrc {
       for (const table of ["global_chat_seen", "global_chat_repeats"]) sql.exec(`DELETE FROM ${table} WHERE rowid NOT IN (SELECT rowid FROM ${table} ORDER BY rowid DESC LIMIT 10000)`);
       return { ok: true, id };
     });
-    if (outcome.ok) { await this.flushGlobal(); await this.armGlobal(); }
+    if (outcome.ok) await this.flushGlobal();
+    if (outcome.ok || outcome.error === "duplicate_message") await this.armGlobal();
     return outcome;
   }
 
@@ -334,6 +335,8 @@ export class RoomIrc {
       }
       return pending.filter(row => row.destination !== "discord" || bridge !== undefined);
     });
+    // Persist retry work before external RPCs can interrupt this delivery turn.
+    await this.armGlobal();
     await Promise.allSettled(rows.map(async row => {
       const message = JSON.parse(row.packet) as GlobalChatMessage;
       if (message.expiresAt <= Date.now()) return;
