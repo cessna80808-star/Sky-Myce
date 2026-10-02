@@ -1,3 +1,31 @@
+# Mod 2.4.13 / loader 1.0.13 — deployed October 2, 2026
+
+Both runtime JARs and their signed manifests are published in the existing private
+`sky-myce-private-artifacts` R2 bucket. The account Worker
+`sky-myce-backend` (`--env backend`) selects both releases together, on version
+`b1410753-f299-4902-ad2e-4e9601ee84c0`. The current verified backend source includes
+the global-chat handlers; the separate Discord Gateway service remains pending.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.13 | `releases/Sky-Myce-2.4.13.jar` | `releases/manifest-2.4.13.json` | `ea3912d88293fec65f221adf419b52a46b22d1677cd732d318699a3f646f2ce1` |
+| Loader 1.0.13 | `loaders/Sky-Myce-Loader-1.0.13.jar` | `loaders/manifest-1.0.13.json` | `9e425c4dcf7e9fe54f9ada78d84d0679a0fabb9011a5e4960d0152d2f3f162c4` |
+
+Minimum loader remains 1.0.11, Minecraft remains 26.1.2, and the existing
+`production-20260927` signer and client trust root are unchanged. Previous release
+objects are retained. Both manifests expire on **October 9, 2026, at 14:05:26 UTC**
+(16:05:26 Stockholm); renew them before that deadline.
+
+Java 25 `check build`, relay type generation/typecheck and the backend dry run
+passed. All four private R2 readbacks match the exact local signed release bytes.
+Both live manifests have valid signatures, matching versions and artifact hashes.
+Live health returns 200; unauthenticated downloads and renewals remain blocked,
+and unsigned Discord interactions return 401. The post-deployment snapshot
+confirms preserved runtime settings, routing, existing bindings, storage namespace
+IDs and secret names/types. No account/device reset or Discord message was issued.
+Evidence is generated under `build/release-2.4.13-*.json`. This publication does
+not establish a new live Minecraft launch or a running Discord Gateway service.
+
 # Loader 1.0.12 protocol repair — deployed October 2, 2026
 
 The previous account Worker rejected the current hardware-bound v3 installation proof

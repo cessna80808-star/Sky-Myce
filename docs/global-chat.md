@@ -54,6 +54,11 @@ Enable the existing User Bot's **Message Content** intent and give it View Chann
 
 ## Verification and rollout
 
+Mod 2.4.13 and loader 1.0.13 were published to private R2 on October 2, 2026.
+The backend handlers are deployed on Worker version
+`b1410753-f299-4902-ad2e-4e9601ee84c0`. The separate User Bot Gateway service
+still needs its runtime rollout; live Minecraft/Discord chat remains unverified.
+
 ```powershell
 # Java 25, from the repository root
 .\gradlew.bat --offline globalChatCheck
