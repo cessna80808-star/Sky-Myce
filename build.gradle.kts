@@ -1,5 +1,9 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
+import java.util.Base64
+import java.net.URI
+import java.security.KeyFactory
+import java.security.spec.X509EncodedKeySpec
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.util.zip.ZipEntry
@@ -7,6 +11,21 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipInputStream
 import net.fabricmc.loom.build.nesting.NestableJarGenerationTask
+
+private fun checkLoaderConfiguration(configuration: Properties) {
+    val backend = URI(configuration.getProperty("backend"))
+    check(backend.scheme == "https" && !backend.host.isNullOrBlank() &&
+        !backend.host.endsWith(".invalid", ignoreCase = true) && (backend.port == -1 || backend.port in 1..65535) &&
+        backend.userInfo == null && backend.rawQuery == null &&
+        backend.fragment == null && backend.path in setOf("", "/")) { "Configure a valid HTTPS loader backend before distribution" }
+    val keys = configuration.stringPropertyNames().filter { it.startsWith("key.") }
+    check(keys.isNotEmpty()) { "Configure a pinned loader signing public key" }
+    for (key in keys) {
+        check(key.removePrefix("key.").matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        val bytes = Base64.getDecoder().decode(configuration.getProperty(key))
+        KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(bytes))
+    }
+}
 
 plugins {
 	id("net.fabricmc.fabric-loom")
@@ -224,6 +243,7 @@ val generateLoaderResources by tasks.registering {
     inputs.properties(values)
     outputs.dir(loaderResources)
     doLast {
+        checkLoaderConfiguration(Properties().apply { putAll(values) })
         val output = loaderResources.get().asFile.apply { mkdirs() }
         output.resolve("sky-myce-loader.properties").writer().use { writer -> Properties().apply { putAll(values) }.store(writer, "Sky-Myce public deployment configuration") }
         output.resolve("fabric.mod.json").writeText("""{
@@ -258,6 +278,30 @@ val loaderJar by tasks.registering(Jar::class) {
     manifest { attributes["Main-Class"] = "me.mycellium.skymyce.loader.LoaderInstaller" }
 }
 tasks.assemble { dependsOn(loaderJar) }
+
+val loaderConfigurationCheck by tasks.registering {
+    group = "verification"
+    description = "Rejects unusable backend/trust configuration in the built loader"
+    dependsOn(loaderJar)
+    doLast {
+        ZipFile(loaderJar.get().archiveFile.get().asFile).use { jar ->
+            val configuration = Properties().apply {
+                jar.getInputStream(jar.getEntry("sky-myce-loader.properties")).use { load(it) }
+            }
+            checkLoaderConfiguration(configuration)
+            val publicKey = configuration.stringPropertyNames().first { it.startsWith("key.") }
+            for ((key, invalid) in listOf(
+                "backend" to "https://CONFIGURE-BEFORE-DISTRIBUTION.INVALID",
+                "backend" to "http://example.org", "backend" to "https://example.org:99999",
+                "backend" to "https://user:fixture@example.org", "backend" to "https://example.org/?query=fixture",
+                publicKey to "", publicKey to "not-a-public-key")) {
+                val rejected = (configuration.clone() as Properties).apply { setProperty(key, invalid) }
+                check(runCatching { checkLoaderConfiguration(rejected) }.isFailure) { "Invalid loader configuration was accepted: $key" }
+            }
+            logger.lifecycle("Loader configuration checks passed: HTTPS backend and pinned Ed25519 trust root")
+        }
+    }
+}
 
 val dungeonFriendsCheck by tasks.registering(JavaExec::class) {
     group = "verification"
@@ -326,7 +370,7 @@ val menuCanvasBenchmark by tasks.registering(JavaExec::class) {
     args("current", ".", "bulk")
     doFirst { workingDir.mkdirs() }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

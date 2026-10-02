@@ -346,6 +346,17 @@ isolation, validation and delivery limits.
 
 ## Building and deployment configuration
 
+Loader 1.0.11 fixes local/default builds that previously embedded
+`configure-before-distribution.invalid` and an empty trust key. Java HTTP DNS
+failures can wrap `UnresolvedAddressException`, an `IllegalArgumentException`,
+so the old startup window incorrectly blamed online-account launch settings.
+Connection failures now show connection guidance; invalid launch identity is
+classified separately. The log records only exception classes and an owned
+source location, without exception messages, launch arguments or credentials.
+Account proof, signature checks, hardware registration and restart handoff are
+unchanged. Replace the old bootstrap JAR after closing the Minecraft instance;
+no HWID reset or new activation code is needed for this configuration fix.
+
 ```powershell
 $env:JAVA_HOME = '<JDK-25-directory>'
 $publicKey = Get-Content -Raw '<public-SPKI-base64-file>'
@@ -361,9 +372,10 @@ to Gradle. `build/libs/Sky-Myce-Loader.jar` is the bootstrap/installer;
 private storage. `loaderJar` builds just the bootstrap. `loaderCheck` executes
 the security checks and is included in `check`/`build`.
 
-An unconfigured build has an invalid backend hostname and no trusted signing
-key, so it fails closed. A distribution build must provide these values and a
-matching Worker signing key. Public-key rotation requires distributing an
+The repository defaults to the existing production backend and pinned public
+signing key in `gradle.properties`. Override all three values together for a
+staging backend. Blank, malformed or placeholder configuration is rejected by
+the build; no signing check is bypassed. Public-key rotation requires distributing an
 updated trusted loader before switching the active key ID. Server token
 rotation requires no client rebuild. Use the release signing/setup procedures
 in the relay/operator documentation.

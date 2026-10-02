@@ -1,6 +1,9 @@
 package me.mycellium.skymyce.loader
 
 import com.mojang.authlib.properties.Property
+import java.io.IOException
+import java.net.ConnectException
+import java.nio.channels.UnresolvedAddressException
 import java.security.KeyPairGenerator
 import java.security.Signature
 import java.util.Base64
@@ -21,6 +24,16 @@ fun checkStartup() {
     reject { StartupAccount.parse(arrayOf("--username", "Alice", "--uuid", "42", "--accessToken", token)) }
     reject { StartupAccount.parse(arguments + arrayOf("--proxyUser", "private")) }
     reject { StartupAccount.parse(arguments + arrayOf("--proxyHost", "localhost", "--proxyPort", "0")) }
+    val missingAccount = runCatching { StartupAccount.parse(emptyArray()) }.exceptionOrNull()!!
+    check(missingAccount is StartupIdentityUnavailable && "online Minecraft account" in startupError(missingAccount))
+    // HttpClient DNS failures contain an IllegalArgumentException subclass; they
+    // must not tell a valid online player that their launch identity is invalid.
+    val dns = IOException(token, ConnectException(token).apply { initCause(UnresolvedAddressException()) })
+    check("could not reach its sign-in service" in startupError(dns))
+    check("online Minecraft account" !in startupError(dns))
+    check("launch settings" !in startupError(IllegalArgumentException(token)))
+    val diagnostic = startupFailureDiagnostic(dns)
+    check("IOException" in diagnostic && "UnresolvedAddressException" in diagnostic && token !in diagnostic)
     val pair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     val base64 = Base64.getEncoder()
     val pem = "-----BEGIN RSA PRIVATE KEY-----\n${base64.encodeToString(pair.private.encoded)}\n-----END RSA PRIVATE KEY-----"

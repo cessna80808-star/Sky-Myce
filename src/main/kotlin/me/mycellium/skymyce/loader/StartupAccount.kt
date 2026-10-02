@@ -10,11 +10,13 @@ import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
+internal class StartupIdentityUnavailable(cause: IllegalArgumentException) : IllegalArgumentException(cause)
+
 /** Uses only this launch's arguments and Mojang Authlib; never opens launcher account files. */
 internal class StartupAccount private constructor(val name: String, val uuid: UUID, private val token: String, private val proxy: Proxy) {
     override fun toString() = "Private startup Minecraft account"
     companion object {
-        fun parse(arguments: Array<String>): StartupAccount {
+        fun parse(arguments: Array<String>): StartupAccount = try {
             val wanted = setOf("username", "uuid", "accessToken", "proxyHost", "proxyPort", "proxyUser", "proxyPass")
             val values = mutableMapOf<String, String>()
             var index = 0
@@ -24,7 +26,7 @@ internal class StartupAccount private constructor(val name: String, val uuid: UU
                 val key = argument.removePrefix("--").substringBefore('=')
                 if (key !in wanted) continue
                 require(key !in values) { "Ambiguous launch identity" }
-                values[key] = if ('=' in argument) argument.substringAfter('=') else arguments.getOrNull(index++) ?: error("Incomplete launch identity")
+                values[key] = if ('=' in argument) argument.substringAfter('=') else requireNotNull(arguments.getOrNull(index++)) { "Incomplete launch identity" }
             }
             val name = requireNotNull(values["username"]).also { require(it.matches(Regex("[A-Za-z0-9_]{1,16}"))) }
             val rawUuid = requireNotNull(values["uuid"]).also { require(it.matches(Regex("[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}"))) }.replace("-", "")
@@ -37,8 +39,8 @@ internal class StartupAccount private constructor(val name: String, val uuid: UU
                 require(port in 1..65535)
                 Proxy(Proxy.Type.SOCKS, InetSocketAddress(it, port))
             } ?: Proxy.NO_PROXY
-            return StartupAccount(name, uuid, token, proxy)
-        }
+            StartupAccount(name, uuid, token, proxy)
+        } catch (failure: IllegalArgumentException) { throw StartupIdentityUnavailable(failure) }
         internal fun pem(value: String): ByteArray = Base64.getMimeDecoder().decode(value
             .lineSequence().filterNot { it.startsWith("-----") }.joinToString(""))
     }

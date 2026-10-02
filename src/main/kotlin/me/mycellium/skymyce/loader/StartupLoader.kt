@@ -4,8 +4,11 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import net.fabricmc.loader.api.FabricLoader
 import net.fabricmc.loader.impl.launch.FabricLauncherBase
+import org.slf4j.LoggerFactory
 import java.awt.GraphicsEnvironment
+import java.io.IOException
 import java.lang.management.ManagementFactory
+import java.nio.channels.UnresolvedAddressException
 import java.nio.file.Path
 import kotlin.system.exitProcess
 
@@ -16,7 +19,8 @@ internal class StartupHandoffLimit : Exception()
 internal fun requireStartupHandoffAllowed(attempted: String?) { if (attempted != null) throw StartupHandoffLimit() }
 
 internal fun startupError(failure: Throwable): String {
-    val cause = generateSequence(failure) { it.cause }.last()
+    val causes = generateSequence(failure) { it.cause }.toList()
+    val cause = causes.last()
     return when (cause) {
         is HardwareIdentityUnavailable -> "The registered hardware identifier is temporarily unavailable. Retry after restoring access; your device registration has been preserved. Do not reset your HWID for this error."
         is StartupHandoffLimit -> "The release changed again during startup. Close this window and launch your instance once more. Automatic startup has stopped to prevent a relaunch loop."
@@ -27,9 +31,21 @@ internal fun startupError(failure: Throwable): String {
                 else "Sky-Myce could not authorize this account. Retry, or ask a Sky-Myce admin to review its access."
         }
         is SecurityException -> "Sky-Myce could not verify this release. Existing files are preserved. Retry or request the current loader from an admin."
-        is IllegalArgumentException -> "Startup sign-in is unavailable for these launch settings. Use an online Minecraft account, or start without Sky-Myce and retry from its in-game Loader menu."
-        else -> "Sky-Myce setup could not finish. Check your connection and retry. Existing files and verified downloads are kept."
+        else -> when {
+            causes.any { it is IOException || it is UnresolvedAddressException } -> "Sky-Myce could not reach its sign-in service. Check your connection and retry. If the problem continues, install the current loader from an admin."
+            causes.any { it is StartupIdentityUnavailable } -> "Startup sign-in is unavailable for these launch settings. Use an online Minecraft account, or start without Sky-Myce and retry from its in-game Loader menu."
+            else -> "Sky-Myce setup could not finish. Check your connection and retry. Existing files and verified downloads are kept."
+        }
     }
+}
+
+/** Never log exception messages, arguments, account values or a raw throwable. */
+internal fun startupFailureDiagnostic(failure: Throwable): String {
+    val causes = generateSequence(failure) { it.cause }.toList()
+    val location = causes.asSequence().flatMap { it.stackTrace.asSequence() }
+        .firstOrNull { it.className.startsWith("me.mycellium.skymyce.loader.") }
+    return "Startup failed: ${failure.javaClass.simpleName} / ${causes.last().javaClass.simpleName}" +
+        (location?.let { " at ${it.className}.${it.methodName}:${it.lineNumber}" } ?: "")
 }
 
 /** Runs after Fabric discovery but before Minecraft's main method, renderer and mod initialization. */
@@ -112,6 +128,7 @@ object StartupLoader {
                     return
                 } catch (failure: Exception) {
                     authorization.deny(); ready = null; activation = null
+                    LoggerFactory.getLogger("Sky-Myce Loader").warn(startupFailureDiagnostic(failure))
                     val cause = generateSequence<Throwable>(failure) { it.cause }.last()
                     val answer = window.prompt(startupError(failure), cause is AuthorizationDenied && startupActivationAllowed(cause.code))
                     when (answer) {
