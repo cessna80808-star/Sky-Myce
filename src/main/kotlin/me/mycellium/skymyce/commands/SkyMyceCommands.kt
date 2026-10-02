@@ -71,6 +71,7 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             }
             .then(dungeon())
+            .then(me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRouting.command())
             .then(literal("settings").executes {
                 MC.instance.execute { navigateMenu(SettingsScreen()) }
                 1

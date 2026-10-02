@@ -26,6 +26,7 @@ import me.mycellium.skymyce.features.instances.dungeons.DungeonCleanChat
 import me.mycellium.skymyce.features.instances.dungeons.DungeonWinOverlay
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
 import me.mycellium.skymyce.features.instances.dungeons.friends.GearLending
+import me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRouting
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTrackerWidget
@@ -84,7 +85,7 @@ object SkyMyce : ClientModInitializer {
             DevTooltips,
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
-            MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng,
+            MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient
         )
 

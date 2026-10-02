@@ -370,7 +370,20 @@ val menuCanvasBenchmark by tasks.registering(JavaExec::class) {
     args("current", ".", "bulk")
     doFirst { workingDir.mkdirs() }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck) }
+val dungeonRoutingCheck by tasks.registering {
+    group = "verification"
+    description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"
+}
+for (checkName in listOf("RoomNavigation", "RoomTemplates", "RoomWorldGeometry", "RoomRoutingUpdates")) {
+    val routingCheck = tasks.register<JavaExec>(checkName.replaceFirstChar { it.lowercase() } + "Check") {
+        group = "verification"
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass = "me.mycellium.skymyce.features.instances.dungeons.routing.${checkName}CheckKt"
+    }
+    dungeonRoutingCheck { dependsOn(routingCheck) }
+}
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

@@ -8,6 +8,7 @@ object DungeonsConfig : CategoryKt("Dungeons") {
     init {
         category(DungeonTrackerConfig)
         category(DungeonFriendsConfig)
+        category(StarredClearRoutingConfig)
     }
 
     val valuableItemThreshold by int(15) {
