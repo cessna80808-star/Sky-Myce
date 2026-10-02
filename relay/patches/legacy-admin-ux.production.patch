@@ -1,0 +1,38 @@
+--- a/index.js
++++ b/index.js
+@@ -804,3 +804,3 @@
+-var object2 = /* @__PURE__ */ __name((value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : null, "object");
+-var roots = /* @__PURE__ */ new Set(["admin", "authorise", "license", "account", "hwid", "warn", "warning", "suspend", "revoke", "session", "audit"]);
+-var reply = /* @__PURE__ */ __name((content) => Response.json({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } }), "reply");
++const object2 = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
++const roots = /* @__PURE__ */ new Set(["admin", "authorise", "license", "account", "hwid", "warn", "warning", "suspend", "revoke", "session", "audit", "build", "skyhawk"]);
++const reply = (content, autocomplete = false) => Response.json(autocomplete ? { type: 8, data: { choices: [] } } : { type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
+@@ -811 +810,0 @@
+-__name(validGuildCaller, "validGuildCaller");
+@@ -813,3 +812,8 @@
+-  if (data.type !== 2 || !roots.has(String(object2(data.data)?.name))) return null;
+-  if (!validGuildCaller(data, env)) return reply("You do not have permission to use this Sky-Myce command here.");
+-  const unavailable = /* @__PURE__ */ __name((reason, status) => {
++  const command = object2(data.data), customId = command?.custom_id, user = object2(data.user);
++  const component = data.type === 3 && command?.component_type === 2 && typeof customId === "string" && customId.length <= 100 && customId.startsWith("sky:");
++  const autocomplete = data.type === 4 && roots.has(String(command?.name));
++  const selfDm = component && data.guild_id === void 0 && typeof customId === "string" && /^sky:user:(status|key|loader|help)$/.test(customId) && typeof user?.id === "string" && /^\d{17,20}$/.test(user.id);
++  if (!component && !autocomplete && (data.type !== 2 || !roots.has(String(command?.name)))) return null;
++  if (!validGuildCaller(data, env) && !selfDm)
++    return reply("You do not have permission to use this Sky-Myce command here.", autocomplete);
++  const unavailable = (reason, status) => {
+@@ -817,2 +821,2 @@
+-    return reply("This Sky-Myce service is currently unavailable.");
+-  }, "unavailable");
++    return reply("This Sky-Myce service is currently unavailable.", autocomplete);
++  };
+@@ -838 +842,6 @@
+-    if (![4, 5].includes(result.type ?? 0) || result.data?.flags !== 64) return unavailable("invalid_response");
++    const choices = result.data?.choices;
++    const autocompleteResult = result.type === 8 && Array.isArray(choices) && choices.length <= 25 && choices.every((value) => {
++      const choice = object2(value);
++      return typeof choice?.name === "string" && choice.name.length > 0 && choice.name.length <= 100 && typeof choice.value === "string" && choice.value.length > 0 && choice.value.length <= 100;
++    });
++    if (autocomplete ? !autocompleteResult : ![4, 5].includes(result.type ?? 0) || result.data?.flags !== 64) return unavailable("invalid_response");
+@@ -844 +852,0 @@
+-__name(administrativeInteraction, "administrativeInteraction");

@@ -1,3 +1,45 @@
+# Admin interaction forwarding repair — prepared October 2, 2026
+
+The legacy `skyblock-relay` Admin interaction endpoint forwards slash commands
+but drops the new `sky:confirm:*` and `sky:cancel:*` button interactions. Its
+fallback produces **Unsupported command** before the account backend receives
+the click. The same filter drops account-view buttons, autocomplete, and the
+new `build` and `skyhawk` command roots.
+
+The repaired forwarder retains exact Discord-signed bodies and headers, the
+existing account Worker service binding, guild checks, and backend authorization.
+It forwards bounded Sky-Myce buttons and modern command roots, accepts bounded
+native autocomplete responses, and permits only authenticated DM self-service
+Status/Get key/Loader/Help controls. Administrator controls remain guild-only.
+The account backend still owns confirmation permissions, expiry and replay checks.
+
+The separate legacy checkout contains unrelated work, so task-only source and
+regression-test changes are recorded in
+[`legacy-admin-ux.patch`](../relay/patches/legacy-admin-ux.patch).
+They are already applied to `D:\Code\Cessna fork\relay`.
+[`legacy-admin-ux.production.patch`](../relay/patches/legacy-admin-ux.production.patch)
+repairs the freshly downloaded production bundle while preserving every byte
+outside its forwarding module. It targets existing Worker version
+`75e32bf6-21b5-4ca1-afeb-6490ea182ea7`, bundle SHA-256
+`2cd8b7eb2b28fc656723f861389c50bb80b1122982cbcbebaa9b180de50c9bd5`.
+Both patches use zero context; validate them with `git apply --check --unidiff-zero`
+against their matching baseline. Git attributes retain patch line endings.
+
+Legacy `npm run check` and full `npm test` passed, including 13 Node tests.
+A two-Worker runtime check reproduces the original failure and verifies the
+repaired production bundle with synthetic Ed25519-signed interactions: Confirm,
+Cancel, account views, autocomplete and DM self-service reach the backend;
+signature tampering, wrong applications, wrong guilds and backend authority
+denials remain blocked. The production dry run and patch application checks pass.
+No real Discord messages or account/device changes were issued during testing.
+Prepared deployment config, bundles and runtime evidence are under
+`build/admin-ux-before` and `build/admin-ux-prepared`.
+
+**Production activation is pending explicit approval.** Automatic approval review
+rejected deployment to the legacy Worker because the bot-fix request did not
+explicitly authorize that production mutation. Mod 2.4.13, loader 1.0.13 and
+their current account Worker release selectors remain live and unchanged.
+
 # Mod 2.4.13 / loader 1.0.13 — deployed October 2, 2026
 
 Both runtime JARs and their signed manifests are published in the existing private

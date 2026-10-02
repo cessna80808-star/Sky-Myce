@@ -1,0 +1,168 @@
+diff --git a/relay/src/discord-admin.ts b/relay/src/discord-admin.ts
+--- a/relay/src/discord-admin.ts
++++ b/relay/src/discord-admin.ts
+@@ -7 +7 @@ const object = (value: unknown): Record<string, unknown> | null => value !== nul
+-const roots = new Set(["admin", "authorise", "license", "account", "hwid", "warn", "warning", "suspend", "revoke", "session", "audit"]);
++const roots = new Set(["admin", "authorise", "license", "account", "hwid", "warn", "warning", "suspend", "revoke", "session", "audit", "build", "skyhawk"]);
+@@ -10 +10 @@ const promptUsers = new Set(["1250627753191931914", "978376257534328883"]);
+-const reply = (content: string) => Response.json({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
++const reply = (content: string, autocomplete = false) => Response.json(autocomplete ? { type: 8, data: { choices: [] } } : { type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
+@@ -19 +19,5 @@ export async function administrativeInteraction(data: Record<string, unknown>, b
+-  const command = object(data.data);
++  const command = object(data.data), customId = command?.custom_id, user = object(data.user);
++  const component = data.type === 3 && command?.component_type === 2 && typeof customId === "string" && customId.length <= 100 && customId.startsWith("sky:");
++  const autocomplete = data.type === 4 && roots.has(String(command?.name));
++  const selfDm = component && data.guild_id === undefined && typeof customId === "string" && /^sky:user:(status|key|loader|help)$/.test(customId) &&
++    typeof user?.id === "string" && /^\d{17,20}$/.test(user.id);
+@@ -23,3 +27,3 @@ export async function administrativeInteraction(data: Record<string, unknown>, b
+-  if (!prompt && (data.type !== 2 || !roots.has(String(command?.name)))) return null;
+-  if (!validGuildCaller(data, env) || prompt && !promptUsers.has(String(object(object(data.member)?.user)?.id)))
+-    return reply("You do not have permission to use this Sky-Myce command here.");
++  if (!prompt && !component && !autocomplete && (data.type !== 2 || !roots.has(String(command?.name)))) return null;
++  if ((!validGuildCaller(data, env) && !selfDm) || prompt && !promptUsers.has(String(object(object(data.member)?.user)?.id)))
++    return reply("You do not have permission to use this Sky-Myce command here.", autocomplete);
+@@ -28 +32 @@ export async function administrativeInteraction(data: Record<string, unknown>, b
+-    return reply("This Sky-Myce service is currently unavailable.");
++    return reply("This Sky-Myce service is currently unavailable.", autocomplete);
+@@ -42 +46 @@ export async function administrativeInteraction(data: Record<string, unknown>, b
+-    const result = await response.json() as { type?: number; data?: { flags?: number; custom_id?: unknown; title?: unknown; components?: unknown } };
++    const result = await response.json() as { type?: number; data?: { flags?: number; custom_id?: unknown; title?: unknown; components?: unknown; choices?: unknown } };
+@@ -47 +51,7 @@ export async function administrativeInteraction(data: Record<string, unknown>, b
+-    if (!modal && (![4, 5].includes(result.type ?? 0) || result.data?.flags !== 64)) return unavailable("invalid_response");
++    const choices = result.data?.choices;
++    const autocompleteResult = result.type === 8 && Array.isArray(choices) && choices.length <= 25 && choices.every(value => {
++      const choice = object(value);
++      return typeof choice?.name === "string" && choice.name.length > 0 && choice.name.length <= 100 &&
++        typeof choice.value === "string" && choice.value.length > 0 && choice.value.length <= 100;
++    });
++    if (autocomplete ? !autocompleteResult : !modal && (![4, 5].includes(result.type ?? 0) || result.data?.flags !== 64)) return unavailable("invalid_response");
+diff --git a/relay/test/discord-admin.mjs b/relay/test/discord-admin.mjs
+--- a/relay/test/discord-admin.mjs
++++ b/relay/test/discord-admin.mjs
+@@ -226,0 +227,126 @@ test('Workers runtime forwards signed admin commands and preserves authoritative
++
++
++test('modern account controls preserve signed bytes and backend authorization', async () => {
++  const request = new Request('https://old.example/discord/interactions', { headers: {
++    'X-Signature-Ed25519': 'fixture-proof', 'X-Signature-Timestamp': '1800000000' } });
++  const denial = { type: 4, data: { content: 'Administrator access required.', flags: 64, allowed_mentions: { parse: [] } } };
++  let forwards = 0, signedBytes, backendReply = denial;
++  const configured = { ...env, SKY_MYCE_BACKEND_URL: 'https://account.example', SKY_MYCE_BACKEND: { async fetch(forwarded) {
++    forwards++;
++    assert.equal(forwarded.url, 'https://account.example/discord/backend/interactions');
++    assert.equal(forwarded.redirect, 'manual');
++    assert.equal(forwarded.headers.get('X-Signature-Ed25519'), 'fixture-proof');
++    assert.equal(forwarded.headers.get('X-Signature-Timestamp'), '1800000000');
++    assert.deepEqual(new Uint8Array(await forwarded.arrayBuffer()), signedBytes);
++    return Response.json(backendReply);
++  } } };
++  const token = 't'.repeat(43);
++  const payloads = [
++    ...['hwid', 'build', 'skyhawk'].map(name => ({ type: 2, data: { name } })),
++    ...['sky:confirm:' + token, 'sky:cancel:' + token, 'sky:admin:info:55555555555555555',
++      'sky:admin:audit:55555555555555555', 'sky:audit:all:25:30:all:all', 'sky:user:status',
++      'sky:' + 'x'.repeat(96)].map(custom_id => ({ type: 3, data: { component_type: 2, custom_id } })),
++  ];
++  for (const payload of payloads) {
++    const interaction = { ...data, ...payload, member: { user: data.member.user, roles: [], permissions: '8' } };
++    signedBytes = new TextEncoder().encode(JSON.stringify(interaction, null, 1));
++    assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, configured)).json(), denial);
++  }
++  assert.equal(forwards, payloads.length, 'Recognized controls reach persisted backend authority regardless of frontend roles');
++  backendReply = { type: 5, data: { flags: 64 } };
++  for (const custom_id of ['sky:confirm:' + token, 'sky:cancel:' + token]) {
++    const interaction = { ...data, type: 3, data: { component_type: 2, custom_id } };
++    signedBytes = new TextEncoder().encode(JSON.stringify(interaction));
++    assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, configured)).json(), backendReply);
++  }
++  const before = forwards;
++  for (const custom_id of ['other:confirm:' + token, 'sky:' + 'x'.repeat(97)]) {
++    assert.equal(await administrativeInteraction({ ...data, type: 3, data: { component_type: 2, custom_id } }, new Uint8Array(), request, configured), null);
++  }
++  for (const change of [{ component_type: 3 }, { custom_id: 3 }, { custom_id: null }]) {
++    assert.equal(await administrativeInteraction({ ...data, type: 3, data: { component_type: 2, custom_id: 'sky:confirm:' + token, ...change } }, new Uint8Array(), request, configured), null);
++  }
++  for (const change of [{ guild_id: '99999999999999999' }, { member: undefined }, { member: { user: { id: 'bad' } } }]) {
++    const response = await administrativeInteraction({ ...data, type: 3, data: { component_type: 2, custom_id: 'sky:confirm:' + token }, ...change }, new Uint8Array(), request, configured);
++    assert.match((await response.json()).data.content, /do not have permission/);
++  }
++  assert.equal(forwards, before, 'Malformed, foreign, or wrong-guild controls never reach the backend');
++});
++
++test('DM account controls forward only validated self-service users without changing signed identity', async () => {
++  const request = new Request('https://old.example/discord/interactions', { headers: {
++    'X-Signature-Ed25519': 'dm-proof', 'X-Signature-Timestamp': '1800000000' } });
++  let forwards = 0, signedBytes;
++  const backendReply = { type: 5, data: { flags: 64 } };
++  const configured = { ...env, SKY_MYCE_BACKEND_URL: 'https://account.example', SKY_MYCE_BACKEND: { async fetch(forwarded) {
++    forwards++;
++    assert.deepEqual(new Uint8Array(await forwarded.arrayBuffer()), signedBytes);
++    assert.equal(forwarded.headers.get('X-Signature-Ed25519'), 'dm-proof');
++    assert.equal(forwarded.headers.get('X-Signature-Timestamp'), '1800000000');
++    return Response.json(backendReply);
++  } } };
++  const dm = custom_id => ({ type: 3, user: { id: '44444444444444444' }, data: { component_type: 2, custom_id } });
++  for (const action of ['status', 'key', 'loader', 'help']) {
++    const interaction = dm('sky:user:' + action);
++    signedBytes = new TextEncoder().encode(JSON.stringify(interaction, null, 1));
++    assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, configured)).json(), backendReply);
++  }
++  assert.equal(forwards, 4);
++  for (const custom_id of ['sky:confirm:' + 't'.repeat(43), 'sky:cancel:' + 't'.repeat(43),
++    'sky:admin:info:55555555555555555', 'sky:audit:all:25:30:all:all', 'sky:user:reset', 'sky:user:key:55555555555555555']) {
++    assert.match((await (await administrativeInteraction(dm(custom_id), new Uint8Array(), request, configured)).json()).data.content, /do not have permission/);
++  }
++  for (const change of [{ user: undefined }, { user: { id: 'bad' } }, { user: { id: 44444444444444444 } },
++    { user: [], member: data.member }, { guild_id: null }, { guild_id: '99999999999999999' }]) {
++    assert.match((await (await administrativeInteraction({ ...dm('sky:user:status'), ...change }, new Uint8Array(), request, configured)).json()).data.content, /do not have permission/);
++  }
++  assert.equal(forwards, 4, 'DM administrator/confirmation controls and invalid self identities never reach the backend');
++});
++
++test('account autocomplete preserves signed bytes and accepts only bounded native choices', async () => {
++  const request = new Request('https://old.example/discord/interactions', { headers: {
++    'X-Signature-Ed25519': 'autocomplete-proof', 'X-Signature-Timestamp': '1800000000' } });
++  let forwards = 0, signedBytes, backendReply;
++  const configured = { ...env, SKY_MYCE_BACKEND_URL: 'https://account.example', SKY_MYCE_BACKEND: { async fetch(forwarded) {
++    forwards++;
++    assert.deepEqual(new Uint8Array(await forwarded.arrayBuffer()), signedBytes);
++    assert.equal(forwarded.headers.get('X-Signature-Ed25519'), 'autocomplete-proof');
++    assert.equal(forwarded.headers.get('X-Signature-Timestamp'), '1800000000');
++    return Response.json(backendReply);
++  } } };
++  const empty = { type: 8, data: { choices: [] } };
++  for (const name of ['license', 'build', 'skyhawk']) {
++    const interaction = { ...data, type: 4, data: { name } };
++    signedBytes = new TextEncoder().encode(JSON.stringify(interaction, null, 1));
++    for (const choices of [[], [{ name: 'PlayerName', value: '55555555555555555' }],
++      Array.from({ length: 25 }, () => ({ name: 'n'.repeat(100), value: 'v'.repeat(100) }))]) {
++      backendReply = { type: 8, data: { choices } };
++      assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, configured)).json(), backendReply);
++    }
++  }
++  const interaction = { ...data, type: 4, data: { name: 'license' } };
++  signedBytes = new TextEncoder().encode(JSON.stringify(interaction));
++  const choice = { name: 'PlayerName', value: '55555555555555555' };
++  for (const invalid of [{ type: 4, data: { flags: 64, content: 'Backend denial' } }, { type: 5, data: { flags: 64 } },
++    { type: 8 }, { type: 8, data: { choices: null } }, { type: 8, data: { choices: Array(26).fill(choice) } },
++    ...[{ ...choice, name: 'n'.repeat(101) }, { ...choice, value: 'v'.repeat(101) }, { ...choice, name: '' },
++      { ...choice, value: '' }, { ...choice, name: 5 }, { ...choice, value: 5 }, null, []].map(value => ({ type: 8, data: { choices: [value] } }))]) {
++    backendReply = invalid;
++    assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, configured)).json(), empty);
++  }
++  for (const failing of [{ fetch: async () => new Response(null, { status: 503 }) }, { fetch: async () => { throw new Error('fixture unavailable'); } }]) {
++    assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, { ...configured, SKY_MYCE_BACKEND: failing })).json(), empty);
++  }
++  assert.deepEqual(await (await administrativeInteraction(interaction, signedBytes, request, env)).json(), empty);
++  const before = forwards;
++  for (const change of [{ guild_id: '99999999999999999' }, { member: undefined }, { member: { user: { id: 'bad' } } }]) {
++    assert.deepEqual(await (await administrativeInteraction({ ...interaction, ...change }, new Uint8Array(), request, configured)).json(), empty);
++  }
++  assert.equal(forwards, before, 'Autocomplete failures and identity denials return native empty choices without forwarding');
++  backendReply = { type: 8, data: { choices: [choice] } };
++  for (const payload of [{ ...data, data: { name: 'build' } }, { ...data, type: 3, data: { component_type: 2, custom_id: 'sky:confirm:' + 't'.repeat(43) } }]) {
++    signedBytes = new TextEncoder().encode(JSON.stringify(payload));
++    assert.match((await (await administrativeInteraction(payload, signedBytes, request, configured)).json()).data.content, /currently unavailable/);
++  }
++  assert.equal(await administrativeInteraction({ ...interaction, data: { name: 'other' } }, new Uint8Array(), request, configured), null);
++});
