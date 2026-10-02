@@ -50,3 +50,5 @@ node_modules/
 *.private.pem
 *.pk8
 /discord-bots/Bot Documentation.md
+/discord-user-bot/.data/
+/discord-bots/.data/

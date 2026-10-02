@@ -26,10 +26,12 @@ export function configuration(env) {
     if (!snowflake.test(value ?? '')) throw new Error(`Missing or invalid ${name}`);
   }
   if (!env.USER_BOT_TOKEN) throw new Error('Missing USER_BOT_TOKEN');
-  const rooms = (env.IRC_ROOMS ?? 'testing').split(',').map(value => value.trim()).filter(Boolean);
-  const channels = { friends: env.DISCORD_IRC_CHANNEL_ID, testing: env.DISCORD_IRC_TEST_CHANNEL_ID };
+  const rooms = (env.IRC_ROOMS ?? (env.GLOBAL_CHAT_CHANNEL_ID ? '' : 'testing')).split(',').map(value => value.trim()).filter(Boolean);
+  if (env.GLOBAL_CHAT_CHANNEL_ID && !rooms.includes('global-chat')) rooms.push('global-chat');
+  const channels = { friends: env.DISCORD_IRC_CHANNEL_ID, testing: env.DISCORD_IRC_TEST_CHANNEL_ID,
+    'global-chat': env.GLOBAL_CHAT_CHANNEL_ID || env.DISCORD_IRC_CHANNEL_ID };
   if (new Set(rooms).size !== rooms.length || rooms.some(room => !Object.hasOwn(channels, room) || !snowflake.test(channels[room] ?? '')) ||
-      channels.friends && channels.friends === channels.testing) throw new Error('Invalid or shared IRC room/channel configuration');
+      channels.friends && channels.friends === channels.testing || new Set(rooms.map(room => channels[room])).size !== rooms.length) throw new Error('Invalid or shared IRC room/channel configuration');
   const url = env.SKY_MYCE_RELAY_URL ?? env.RELAY_URL;
   const secret = env.SKY_MYCE_RELAY_AUTH_SECRET ?? env.DISCORD_BRIDGE_SECRET;
   if (rooms.length) {
@@ -39,7 +41,8 @@ export function configuration(env) {
     if (!secret || secret.length < 32) throw new Error('Missing or invalid SKY_MYCE_RELAY_AUTH_SECRET');
     if (secret === env.USER_BOT_TOKEN) throw new Error('The relay credential must be separate from USER_BOT_TOKEN');
   }
-  return { app, guild: env.DISCORD_GUILD_ID, token: env.USER_BOT_TOKEN, rooms, channels, url, secret, limits: limits(env) };
+  return { app, guild: env.DISCORD_GUILD_ID, token: env.USER_BOT_TOKEN, rooms, channels, url, secret, limits: limits(env),
+    receiptsPath: env.GLOBAL_CHAT_RECEIPTS_PATH || '.data/global-chat-receipts.json' };
 }
 
 export class ExpiringIds {

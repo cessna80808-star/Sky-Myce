@@ -166,14 +166,12 @@ object DungeonFriends : SkyMyceModule() {
     }
 
     override fun tick() {
-        if (!isEnabled()) return
-        DungeonFriendRelay.tick(LocationAPI.onHypixel && MC.connection != null)
-        if (!LocationAPI.isOnSkyBlock) {
-            fallbackMessages.clear()
-            DungeonFriendRelay.publishPolicy(DungeonJoinPolicy(DungeonFriendsSettings.availability.floor,
-                DungeonFriendsSettings.availability.maxPbMillis, open = false),
-                MC.instance.player?.let { DungeonFriendStatsCache.get(it.name.string)?.selectedClass })
-        }
+        val global = me.mycellium.skymyce.config.misc.GlobalChatConfig.enabled
+        DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
+            global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
+        RelayMessages.globalTick()
+        if (!isEnabled()) { publishClosedPolicy(); return }
+        if (!LocationAPI.isOnSkyBlock) { fallbackMessages.clear(); publishClosedPolicy() }
         if (!LocationAPI.onHypixel || MC.instance.player == null) return
         loadFriends()
         observeFriends()
@@ -684,8 +682,17 @@ object DungeonFriends : SkyMyceModule() {
 
     @Subscription
     fun onDisconnect(event: ServerDisconnectEvent) { resetConnection() }
-    override fun onDisable() { resetConnection() }
-    private fun resetConnection() {
+    override fun onDisable() { resetConnection(disconnectRelay = false) }
+    private fun publishClosedPolicy() {
+        if (!DungeonFriendRelay.connected) return
+        val availability = DungeonFriendsSettings.availability
+        val policy = publishedPolicy?.takeIf { it.floor == availability.floor &&
+            it.maxPbMillis == availability.maxPbMillis && !it.open }
+            ?: DungeonJoinPolicy(availability.floor, availability.maxPbMillis, open = false).also { publishedPolicy = it }
+        DungeonFriendRelay.publishPolicy(policy,
+            MC.instance.player?.let { DungeonFriendStatsCache.get(it.name.string)?.selectedClass })
+    }
+    private fun resetConnection(disconnectRelay: Boolean = true) {
         FriendWealthCache.save(true)
         scanner.cancel()
         saveFriends(true)
@@ -703,7 +710,7 @@ object DungeonFriends : SkyMyceModule() {
         lastJoinStatus = ""
         nextJoinStatsCheck = 0L
         fallbackMessages.clear()
-        DungeonFriendRelay.disconnect()
+        if (disconnectRelay) DungeonFriendRelay.disconnect()
         joining.clear()
         partyNotices.clear()
         partyBorders.clear()

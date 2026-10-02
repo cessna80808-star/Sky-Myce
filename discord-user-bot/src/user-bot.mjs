@@ -1,6 +1,7 @@
 import { Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { configuration, RateLimit, unavailable } from './config.mjs';
 import { RelayBridge, discordPacket } from './relay.mjs';
+import { DeliveryReceipts, GLOBAL_ROOM, globalEmbedPacket } from './global-chat.mjs';
 
 let config;
 try { config = configuration(process.env); }
@@ -27,12 +28,14 @@ async function startBridges() {
   starting = true;
   try {
     if (client.user.id !== config.app || !client.guilds.cache.has(config.guild)) throw new Error('Application or guild mismatch');
+    const receipts = config.rooms.includes(GLOBAL_ROOM) ? await new DeliveryReceipts(config.receiptsPath).load() : null;
     for (const room of config.rooms) {
       const channel = await client.channels.fetch(config.channels[room]);
       if (!channel?.isSendable() || channel.guildId !== config.guild ||
-          !channel.permissionsFor(client.user)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) throw new Error('Channel unavailable');
+          !channel.permissionsFor(client.user)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+            ...(room === GLOBAL_ROOM ? [PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory] : [])])) throw new Error('Channel unavailable');
       const bridge = new RelayBridge({ url: config.url, room, secret: config.secret, policy: config.limits, globalRate,
-        onMessage: content => channel.send(content), onResult: result });
+        channelId: config.channels[room], receipts, onMessage: content => channel.send(content), onResult: result });
       bridges.set(room, bridge); bridge.connect();
     }
     console.info(JSON.stringify({ event: 'discord_connected', name: 'Sky-Myce User Bot', applicationId: config.app,
@@ -48,17 +51,27 @@ function shutdown() {
 function start() { void startBridges().catch(() => { console.error('Sky-Myce startup failed. Check application, guild, channel permissions and relay configuration.'); shutdown(); process.exitCode = 1; }); }
 client.once(Events.ClientReady, start);
 client.on(Events.MessageCreate, message => {
-  if (message.guildId !== config.guild || message.author?.bot || message.webhookId) return;
+  if (message.guildId !== config.guild || message.webhookId || message.author?.id === config.app) return;
   for (const [room, bridge] of bridges) {
     if (message.channelId !== config.channels[room]) continue;
-    if (!userRate.allow(message.author.id)) { void notice(message, 'Please wait before sending another bridge message.'); return; }
+    if (room !== GLOBAL_ROOM && message.author?.bot) return;
+    if (room !== GLOBAL_ROOM && !userRate.allow(message.author.id)) { void notice(message, 'Please wait before sending another bridge message.'); return; }
     const packet = discordPacket(message, config.guild, config.channels[room], room, config.limits.outboundLength);
-    if (!packet) { void notice(message, `Bridge messages must be plain text of 1–${config.limits.outboundLength} characters without control/formatting codes.`); return; }
+    if (!packet) {
+      if (room !== GLOBAL_ROOM) void notice(message, `Bridge messages must be plain text of 1–${config.limits.outboundLength} characters without control/formatting codes.`);
+      return;
+    }
     if (pending.has(packet.id)) return;
     if (pending.size >= 128 || !bridge.send(packet)) { void notice(message); return; }
     const timer = setTimeout(() => result(packet.id, 'timeout'), 10000);
     pending.set(packet.id, { message, timer });
   }
+});
+client.on(Events.MessageUpdate, (previous, message) => {
+  const bridge = bridges.get(GLOBAL_ROOM);
+  if (!bridge) return;
+  const packet = globalEmbedPacket(previous, message, config.guild, config.channels[GLOBAL_ROOM]);
+  if (packet) bridge.send(packet);
 });
 // Only delivered when no HTTP endpoint is configured. Never invent an unsigned backend API.
 client.on(Events.InteractionCreate, interaction => {

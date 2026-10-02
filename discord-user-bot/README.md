@@ -21,6 +21,8 @@ For IRC, set `IRC_ROOMS=testing` first, its channel ID, `SKY_MYCE_RELAY_URL` to 
 
 The User Bot process must never receive the Backend Bot token or administrative backend credentials. Existing `DISCORD_USER_APPLICATION_ID`, `RELAY_URL`, and `DISCORD_BRIDGE_SECRET` aliases remain accepted for compatibility. The bot token's name is `USER_BOT_TOKEN`. Example files contain no real credentials.
 
+Global SkyMyce chat extends this same frontend bridge. Set `GLOBAL_CHAT_CHANNEL_ID` to the dedicated channel and `IRC_ROOMS=` for global chat only; Minecraft participants keep their existing authenticated relay connection. The Worker must use the same channel ID and have the global-chat implementation deployed. The local receipt file contains bounded delivery IDs, not credentials or chat text; preserve it across supervised process restarts. See [global chat configuration, behavior and verification](../docs/global-chat.md). The existing room-local IRC settings below remain available for compatibility on separate channels.
+
 ## Account operations
 
 Start with `/status`, `/key`, `/loader` or `/help`. These commands act on your

@@ -40,7 +40,11 @@ internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean,
     localAllowed && active && identity.isNotEmpty() && identity == requestedIdentity
 
 internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..65536 &&
-    (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result"))
+    (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result", "irc_message"))
+
+/** Turning a feature off unsubscribes its messages while the world's shared authorization remains open. */
+internal fun relayActive(inWorld: Boolean, globalEnabled: Boolean, friendsActive: Boolean, connected: Boolean) =
+    inWorld && (globalEnabled || friendsActive || connected)
 
 /** Allocate a callback snapshot only when something actually expires. Completions may enqueue new requests. */
 internal fun expireRelayRequests(requests: MutableMap<String, Pair<Long, CompletableFuture<JsonObject?>>>, now: Long, cancelled: Boolean = true) {
@@ -137,6 +141,8 @@ object DungeonFriendRelay {
         private set
     var ircAvailable = false
         private set
+    var globalChatAvailable = false
+        private set
     private var activeLease: String? = null
     var onDigestEvent: ((JsonObject) -> Unit)? = null
     var onDigestReady: (() -> Unit)? = null
@@ -191,7 +197,7 @@ object DungeonFriendRelay {
         }
         if (!active || url.isBlank()) {
             if (identity.isNotEmpty()) disconnect()
-            status = if (url.isBlank()) "Relay not configured" else "Relay connects on Hypixel"
+            status = if (url.isBlank()) "Relay not configured" else "Join a world to connect the relay"
             return
         }
         if (key != identity) { disconnect(); identity = key }
@@ -277,7 +283,7 @@ object DungeonFriendRelay {
                                                 sign()
                                             }
                                             val base64 = Base64.getEncoder()
-                                            mapOf("type" to "authenticate", "name" to user.name, "uuid" to uuid, "liveUpdates" to true, "userMessages" to true, "cosmetics" to true, "cosmeticsVersion" to 3,
+                                            mapOf("type" to "authenticate", "name" to user.name, "uuid" to uuid, "liveUpdates" to true, "userMessages" to true, "globalChat" to true, "cosmetics" to true, "cosmeticsVersion" to 3,
                                                 "expires" to certificate.expiresAt().toEpochMilli(),
                                                 "publicKey" to base64.encodeToString(certificate.key().encoded),
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
@@ -316,6 +322,7 @@ object DungeonFriendRelay {
                                         cosmeticsAvailable = json.get("cosmetics")?.asBoolean == true
                                         cosmeticsNamesAvailable = cosmeticsAvailable && json.get("cosmeticsNames")?.asBoolean == true
                                         ircAvailable = json.get("irc")?.asBoolean == true
+                                        globalChatAvailable = json.get("globalChat")?.asBoolean == true
                                         retry.reset()
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -325,9 +332,24 @@ object DungeonFriendRelay {
                                         onDigestReady?.invoke()
                                         me.mycellium.skymyce.features.social.CosmeticsClient.ready()
                                         RelayMessages.ircReady()
+                                        RelayMessages.globalReady()
                                     }
-                                    "irc_message" -> { check(connected && ircAvailable); RelayMessages.receiveIrc(json) }
-                                    "irc_result" -> { check(connected); if (json.has("error")) RelayMessages.ircError() }
+                                    "irc_message" -> {
+                                        check(connected)
+                                        if (json.get("scope")?.asString == "global") {
+                                            check(globalChatAvailable)
+                                            RelayMessages.receiveGlobal(json, user.profileId.toString())
+                                        } else { check(ircAvailable); RelayMessages.receiveIrc(json) }
+                                    }
+                                    "irc_result" -> {
+                                        check(connected)
+                                        if (json.has("error")) {
+                                            if (json.get("scope")?.asString == "global") {
+                                                if (currentGlobalSession()) RelayMessages.globalError(json.get("error")?.asString)
+                                            }
+                                            else RelayMessages.ircError()
+                                        }
+                                    }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
                                         LoaderClient.deny(reason == "license_revoked", reason); disconnect()
@@ -442,6 +464,16 @@ object DungeonFriendRelay {
         packet(fields + mapOf("type" to type, "id" to UUID.randomUUID().toString().replace("-", "")))
         return true
     }
+
+    fun globalPacket(type: String, fields: Map<String, Any>): Boolean {
+        if (!connected || !globalChatAvailable || !LoaderClient.onlineAllowed || !currentGlobalSession() ||
+            type !in setOf("irc_send", "irc_subscribe")) return false
+        packet(fields + mapOf("type" to type, "scope" to "global", "id" to UUID.randomUUID().toString().replace("-", "")))
+        return true
+    }
+
+    private fun currentGlobalSession() = identity == "${DungeonFriendsSettings.relayUrl}|${MC.instance.user.profileId}" &&
+        activeLease == LoaderClient.authorization.lease
 
     fun sendUserMessage(name: String, text: String, received: () -> Unit, failed: (String) -> Unit): Boolean {
         if (!connected || !userMessagesAvailable) return false
@@ -606,6 +638,7 @@ object DungeonFriendRelay {
         rngFeedAvailable = false
         userMessagesAvailable = false
         ircAvailable = false
+        globalChatAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false

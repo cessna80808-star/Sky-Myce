@@ -94,6 +94,10 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             })
             .then(messageCommand("msg", RelayMessages::send))
+            .then(literal("global").executes { RelayMessages.selectGlobal(); 1 }
+                .then(argument("message", StringArgumentType.greedyString()).executes {
+                    RelayMessages.sendGlobal(StringArgumentType.getString(it, "message")); 1
+                }))
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->
                     RelayMessages.recipients(builder.remaining).forEach(builder::suggest)

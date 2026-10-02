@@ -383,7 +383,14 @@ for (checkName in listOf("RoomNavigation", "RoomTemplates", "RoomWorldGeometry",
     }
     dungeonRoutingCheck { dependsOn(routingCheck) }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck) }
+val globalChatCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks global chat payloads, mentions, replies, safe links and deduplication"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.GlobalChatCheckKt"
+}
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

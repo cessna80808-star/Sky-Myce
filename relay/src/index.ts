@@ -9,7 +9,7 @@ import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, 
 import { handleDrmRequest, type DrmConfig } from "./drm";
 import type { AccountsConfig } from "./accounts";
 import { handleLoaderDownload } from "./discord-download";
-import { RoomIrc, verifyBridge, type IrcConfig, type IrcSession } from "./irc";
+import { RoomIrc, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage } from "./irc";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
 export { AccountStore } from "./accounts";
 
@@ -111,7 +111,8 @@ export default {
       return new Response("WebSocket upgrade required", { status: 426 });
     }
     const room = url.searchParams.get("room") ?? "friends";
-    if (!/^[a-z0-9_-]{1,32}$/.test(room) || !env.ROOMS.split(",").includes(room)) {
+    const globalBridge = url.pathname === "/discord/bridge" && room === GLOBAL_CHAT_ROOM;
+    if (!/^[a-z0-9_-]{1,32}$/.test(room) || (!globalBridge && (!env.ROOMS.split(",").includes(room) || room === GLOBAL_CHAT_ROOM))) {
       return new Response("Room not allowed", { status: 403 });
     }
     // Identity is not verified yet; bound attempts by the Cloudflare-provided IP.
@@ -205,7 +206,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     const bridge = url.pathname === "/discord/bridge";
     if (bridge) {
       const room = url.searchParams.get("room") ?? "friends";
-      const configured = room === "testing" ? this.env.DISCORD_IRC_TEST_CHANNEL_ID : room === "friends" ? this.env.DISCORD_IRC_CHANNEL_ID : undefined;
+      const configured = room === GLOBAL_CHAT_ROOM ? globalChatChannel(this.env) : room === "testing" ? this.env.DISCORD_IRC_TEST_CHANNEL_ID : room === "friends" ? this.env.DISCORD_IRC_CHANNEL_ID : undefined;
       if (!configured) return new Response("Bridge unavailable", { status: 503 });
       const nonce = await verifyBridge(request, this.env, room);
       if (!nonce || !this.irc.acceptNonce(nonce)) return new Response("Bridge not authorized", { status: 401 });
@@ -226,15 +227,17 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(session);
-    server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, room: session.room } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
+    server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, room: session.room, ...(session.room === GLOBAL_CHAT_ROOM ? { globalChat: true } : {}) } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > session.expires) await this.ctx.storage.setAlarm(session.expires);
+    if (bridge && session.room === GLOBAL_CHAT_ROOM) await this.irc.bridgeConnected();
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     const session = ws.deserializeAttachment() as Session;
-    if (typeof raw !== "string" || encoder.encode(raw).length > 8192) { ws.close(1009, "Message too large"); return; }
+    const maximum = session.bridge && session.room === GLOBAL_CHAT_ROOM ? 32768 : 8192;
+    if (typeof raw !== "string" || encoder.encode(raw).length > maximum) { ws.close(1009, "Message too large"); return; }
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(raw);
@@ -242,9 +245,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     } catch { ws.close(1008, "Invalid JSON message"); return; }
 
     if (session.bridge) {
-      if (encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
+      if (session.room !== GLOBAL_CHAT_ROOM && encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
       try { await this.irc.message(ws, session, data); }
-      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable" })); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" ? { scope: "global" } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
     }
 
@@ -295,16 +298,16 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.challenge = "";
         ws.serializeAttachment(session);
         ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true,
-          irc: !!session.accountId, account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
+          irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
 
     if (!await this.authorized(ws, session, true)) return;
     if (data.type === "irc_send" || data.type === "irc_subscribe") {
-      if (!session.accountId || encoder.encode(raw).length > 2048) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized" })); return; }
+      if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" ? { scope: "global" } : {}) })); return; }
       try { await this.irc.message(ws, session, data); }
-      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable" })); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" ? { scope: "global" } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
     }
 
@@ -651,6 +654,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     }
   }
 
+  /** Binding-only global coordination; public socket handlers supply the verified sender. */
+  async globalChatMinecraft(sender: GlobalChatSender, input: GlobalChatSend): Promise<GlobalChatResult> {
+    return this.irc.globalMinecraft(sender, input);
+  }
+  async globalChatDeliver(message: GlobalChatMessage): Promise<void> { await this.irc.deliverGlobal(message); }
+
   private async broadcast(sender: WebSocket, packet: object): Promise<void> {
     const text = JSON.stringify(packet);
     for (const peer of this.ctx.getWebSockets()) {
@@ -664,6 +673,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async alarm(): Promise<void> {
+    await this.irc.flushGlobal();
     let next = Infinity;
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
@@ -678,6 +688,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       }
       else next = Math.min(next, session.expires);
     }
+    next = Math.min(next, this.irc.nextGlobalAlarm() ?? Infinity);
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }
 
