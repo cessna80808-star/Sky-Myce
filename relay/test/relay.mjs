@@ -5,6 +5,9 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { checkDigest } from "./digest.mjs";
 import { checkSocial } from "./social.mjs";
 import { checkCosmetics } from "./cosmetics.mjs";
+import { checkIrc } from "./irc.mjs";
+import { checkAccounts } from "./accounts.mjs";
+import { checkStrictCosmetics } from "./cosmetics-strict.mjs";
 
 // Replace public trust roots only in this in-memory test bundle. Production has no auth bypass.
 const rsa = () => generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -33,7 +36,7 @@ function proof(name, challenge, changes = {}) {
 const options = convertV4MiniflareOptions({
   name: "relay-check",
   modules: true, script, compatibilityDate: "2026-09-21",
-  bindings: { ROOMS: "friends,testing" },
+  bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true" },
   durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
   outboundService: () => { throw new Error("Account verification must not make outbound requests"); },
 });
@@ -398,3 +401,6 @@ try {
 await checkDigest(script, proof);
 await checkSocial(script, proof);
 await checkCosmetics(script, proof);
+await checkAccounts(script, proof);
+await checkStrictCosmetics(script, proof);
+await checkIrc(script, proof);

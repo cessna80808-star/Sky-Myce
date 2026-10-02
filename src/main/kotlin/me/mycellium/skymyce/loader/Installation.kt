@@ -18,11 +18,60 @@ import java.util.Properties
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Shared per OS user, outside the game instance: copying a mods/config folder cannot copy its key. */
-class Installation(private val directory: Path = Path.of(System.getProperty("user.home"), ".sky-myce", "device-v1")) {
+internal class HardwareIdentityUnavailable : IllegalStateException()
+
+internal fun hardwareIdentityHash(source: String, identifier: String): String {
+    val normalized = identifier.trim().lowercase(java.util.Locale.ROOT)
+    require(normalized.matches(Regex("[a-f0-9-]{32,36}")) && normalized.replace("-", "").let { it.length == 32 && it.toSet().size > 1 })
+    return SignedFiles.sha256("Sky-Myce hardware v1\n$source\n$normalized".toByteArray(Charsets.UTF_8))
+}
+
+private fun hardwareSources(): List<String> = when {
+    System.getProperty("os.name").startsWith("Windows") -> listOf("windows-smbios", "windows-machine-guid")
+    System.getProperty("os.name").startsWith("Linux") -> listOf("linux-dmi", "linux-machine-id", "linux-dbus-machine-id")
+    System.getProperty("os.name").startsWith("Mac") -> listOf("macos-platform")
+    else -> listOf("software-installation")
+}
+
+private fun readHardwareIdentifier(source: String): String? = runCatching {
+    val file = when (source) {
+        "linux-dmi" -> Path.of("/sys/class/dmi/id/product_uuid")
+        "linux-machine-id" -> Path.of("/etc/machine-id")
+        "linux-dbus-machine-id" -> Path.of("/var/lib/dbus/machine-id")
+        else -> null
+    }
+    if (file != null) {
+        require(Files.size(file) <= 4096)
+        Files.readString(file).trim()
+    } else {
+        val command = when (source) {
+            "windows-smbios" -> listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                "(Get-CimInstance -ClassName Win32_ComputerSystemProduct -ErrorAction Stop).UUID")
+            "windows-machine-guid" -> listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                "Get-ItemPropertyValue -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid -ErrorAction Stop")
+            "macos-platform" -> listOf("/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+            else -> error("Unsupported hardware source")
+        }
+        val process = ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        process.outputStream.close()
+        check(process.waitFor(15, TimeUnit.SECONDS).also { if (!it) process.destroyForcibly() })
+        check(process.exitValue() == 0)
+        val result = process.inputStream.bufferedReader().use { it.readText() }.also { require(it.length <= 16384) }
+        if (source == "macos-platform") Regex("\"IOPlatformUUID\"\\s*=\\s*\"([a-fA-F0-9-]+)\"").find(result)?.groupValues?.get(1)
+        else result.trim()
+    }
+}.getOrNull()
+
+/** Shared per OS user, outside the game instance; runtime/session state never changes this identity. */
+class Installation internal constructor(
+    private val directory: Path = Path.of(System.getProperty("user.home"), ".sky-myce", "device-v1"),
+    private val readHardware: (String) -> String? = ::readHardwareIdentifier,
+    private val sources: List<String> = hardwareSources()
+) {
     val id: String
     val publicKey: String
     val deviceHash: String
+    val hardwareHash: String
     private val privateKey: PrivateKey
     init {
         Files.createDirectories(directory)
@@ -50,6 +99,19 @@ class Installation(private val directory: Path = Path.of(System.getProperty("use
                 val encoded = Base64.getDecoder().decode(properties.getProperty("privateKey"))
                 privateKey = KeyFactory.getInstance("Ed25519").generatePrivate(PKCS8EncodedKeySpec(
                     if (isWindows()) Base64.getDecoder().decode(protect(encoded, true)) else encoded))
+                val storedSource = properties.getProperty("hardwareSource")
+                val selected = (storedSource?.let(::listOf) ?: sources).firstNotNullOfOrNull { source ->
+                    if (source == "software-installation") source to deviceHash
+                    else readHardware(source)?.let { identifier -> runCatching { source to hardwareIdentityHash(source, identifier) }.getOrNull() }
+                } ?: throw HardwareIdentityUnavailable()
+                hardwareHash = selected.second
+                if (storedSource == null) {
+                    // Upgrade the proof without changing the already-enrolled installation or device binding.
+                    properties.setProperty("hardwareSource", selected.first)
+                    val bytes = java.io.ByteArrayOutputStream().also { properties.store(it, "Sky-Myce local installation; never share") }.toByteArray()
+                    SignedFiles.atomicWrite(file, bytes)
+                }
+                restrict(file)
             }
         }
     }

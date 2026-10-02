@@ -18,7 +18,8 @@ internal class AuthorizationDenied(val code: String) : Exception()
 
 /** Fixed, safe guidance shared by the desktop window and in-game menu. Never echo server text. */
 internal fun accountAccessError(code: String): String? = when (code) {
-    "device_reset_required" -> "This account is registered to another installation. Ask an admin to use /hwid reset for your Discord account, then retry your newest activation code. A new code alone cannot switch devices. (device_reset_required)"
+    "HWID_MISMATCH", "device_reset_required" -> "This license is already bound to another device. For an intentional hardware transfer, use the User Bot's /hwid reset confirm:true after the seven-day cooldown, then activate this device. Administrators can perform an explicit emergency reset. A new code alone cannot switch devices. ($code)"
+    "device_reset_cooldown", "device_transfer_cooldown" -> "A hardware transfer is not available yet. Transfers have a seven-day cooldown; continue using the registered device. After the cooldown, use the User Bot's /hwid reset confirm:true for an intentional transfer. ($code)"
     "device_owned" -> "This installation belongs to another Sky-Myce account. Ask an admin to review its device registration. (device_owned)"
     "device_revoked" -> "Device registration is blocked for this account. Ask an admin to review it before retrying. (device_revoked)"
     "minecraft_account_owned" -> "This Minecraft account is linked to another Sky-Myce account. Ask an admin to review the link. (minecraft_account_owned)"
@@ -81,6 +82,7 @@ internal class LoaderApi(private val config: Properties, private val installatio
     internal fun challengeInput(purpose: String, startSession: Boolean, clientNonce: String): Map<String, Any> =
         mapOf("purpose" to purpose, "clientNonce" to clientNonce,
             "installationId" to installation.id, "publicKey" to installation.publicKey, "deviceHash" to installation.deviceHash,
+            "hardwareHash" to installation.hardwareHash,
             "minecraftVersion" to config.getProperty("minecraft"), "loaderVersion" to config.getProperty("loaderVersion"), "modVersion" to version,
             "platform" to LaunchSession.platform, "launchSessionId" to LaunchSession.id, "startSession" to startSession)
 
@@ -91,7 +93,7 @@ internal class LoaderApi(private val config: Properties, private val installatio
             it.addProperty("clientNonce", nonce); it.addProperty("startSession", startSession)
         }
     }
-    fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v2\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}\n${LaunchSession.platform}\n${LaunchSession.id}\n${challenge.get("startSession").asBoolean}")
+    fun signature(purpose: String, challenge: JsonObject) = installation.sign("Sky-Myce installation v3\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n${config.getProperty("minecraft")}\n${config.getProperty("loaderVersion")}\n$version\n${challenge.get("clientNonce").asString}\n${installation.hardwareHash}\n${LaunchSession.platform}\n${LaunchSession.id}\n${challenge.get("startSession").asBoolean}")
 
     fun downloadLoader(purpose: String, body: Map<String, Any>, envelope: JsonObject, directory: Path) {
         require(purpose in setOf("bootstrap-renew", "bootstrap-activate"))

@@ -3,7 +3,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 export async function checkSocial(script, proof) {
   const options = convertV4MiniflareOptions({ name: "social-check", modules: true, script, compatibilityDate: "2026-09-21",
-    bindings: { ROOMS: "friends,testing" }, durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
+    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true" }, durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: () => { throw new Error("Social protocol must not make unexpected outbound requests"); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 20, period: 60 } };

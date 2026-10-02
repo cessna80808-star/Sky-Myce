@@ -46,6 +46,7 @@ fun verifyLease(token: String, config: Properties, installation: Installation, u
         require(it.get("product").asString == "sky-myce" && it.get("protocol").asInt == 3)
         require(it.get("uuid").asString == uuid && it.get("installationId").asString == installation.id)
         require(it.get("deviceHash").asString == installation.deviceHash)
+        require(it.get("hardwareHash")?.asString == installation.hardwareHash)
         require(it.get("keyFingerprint").asString == SignedFiles.sha256(Base64.getDecoder().decode(installation.publicKey)))
         require(it.get("minecraft").asString == config.getProperty("minecraft") && it.get("version").asString == version)
         require(it.get("accountId").asString.isNotBlank() && it.get("discordId").asString.matches(Regex("[0-9]{17,20}")))

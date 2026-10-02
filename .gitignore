@@ -39,3 +39,14 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# Local service configuration and signing material
+node_modules/
+.env*
+.dev.vars*
+!.env.example
+!.env.*.example
+!.dev.vars.example
+*.private.pem
+*.pk8
+/discord-bots/Bot Documentation.md

@@ -18,6 +18,7 @@ internal fun requireStartupHandoffAllowed(attempted: String?) { if (attempted !=
 internal fun startupError(failure: Throwable): String {
     val cause = generateSequence(failure) { it.cause }.last()
     return when (cause) {
+        is HardwareIdentityUnavailable -> "The registered hardware identifier is temporarily unavailable. Retry after restoring access; your device registration has been preserved. Do not reset your HWID for this error."
         is StartupHandoffLimit -> "The release changed again during startup. Close this window and launch your instance once more. Automatic startup has stopped to prevent a relaunch loop."
         is AuthorizationDenied -> accountAccessError(cause.code) ?: when (cause.code) {
             "invalid_activation_key", "invalid_activation", "activation_invalid" -> "That activation code is invalid, expired or already used. Use your newest Discord DM code, or ask an admin to reissue it."

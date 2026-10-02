@@ -7,7 +7,7 @@ export async function checkCosmetics(script, proof) {
   const application = "123456789012345678", aliceActor = "223456789012345678", bobActor = "323456789012345678", adminActor = "423456789012345678";
   const channel = "1552057526969835612";
   const options = convertV4MiniflareOptions({ name: "cosmetics-check", modules: true, script, compatibilityDate: "2026-09-21",
-    bindings: { ROOMS: "friends,testing", DISCORD_APPLICATION_ID: application,
+    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", DISCORD_APPLICATION_ID: application,
       DISCORD_PUBLIC_KEY: keys.publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex"),
       COSMETICS_COMMAND_CHANNEL: channel },
     durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
@@ -63,7 +63,7 @@ export async function checkCosmetics(script, proof) {
     assert.equal((await interaction(ping, { timestamp: String(Math.floor(Date.now() / 1000) - 301) })).status, 401);
     assert.equal((await interaction(ping, { timestamp: String(Math.floor(Date.now() / 1000) + 62) })).status, 401);
     assert.equal((await interaction({ ...ping, application_id: "wrong" })).status, 401);
-    assert.equal((await interaction({ ...ping, oversized: "x".repeat(32769) })).status, 401);
+    assert.equal((await interaction({ ...ping, oversized: "x".repeat(96 * 1024 + 1) })).status, 401);
     assert.equal((await interaction(ping, { headers: { "X-Signature-Timestamp": "NaN" } })).status, 401);
     assert.match(await call(command("show", {}, aliceActor, { channel_id: "1552585927086440459" })), /Use cosmetic commands/);
     assert.match(await call(command("show", {}, aliceActor, { channel_id: undefined })), /Use cosmetic commands/);

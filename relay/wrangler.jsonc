@@ -4,15 +4,162 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-21",
   "workers_dev": true,
-  "vars": { "ROOMS": "friends,testing" },
-  "ratelimits": [{ "name": "CONNECT_LIMIT", "namespace_id": "7112026", "simple": { "limit": 20, "period": 60 } }],
-  "durable_objects": {
-    "bindings": [{ "name": "RELAY_ROOMS", "class_name": "RelayRoom" }]
+  "vars": {
+    "ROOMS": "friends,testing",
+    "SKYMYCE_ENVIRONMENT": "production",
+    "MINECRAFT_VERSION": "26.1.2",
+    "SKY_MYCE_VERSION": "2.4.4",
+    "MINIMUM_LOADER_VERSION": "1.0.0"
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayRoom"] }],
+  "ratelimits": [
+    {
+      "name": "CONNECT_LIMIT",
+      "namespace_id": "7112026",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY_ROOMS",
+        "class_name": "RelayRoom"
+      },
+      {
+        "name": "ACCOUNT_STORE",
+        "class_name": "AccountStore"
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "PRIVATE_ARTIFACTS",
+      "bucket_name": "sky-myce-private-artifacts"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "RelayRoom"
+      ]
+    },
+    {
+      "tag": "v2-accounts",
+      "new_sqlite_classes": [
+        "AccountStore"
+      ]
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "sky-myce-staging",
+      "vars": {
+        "ROOMS": "testing",
+        "SKYMYCE_ENVIRONMENT": "staging",
+        "DISCORD_INTERACTIONS_ROOM": "testing",
+        "MINECRAFT_VERSION": "26.1.2",
+        "SKY_MYCE_VERSION": "2.4.4",
+        "MINIMUM_LOADER_VERSION": "1.0.0"
+      },
+      "ratelimits": [
+        {
+          "name": "CONNECT_LIMIT",
+          "namespace_id": "7112027",
+          "simple": {
+            "limit": 20,
+            "period": 60
+          }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RELAY_ROOMS",
+            "class_name": "RelayRoom"
+          },
+          {
+            "name": "ACCOUNT_STORE",
+            "class_name": "AccountStore"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "PRIVATE_ARTIFACTS",
+          "bucket_name": "sky-myce-staging-private-artifacts"
+        }
+      ]
+    },
+    "backend": {
+      "name": "sky-myce-backend",
+      "compatibility_date": "2026-09-27",
+      "vars": {
+        "ROOMS": "friends,testing",
+        "SKYMYCE_ENVIRONMENT": "production",
+        "MINECRAFT_VERSION": "26.1.2",
+        "SKY_MYCE_VERSION": "2.4.12",
+        "MINIMUM_LOADER_VERSION": "1.0.10",
+        "ARTIFACT_MANIFEST_KEY": "releases/manifest-2.4.12.json",
+        "SKYMYCE_LOADER_R2_KEY": "loaders/Sky-Myce-Loader-1.0.10.jar",
+        "LOADER_MANIFEST_KEY": "loaders/manifest-1.0.10.json",
+        "DISCORD_GUILD_ID": "1552053091493486594",
+        "ADMIN_BOOTSTRAP_USER_ID": "978376257534328883",
+        "BACKEND_BOT_APPLICATION_ID": "1552590804810342400",
+        "BACKEND_BOT_PUBLIC_KEY": "9f729727a98670828557032a127963cc28ac0c02ec6237c6fc982329cea53c3f",
+        "USER_BOT_APPLICATION_ID": "1553617043914367068",
+        "USER_BOT_PUBLIC_KEY": "b566aee3f39af3f21d539c9f629d53b8d1616bd2d4bbeda4d14380bcb4548486",
+        "SKYMYCE_PUBLIC_URL": "https://sky-myce-backend.skyblock-relay.workers.dev",
+        "DRM_KEY_ID": "production-20260927",
+        "DRM_PUBLIC_KEYS": "{\"production-20260927\":\"MCowBQYDK2VwAyEAbI6SZNtcVbtbzRKs0PfoU8MXp0nW+w1VeT71gDKM5NA=\"}",
+        "DISCORD_AUDIT_CHANNEL_ID": "1553538991502925844",
+        "DISCORD_SECURITY_CHANNEL_ID": "1553538215762206720",
+        "DISCORD_LICENSE_CHANNEL_ID": "1553539130624053400",
+        "DISCORD_IRC_CHANNEL_ID": "1553536927498506270",
+        "DISCORD_IRC_TEST_CHANNEL_ID": "1553537591960412241",
+        "DISCORD_LOADER_DELIVERY_ENABLED": "true"
+      },
+      "ratelimits": [
+        {
+          "name": "CONNECT_LIMIT",
+          "namespace_id": "7112028",
+          "simple": {
+            "limit": 20,
+            "period": 60
+          }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RELAY_ROOMS",
+            "class_name": "RelayRoom"
+          },
+          {
+            "name": "ACCOUNT_STORE",
+            "class_name": "AccountStore"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "PRIVATE_ARTIFACTS",
+          "bucket_name": "sky-myce-private-artifacts"
+        }
+      ]
+    }
+  },
   "observability": {
     "enabled": true,
-    "logs": { "enabled": true, "invocation_logs": false },
-    "traces": { "enabled": true, "head_sampling_rate": 0.1 }
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
   }
 }

@@ -7,7 +7,7 @@ export async function checkDigest(script, proof) {
   let mode = "success", calls = 0;
   const fetched = [];
   const options = convertV4MiniflareOptions({ name: "digest-check", modules: true, script, compatibilityDate: "2026-09-21",
-    bindings: { ROOMS: "friends,testing", DISCORD_NEWS_TOKEN: "test-only-bot-token",
+    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", DISCORD_NEWS_TOKEN: "test-only-bot-token",
       DIGEST_GAME_CHANNEL: channels.game, DIGEST_ALPHA_CHANNEL: channels.alpha },
     durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: async request => {

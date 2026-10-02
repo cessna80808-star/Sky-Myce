@@ -1,5 +1,6 @@
 import type { CosmeticsConfig, DiscordCommand } from "./cosmetics";
 
+const MAX_INTERACTION_BYTES = 96 * 1024;
 /** Discord signs the exact bytes. No bot token is accepted from a client or needed for verification. */
 export async function verifiedInteraction(request: Request, env: CosmeticsConfig, now = Date.now()): Promise<Record<string, unknown> | null> {
   const signature = request.headers.get("X-Signature-Ed25519") ?? "";
@@ -8,12 +9,12 @@ export async function verifiedInteraction(request: Request, env: CosmeticsConfig
   if (request.method !== "POST" || !/^[a-f0-9]{128}$/i.test(signature) || !/^[a-f0-9]{64}$/i.test(publicKey) ||
       !/^\d{10}$/.test(timestamp) || now - Number(timestamp) * 1000 > 300000 || Number(timestamp) * 1000 - now > 60000) return null;
   const reader = request.body?.getReader();
-  if (!reader || Number(request.headers.get("Content-Length") ?? 0) > 32768) return null;
+  if (!reader || Number(request.headers.get("Content-Length") ?? 0) > MAX_INTERACTION_BYTES) return null;
   const chunks: Uint8Array[] = []; let size = 0;
   let timedOut = false;
   const timeout = setTimeout(() => { timedOut = true; void reader.cancel().catch(() => {}); }, 3000);
   try {
-    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 32768) return null; chunks.push(value); }
+    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > MAX_INTERACTION_BYTES) return null; chunks.push(value); }
     if (timedOut) return null;
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }

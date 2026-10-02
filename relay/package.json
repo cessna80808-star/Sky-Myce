@@ -9,7 +9,7 @@
     "cf-typegen": "wrangler types",
     "check": "wrangler types && tsc --noEmit",
     "smoke": "node test/live.mjs",
-    "test": "wrangler deploy --dry-run --outdir .test-build && node test/relay.mjs"
+    "test": "wrangler deploy --dry-run --outdir .test-build && node test/relay.mjs && node test/prompts.mjs && node --test test/discord-bots.mjs && node scripts/release.mjs check"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

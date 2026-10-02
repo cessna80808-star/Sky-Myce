@@ -288,6 +288,10 @@ object LoaderClient {
                     return@execute
                 }
                 when (cause) {
+                    is HardwareIdentityUnavailable -> {
+                        authorization.deny(); nextAttempt = Long.MAX_VALUE
+                        status = startupError(cause)
+                    }
                     is AuthorizationDenied -> {
                         if (cause.code == "approval_required") {
                             status = "This loader needs a fresh activation code. Ask an admin to use /authorise with reissue:true."

@@ -5,10 +5,26 @@ import { SharedWealth, WEALTH_TTL, validateWealth } from "./wealth";
 import { DigestNews, DigestRng, type DigestConfig } from "./digest";
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand } from "./cosmetics";
 import { verifiedInteraction, discordCommand } from "./discord";
+import { deferInteraction, handleAccountInteraction, type DiscordAccountsConfig } from "./discord-accounts";
+import { handleDrmRequest, type DrmConfig } from "./drm";
+import type { AccountsConfig } from "./accounts";
+import { handleLoaderDownload } from "./discord-download";
+import { RoomIrc, verifyBridge, type IrcConfig, type IrcSession } from "./irc";
+import { handlePromptInteraction, handlePromptRunner } from "./prompts";
+export { AccountStore } from "./accounts";
 
-type RelayEnv = Env & DigestConfig & CosmeticsConfig;
+type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
+  SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string;
+};
+const legacyRelay = (env: RelayEnv) => env.SKYMYCE_ENVIRONMENT === "development" && env.ALLOW_LEGACY_RELAY === "true";
+const discordEnvironment = (env: RelayEnv): RelayEnv => ({ ...env,
+  DISCORD_USER_APPLICATION_ID: env.USER_BOT_APPLICATION_ID ?? env.DISCORD_USER_APPLICATION_ID,
+  DISCORD_USER_PUBLIC_KEY: env.USER_BOT_PUBLIC_KEY ?? env.DISCORD_USER_PUBLIC_KEY,
+  DISCORD_BACKEND_APPLICATION_ID: env.BACKEND_BOT_APPLICATION_ID ?? env.DISCORD_BACKEND_APPLICATION_ID,
+  DISCORD_BACKEND_PUBLIC_KEY: env.BACKEND_BOT_PUBLIC_KEY ?? env.DISCORD_BACKEND_PUBLIC_KEY,
+  DISCORD_BACKEND_BOT_TOKEN: env.BACKEND_BOT_TOKEN ?? env.DISCORD_BACKEND_BOT_TOKEN });
 type JoinPolicy = { floor: string; maxPbMillis: number | null; open: boolean; selectedClass?: string };
-type Session = {
+type Session = IrcSession & {
   started?: number;
   challenge: string;
   expires: number;
@@ -46,22 +62,50 @@ const uuid = /^[a-f0-9]{32}$/;
 const encoder = new TextEncoder();
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
+    env = discordEnvironment(env);
     const url = new URL(request.url);
-    if (url.pathname === "/discord/interactions") {
-      if (!env.DISCORD_PUBLIC_KEY || !env.DISCORD_APPLICATION_ID) return new Response("Interactions not configured", { status: 503 });
+    if (url.pathname === "/prompt/runner") {
+      if (!(await env.CONNECT_LIMIT.limit({ key: `prompt-runner:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      return await handlePromptRunner(request, env);
+    }
+    if (url.pathname === "/discord/loader") {
+      if (!(await env.CONNECT_LIMIT.limit({ key: `download:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      return await handleLoaderDownload(request, env);
+    }
+    if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/")) {
+      if (!(await env.CONNECT_LIMIT.limit({ key: `auth:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      try { return await handleDrmRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      catch { console.error({ event: "authorization_unavailable" }); return Response.json({ error: "temporarily_unavailable" }, { status: 503 }); }
+    }
+    if (url.pathname === "/discord/interactions" || url.pathname === "/discord/backend/interactions") {
+      const backend = url.pathname === "/discord/backend/interactions";
+      const discordEnv = { ...env, DISCORD_PUBLIC_KEY: backend ? env.DISCORD_BACKEND_PUBLIC_KEY : (env.DISCORD_USER_PUBLIC_KEY ?? env.DISCORD_PUBLIC_KEY),
+        DISCORD_APPLICATION_ID: backend ? env.DISCORD_BACKEND_APPLICATION_ID : (env.DISCORD_USER_APPLICATION_ID ?? env.DISCORD_APPLICATION_ID) };
+      if (!discordEnv.DISCORD_PUBLIC_KEY || !discordEnv.DISCORD_APPLICATION_ID) return new Response("Interactions not configured", { status: 503 });
       if (!(await env.CONNECT_LIMIT.limit({ key: `discord:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
-      const data = await verifiedInteraction(request, env);
+      const data = await verifiedInteraction(request, discordEnv);
       if (!data) return new Response("Invalid signature or interaction", { status: 401 });
       if (data.type === 1) return Response.json({ type: 1 });
+      const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
+      if (promptResponse) return promptResponse;
+      const accountResponse = await handleAccountInteraction(data, env, ctx, backend ? "backend" : "user");
+      if (accountResponse) return accountResponse;
+      if (backend) return Response.json({ type: 4, data: { content: "Unsupported command.", flags: 64, allowed_mentions: { parse: [] } } });
+      if (!legacyRelay(env) && data.guild_id !== env.DISCORD_GUILD_ID) return new Response("Guild not allowed", { status: 403 });
       const command = discordCommand(data);
       if (!command) return Response.json({ type: 4, data: { content: "Unsupported command.", flags: 64, allowed_mentions: { parse: [] } } });
       const room = env.DISCORD_INTERACTIONS_ROOM ?? "friends";
       if (!env.ROOMS.split(",").includes(room)) return new Response("Interactions room unavailable", { status: 503 });
-      return Response.json(await env.RELAY_ROOMS.getByName(room).discordInteraction(command));
+      if (!legacyRelay(env)) return deferInteraction(data, ctx, async () => {
+        const result = await env.RELAY_ROOMS.getByName(room).discordInteraction(command) as { data: { content: string } };
+        return result.data.content;
+      });
+      try { return Response.json(await env.RELAY_ROOMS.getByName(room).discordInteraction(command)); }
+      catch { return Response.json({ type: 4, data: { content: "Sky-Myce is temporarily unavailable.", flags: 64, allowed_mentions: { parse: [] } } }); }
     }
-    if (url.pathname === "/health") return Response.json({ service: "SkyMyce relay", version: 2 });
-    if (url.pathname !== "/websocket") return new Response("Not found", { status: 404 });
+    if (url.pathname === "/health") return Response.json({ service: "Sky-Myce relay", version: 3 });
+    if (url.pathname !== "/websocket" && url.pathname !== "/discord/bridge") return new Response("Not found", { status: 404 });
     if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("WebSocket upgrade required", { status: 426 });
     }
@@ -73,7 +117,8 @@ export default {
     if (!(await env.CONNECT_LIMIT.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" })).success) {
       return new Response("Too many connection attempts", { status: 429 });
     }
-    return env.RELAY_ROOMS.getByName(room).fetch(request);
+    try { return await env.RELAY_ROOMS.getByName(room).fetch(request); }
+    catch { console.error({ event: "relay_unavailable" }); return new Response("Sky-Myce is temporarily unavailable", { status: 503 }); }
   },
 } satisfies ExportedHandler<RelayEnv>;
 
@@ -83,7 +128,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly news: DigestNews;
   private readonly rng: DigestRng;
   private readonly cosmetics: PlayerCosmetics;
+  private readonly irc: RoomIrc;
   constructor(ctx: DurableObjectState, env: RelayEnv) {
+    env = discordEnvironment(env);
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.stats = new SharedStats(ctx.storage.sql);
@@ -91,6 +138,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.news = new DigestNews(ctx.storage.sql, env);
     this.rng = new DigestRng(ctx.storage.sql);
     this.cosmetics = new PlayerCosmetics(ctx.storage);
+    this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session));
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS account_migration_state (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS mod_users (
       uuid TEXT PRIMARY KEY, name TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS mod_users_name ON mod_users(name COLLATE NOCASE)");
@@ -107,11 +156,34 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   /** Binding-only RPC. The public Worker verifies Discord's exact signed HTTP body first. */
   async discordInteraction(command: DiscordCommand): Promise<object> {
-    const result = await this.cosmetics.command(command, this.env, Date.now());
+    const reply = (content: string) => ({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
+    let authority: { uuid: string } | undefined;
+    if (!legacyRelay(this.env)) {
+      if (command.channel !== (this.env.COSMETICS_COMMAND_CHANNEL ?? "1552057526969835612")) return reply("Use cosmetic commands in the configured cosmetics channel.");
+      try {
+        if (!await this.migrateLegacyAccounts(this.env.DISCORD_INTERACTIONS_ROOM ?? "friends")) return reply("Sky-Myce account migration is in progress. Please retry.");
+        const store = this.env.ACCOUNT_STORE.getByName("global");
+        if (command.action === "link") {
+          const linked = await store.consumeMinecraftLink(command.actor, command.options.code as string);
+          return reply(linked.ok ? "Minecraft account linked to your Sky-Myce account." : "The account link could not be completed. Request a fresh code in Minecraft.");
+        }
+        const account = await store.getAccountByDiscordId(command.actor);
+        if (!account || account.status !== "active" || account.licenseStatus !== "active" ||
+            (account.licenseExpiresAt !== null && account.licenseExpiresAt <= Date.now())) return reply("Your Sky-Myce account is not currently authorized.");
+        // Keep the previous cosmetic target when it still belongs to the global account.
+        const oldTarget = this.ctx.storage.sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
+        const target = account.uuids.find(value => value.uuid === oldTarget)?.uuid ?? account.uuids[0]?.uuid;
+        if (!target) return reply("Link a Minecraft account through the Sky-Myce Loader first.");
+        if (command.action === "unlink") return reply("Use /account unlink to remove a Minecraft account from Sky-Myce. Use /cosmetics reset to clear its appearance.");
+        authority = { uuid: target };
+      } catch { return reply("Sky-Myce account services are temporarily unavailable."); }
+    }
+    const result = await this.cosmetics.command(command, this.env, Date.now(), authority);
     if (result.changed) {
       for (const ws of this.ctx.getWebSockets()) {
         const session = ws.deserializeAttachment() as Session;
         if (ws.readyState === WebSocket.OPEN && session.name && session.cosmetics && watchesCosmetic(session.cosmeticWatching, result.changed.uuid)) {
+          if (!await this.authorized(ws, session)) continue;
           try { ws.send(JSON.stringify({ type: "cosmetics_event", record: cosmeticPayload(result.changed, session.cosmeticsVersion) })); } catch { /* Reconnect lookup restores the newest revision. */ }
         }
       }
@@ -127,7 +199,20 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (!legacyRelay(this.env) && !await this.migrateLegacyAccounts(url.searchParams.get("room") ?? "friends")) return new Response("Account migration in progress; retry", { status: 503 });
+    const bridge = url.pathname === "/discord/bridge";
+    if (bridge) {
+      const room = url.searchParams.get("room") ?? "friends";
+      const configured = room === "testing" ? this.env.DISCORD_IRC_TEST_CHANNEL_ID : room === "friends" ? this.env.DISCORD_IRC_CHANNEL_ID : undefined;
+      if (!configured) return new Response("Bridge unavailable", { status: 503 });
+      const nonce = await verifyBridge(request, this.env, room);
+      if (!nonce || !this.irc.acceptNonce(nonce)) return new Response("Bridge not authorized", { status: 401 });
+    }
     const sockets = this.ctx.getWebSockets();
+    if (bridge && sockets.some(ws => ws.readyState === WebSocket.OPEN && (ws.deserializeAttachment() as Session).bridge)) {
+      return new Response("A bridge already owns this room", { status: 409 });
+    }
     const ip = request.headers.get("CF-Connecting-IP") ?? "local";
     if (sockets.length >= 128 || sockets.filter(ws => (ws.deserializeAttachment() as Session).ip === ip).length >= 8) {
       return new Response("Too many connections", { status: 429 });
@@ -136,11 +221,11 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     const now = Date.now();
     const session: Session = {
       challenge: crypto.randomUUID().replaceAll("-", ""), expires: now + 30000, started: now, ip,
-      credits: 12, updated: now, seen: [], inbox: [],
+      credits: 12, updated: now, seen: [], inbox: [], room: url.searchParams.get("room") ?? "friends", ...(bridge ? { bridge: true } : {}),
     };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(session);
-    server.send(JSON.stringify({ type: "challenge", serverId: session.challenge, protocol: 2 }));
+    server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, room: session.room } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > session.expires) await this.ctx.storage.setAlarm(session.expires);
     return new Response(null, { status: 101, webSocket: client });
@@ -154,6 +239,13 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       data = JSON.parse(raw);
       if (!data || Array.isArray(data) || typeof data !== "object") throw new Error();
     } catch { ws.close(1008, "Invalid JSON message"); return; }
+
+    if (session.bridge) {
+      if (encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
+      try { await this.irc.message(ws, session, data); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable" })); }
+      return;
+    }
 
     if (!session.name) {
       if (session.checking || Date.now() > session.expires || data.type !== "authenticate" ||
@@ -169,6 +261,19 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           const rejection = "error" in profile ? profile : { error: "challenge_expired", retryable: true };
           console.warn({ event: "authentication_rejected", category: rejection.error, retryable: rejection.retryable });
           ws.close(rejection.retryable ? 4003 : 4004, rejection.error); return;
+        }
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (!legacyRelay(this.env)) {
+          if (typeof data.lease !== "string" || typeof data.installationSignature !== "string") { ws.close(4005, "Authorization required"); return; }
+          const authorization = await this.env.ACCOUNT_STORE.getByName("global").authorizeSession({ uuid: profile.id,
+            lease: data.lease, challenge: session.challenge, signature: data.installationSignature });
+          if (!authorization.ok) {
+            if (authorization.error?.endsWith("unavailable")) ws.close(1013, "Authorization service unavailable");
+            else ws.close(4005, authorization.error ?? "not_authorized");
+            return;
+          }
+          Object.assign(session, { accountId: authorization.accountId, discordId: authorization.discordId,
+            installationId: authorization.installationId, generation: authorization.generation, leaseExpiresAt: authorization.expiresAt });
         }
         if (ws.readyState !== WebSocket.OPEN) return;
         this.registerUser(profile.id, profile.name);
@@ -187,8 +292,17 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.cosmeticsVersion = data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
         session.challenge = "";
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: 2, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true }));
+        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true,
+          irc: !!session.accountId, account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
+      return;
+    }
+
+    if (!await this.authorized(ws, session)) return;
+    if (data.type === "irc_send" || data.type === "irc_subscribe") {
+      if (!session.accountId || encoder.encode(raw).length > 2048) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized" })); return; }
+      try { await this.irc.message(ws, session, data); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable" })); }
       return;
     }
 
@@ -204,7 +318,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.cosmeticCredits < 1) { ws.serializeAttachment(session); ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "rate_limited" })); return; }
       session.cosmeticCredits--; ws.serializeAttachment(session);
       if (data.type === "cosmetics_link") {
-        if (!this.env.DISCORD_PUBLIC_KEY || !this.env.DISCORD_APPLICATION_ID) { ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "not_configured" })); return; }
+        if (!(this.env.DISCORD_USER_PUBLIC_KEY ?? this.env.DISCORD_PUBLIC_KEY) || !(this.env.DISCORD_USER_APPLICATION_ID ?? this.env.DISCORD_APPLICATION_ID)) { ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "not_configured" })); return; }
+        if (!legacyRelay(this.env)) {
+          const result = await this.env.ACCOUNT_STORE.getByName("global").issueMinecraftLink(session.uuid!, session.name, session.discordId!);
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, ...result }));
+          return;
+        }
         const code = newLinkCode();
         const result = this.cosmetics.issue(session.uuid!, await codeHash(normalizedCode(code)!), now);
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, ...result, ...(result.error ? {} : { code }) }));
@@ -261,7 +380,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           for (const peer of this.ctx.getWebSockets()) {
             const recipient = peer.deserializeAttachment() as Session;
             if (peer !== ws && peer.readyState === WebSocket.OPEN && recipient.name && recipient.rngSubscribed) {
-              try { peer.send(packet); } catch { /* Recipient disconnected during delivery. */ }
+              if (await this.authorized(peer, recipient)) try { peer.send(packet); } catch { /* Recipient disconnected during delivery. */ }
             }
           }
         }
@@ -291,7 +410,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         }
         session.party = party;
         ws.serializeAttachment(session);
-        if (changed) this.broadcast(ws, { type: "party_update", name: session.name, uuid: session.uuid, ...party });
+        if (changed) await this.broadcast(ws, { type: "party_update", name: session.name, uuid: session.uuid, ...party });
         return;
       }
       if (typeof data.id !== "string" || !uuid.test(data.id) || !Array.isArray(data.names) || data.names.length > 32 ||
@@ -404,7 +523,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         const ownRefresh = session.liveUpdates === true && data.uuid === session.uuid && data.name.toLowerCase() === session.name.toLowerCase();
         const stored = this.stats.put(record, session.uuid!, now, ownRefresh);
         ws.send(JSON.stringify({ type: "stats_result", id: data.id, stored }));
-        if (stored) this.broadcast(ws, { type: "stats_update", record });
+        if (stored) await this.broadcast(ws, { type: "stats_update", record });
       }
       return;
     }
@@ -450,6 +569,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       ws.send(JSON.stringify({ type: "error", id: data.id, code: "offline" })); return;
     }
     try {
+      if (!await this.authorized(target, target.deserializeAttachment() as Session)) {
+        ws.send(JSON.stringify({ type: "error", id: data.id, code: "offline" })); return;
+      }
       if (!receiptMessage) {
         const recipient = target.deserializeAttachment() as Session;
         if (ordinary && !recipient.userMessages) { ws.send(JSON.stringify({ type: "error", id: data.id, code: "recipient_unsupported" })); return; }
@@ -470,12 +592,65 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     }
   }
 
-  private broadcast(sender: WebSocket, packet: object): void {
+  private async migrateLegacyAccounts(room: string): Promise<boolean> {
+    const sql = this.ctx.storage.sql;
+    const previous = sql.exec<{ cursor: string; done: number }>("SELECT cursor,done FROM account_migration_state WHERE id=1").toArray()[0];
+    if (previous?.done) return true;
+    const rows = sql.exec<{ discord: string; uuid: string; linked_at: number }>(
+      "SELECT discord,uuid,linked_at FROM cosmetics_links WHERE discord>? ORDER BY discord LIMIT 250", previous?.cursor ?? "").toArray();
+    if (rows.length) {
+      const result = await this.env.ACCOUNT_STORE.getByName("global").importCosmeticLinks(room, rows);
+      if (result.conflicts) console.warn({ event: "legacy_account_conflict", count: result.conflicts, room });
+    }
+    // Global import is idempotent, so a crash between stores cannot transfer ownership or duplicate a grant.
+    sql.exec("INSERT INTO account_migration_state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET cursor=MAX(cursor,excluded.cursor),done=MAX(done,excluded.done)",
+      rows.at(-1)?.discord ?? previous?.cursor ?? "", rows.length < 250 ? 1 : 0);
+    return rows.length < 250;
+  }
+
+  private async authorized(ws: WebSocket, session: IrcSession): Promise<boolean> {
+    if (session.bridge) return true;
+    if (legacyRelay(this.env)) return true;
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      if (!session.accountId || !session.uuid || !session.installationId || session.generation === undefined) {
+        ws.close(4005, "Authorization required"); return false;
+      }
+      if (!session.leaseExpiresAt || session.leaseExpiresAt <= Date.now()) {
+        ws.close(4006, "Authorization renewal required"); return false;
+      }
+      const state = await this.env.ACCOUNT_STORE.getByName("global").checkSession({ accountId: session.accountId,
+        uuid: session.uuid, installationId: session.installationId, generation: session.generation });
+      if (!state.ok) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error === "license_revoked" ? "license_revoked" : "not_authorized" }));
+          ws.close(4005, "Sky-Myce authorization denied. Contact the owners.");
+        }
+        return false;
+      }
+      return ws.readyState === WebSocket.OPEN;
+    } catch {
+      // An unavailable authority cannot grant online access, but it is not a revocation.
+      if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Authorization service unavailable");
+      return false;
+    }
+  }
+
+  /** Binding-only revocation push. Current state is still checked on every protected request. */
+  async invalidateAccount(accountId: string): Promise<void> {
+    for (const ws of this.ctx.getWebSockets()) {
+      const session = ws.deserializeAttachment() as Session;
+      if (session.accountId === accountId && ws.readyState === WebSocket.OPEN) await this.authorized(ws, session);
+    }
+  }
+
+  private async broadcast(sender: WebSocket, packet: object): Promise<void> {
     const text = JSON.stringify(packet);
     for (const peer of this.ctx.getWebSockets()) {
       const session = peer.deserializeAttachment() as Session;
       // Older clients reject unknown packet types. Opt-in survives hibernation with the socket.
       if (peer !== sender && peer.readyState === WebSocket.OPEN && session.name && session.liveUpdates) {
+        if (!await this.authorized(peer, session)) continue;
         try { peer.send(text); } catch { /* The recipient disconnected during delivery. */ }
       }
     }
@@ -485,7 +660,11 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     let next = Infinity;
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
-      if (session.name) continue;
+      if (session.bridge || ws.readyState !== WebSocket.OPEN) continue;
+      if (session.name) {
+        if (!legacyRelay(this.env) && await this.authorized(ws, session)) next = Math.min(next, Date.now() + 30_000, session.leaseExpiresAt!);
+        continue;
+      }
       if (session.expires <= Date.now()) {
         console.warn({ event: "authentication_rejected", category: "challenge_timeout", retryable: true });
         ws.close(1008, "Authentication timed out");

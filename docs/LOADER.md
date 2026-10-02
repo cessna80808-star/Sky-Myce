@@ -193,7 +193,7 @@ restore it through fresh authorization; never disable verification to
 recover. Fabric discovery happens before this hook, so another malicious mod
 or a modified Fabric loader is outside the host trust boundary.
 
-## Linux launch authorization
+## Runtime authorization sessions
 
 Loader **1.0.10** gives each game process a new random authorization session ID.
 The ID stays in memory and is reused across retries, activation and lease renewal;
@@ -201,15 +201,11 @@ it is never saved or carried into a restarted process. Each launch still require
 the existing fresh Minecraft and installation proofs before protected features load.
 The standalone installer only installs verified files; it grants no authorization.
 
-Backend `LINUX_REQUIRE_REAUTH_ON_EVERY_LAUNCH=true` enables automatic Linux launch
-reauthorization. A successfully authorized new Linux session replaces the previous
-session. Old leases and renewal requests are rejected by the backend, including
-relay and artifact access. Retries within the active process renew the same session.
-This policy can be disabled with `false` without rebuilding the mod or loader.
-Missing configuration preserves the standard policy; invalid values fail closed.
-Windows, macOS and other platforms retain the standard authorization policy.
-Enabling the policy while an untracked Linux session is already running requires
-that instance to close and relaunch before it can authorize under the new policy.
+Linux, Windows, macOS and other platforms use the same persistent-device policy.
+The obsolete `LINUX_REQUIRE_REAUTH_ON_EVERY_LAUNCH` setting is ignored. New runtime
+session IDs do not replace the HWID, invalidate another legitimate same-device
+session, require another activation code or consume a hardware transfer.
+Retries and lease renewal retain the same runtime session ID.
 
 Launch authorization never clears or changes the persistent HWID, installation
 key or seven-day hardware-transfer cooldown. Boot, shutdown, suspend and login
@@ -233,26 +229,54 @@ Identity is shared by Minecraft instances belonging to the same OS user in
 `~/.sky-myce/device-v1/`. It contains:
 
 - A random installation UUID and an Ed25519 keypair.
-- A SHA-256 device identifier over a product-specific label and two random
-  local UUIDs, created once and retained outside Minecraft's instance folder.
+- A persistent opaque device reference, created once and retained outside
+  Minecraft's instance folder. Existing references and keys survive upgrades.
+- A selected hardware source. Its product-specific SHA-256 identifier is
+  recalculated on launch and included in the signed installation proof;
+  the backend pins it after successful authentication. Windows uses the
+  SMBIOS system UUID, falling back to the persistent OS `MachineGuid`;
+  Linux uses a readable DMI UUID, falling back to the
+  persistent OS machine ID; macOS uses `IOPlatformUUID`. The selected source
+  is retained so a newly readable source never changes an existing identity.
 - The last signed lease, retained as a boundary/audit aid, **never** used to
   authorize an offline restart.
 
-No MAC, hardware serial, product key, hostname, machine registry identifier,
-Minecraft token or Discord token participates or is uploaded. The private key
+No raw hardware identifier, MAC, product key, hostname, Minecraft token or
+Discord token is uploaded or logged. Only the opaque hardware hash participates
+in authorization. The private key
 is protected with Windows DPAPI `CurrentUser`, with a product-specific entropy
 label and an owner-only ACL. On POSIX it is stored under a `0700` directory in
 a `0600` file. Creation is serialized with an OS file lock.
 
 Copying the Minecraft instance does not copy this identity. Copying Windows
 key ciphertext to another machine/user does not make DPAPI decrypt it. A user
-who controls their host can export/spoof a software identity; POSIX permissions
-do not resist the account owner. A different OS user is a different device
-identity. These are explicit limits, not claims of physical hardware proof.
+who controls their host can export/spoof a software identity and hardware
+inputs; POSIX permissions do not resist the account owner. The OS machine-ID
+fallback identifies an OS installation rather than an immutable physical
+machine, and virtual machines can clone/spoof their firmware UUID. Unsupported
+platforms retain the persistent software identity without hardware commands.
+These are explicit software trust limits, not claims of hardware attestation.
+Copying an identity to a machine with another hardware identifier causes a
+backend `HWID_MISMATCH`; the client never trusts a cached hardware hash.
+If the selected source becomes temporarily inaccessible, authorization pauses
+with retry guidance; the identity and binding remain intact.
 Deleting the identity creates a new installation that the server rejects
 until the account's reset/re-enrollment policy permits it.
 
-### Linux and moving installations
+### Persistent enrollment and moving installations
+
+Enroll once, then use the same device normally. Linux and Windows use the same
+persistent binding policy. Reopening Minecraft or the loader, rebooting,
+shutdown/startup, suspend/resume, logout/login, software updates, WebSocket
+reconnection, lease expiry/renewal and IP/network/VPN changes never reset the
+HWID or consume a hardware transfer. An existing device does not need another
+activation code merely because a runtime session ended. The backend remains
+authoritative for enrollment, verification and deliberate binding changes.
+
+Normal hardware transfers use a seven-day cooldown that applies only to actual
+binding changes. Admin emergency resets and deliberate security invalidation
+revoke the affected authorization and are audited; normal launches never
+produce HWID-reset events.
 
 Ubuntu uses the same loader JAR, activation window, signed self-update and
 launcher-independent restart. Use Java 25 with desktop/AWT support in Prism;
@@ -265,18 +289,19 @@ Minecraft account or verify every launcher sandbox.
 An OS reinstall, switching from Windows to Linux, or a launcher package with
 a different Java `user.home` can produce a new installation identity. Keep
 `~/.sky-myce/device-v1/` private and persistent; deleting it does not fix sign-in.
-If the loader reports `device_reset_required`, a Sky-Myce admin must use
-the Backend Bot's `/hwid reset user:<Discord user>` before the replacement
-installation can activate. This revokes the old installation. Retry the newest
-unexpired, unused activation code afterward; `/authorise` by itself does not
-reset the device. The desktop and in-game menus now explain this restriction
-instead of giving a generic authorization error.
+If the loader reports `HWID_MISMATCH` (or legacy `device_reset_required`), use
+the User Bot's `/hwid reset confirm:true` for an intentional hardware transfer
+after the seven-day cooldown.
+An emergency `/hwid reset user:<Discord user>` is an explicit administrator
+action and revokes the old installation. Retry the newest unexpired, unused
+activation code afterward; `/authorise` by itself does not reset the device.
+The desktop and in-game menus explain this restriction.
 
 ## Leases, revocation and outages
 
 Public signing keys are compiled into the loader. Server replies cannot add
 keys. Lease claims bind account, Discord ID, Minecraft UUID, installation,
-device hash, public-key fingerprint, product/version, generation, features and
+device hash, hardware hash, public-key fingerprint, product/version, generation, features and
 the **exact request challenge ID and freshly generated client nonce**. The
 client nonce is retained from the outgoing request, never taken from an echoed
 server field. Replaying an old challenge response together with its signed lease

@@ -1,0 +1,14 @@
+{
+  "name": "sky-myce-discord-bots",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "node --env-file=.env src/user-bot.mjs",
+    "test": "node --test test/*.test.mjs",
+    "register:user": "node --env-file=.env src/register.mjs user",
+    "register:backend": "node --env-file=.env.backend src/register.mjs backend"
+  },
+  "dependencies": { "discord.js": "14.27.0", "ws": "8.22.0" }
+}

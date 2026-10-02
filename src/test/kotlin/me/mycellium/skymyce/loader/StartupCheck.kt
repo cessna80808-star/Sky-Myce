@@ -47,9 +47,12 @@ fun checkStartup() {
     check("prevent a relaunch loop" in startupError(StartupHandoffLimit()))
     val deviceHelp = requireNotNull(accountAccessError("device_reset_required"))
     check("/hwid reset" in deviceHelp && "new code alone cannot switch devices" in deviceHelp)
+    check("User Bot's /hwid reset confirm:true" in deviceHelp && "explicit emergency reset" in deviceHelp)
     check(startupError(AuthorizationDenied("device_reset_required")) == deviceHelp)
-    for (code in listOf("device_reset_required", "device_owned", "device_revoked", "minecraft_account_owned", "minecraft_proof_invalid", "version_denied",
-        "loader_update_required", "launch_authorization_required", "platform_changed", "authorization_revoked")) {
+    check("seven-day cooldown" in deviceHelp)
+    check("Do not reset your HWID" in startupError(HardwareIdentityUnavailable()))
+    for (code in listOf("HWID_MISMATCH", "device_reset_required", "device_reset_cooldown", "device_transfer_cooldown", "device_owned", "device_revoked",
+        "minecraft_account_owned", "minecraft_proof_invalid", "version_denied", "loader_update_required", "launch_authorization_required", "platform_changed", "authorization_revoked")) {
         check(!startupActivationAllowed(code)) // Another code must never bypass an account/device restriction.
         check(code in requireNotNull(accountAccessError(code)))
     }

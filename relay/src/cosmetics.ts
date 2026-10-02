@@ -77,7 +77,7 @@ export class PlayerCosmetics {
       return { expiresAt };
     });
   }
-  async command(command: DiscordCommand, env: CosmeticsConfig, now: number): Promise<{ response: object; changed?: CosmeticProfile }> {
+  async command(command: DiscordCommand, env: CosmeticsConfig, now: number, authority?: { uuid: string }): Promise<{ response: object; changed?: CosmeticProfile }> {
     if (command.channel !== (env.COSMETICS_COMMAND_CHANNEL ?? COSMETICS_CHANNEL)) return { response: ephemeral(`Use cosmetic commands in <#${env.COSMETICS_COMMAND_CHANNEL ?? COSMETICS_CHANNEL}>.`) };
     const code = normalizedCode(command.options.code);
     const hash = command.action === "link" && code ? await codeHash(code) : null;
@@ -95,6 +95,7 @@ export class PlayerCosmetics {
       if (count > 6) return { response: ephemeral("Too many cosmetic commands. Wait a minute and try again.") };
       try {
         if (command.action === "link") {
+          if (authority) message("Use the Sky-Myce account linking command.");
           if (!hash || Object.keys(command.options).some(it => it !== "code")) message("Use the one-time code shown by /sm cosmetics link in Minecraft.");
           const challenge = sql.exec<{ uuid: string; expires: number }>("SELECT uuid, expires FROM cosmetics_challenges WHERE hash = ?", hash).toArray()[0];
           if (!challenge || challenge.expires <= now) message("That link code is expired or was already used. Request a new one in Minecraft.");
@@ -108,13 +109,13 @@ export class PlayerCosmetics {
           this.audit(challenge.uuid, command.actor, "link", this.get(challenge.uuid).revision, now);
           return { response: ephemeral("Minecraft account linked. Any previous Discord owner of this Minecraft account has lost access. Use /cosmetics set to customize your cosmetics.") };
         }
-        const linked = sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
+        const linked = authority?.uuid ?? sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
         const target = linked;
         if (!target) message("Link your Minecraft account first with /sm cosmetics link, then /cosmetics link.");
         const allowed = command.action === "set" ? ["name", "x", "y", "z"] : command.action === "unlink" ? ["confirm"] : [];
         if (Object.keys(command.options).some(it => !allowed.includes(it))) message("Unsupported cosmetic option.");
         const current = this.get(target);
-        if (command.action === "show") return { response: ephemeral(`Minecraft UUID: ${target}\nDisplay name: ${current.name ?? "real IGN"}\nSize X: ${current.scaleX}, Y: ${current.scaleY}, Z: ${current.scaleZ}\nRevision: ${current.revision}\nOnly supporting Sky-Hawk clients see these settings.`) };
+        if (command.action === "show") return { response: ephemeral(`Minecraft UUID: ${target}\nDisplay name: ${current.name ?? "real IGN"}\nSize X: ${current.scaleX}, Y: ${current.scaleY}, Z: ${current.scaleZ}\nRevision: ${current.revision}\nOnly supporting Sky-Myce clients see these settings.`) };
         if (command.action === "unlink" && command.options.confirm !== true) message("Use /cosmetics unlink confirm:true to remove the account link and reset cosmetics.");
         if (command.action === "set" && Object.keys(command.options).length === 0) message("Provide name, x, y or z, or use /cosmetics reset.");
         const reset = command.action === "reset" || command.action === "unlink";
@@ -128,7 +129,7 @@ export class PlayerCosmetics {
           ON CONFLICT(uuid) DO UPDATE SET display_name=excluded.display_name,scale=excluded.scale,revision=cosmetics_public.revision+1,updated_at=excluded.updated_at,
           name_json=excluded.name_json,scale_x=excluded.scale_x,scale_y=excluded.scale_y,scale_z=excluded.scale_z`,
           target, name.plain, y, now, name.component ? JSON.stringify(name.component) : null, x, y, z);
-        if (command.action === "unlink") {
+        if (command.action === "unlink" && !authority) {
           sql.exec("DELETE FROM cosmetics_links WHERE discord = ?", command.actor);
           sql.exec("UPDATE cosmetics_challenges SET hash = 'revoked:' || hash WHERE uuid = ?", target);
         }

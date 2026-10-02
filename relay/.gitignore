@@ -1,8 +1,11 @@
 node_modules/
 .wrangler/
 .test-build/
+.backend-build/
 .dev.vars*
 .env*
+!.env.example
+!.dev.vars.example
 worker-configuration.d.ts
 access-code.txt
 codex-original-scaffold/

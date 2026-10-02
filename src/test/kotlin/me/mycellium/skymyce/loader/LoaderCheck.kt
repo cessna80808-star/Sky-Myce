@@ -34,9 +34,10 @@ fun main() {
     val now = System.currentTimeMillis()
     val temporary = Files.createTempDirectory("sky-myce-loader-check")
     try {
+        checkInstallation(temporary.resolve("hardware"))
         val installation = Installation(temporary.resolve("identity"))
         val reload = Installation(temporary.resolve("identity"))
-        check(installation.id == reload.id && installation.publicKey == reload.publicKey && installation.deviceHash == reload.deviceHash)
+        check(installation.id == reload.id && installation.publicKey == reload.publicKey && installation.deviceHash == reload.deviceHash && installation.hardwareHash == reload.hardwareHash)
         checkLaunchProof(installation, config)
         if (Files.getFileStore(temporary).supportsFileAttributeView("posix")) {
             val identity = temporary.resolve("identity")
@@ -99,6 +100,7 @@ fun main() {
             addProperty("product", "sky-myce"); addProperty("protocol", 3); addProperty("accountId", "account")
             addProperty("discordId", "1250627753191931914"); addProperty("uuid", uuid)
             addProperty("installationId", installation.id); addProperty("deviceHash", installation.deviceHash)
+            addProperty("hardwareHash", installation.hardwareHash)
             addProperty("keyFingerprint", SignedFiles.sha256(Base64.getDecoder().decode(installation.publicKey)))
             addProperty("version", "2.4.2"); addProperty("minecraft", "26.1.2"); addProperty("iat", now)
             addProperty("exp", now + 300000); addProperty("offlineUntil", now + 900000); addProperty("generation", 0); addProperty("jti", "unique")
@@ -114,6 +116,7 @@ fun main() {
         }
         val lease = token(claims)
         verifyLease(lease, config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce")
+        reject { verifyLease(token(claims.deepCopy().apply { remove("hardwareHash") }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         reject { verifyLease(lease.dropLast(10) + "AAAAAAAAAA", config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         reject { verifyLease(lease, config, copiedGame, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         reject { verifyLease(lease, config, installation, "b".repeat(32), "2.4.2", "request-1", "fresh-client-nonce") }
@@ -121,7 +124,7 @@ fun main() {
         reject { verifyLease(lease, config, installation, uuid, "2.4.2", "different-request", "fresh-client-nonce") }
         // Even replaying both the old challenge response and its matching lease cannot match a new local nonce.
         reject { verifyLease(lease, config, installation, uuid, "2.4.2", "request-1", "another-fresh-client-nonce") }
-        listOf("product" to "other", "deviceHash" to "b".repeat(64), "keyFingerprint" to "b".repeat(64), "minecraft" to "26.3",
+        listOf("product" to "other", "deviceHash" to "b".repeat(64), "hardwareHash" to "b".repeat(64), "keyFingerprint" to "b".repeat(64), "minecraft" to "26.3",
             "platform" to "invalid", "launchSessionId" to UUID.randomUUID().toString()).forEach { (key, value) ->
             reject { verifyLease(token(claims.deepCopy().apply { addProperty(key, value) }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         }
@@ -145,6 +148,7 @@ fun main() {
         state.accept(lease, claims, now); check(state.onlineAllowed)
         val beforeRevocation = state.generation
         state.deny(); state.unavailable(); check(!state.localAllowed && !state.onlineAllowed)
+        check(Installation(temporary.resolve("identity")).hardwareHash == installation.hardwareHash) // Session denial/expiry never resets hardware.
         reject { state.accept(lease, claims, now, beforeRevocation) }
         check(!state.localAllowed) // An in-flight pre-revoke renewal cannot re-enable the mod.
         LaunchSession.accept()
@@ -169,6 +173,7 @@ private fun checkLaunchProof(installation: Installation, config: Properties) {
     val renewal = LoaderApi(config, installation, "2.4.2").challengeInput("renew", false, nonce)
     check(first["launchSessionId"] == LaunchSession.id && first["platform"] == LaunchSession.platform && first["startSession"] == true)
     check(renewal["launchSessionId"] == first["launchSessionId"] && renewal["startSession"] == false)
+    check(first["hardwareHash"] == installation.hardwareHash && renewal["hardwareHash"] == first["hardwareHash"])
     check(UUID.fromString(LaunchSession.id).version() == 4)
     check(!LaunchSession.authorized)
     val publicKey = KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(installation.publicKey)))
@@ -177,9 +182,9 @@ private fun checkLaunchProof(installation: Installation, config: Properties) {
             val challenge = JsonObject().apply {
                 addProperty("nonce", "a".repeat(43)); addProperty("clientNonce", nonce); addProperty("startSession", start)
                 // Server-echoed platform/ID cannot replace this process's signed metadata.
-                addProperty("platform", "invalid"); addProperty("launchSessionId", UUID.randomUUID().toString())
+                addProperty("platform", "invalid"); addProperty("launchSessionId", UUID.randomUUID().toString()); addProperty("hardwareHash", "b".repeat(64))
             }
-            val message = "Sky-Myce installation v2\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n26.1.2\n1.0.0\n2.4.2\n$nonce\n${LaunchSession.platform}\n${LaunchSession.id}\n$start"
+            val message = "Sky-Myce installation v3\n$purpose\n${challenge.get("nonce").asString}\n${installation.id}\n${installation.deviceHash}\n26.1.2\n1.0.0\n2.4.2\n$nonce\n${installation.hardwareHash}\n${LaunchSession.platform}\n${LaunchSession.id}\n$start"
             val signature = Base64.getDecoder().decode(api.signature(purpose, challenge))
             fun verifies(text: String) = Signature.getInstance("Ed25519").run {
                 initVerify(publicKey); update(text.toByteArray()); verify(signature)
@@ -188,6 +193,7 @@ private fun checkLaunchProof(installation: Installation, config: Properties) {
             check(!verifies(message.substringBeforeLast('\n') + "\n${!start}"))
             check(!verifies(message.replace(LaunchSession.id, UUID.randomUUID().toString())))
             check(!verifies(message.replace("\n${LaunchSession.platform}\n", "\ninvalid\n")))
+            check(!verifies(message.replace(installation.hardwareHash, "b".repeat(64))))
         }
     }
     check(launchPlatform("Linux") == "linux" && launchPlatform("LINUX") == "linux")
@@ -209,6 +215,7 @@ private fun checkLaunchProcesses(identity: Path, expected: Installation) {
             check(child.exitValue() == 0) { "Launch session child failed: $output" }
             val result = com.google.gson.JsonParser.parseString(output).asJsonObject
             check(result.get("id").asString == expected.id && result.get("deviceHash").asString == expected.deviceHash && result.get("publicKey").asString == expected.publicKey)
+            check(result.get("hardwareHash").asString == expected.hardwareHash)
             check(result.get("platform").asString == LaunchSession.platform)
             check(ids.add(result.get("launchSessionId").asString))
             check(!result.get("authorized").asBoolean && !result.get("localAllowed").asBoolean)
@@ -221,9 +228,9 @@ object LaunchSessionCheckChild {
     @JvmStatic fun main(arguments: Array<String>) {
         val installation = Installation(Path.of(arguments.single()))
         val again = Installation(Path.of(arguments.single()))
-        check(installation.id == again.id && installation.deviceHash == again.deviceHash && installation.publicKey == again.publicKey)
+        check(installation.id == again.id && installation.deviceHash == again.deviceHash && installation.publicKey == again.publicKey && installation.hardwareHash == again.hardwareHash)
         check(Files.exists(Path.of(arguments.single()).resolve("last-signed-lease")))
-        println(Gson().toJson(mapOf("id" to installation.id, "deviceHash" to installation.deviceHash, "publicKey" to installation.publicKey,
+        println(Gson().toJson(mapOf("id" to installation.id, "deviceHash" to installation.deviceHash, "hardwareHash" to installation.hardwareHash, "publicKey" to installation.publicKey,
             "launchSessionId" to LaunchSession.id, "platform" to LaunchSession.platform, "authorized" to LaunchSession.authorized,
             "localAllowed" to AuthorizationState().localAllowed)))
     }
