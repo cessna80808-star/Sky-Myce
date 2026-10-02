@@ -1,11 +1,11 @@
-# Loader 1.0.12 protocol repair — prepared October 2, 2026
+# Loader 1.0.12 protocol repair — deployed October 2, 2026
 
-The live account Worker rejects the current hardware-bound v3 installation proof
+The previous account Worker rejected the current hardware-bound v3 installation proof
 as `installation_proof_invalid`. An anonymous compatibility check with fresh keys
 confirmed that the same endpoint accepts the older v2 transcript and proceeds to
 `minecraft_proof_required`. No Minecraft credentials or account proofs were used.
 
-The prepared rollout targets only `sky-myce-backend` (`--env backend`), deploys
+The rollout targets only `sky-myce-backend` (`--env backend`), deploys
 the repository's v3 verifier, and selects private
 `loaders/Sky-Myce-Loader-1.0.12.jar` with `loaders/manifest-1.0.12.json`.
 Minimum loader becomes 1.0.11. The signed protected mod remains the exact existing
@@ -14,7 +14,8 @@ Minimum loader becomes 1.0.11. The signed protected mod remains the exact existi
 Installation proofs, lease verification and renewals are owned by the separate loader JAR.
 Keep the existing signer, secret bindings, storage namespaces and account/device
 records. Upload and verify the new loader first, then both signed manifests, before
-deploying the configured Worker. This rollout is **prepared, not deployed**.
+deploying the configured Worker. The user approved publication and deployment.
+Account Worker version: `b88b559f-b9ab-48bb-a613-2323075d72ea`.
 
 After deployment, repeat the anonymous v3 check: it must pass installation proof
 verification and stop at `minecraft_proof_required`. Verify the live loader
@@ -23,6 +24,21 @@ hash, then verify startup and later renewal in the user's existing instance.
 An unsupported loader, missing account proof or unauthenticated artifact request
 must still be rejected. A new activation code or HWID reset cannot fix a protocol
 mismatch.
+
+Verified after deployment: both live manifests have valid signatures under the
+existing pinned public key; private R2 readbacks match the prepared files. Loader
+1.0.12 SHA-256: `98960fd754817e4504b88eb470fbacdee1b6ef9961562f1f221e96a4963cdea8`.
+Protected mod 2.4.12 retains SHA-256
+`85a5df8de2f4e5ccf3b10f24a0ef72f793059a52040e09a7a976c11754ea189d`.
+The live v3 probe now reaches `minecraft_proof_required`; a v2 transcript for the
+same hardware-bound input is rejected. Unauthenticated artifact requests remain
+blocked. Full Java 25 `check build`, relay tests, typecheck and the backend dry run
+passed. Loader 1.0.12 is installed in the user's existing Prism instance with a
+backup. The verification launch passed startup, automatically installed the exact
+signed production mod, and reached Minecraft's renderer. A read-only JVM check
+confirmed startup was not skipped, local and online access were allowed, no restart
+was pending, and an in-game renewal was accepted after the initial startup renewal
+deadline. The diagnostic recorded only booleans, without credentials or identities.
 
 # Loader 1.0.1 / mod 2.4.4 deployment — September 27, 2026
 
