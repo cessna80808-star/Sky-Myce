@@ -81,10 +81,10 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
                 } }.wrappedTooltip(Component.literal("Keep up to eight searches, including filters and sort order.")))
                 child(button("Reset", 45) { change(AuctionSearch()); rebuild() })
             })
-            if (expanded && height >= 340) child(UIContainers.verticalScroll(Sizing.fill(), Sizing.fixed(76), filters()).apply { scrollStep(20) })
+            if (expanded && height >= 340) child(menuScroll(Sizing.fill(), Sizing.fixed(76), filters()).apply { scrollStep(20) })
             status = label("", MenuTheme.MUTED); child(status)
             count = label("Searching cached auctions…", MenuTheme.MUTED); child(count)
-            scroll = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), column()).apply {
+            scroll = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(30)
             }
             child(scroll)
@@ -154,7 +154,10 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
                 val found = query.results(snapshot.auctions)
                 MC.instance.execute {
                     filterBusy = false
-                    if (!closed && revision == queryRevision) { matches = found; renderResults() }
+                    if (!closed && revision == queryRevision) {
+                        val changed = matches != found
+                        matches = found; renderResults(animate = changed)
+                    }
                 }
             }
         }
@@ -171,7 +174,8 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
         status.text(Component.literal("${if (view.stale) "Stale • " else ""}${view.coverage}\n${view.message}").withColor(if (view.stale) MenuTheme.YELLOW else MenuTheme.MUTED))
     }
 
-    private fun renderResults() {
+    private fun renderResults(direction: Int = 1, animate: Boolean = true) {
+        if (animate) contentChanged(direction)
         cardsRevision++; clocks.clear()
         val pageCount = ((matches.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
         search = search.copy(page = search.page.coerceIn(0, pageCount - 1))
@@ -241,8 +245,8 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
         val seconds = (auction.remaining / 1000).coerceAtLeast(0)
         return if (seconds == 0L) "Expired" else "Ends in ${seconds / 3600}h ${seconds / 60 % 60}m ${seconds % 60}s"
     }
-    private fun changePage(delta: Int) { if (selected == null) { search = search.copy(page = (search.page + delta).coerceAtLeast(0)); renderResults() } }
-    private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    private fun changePage(delta: Int) { if (selected == null) { search = search.copy(page = (search.page + delta).coerceAtLeast(0)); renderResults(delta) } }
+    private fun rebuild() { rebuildMenu() }
     private fun menu(button: ButtonComponent, entries: (DropdownComponent) -> Unit) = openMenuDropdown(button, entries)
     private fun column(w: Sizing = Sizing.fill(), h: Sizing = Sizing.content()) = UIContainers.verticalFlow(w, h).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }

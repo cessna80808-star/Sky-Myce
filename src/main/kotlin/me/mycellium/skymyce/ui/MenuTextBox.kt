@@ -24,6 +24,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
     private var lastCursor = -1
     private var lastValue = ""
     private var caretEpoch = System.nanoTime()
+    private val focusMotion = MotionValue(0.0)
 
     init { setTextShadow(false) }
 
@@ -100,7 +101,16 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
     override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         if (!isVisible) return
         updateScroll()
-        if (isBordered) MenuTheme.drawField(g, x, y, width, height, isFocused)
+        focusMotion.animateTo(if (isFocused) 1.0 else 0.0, 120, MotionEasing.QUICK,
+            me.mycellium.skymyce.config.misc.ThemeConfig.animationMode)
+        val focus = focusMotion.sample().coerceIn(0.0, 1.0)
+        if (isBordered) {
+            val graphics = g as MenuGraphics
+            MenuTheme.glow(graphics, x, y, width, height, focus)
+            MenuTheme.box(graphics, x, y, width, height, MenuTheme.CARD,
+                MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (focus * 100).toInt()))
+            if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
+        }
         val left = origin().roundToInt()
         val lineHeight = MenuCanvas.lineHeight()
         val top = y + (height - lineHeight) / 2

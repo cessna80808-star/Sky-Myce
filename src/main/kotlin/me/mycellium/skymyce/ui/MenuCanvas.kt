@@ -19,9 +19,13 @@ class MenuCanvas {
     data class Transform(val a: Double = 1.0, val b: Double = 0.0, val c: Double = 0.0, val d: Double = 1.0, val x: Double = 0.0, val y: Double = 0.0)
     data class Clip(val x: Int, val y: Int, val width: Int, val height: Int)
     data class Run(val text: String, val color: Int, val bold: Boolean = false, val italic: Boolean = false, val underline: Boolean = false)
-    private data class Paint(val kind: Int, val values: List<Double>, val colors: List<Int>, val runs: List<Run>, val transform: Transform, val clip: Clip?, val picture: BufferedImage? = null)
+    private data class Paint(val kind: Int, val values: List<Double>, val colors: List<Int>, val runs: List<Run>, val transform: Transform, val clip: Clip?, val picture: BufferedImage? = null, val opacity: Double = 1.0, val group: String? = null)
     var transform = Transform()
     var clip: Clip? = null
+    var opacity = 1.0
+    var group: String? = null
+    /** A bounded inert raster captured on interaction, never a live screen, adapter, or texture. */
+    class Snapshot internal constructor(internal val replay: (MenuCanvas, Double, Double, Double, Clip?) -> Unit)
     private val pending = ArrayList<Paint>()
     private var previous = emptyList<Paint>()
     private var previousScale = Double.NaN
@@ -35,9 +39,9 @@ class MenuCanvas {
     var dirtyRegion: Rectangle? = null
         private set
 
-    fun begin() { pending.clear(); transform = Transform(); clip = null }
+    fun begin() { pending.clear(); transform = Transform(); clip = null; opacity = 1.0; group = null }
     private fun add(kind: Int, values: List<Double>, colors: List<Int> = emptyList(), runs: List<Run> = emptyList()) {
-        pending += Paint(kind, values, colors, runs, transform, clip)
+        if (opacity > 0) pending += Paint(kind, values, colors, runs, transform, clip, opacity = opacity.coerceIn(0.0, 1.0), group = group)
     }
     fun fill(x: Double, y: Double, width: Double, height: Double, color: Int) {
         if (width > 0 && height > 0 && color ushr 24 != 0) add(0, listOf(x, y, width, height), listOf(color))
@@ -49,8 +53,36 @@ class MenuCanvas {
     fun text(runs: List<Run>, x: Double, y: Double, size: Double = 10.0) = add(3, listOf(x, y, size), runs = runs)
     fun line(x1: Double, y1: Double, x2: Double, y2: Double, thickness: Double, color: Int) = add(4, listOf(x1, y1, x2, y2, thickness), listOf(color))
     fun picture(image: BufferedImage, x: Double, y: Double, width: Double, height: Double) {
-        pending += Paint(5, listOf(x, y, width, height), emptyList(), emptyList(), transform, clip, image)
+        if (opacity > 0) pending += Paint(5, listOf(x, y, width, height), emptyList(), emptyList(), transform, clip, image, opacity.coerceIn(0.0, 1.0), group)
     }
+
+    fun snapshot(group: String): Snapshot? {
+        val prefix = "$group/"
+        val commands = previous.filter { it.group == group || it.group?.startsWith(prefix) == true }
+        if (commands.isEmpty()) return null
+        val source = image ?: return null
+        val scale = previousScale
+        var area: Rectangle? = null
+        commands.forEach { command -> physicalBounds(command, source.width, source.height, scale)?.let {
+            area = area?.union(it) ?: it
+        } }
+        val region = area?.takeUnless { it.isEmpty } ?: return null
+        val captured = BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB)
+        val graphics = captured.createGraphics()
+        graphics.composite = AlphaComposite.Src
+        graphics.drawImage(source, -region.x, -region.y, null)
+        graphics.dispose()
+        val values = listOf(region.x / scale, region.y / scale, region.width / scale, region.height / scale)
+        // Flatten interrupted transitions once, so repeated A→B→C never grows a history of commands.
+        return Snapshot { destination, alpha, dx, dy, boundary ->
+            if (alpha > 0) destination.pending += Paint(5, values, emptyList(), emptyList(), Transform(x = dx, y = dy),
+                boundary, captured, alpha.coerceIn(0.0, 1.0), destination.group)
+        }
+    }
+    fun replay(snapshot: Snapshot, alpha: Double = 1.0, x: Double = 0.0, y: Double = 0.0, boundary: Clip? = null) =
+        snapshot.replay(this, alpha * opacity, x, y, boundary)
+
+    fun close() { pending.clear(); previous = emptyList(); gradients.clear(); image = null; dirtyRegion = null }
 
     /** Hover/tooltips only repaint their old and new bounds, including the underlying menu layers. */
     fun finish(width: Int, height: Int, scale: Double = 2.0): BufferedImage {
@@ -78,11 +110,12 @@ class MenuCanvas {
             command.clip?.let { paint.clip(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
             val t = command.transform
             paint.transform(AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y))
+            if (command.opacity < 1.0) paint.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, command.opacity.toFloat())
             draw(paint, command, scale)
             paint.dispose()
         }
         g.dispose()
-        gradients.keys.retainAll(pending.filter { it.kind == 2 }.toSet())
+        gradients.keys.retainAll(pending.filter { it.kind == 2 }.map { gradientKey(it) }.toSet())
         previous = pending.toList(); previousScale = scale; revision++
         return image!!
     }
@@ -188,22 +221,19 @@ class MenuCanvas {
             }
             2 -> {
                 if (!visible(g, v[0], v[1], v[2], v[3])) return
-                // Java2D's gradient interpolation depends on the raster origin; reuse a stable layer.
-                val (region, layer) = gradients.getOrPut(p) {
-                    val region = physicalBounds(p, image!!.width, image!!.height, scale) ?: return
+                // Rasterize in local coordinates once. Motion/opacity/clip reuse the same layer.
+                val (region, layer) = gradients.getOrPut(gradientKey(p)) {
+                    val region = Rectangle(kotlin.math.floor(v[0] * scale).toInt(), kotlin.math.floor(v[1] * scale).toInt(),
+                        kotlin.math.ceil(v[2] * scale + 2).toInt().coerceAtLeast(1), kotlin.math.ceil(v[3] * scale + 2).toInt().coerceAtLeast(1))
                     val layer = BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB)
                     val paint = layer.createGraphics()
                     paint.setRenderingHints(g.renderingHints)
                     paint.translate(-region.x.toDouble(), -region.y.toDouble()); paint.scale(scale, scale)
-                    p.clip?.let { paint.clip(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
-                    val t = p.transform
-                    paint.transform(AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y))
                     drawGradient(paint, p)
                     paint.dispose()
                     region to layer
                 }
-                g.transform = AffineTransform()
-                g.drawImage(layer, region.x, region.y, null)
+                g.drawImage(layer, AffineTransform(1 / scale, 0.0, 0.0, 1 / scale, region.x / scale, region.y / scale), null)
             }
             3 -> {
                 var left = v[0]
@@ -251,6 +281,7 @@ class MenuCanvas {
         }
     }
     companion object {
+        private fun gradientKey(paint: Paint) = paint.copy(transform = Transform(), clip = null, opacity = 1.0, group = null)
         private val font: Font = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")!!.use { Font.createFont(Font.TRUETYPE_FONT, it) }.deriveFont(10f)
         private val fallback = Font(Font.SANS_SERIF, Font.PLAIN, 10)
         private val frc = FontRenderContext(null, true, true)

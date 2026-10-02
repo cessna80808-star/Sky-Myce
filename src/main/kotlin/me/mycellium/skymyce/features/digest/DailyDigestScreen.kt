@@ -108,7 +108,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                     }.tip("Cycle activity filter: dungeons, slayer and other detected sources"))
                 })
             }
-            results = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), column()).apply {
+            results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(accent)))
                 scrollbarThiccness(2); padding(Insets.right(4)); scrollStep(20)
             }
@@ -152,6 +152,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     private fun updateContent() {
         if (!::results.isInitialized) return
+        contentChanged()
         cards.clear()
         clocks.clear()
         results.child(column().apply {
@@ -185,6 +186,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     private fun updateCard(state: DigestCardState) {
         cards[state.id]?.let { panel ->
+            contentChanged()
             clocks.removeAll { it.first == state.id }
             panel.clearChildren()
             populateCard(panel, state)
@@ -296,15 +298,15 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             DailyDigest.setManual(id, !entry.manualComplete)
         }.tip("A local note for this profile, clearly labelled as manual. It does not change the game or claim automatic verification.")) }
         digestLink(entry.url)?.let { uri -> child(button("Open source", 90) {
-            MC.instance.setScreen(MenuConfirmScreen(this@DailyDigestScreen, "Open source in your browser?", uri.toString(), "Open browser") {
+            navigateMenu(MenuConfirmScreen(this@DailyDigestScreen, "Open source in your browser?", uri.toString(), "Open browser") {
                 net.minecraft.util.Util.getPlatform().openUri(uri)
             })
         }.tip("Open ${uri.host} in your browser after confirmation")) }
         if (page == "rng") child(MenuButton(Component.literal("Share…")) { anchor ->
             val report = digestShareText(entry)
             openMenuDropdown(anchor) { menu ->
-                menu.button(Component.literal("Party chat…")) { MC.instance.setScreen(ChatScreen("/pc $report", false)) }
-                menu.button(Component.literal("Guild chat…")) { MC.instance.setScreen(ChatScreen("/gc $report", false)) }
+                menu.button(Component.literal("Party chat…")) { navigateMenu(ChatScreen("/pc $report", false)) }
+                menu.button(Component.literal("Guild chat…")) { navigateMenu(ChatScreen("/gc $report", false)) }
                 menu.button(Component.literal("Copy report")) { MC.instance.keyboardHandler.clipboard = report; menu.parent()?.removeChild(menu) }
             }
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
@@ -319,7 +321,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     }
 
     private fun confirmClear() {
-        MC.instance.setScreen(MenuConfirmScreen(this, "Clear local RNG history?",
+        navigateMenu(MenuConfirmScreen(this, "Clear local RNG history?",
             "Remove the history saved for this account and profile. Already shared community reports are unaffected.", "Clear history") {
             DailyDigest.clearHistory()
         })
@@ -330,12 +332,12 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     private fun settingsButton() = button("Settings", if (mergedHeader) 54 else 64) {
         returningFromSettings = true
-        MC.instance.setScreen(SettingsScreen(this@DailyDigestScreen, if (page == "rng") SettingsTab.SOCIAL else SettingsTab.GENERAL))
+        navigateMenu(SettingsScreen(this@DailyDigestScreen, if (page == "rng") SettingsTab.SOCIAL else SettingsTab.GENERAL))
     }.tip("Automatic opening and news in General; RNG privacy in Social & Sharing; global colors in Theme & Appearance")
 
-    private fun navigate(next: String?) { page = next; historyPage = 0; rebuild() }
+    private fun navigate(next: String?) { page = next; historyPage = 0; rebuildMenu(if (next == null) -1 else 1) }
     private fun resetList() { historyPage = 0; updateContent() }
-    private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    private fun rebuild() { rebuildMenu() }
     private fun pageTitle() = when (page) { "news" -> "DAILY NEWS"; "global" -> "GLOBAL STATUS"; "dailies" -> "PERSONAL DAILIES"; "rng" -> "RNG ACTIVITY"; else -> "DAILY DIGEST" }
     private fun footerText(view: DigestView) = digestText(view.status.ifBlank { "Local time • cached first • Tab to navigate • Esc to close" }, 200)
     private fun timestamp(value: Long) = TIME.format(Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()))

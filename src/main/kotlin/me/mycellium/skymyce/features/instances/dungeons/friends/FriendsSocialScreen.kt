@@ -54,7 +54,8 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
             Tab.entries.chunked(if (panelWidth < 310) 2 else 3).forEach { tabs -> child(row().apply {
                 tabs.forEach { value ->
                     child(button("${if (tab == value) "§b" else ""}${value.label}", if (value == Tab.FRIENDS) 62 else 94) {
-                        tab = value; rebuild()
+                        val direction = if (value.ordinal < tab.ordinal) -1 else 1
+                        tab = value; rebuildMenu(direction)
                     })
                 }
             }) }
@@ -88,7 +89,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
                     child(label("Local to this account", MUTED).horizontalSizing(Sizing.expand()))
                 })
             }
-            results = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
+            results = menuScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(CYAN)))
                 scrollbarThiccness(2); padding(Insets.right(4))
             }
@@ -119,6 +120,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
 
     private fun updateRows() {
         if (!::results.isInitialized) return
+        contentChanged()
         results.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(6)
             when (tab) { Tab.FRIENDS -> friendRows(this); Tab.LENDING -> lendingRows(this); Tab.WEALTH -> wealthRows(this) }
@@ -244,7 +246,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
         sizing(Sizing.fixed(width), Sizing.fixed(18)); textShadow(false)
         themed()
     }
-    private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    private fun rebuild() { rebuildMenu() }
     companion object {
         private val CYAN get() = MenuTheme.ACCENT
         private val WHITE get() = MenuTheme.TEXT

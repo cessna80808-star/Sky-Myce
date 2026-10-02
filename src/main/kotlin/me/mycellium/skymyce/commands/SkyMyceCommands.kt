@@ -22,6 +22,7 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
 import me.mycellium.skymyce.features.instances.dungeons.friends.RelayMessages
 import me.mycellium.skymyce.features.instances.dungeons.friends.FriendsSocialScreen
 import me.mycellium.skymyce.hud.widget.WidgetEditorScreen
+import me.mycellium.skymyce.ui.navigateMenu
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.Utils.displayMessage
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback
@@ -69,7 +70,7 @@ object SkyMyceCommands : SkyMyceModule() {
             }
             .then(dungeon())
             .then(literal("settings").executes {
-                MC.instance.execute { MC.instance.setScreen(SettingsScreen()) }
+                MC.instance.execute { navigateMenu(SettingsScreen()) }
                 1
             })
             .then(m7PbCommand())
@@ -78,15 +79,15 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             })
             .then(literal("pf").executes {
-                MC.instance.execute { MC.instance.setScreen(DungeonFriendsScreen()) }
+                MC.instance.execute { navigateMenu(DungeonFriendsScreen()) }
                 1
             })
             .then(literal("friends").executes {
-                MC.instance.execute { MC.instance.setScreen(FriendsSocialScreen()) }
+                MC.instance.execute { navigateMenu(FriendsSocialScreen()) }
                 1
             })
             .then(literal("loans").executes {
-                MC.instance.execute { MC.instance.setScreen(FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)) }
+                MC.instance.execute { navigateMenu(FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)) }
                 1
             })
             .then(messageCommand("msg", RelayMessages::send))
@@ -100,9 +101,9 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(replyCommand("reply"))
             .then(replyCommand("r"))
             .then(literal("cosmetics").executes {
-                MC.instance.execute { MC.instance.setScreen(me.mycellium.skymyce.features.social.CosmeticsScreen()) }; 1
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.social.CosmeticsScreen()) }; 1
             }.then(literal("link").executes {
-                MC.instance.execute { MC.instance.setScreen(me.mycellium.skymyce.features.social.CosmeticsScreen(true)) }; 1
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.social.CosmeticsScreen(true)) }; 1
             }))
             .then(auction())
             .then(hud())
@@ -134,7 +135,7 @@ object SkyMyceCommands : SkyMyceModule() {
         return literal("dungeon")
             .executes {
                 MC.instance.execute {
-                    MC.instance.setScreen(DungeonScreen())
+                    navigateMenu(DungeonScreen())
                 }
                 1
             }
@@ -144,7 +145,7 @@ object SkyMyceCommands : SkyMyceModule() {
         return literal("ah")
             .executes {
                 MC.instance.execute {
-                    MC.instance.setScreen(AuctionHouseScreen())
+                    navigateMenu(AuctionHouseScreen())
                 }
                 1
             }
@@ -154,7 +155,7 @@ object SkyMyceCommands : SkyMyceModule() {
         return literal("hud")
             .executes {
                 MC.instance.execute {
-                    MC.instance.setScreen(WidgetEditorScreen(MC.screen.takeIf { it is me.mycellium.skymyce.ui.MenuScreen }))
+                    navigateMenu(WidgetEditorScreen(MC.screen.takeIf { it is me.mycellium.skymyce.ui.MenuScreen }))
                 }
                 1
             }

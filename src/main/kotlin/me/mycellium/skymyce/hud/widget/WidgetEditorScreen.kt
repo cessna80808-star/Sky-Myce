@@ -11,6 +11,7 @@ import io.wispforest.owo.ui.core.CursorStyle
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.hud.ThemeEditorScreen
 import me.mycellium.skymyce.hud.themed
+import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.ui.*
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.events.GuiEventListener
@@ -18,6 +19,7 @@ import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
+import net.minecraft.util.FormattedCharSequence
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
@@ -53,6 +55,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     private var clickedWidget: Widget? = null
     private var selectedAnchor: Anchor? = null
     private var screenWidgets: List<Widget> = emptyList()
+    private var helpLines = emptyList<FormattedCharSequence>()
 
     private var mouseRelX = 0
     private var mouseRelY = 0
@@ -62,8 +65,14 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     private var controlsVisible = true
     private val canvas = MenuCanvas()
     private val texture = MenuTexture()
+    private val appearance = MotionValue(0.0)
+    private val controls = MotionValue(1.0)
+    private var closing = false
 
     override fun init() {
+        closing = false
+        appearance.snap(0.0); appearance.animateTo(1.0, 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+        controls.snap(1.0)
         ui?.dispose()
         selectedWidget = null
         clickedWidget = null
@@ -72,6 +81,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         anchorSelect = false
         controlsVisible = true
         screenWidgets = WidgetManager.widgets.filter { it.prepareEditor() }
+        helpLines = hudEditorHelp(width)
 
         val adapter = OwoUIAdapter.create(this, UIContainers::verticalFlow)
         ui = adapter
@@ -97,6 +107,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun removed() {
+        appearance.cancel(); controls.cancel(); closing = false
         texture.close()
         WidgetManager.save()
         ui?.dispose()
@@ -104,53 +115,69 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         super.removed()
     }
 
-    override fun onClose() { MC.instance.setScreen(parent) }
+    override fun onClose() {
+        if (closing) return
+        closing = true; clickedWidget = null; selectedAnchor = null; anchorSelect = false; snapPosition = false
+        appearance.animateTo(0.0, 120, MotionEasing.QUICK, ThemeConfig.animationMode)
+        if (!appearance.running && MC.screen === this) navigateMenu(parent)
+    }
+    override fun tick() {
+        super.tick()
+        appearance.sample()
+        if (closing && !appearance.running && MC.screen === this) navigateMenu(parent)
+    }
 
     override fun extractBackground(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
     }
 
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
-        output.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, 25))
+        appearance.animateTo(if (closing) 0.0 else 1.0, if (closing) 120 else 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val alpha = appearance.sample().coerceIn(0.0, 1.0)
+        output.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, (25 * alpha).toInt()))
         canvas.begin()
         val graphics = MenuGraphics(canvas, mouseX, mouseY)
         // Widgets and their stored positions use Minecraft GUI coordinates, exactly like the live HUD.
         // Keep that one coordinate space for outlines, pointer input and saved positions.
-        screenWidgets.forEach { widget ->
-            // Preview the actual HUD renderer and its measured bounds; editor controls use our canvas.
-            if (!widget.render(output, mouseX, mouseY, a, editor = true)) return@forEach
-            val outlineColor = MenuTheme.alpha(if (clickedWidget == widget || selectedWidget == widget) MenuTheme.ACCENT else MenuTheme.MUTED)
-            graphics.outline(widget.renderX, widget.renderY, widget.width, widget.height, outlineColor)
-            if (selectedWidget == widget || clickedWidget == widget) {
-                val labelY = (widget.renderY + widget.height + 4).coerceAtMost(height - MenuCanvas.lineHeight()).coerceAtLeast(0)
-                graphics.text(MC.font, "${widget.title} | X: ${widget.x} Y: ${widget.y} Scale: ${widget.scale}",
-                    widget.renderX.coerceAtLeast(0), labelY, outlineColor, false)
+        graphics.layer(alpha = alpha) {
+            screenWidgets.forEach { widget ->
+                // Preview the actual HUD renderer and its measured bounds; editor controls use our canvas.
+                if (!widget.render(output, mouseX, mouseY, a, editor = true)) return@forEach
+                val outlineColor = MenuTheme.alpha(if (clickedWidget == widget || selectedWidget == widget) MenuTheme.ACCENT else MenuTheme.MUTED)
+                graphics.outline(widget.renderX, widget.renderY, widget.width, widget.height, outlineColor)
+                if (selectedWidget == widget || clickedWidget == widget) {
+                    val labelY = (widget.renderY + widget.height + 4).coerceAtMost(height - MenuCanvas.lineHeight()).coerceAtLeast(0)
+                    graphics.text(MC.font, "${widget.title} | X: ${widget.x} Y: ${widget.y} Scale: ${widget.scale}",
+                        widget.renderX.coerceAtLeast(0), labelY, outlineColor, false)
+                }
             }
-        }
 
-        if (anchorSelect) {
-            selectedWidget?.let { widget ->
-                Anchor.entries.forEach { anchor ->
-                    val x = widget.renderX + (anchor.x * widget.width).toInt()
-                    val y = widget.renderY + (anchor.y * widget.height).toInt()
-                    graphics.fill(x - 2, y - 2, x + 2, y + 2, if (selectedAnchor == anchor) 0xFF55FF55.toInt() else if (widget.anchor == anchor) 0xFFFFFF55.toInt() else 0xFFFF5555.toInt())
+            if (anchorSelect) {
+                selectedWidget?.let { widget ->
+                    Anchor.entries.forEach { anchor ->
+                        val x = widget.renderX + (anchor.x * widget.width).toInt()
+                        val y = widget.renderY + (anchor.y * widget.height).toInt()
+                        graphics.fill(x - 2, y - 2, x + 2, y + 2, if (selectedAnchor == anchor) 0xFF55FF55.toInt() else if (widget.anchor == anchor) 0xFFFFFF55.toInt() else 0xFFFF5555.toInt())
+                    }
                 }
             }
         }
 
-        if (controlsVisible && clickedWidget == null) {
-            val help = hudEditorHelp(width)
+        controls.animateTo(if (controlsVisible && clickedWidget == null) 1.0 else 0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val controlAlpha = alpha * controls.sample().coerceIn(0.0, 1.0)
+        if (controlAlpha > 0.0) graphics.layer(alpha = controlAlpha) {
             val lineHeight = MenuCanvas.lineHeight()
-            help.forEachIndexed { index, line -> graphics.text(MC.font, line, 8, height - 6 - (help.size - index) * lineHeight,
+            helpLines.forEachIndexed { index, line -> graphics.text(MC.font, line, 8, height - 6 - (helpLines.size - index) * lineHeight,
                 MenuTheme.alpha(MenuTheme.MUTED), false) }
             super.extractRenderState(graphics, mouseX, mouseY, a)
-            ui?.drawTooltip(graphics, mouseX, mouseY, a)
+            if (controlsVisible && !closing) ui?.drawTooltip(graphics, mouseX, mouseY, a)
         }
-        val rasterScale = minOf(2.0, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision, canvas.dirtyRegion)
     }
 
 
     override fun mouseMoved(mouseX: Double, mouseY: Double) {
+        if (closing) return
         selectedWidget = screenWidgets.asReversed().firstOrNull {
             !hudEditorControlAt(ui?.rootComponent, mouseX, mouseY, controlsVisible) && it.inBounds(mouseX.toInt(), mouseY.toInt())
         }
@@ -161,11 +188,12 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun mouseClicked(button: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (closing) return true
         if (super.mouseClicked(button, doubled)) return true
         if (button.button() == 1) {
             val widget = screenWidgets.asReversed().firstOrNull { it.inBounds(button.x.toInt(), button.y.toInt()) } ?: return false
             WidgetManager.save()
-            MC.instance.setScreen(ThemeEditorScreen(this, widget))
+            navigateMenu(ThemeEditorScreen(this, widget))
             return true
         }
         if (button.button() != 0) return false
@@ -180,6 +208,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun mouseReleased(button: MouseButtonEvent): Boolean {
+        if (closing) return true
         if (button.button() == 0 && clickedWidget != null) {
             clickedWidget = null
             return true
@@ -193,6 +222,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         super.getChildAt(x, y).filter { it !== ui || hudEditorControlAt(ui?.rootComponent, x, y, controlsVisible && clickedWidget == null) }
 
     override fun mouseDragged(button: MouseButtonEvent, offsetX: Double, offsetY: Double): Boolean {
+        if (closing) return true
         if (button.button() == 0) {
             clickedWidget?.let { widget ->
                 widget.x = hudEditorCoordinate(button.x, mouseRelX, widget.anchor.x, widget.width, width, snapPosition)
@@ -205,6 +235,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, horizontalAmt: Double, verticalAmt: Double): Boolean {
+        if (closing) return true
         if (hudEditorControlAt(ui?.rootComponent, mouseX, mouseY, controlsVisible)) return super.mouseScrolled(mouseX, mouseY, horizontalAmt, verticalAmt)
         screenWidgets.asReversed().firstOrNull { it.inBounds(mouseX.toInt(), mouseY.toInt()) }?.let {
             it.scale += verticalAmt.toFloat() * 0.1f
@@ -216,6 +247,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun keyPressed(input: KeyEvent): Boolean {
+        if (closing) return true
         if (input.isEscape) { onClose(); return true }
         if (input.key == GLFW.GLFW_KEY_H && !input.hasControlDown() && !input.hasAltDown()) {
             controlsVisible = !controlsVisible
@@ -229,6 +261,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun keyReleased(input: KeyEvent): Boolean {
+        if (closing) return true
         snapPosition = input.hasShiftDown()
 
         if (anchorSelect && !input.hasControlDown()) {

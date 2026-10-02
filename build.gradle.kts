@@ -144,7 +144,12 @@ val loaderJar by tasks.registering(Jar::class) {
     description = "Build the Fabric bootstrap and standalone signed update installer"
     dependsOn(tasks.classes, generateLoaderResources)
     archiveFileName = "Sky-Myce-Loader.jar"
-    from(sourceSets.main.get().output) { include("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class") }
+    from(sourceSets.main.get().output) {
+        include("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class")
+        include("me/mycellium/skymyce/ui/MotionValue*.class", "me/mycellium/skymyce/ui/MotionEasing*.class",
+            "me/mycellium/skymyce/ui/GuiMotion*.class", "me/mycellium/skymyce/ui/GuiQuality*.class", "me/mycellium/skymyce/ui/MotionPose*.class",
+            "me/mycellium/skymyce/ui/MenuMotionKt*.class")
+    }
     from(loaderResources)
     // First activation has no protected mod (or its sentinel); owo includes its own nested dependencies.
     from({ configurations.runtimeClasspath.get().single { it.name == "owo-lib-${providers.gradleProperty("owo_version").get()}.jar" } }) {
@@ -189,7 +194,16 @@ val loaderCheck by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.loader.LoaderCheckKt"
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck) }
+val menuMotionCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks GUI motion timing, interruption, accessibility and input transforms"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.MenuMotionCheckKt"
+    workingDir = layout.buildDirectory.dir("menu-motion-check").get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

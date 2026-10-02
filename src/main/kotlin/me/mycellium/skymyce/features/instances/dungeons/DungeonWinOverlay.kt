@@ -5,6 +5,10 @@ import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.DungeonRank
 import me.mycellium.skymyce.api.DungeonRank.Companion.formatted
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
+import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.ui.GuiMotion
+import me.mycellium.skymyce.ui.MotionEasing
+import me.mycellium.skymyce.ui.MotionValue
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
@@ -18,7 +22,7 @@ import tech.thatgravyboat.skyblockapi.api.events.base.predicates.OnlyIn
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
-import kotlin.math.*
+import kotlin.math.roundToInt
 
 object DungeonWinOverlay : SkyMyceModule() {
     const val RANK_WIDTH = 96
@@ -27,9 +31,11 @@ object DungeonWinOverlay : SkyMyceModule() {
     val SCORE_REGEX = Regex("^\\s*Team Score: (\\d+) \\((.+?)\\)( \\(NEW RECORD!\\))?$")
 
     var showOverlay = false
-    var startTime: Long = 0L
     var currentRank = DungeonRank.UNKNOWN
     var currentStats = mutableListOf<Component>()
+    private val rankTravel = MotionValue(0.0)
+    private val rankScale = MotionValue(0.05)
+    private var statReveals = emptyList<MotionValue>()
 
     override fun init() {
         HudElementRegistry.attachElementBefore(
@@ -43,19 +49,37 @@ object DungeonWinOverlay : SkyMyceModule() {
     fun onChatEvent(event: ChatReceivedEvent.Pre) {
         SCORE_REGEX.find(event.text)?.let {
             showOverlay = true
-            startTime = System.currentTimeMillis()
             currentRank = DungeonRank.fromLabel(it.groupValues[2])
             currentStats = mutableListOf<Component>().apply {
                 add(Component.literal("§c${DungeonAPI.dungeonFloor?.longName}"))
                 add(Component.literal("§fTeam Score: §a${it.groupValues[1]}§f (${currentRank.formatted()}§f)"))
                 add(Component.literal("§7Time Elapsed: §e${DungeonAPI.time}"))
             }
+            rankTravel.snap(0.0)
+            rankScale.snap(0.05)
+            statReveals = currentStats.map { MotionValue(0.0) }
+            animateReveal()
         }
     }
 
     @Subscription
     fun onIslandChange(event: IslandChangeEvent) {
         showOverlay = false
+        rankTravel.cancel(); rankScale.cancel()
+        statReveals.forEach(MotionValue::cancel)
+        statReveals = emptyList()
+    }
+
+    private fun animateReveal() {
+        val mode = ThemeConfig.animationMode
+        // Reduced motion keeps the rank at its final position and only fades the run details.
+        val rankMode = if (mode == GuiMotion.FULL) mode else GuiMotion.OFF
+        rankTravel.animateTo(1.0, 1000, MotionEasing.SMOOTH, rankMode)
+        rankScale.animateTo(1.0, 650, MotionEasing.SETTLE, rankMode)
+        statReveals.forEachIndexed { index, reveal ->
+            reveal.animateTo(1.0, 200, MotionEasing.QUICK, mode,
+                delayMillis = if (mode == GuiMotion.FULL) 650L + index * 50 else 0)
+        }
     }
 
     fun render(graphics: GuiGraphicsExtractor) {
@@ -63,21 +87,10 @@ object DungeonWinOverlay : SkyMyceModule() {
         if (!showOverlay) return
         if (MC.instance.options.hideGui) return
 
-        val age = System.currentTimeMillis() - startTime
-
+        animateReveal()
         val widgetX = graphics.guiWidth() / 2F
-        val widgetY = when {
-            age < 500 -> graphics.guiHeight() / 2f - sin(age / 1000f * PI).toFloat() * graphics.guiHeight() / 9f
-            age < 1000 -> graphics.guiHeight() / 6f + sin(age / 1000f * PI).toFloat() * graphics.guiHeight() * 4f / 18f
-            else -> graphics.guiHeight() / 6f
-        }
-
-        val scale = when {
-            age < 200 -> max(0.05f, age / 200f)
-            age < 1000 -> 1f + sin((age - 200) / 800f * PI).toFloat() * 0.5f
-            age < 1250 -> 1f + sin((age - 1000) / 250f * PI).toFloat() * 0.25f
-            else -> 1f
-        }
+        val widgetY = graphics.guiHeight() * (0.5 - rankTravel.sample() / 3.0).toFloat()
+        val scale = rankScale.sample().coerceAtLeast(0.05)
 
         val rankWidth = (RANK_WIDTH * scale).roundToInt()
         val rankHeight = (RANK_HEIGHT * scale).roundToInt()
@@ -95,21 +108,17 @@ object DungeonWinOverlay : SkyMyceModule() {
             rankHeight
         )
 
-        // Run info
-        if (age > 650) {
-            for ((index, line) in currentStats.withIndex()) {
-                val lineAge = (age - 650) - index * 50
-                if (lineAge < 0) continue
-                val textAlpha = (min(1f, lineAge / 200f) * 255).roundToInt()
-                val lineColor = (textAlpha shl 24) or 0xFFFFFF
-                graphics.centeredText(
-                    MC.font,
-                    line,
-                    widgetX.toInt(),
-                    (widgetY.toInt() + RANK_HEIGHT / 2 + 15) + index * (MC.font.lineHeight + 3),
-                    lineColor
-                )
-            }
+        for ((index, line) in currentStats.withIndex()) {
+            val textAlpha = ((statReveals.getOrNull(index)?.sample() ?: 1.0).coerceIn(0.0, 1.0) * 255).roundToInt()
+            if (textAlpha == 0) continue
+            val lineColor = (textAlpha shl 24) or 0xFFFFFF
+            graphics.centeredText(
+                MC.font,
+                line,
+                widgetX.toInt(),
+                (widgetY.toInt() + RANK_HEIGHT / 2 + 15) + index * (MC.font.lineHeight + 3),
+                lineColor
+            )
         }
     }
 }

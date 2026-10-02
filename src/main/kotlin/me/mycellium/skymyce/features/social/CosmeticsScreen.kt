@@ -27,7 +27,7 @@ class CosmeticsScreen(private val link: Boolean = false) : MenuScreen(Component.
     override fun buildContent(root: FlowLayout) {
         root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(MenuTheme.PADDING + 3)) }
-        root.child(UIContainers.verticalScroll(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), content).apply {
+        root.child(menuScroll(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), content).apply {
             surface(MenuTheme.panel()); scrollbarThiccness(2); scrollStep(20)
         })
         update()
@@ -44,6 +44,7 @@ class CosmeticsScreen(private val link: Boolean = false) : MenuScreen(Component.
     }
     private fun update() {
         if (!::content.isInitialized) return
+        contentChanged()
         seen = CosmeticsClient.revision; status = CosmeticsClient.status
         content.clearChildren()
         expiry = null
@@ -55,9 +56,9 @@ class CosmeticsScreen(private val link: Boolean = false) : MenuScreen(Component.
         content.child(label("Revision: ${own?.revision ?: "—"}", MenuTheme.MUTED))
         content.child(label(status, MenuTheme.MUTED))
         content.child(button("Refresh my settings") { CosmeticsClient.refreshOwn() }.wrappedTooltip(Component.literal("Read your public settings through the authenticated relay. Does not query friends or Hypixel APIs.")))
-        content.child(button("Show Cosmetic Names: ${if (CosmeticsConfig.names) "On" else "Off"}") { CosmeticsConfig.names = !CosmeticsConfig.names; dirty = true; update() })
-        content.child(button("Original tooltip names: ${if (CosmeticsConfig.originalTooltips) "On" else "Off"}") { CosmeticsConfig.originalTooltips = !CosmeticsConfig.originalTooltips; dirty = true; update() })
-        content.child(button("Player scaling: ${if (CosmeticsConfig.scaling) "On" else "Off"}") { CosmeticsConfig.scaling = !CosmeticsConfig.scaling; dirty = true; update() })
+        content.child(button("Show Cosmetic Names: ${if (CosmeticsConfig.names) "On" else "Off"}") { CosmeticsConfig.names = !CosmeticsConfig.names; preferenceChanged("Cosmetic names", CosmeticsConfig.names) })
+        content.child(button("Original tooltip names: ${if (CosmeticsConfig.originalTooltips) "On" else "Off"}") { CosmeticsConfig.originalTooltips = !CosmeticsConfig.originalTooltips; preferenceChanged("Original tooltip names", CosmeticsConfig.originalTooltips) })
+        content.child(button("Player scaling: ${if (CosmeticsConfig.scaling) "On" else "Off"}") { CosmeticsConfig.scaling = !CosmeticsConfig.scaling; preferenceChanged("Player scaling", CosmeticsConfig.scaling) })
         content.child(label("Names replace complete known usernames only in displayed text. Commands and gameplay use real identities. Size is a third-person visual effect only.", MenuTheme.MUTED))
         content.child(button("Link my Discord account") { CosmeticsClient.requestLink() }.wrappedTooltip(Component.literal("Request a single-use code tied to your authenticated Minecraft UUID. Codes expire in five minutes.")))
         CosmeticsClient.linkCode?.let { code ->
@@ -72,6 +73,9 @@ class CosmeticsScreen(private val link: Boolean = false) : MenuScreen(Component.
     override fun removed() {
         if (dirty) Scheduling.schedule(0.milliseconds) { runCatching { SkyMyce.config.save() }.onFailure { SkyMyce.logger.warn("Could not save cosmetic preferences") } }
         super.removed()
+    }
+    private fun preferenceChanged(name: String, enabled: Boolean) {
+        dirty = true; update(); showMenuToast("$name ${if (enabled) "enabled" else "disabled"}", MenuToastKind.SUCCESS)
     }
     private fun expiryText() = "Expires in ${((CosmeticsClient.linkExpires - System.currentTimeMillis()) / 1000).coerceAtLeast(0)} seconds"
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(CosmeticNames.original(Component.literal(text).withColor(color))).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }

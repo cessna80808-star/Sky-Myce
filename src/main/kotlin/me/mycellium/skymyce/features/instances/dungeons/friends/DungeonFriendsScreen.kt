@@ -242,7 +242,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
         })
         actionStatus = label(DungeonFriends.actionUnavailable.orEmpty(), 0xE8BF71).apply { horizontalSizing(Sizing.fill()) }
         child(actionStatus)
-        results = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
+        results = menuScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
             scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(CYAN)))
             scrollbarThiccness(2)
             padding(Insets.right(4))
@@ -286,6 +286,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
 
     private fun updateResults() {
         if (!::results.isInitialized) return
+        contentChanged()
         floorButton.message = Component.literal("§b${floor.name} v")
         val wanted = wantedClasses()
         classButton.message = Component.literal("Missing (${wanted.size})")
@@ -371,7 +372,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             val join = button("Join", 38) { DungeonFriends.join(friend, floor) }.active(joinReason == null)
             join.tooltip(Component.literal(joinReason ?: "Request to join ${friend.name} on ${floor.name}"))
             joinActions += join to friend
-            val edit = button("Edit", 34) { MC.instance.setScreen(SettingsScreen(this@DungeonFriendsScreen, SettingsTab.PARTY, dungeonFriend = friend.name)) }
+            val edit = button("Edit", 34) { navigateMenu(SettingsScreen(this@DungeonFriendsScreen, SettingsTab.PARTY, dungeonFriend = friend.name)) }
                 .tooltip(Component.literal("Edit ${friend.name}'s secondary classes in Party Finder settings"))
             child(dungeonFriendActions((panelWidth - 40).coerceAtLeast(1), listOf(invite, message, join, edit)))
         }

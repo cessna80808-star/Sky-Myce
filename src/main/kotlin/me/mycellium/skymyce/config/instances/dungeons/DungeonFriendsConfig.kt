@@ -12,6 +12,7 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.FRIEND_FLOORS
 import me.mycellium.skymyce.features.instances.dungeons.friends.parseDungeonClass
 import me.mycellium.skymyce.features.instances.dungeons.friends.relayUri
 import me.mycellium.skymyce.features.instances.dungeons.friends.currentRelayUrl
+import me.mycellium.skymyce.ui.navigateMenu
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import java.nio.file.AtomicMoveNotSupportedException
@@ -29,7 +30,7 @@ object DungeonFriendsConfig : CategoryKt("Dungeon Friends") {
             title = "Dungeon Friend & LFG Assistant"
             text = "Open"
             description = "Online dungeon friends, floor stats and quick invites (/skymyce pf)"
-            onClick { MC.instance.execute { MC.instance.setScreen(DungeonFriendsScreen()) } }
+            onClick { MC.instance.execute { navigateMenu(DungeonFriendsScreen()) } }
         }
     }
 }

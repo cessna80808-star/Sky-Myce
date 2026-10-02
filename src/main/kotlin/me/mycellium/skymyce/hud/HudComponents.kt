@@ -5,6 +5,8 @@ import io.wispforest.owo.ui.component.UIComponents
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.Insets
+import io.wispforest.owo.ui.core.Color
+import io.wispforest.owo.ui.core.OwoUIGraphics
 import io.wispforest.owo.ui.core.Size
 import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.Surface
@@ -53,6 +55,17 @@ internal fun themedHudText(value: String): Component {
 internal class HudTextLabel(initial: String) : LabelComponent(Component.empty()) {
     private var source = ""
     private var theme = 0L
+    var opacity = 1.0
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val original = color().get()
+        val faded = hudOpacityColor(original.argb(), opacity)
+        // Some native text paths treat RGB or nearly transparent colors as opaque.
+        if (faded ushr 24 <= 4) return
+        if (faded == original.argb()) { super.draw(graphics, mouseX, mouseY, partialTicks, delta); return }
+        color(Color.ofArgb(faded))
+        try { super.draw(graphics, mouseX, mouseY, partialTicks, delta) }
+        finally { color(original) }
+    }
     fun update(value: String = source, force: Boolean = false) {
         // Labels belong to one widget; revision also changes whenever its overrides are edited.
         if (!force && value == source && theme == HudTheme.revision) return
@@ -60,6 +73,16 @@ internal class HudTextLabel(initial: String) : LabelComponent(Component.empty())
         text(themedHudText(value.ifEmpty { " " })); shadow(HudTheme.SHADOW)
     }
     init { theme = -1; update(initial) }
+}
+
+internal fun hudOpacityColor(color: Int, opacity: Double): Int {
+    val amount = opacity.takeIf(Double::isFinite)?.coerceIn(0.0, 1.0) ?: 0.0
+    return ((color ushr 24) * amount).toInt().shl(24) or (color and 0xFFFFFF)
+}
+
+/** Presentation only; the original HUD label color and semantic spans remain unchanged. */
+fun LabelComponent.hudOpacity(amount: Double): LabelComponent = apply {
+    if (this is HudTextLabel) opacity = amount
 }
 
 fun LabelComponent.updateText(text: String) {
@@ -76,12 +99,14 @@ internal fun FlowLayout.replaceContent(content: UIComponent) {
 }
 
 /** Keep the layout and existing labels alive as rows change, so owo can update their bounds. */
-fun FlowLayout.updateTextLines(lines: List<String>): FlowLayout = apply {
+fun FlowLayout.updateTextLines(lines: List<String>, opacities: List<Double> = emptyList()): FlowLayout = apply {
     configure<FlowLayout> { column ->
         while (column.children().size > lines.size) column.removeChild(column.children().last())
         lines.forEachIndexed { index, text ->
             val label = column.children().getOrNull(index) as? LabelComponent
-            if (label == null) column.child(hudLabel(text)) else label.updateText(text)
+            val opacity = opacities.getOrNull(index) ?: 1.0
+            if (label == null) column.child(hudLabel(text).hudOpacity(opacity))
+            else { label.updateText(text); label.hudOpacity(opacity) }
         }
     }
 }

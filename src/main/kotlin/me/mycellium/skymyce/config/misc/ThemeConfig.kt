@@ -4,6 +4,8 @@ import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 import me.mycellium.skymyce.hud.ThemeOverrides
 import me.mycellium.skymyce.hud.ThemePreset
+import me.mycellium.skymyce.ui.GuiMotion
+import me.mycellium.skymyce.ui.GuiQuality
 
 object ThemeConfig : CategoryKt("Theme & Appearance") {
     var migratedDigestTheme by boolean(false) { condition = { false } }
@@ -11,6 +13,14 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     var preset by enum(ThemePreset.DARK_GLASS) {
         name = TranslatableValue.literal("Theme preset")
         description = TranslatableValue.literal("Base palette inherited by menus and widgets. Overrides remain separate.")
+    }
+    var graphicsQuality by enum(GuiQuality.MEDIUM) {
+        name = TranslatableValue.literal("GUI Graphics Quality")
+        description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls raster detail, shadows and ambient effects while keeping essential interaction feedback.")
+    }
+    var animationMode by enum(GuiMotion.FULL) {
+        name = TranslatableValue.literal("GUI Animations")
+        description = TranslatableValue.literal("Full motion, reduced motion or immediate visual state changes. Controls remain usable in every mode.")
     }
 
     fun migrateDigestTheme() {

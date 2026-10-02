@@ -14,6 +14,7 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.commands.SkyMyceCommands
 import me.mycellium.skymyce.config.instances.dungeons.PartyFinder
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
+import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.*
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.hud.*
@@ -108,7 +109,9 @@ class SettingsScreen @JvmOverloads constructor(
     public override val menuParent get() = parent.takeIf { it is MenuScreen || it is WidgetEditorScreen }
     override val settingsCategory get() = tab
     override fun selectSettings(tab: SettingsTab) {
-        this.tab = tab; query = ""; selectedGroup = null; editingDungeonFriend = null; friendDraft = null; keyCapture = null; rebuild()
+        val direction = if (tab.ordinal < this.tab.ordinal) -1 else 1
+        this.tab = tab; query = ""; selectedGroup = null; editingDungeonFriend = null; friendDraft = null; keyCapture = null
+        rebuildMenu(direction)
     }
     private var selectedGroup: String? = dungeonFriend?.let { "Dungeon Friends" }
     private var editingDungeonFriend = dungeonFriend
@@ -146,7 +149,7 @@ class SettingsScreen @JvmOverloads constructor(
                 if (inlineSearch) child(search)
             })
             if (!inlineSearch) child(search)
-            child(UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), body).apply {
+            child(menuScroll(Sizing.fill(), Sizing.expand(), body).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
             })
             child(settingsRow().apply {
@@ -156,7 +159,7 @@ class SettingsScreen @JvmOverloads constructor(
         }
         drawerHeading = column().apply { padding(Insets.of(14)) }
         details = column().apply { padding(Insets.horizontal(14)); gap(0) }
-        drawerScroll = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), details).apply {
+        drawerScroll = menuScroll(Sizing.fill(), Sizing.expand(), details).apply {
             scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
         }
         drawer = UIContainers.verticalFlow(Sizing.fixed(detailWidth), Sizing.fill()).apply {
@@ -178,16 +181,36 @@ class SettingsScreen @JvmOverloads constructor(
     }
 
     private fun populate() {
+        contentChanged()
         body.clearChildren()
         details.clearChildren()
         if (tab == SettingsTab.THEME) {
             closeDetails(false)
             body.child(label("Shared colors, spacing and widget appearance", MenuTheme.MUTED))
+            body.child(button("GUI graphics: ${qualityName(ThemeConfig.graphicsQuality)}", minOf(240, menuWidth - 28),
+                "Choose rendering detail. Essential interaction feedback stays active at every quality.") { anchor ->
+                menu(anchor) { choices -> GuiQuality.entries.forEach { quality ->
+                    choices.button(Component.literal(qualityName(quality))) {
+                        ThemeConfig.graphicsQuality = quality; edited(); populate()
+                        showMenuToast("GUI graphics: ${qualityName(quality)}", MenuToastKind.SUCCESS)
+                    }
+                } }
+            })
+            body.child(button("Animations: ${motionName(ThemeConfig.animationMode)}", minOf(240, menuWidth - 28),
+                "Full adds directional transitions. Reduced keeps quiet fades. Off applies visual changes immediately.") { anchor ->
+                menu(anchor) { choices -> GuiMotion.entries.forEach { motion ->
+                    choices.button(Component.literal(motionName(motion))) {
+                        ThemeConfig.animationMode = motion; edited(); populate()
+                        showMenuToast("Animations: ${motionName(motion)}", MenuToastKind.SUCCESS)
+                    }
+                } }
+            })
+            body.child(label("Quality changes visual effects. Animation mode controls movement independently.", MenuTheme.MUTED, 9f))
             body.child(button("Customize shared theme", minOf(190, menuWidth - 28), "Presets, colors, opacity, spacing, preview and JSON import/export") {
-                MC.instance.setScreen(ThemeEditorScreen(this))
+                navigateMenu(ThemeEditorScreen(this))
             }.apply { verticalSizing(Sizing.fixed(38)) })
             body.child(button("Per-widget themes", minOf(190, menuWidth - 28), "Open the HUD editor and right-click a widget to customize its theme") {
-                MC.instance.setScreen(WidgetEditorScreen(this))
+                navigateMenu(WidgetEditorScreen(this))
             }.apply { verticalSizing(Sizing.fixed(38)) })
             body.child(label("Presets and global overrides apply to your HUD. Widgets can inherit them or use their own overrides.", MenuTheme.MUTED))
             return
@@ -229,6 +252,7 @@ class SettingsScreen @JvmOverloads constructor(
     }
 
     private fun populateDetails(groups: Map<String, List<SettingRow>>) {
+        contentChanged()
         details.clearChildren()
         drawerHeading.clearChildren()
         drawerHeading.child(label("FEATURE SETTINGS", MenuTheme.MUTED, 8f))
@@ -328,7 +352,11 @@ class SettingsScreen @JvmOverloads constructor(
                 )) {
                     if (availabilityChanged) DungeonFriends.joining.clear()
                     feedback.text(Component.literal("Saved")); feedback.color(Color.ofRgb(MenuTheme.ACCENT))
-                } else feedback.text(Component.literal(DungeonFriendsSettings.error ?: "Use a nonempty message of up to 220 characters."))
+                    showMenuToast("Friend preferences saved", MenuToastKind.SUCCESS)
+                } else {
+                    feedback.text(Component.literal(DungeonFriendsSettings.error ?: "Use a nonempty message of up to 220 characters."))
+                    showMenuToast("Friend preferences could not be saved", MenuToastKind.ERROR)
+                }
             })
             child(button("Cancel", 58, "Discard unapplied preferences and close") { closeDetails() })
         })
@@ -336,18 +364,26 @@ class SettingsScreen @JvmOverloads constructor(
 
     private fun openDetails(animate: Boolean = true) {
         if (drawerClip.children().isEmpty()) drawerClip.child(drawer)
-        drawerClip.horizontalSizing().animate(if (animate) 200 else 1, Easing.CUBIC, Sizing.fixed(detailWidth)).forwards()
-        if (!animate) drawerClip.horizontalSizing(Sizing.fixed(detailWidth))
+        val duration = drawerDuration(animate)
+        if (duration == 0) drawerClip.horizontalSizing(Sizing.fixed(detailWidth))
+        else drawerClip.horizontalSizing().animate(duration, Easing.CUBIC, Sizing.fixed(detailWidth)).forwards()
     }
 
     private fun closeDetails(animate: Boolean = true) {
         if (animate) friendDraft = null
         selectedGroup = null; keyCapture = null
         if (!::drawerClip.isInitialized) return
-        val animation = drawerClip.horizontalSizing().animate(if (animate) 200 else 1, Easing.CUBIC, Sizing.fixed(0))
-        if (animate) animation.finished().subscribe { _, _ -> if (selectedGroup == null) drawerClip.clearChildren() }
-        else { drawerClip.horizontalSizing(Sizing.fixed(0)); drawerClip.clearChildren() }
-        animation.forwards()
+        val duration = drawerDuration(animate)
+        if (duration == 0) { drawerClip.horizontalSizing(Sizing.fixed(0)); drawerClip.clearChildren() }
+        else {
+            val closing = drawerClip
+            val animation = closing.horizontalSizing().animate(duration, Easing.CUBIC, Sizing.fixed(0))
+            animation.finished().subscribe { _, _ -> if (selectedGroup == null && drawerClip === closing) closing.clearChildren() }
+            animation.forwards()
+        }
+    }
+    private fun drawerDuration(animate: Boolean) = if (!animate) 0 else when (ThemeConfig.animationMode) {
+        GuiMotion.FULL -> 200; GuiMotion.REDUCED -> 90; GuiMotion.OFF -> 0
     }
 
     private fun toggle(setting: SettingRow) = MenuButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
@@ -421,6 +457,7 @@ class SettingsScreen @JvmOverloads constructor(
     }
 
     override fun keyPressed(event: KeyEvent): Boolean {
+        if (menuClosing) return true
         if (event.isEscape && closeMenuDropdown()) return true
         keyCapture?.let { (setting, button) ->
             if (event.key != GLFW.GLFW_KEY_ESCAPE && setting.entry.setInt(if (event.key == GLFW.GLFW_KEY_BACKSPACE) GLFW.GLFW_KEY_UNKNOWN else event.key)) edited()
@@ -446,12 +483,14 @@ class SettingsScreen @JvmOverloads constructor(
         }
         super.removed()
     }
-    override fun onClose() { MC.instance.setScreen(parent) }
+    override fun onClose() { keyCapture = null; closeMenuTo(parent) }
     private fun edited() {
         changed = true; PartyFinder.invalidateMatcher()
         heading.color(Color.ofRgb(MenuTheme.ACCENT))
     }
-    private fun rebuild() { if (uiAdapter == null) return; uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    private fun rebuild() { if (uiAdapter != null) rebuildMenu() }
+    private fun qualityName(value: GuiQuality) = value.toString()
+    private fun motionName(value: GuiMotion) = value.toString()
     private fun keyName(key: Int) = if (key == GLFW.GLFW_KEY_UNKNOWN) "Unbound" else InputConstants.Type.KEYSYM.getOrCreate(key).displayName.string
     private fun numberText(value: Double) = "%.2f".format(value).trimEnd('0').trimEnd('.', ',')
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).gap(6)

@@ -60,10 +60,29 @@ internal fun menuTextRuns(text: FormattedCharSequence, color: Int): List<MenuCan
 
 /** Owo supplies retained layout/input; all paint goes to our canvas, never its native render state. */
 class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val menuWidth: Int = Minecraft.getInstance().window.guiScaledWidth,
-                   private val menuHeight: Int = Minecraft.getInstance().window.guiScaledHeight) :
+                   private val menuHeight: Int = Minecraft.getInstance().window.guiScaledHeight,
+                   private val tooltipMotion: MenuTooltipMotion? = null) :
     OwoUIGraphics(Minecraft.getInstance(), GuiRenderState(), mouseX, mouseY, {}) {
     override fun guiWidth() = menuWidth
     override fun guiHeight() = menuHeight
+    /** Compose effects without changing retained layout, focus, or component state. */
+    fun layer(alpha: Double = 1.0, x: Double = 0.0, y: Double = 0.0, scale: Double = 1.0,
+              pivotX: Double = 0.0, pivotY: Double = 0.0, draw: () -> Unit) {
+        val previousOpacity = canvas.opacity
+        pose().pushMatrix()
+        try {
+            pose().translate((x + pivotX).toFloat(), (y + pivotY).toFloat())
+            pose().scale(scale.toFloat(), scale.toFloat())
+            pose().translate(-pivotX.toFloat(), -pivotY.toFloat())
+            canvas.opacity *= alpha.coerceIn(0.0, 1.0)
+            sync()
+            draw()
+        } finally {
+            canvas.opacity = previousOpacity
+            pose().popMatrix()
+            sync()
+        }
+    }
     private fun sync() {
         val m = pose()
         canvas.transform = MenuCanvas.Transform(m.m00().toDouble(), m.m01().toDouble(), m.m10().toDouble(), m.m11().toDouble(), m.m20().toDouble(), m.m21().toDouble())
@@ -111,11 +130,41 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
         val left = (x + 10).coerceAtMost(guiWidth() - width - 4).coerceAtLeast(4)
         val top = (y + 12).coerceAtMost(guiHeight() - height - 4).coerceAtLeast(4)
         pose().pushMatrix(); pose().identity()
-        MenuTheme.box(this, left, top, width, height, MenuTheme.SIDEBAR)
-        lines.forEachIndexed { i, line -> styledText(line, (left + 7).toDouble(), (top + 6 + i * lineHeight).toDouble(), MenuTheme.alpha(MenuTheme.TEXT)) }
+        val progress = tooltipMotion?.show(lines) ?: 1.0
+        layer(alpha = progress) {
+            MenuTheme.box(this, left, top, width, height, MenuTheme.SIDEBAR)
+            lines.forEachIndexed { i, line -> styledText(line, (left + 7).toDouble(), (top + 6 + i * lineHeight).toDouble(), MenuTheme.alpha(MenuTheme.TEXT)) }
+        }
         pose().popMatrix()
     }
     fun styledText(text: FormattedCharSequence, x: Double, y: Double, color: Int, size: Double = 10.0) {
         sync(); canvas.text(menuTextRuns(text, color), x, y, size)
     }
+}
+
+/** Owned by a visible screen; no global tooltip timer survives its removal. */
+class MenuTooltipMotion {
+    private var key: List<List<MenuCanvas.Run>>? = null
+    private var seen = false
+    private val fade = MotionValue(0.0)
+    private var outgoing: MenuCanvas.Snapshot? = null
+    fun beginFrame() { seen = false }
+    fun show(lines: List<FormattedCharSequence>): Double {
+        seen = true
+        val identity = lines.map { menuTextRuns(it, MenuTheme.alpha(MenuTheme.TEXT)) }
+        if (key != identity) { key = identity; fade.snap(0.0); outgoing = null }
+        fade.animateTo(1.0, 95, mode = me.mycellium.skymyce.config.misc.ThemeConfig.animationMode)
+        return fade.sample().coerceIn(0.0, 1.0)
+    }
+    fun endFrame(canvas: MenuCanvas) {
+        if (seen) return
+        if (key != null) {
+            outgoing = canvas.snapshot("tooltip"); key = null
+            fade.snap(1.0)
+        }
+        fade.animateTo(0.0, 75, mode = me.mycellium.skymyce.config.misc.ThemeConfig.animationMode)
+        val alpha = fade.sample().coerceIn(0.0, 1.0)
+        if (alpha > 0.0) outgoing?.let { canvas.replay(it, alpha) } else outgoing = null
+    }
+    fun clear() { key = null; outgoing = null; fade.snap(0.0) }
 }

@@ -8,6 +8,17 @@ import me.mycellium.skymyce.utils.AtomicJsonFile
 import java.nio.file.Files
 
 fun checkThemes() {
+    val translucent = 0x80A15CC3.toInt()
+    check(hudOpacityColor(translucent, .5) == 0x40A15CC3) { "HUD fade lost the configured alpha or changed its RGB" }
+    check(hudOpacityColor(translucent, 1.0) == translucent)
+    check(hudOpacityColor(translucent, 5.0) == translucent)
+    val fades = listOf(0.0, .125, .25, .5, .75, 1.0).map { hudOpacityColor(translucent, it) }
+    check(fades.all { it and 0xFFFFFF == translucent and 0xFFFFFF })
+    check(fades.map { it ushr 24 }.zipWithNext().all { (before, after) -> before <= after && after <= 128 })
+    for (invalid in listOf(-1.0, Double.NaN, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY)) {
+        check(hudOpacityColor(translucent, invalid) == translucent and 0xFFFFFF) { "Invalid HUD fade became opaque" }
+    }
+    check(hudOpacityColor(0x00A15CC3, .5) == 0x00A15CC3) { "Transparent configured HUD color gained opacity" }
     val originalConfig = JsonParser.parseString("""{"Theme & Appearance":{"primary":123,"unknown":true},"other":{"value":7}}""").asJsonObject
     val newConfig = JsonParser.parseString("""{"Theme & Appearance":{"primary":456,"themeVersion":1}}""").asJsonObject
     val merged = me.mycellium.skymyce.config.mergeConfigFields(originalConfig, newConfig)

@@ -22,7 +22,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
     override val menuParent get() = if (parent is me.mycellium.skymyce.config.SettingsScreen) parent.menuParent else parent
     override val settingsCategory get() = me.mycellium.skymyce.config.SettingsTab.THEME
     override fun selectSettings(tab: me.mycellium.skymyce.config.SettingsTab) {
-        MC.instance.setScreen(me.mycellium.skymyce.config.SettingsScreen((parent as? me.mycellium.skymyce.config.SettingsScreen)?.menuParent, tab))
+        navigateMenu(me.mycellium.skymyce.config.SettingsScreen((parent as? me.mycellium.skymyce.config.SettingsScreen)?.menuParent, tab))
     }
     private var draft = ThemeDocument(preset = ThemeConfig.preset, overrides = widget?.theme ?: if (widget == null) ThemeConfig.overrides() else ThemeOverrides())
     private lateinit var preview: FlowLayout
@@ -42,7 +42,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
             })
             preview = column(); child(preview)
             val controls = column()
-            child(UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), controls).apply { scrollbarThiccness(2); scrollStep(20) })
+            child(menuScroll(Sizing.fill(), Sizing.expand(), controls).apply { scrollbarThiccness(2); scrollStep(20) })
             if (widget == null) controls.child(button("Preset: ${draft.preset.title}", 190) { b ->
                 openMenuDropdown(b) { d ->
                     ThemePreset.entries.forEach { preset -> d.button(Component.literal(preset.title)) {
@@ -53,7 +53,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
             controls.child(row().apply {
                 child(button("Reset", 55) { draft = draft.copy(overrides = ThemeOverrides()); applyDraft(); rebuild() }
                     .wrappedTooltip(Component.literal(if (widget == null) "Reset all global overrides to the selected preset." else "Use the global theme for every widget value. Layout and scale stay unchanged.")))
-                child(button("Export", 55) { MC.instance.keyboardHandler.clipboard = exportThemeDocument(draft); notice.text(Component.literal("Theme JSON copied to clipboard")) }
+                child(button("Export", 55) { MC.instance.keyboardHandler.clipboard = exportThemeDocument(draft); notice.text(Component.literal("Theme JSON copied to clipboard")); showMenuToast("Theme copied to clipboard", MenuToastKind.SUCCESS) }
                     .wrappedTooltip(Component.literal("Copy versioned theme JSON. No positions, identities or secrets are included.")))
                 child(button("Import", 55) { importClipboard() }.wrappedTooltip(Component.literal("Import theme JSON from the clipboard, limited to 16 KiB. Invalid data changes nothing.")))
             })
@@ -74,7 +74,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
         updatePreview()
     }
     private fun resolved() = resolveTheme(draft.preset, if (widget == null) draft.overrides else ThemeConfig.overrides(), if (widget == null) null else draft.overrides)
-    private fun colorControl(key: String, name: String) = UIContainers.collapsible(Sizing.fill(), Sizing.content(), Component.literal(name).withColor(MenuTheme.TEXT), false).apply {
+    private fun colorControl(key: String, name: String) = MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal(name).withColor(MenuTheme.TEXT), false).apply {
         wrappedTooltip(Component.literal("Choose a color override or reset to inheritance. Status colors remain independent."))
         val resolved = Gson().toJsonTree(resolved()).asJsonObject.get(key).asInt
         val hex = MenuTextBox(Sizing.fixed(100)).apply { setMaxLength(7); text("#%06X".format(resolved)); wrappedTooltip(Component.literal("Six hexadecimal RGB digits, for example #67CCF2.")) }
@@ -150,10 +150,11 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
     }
     private fun importClipboard() {
         val parsed = runCatching { parseThemeDocument(MC.instance.keyboardHandler.clipboard) }.getOrNull()
-        if (parsed == null) { notice.text(Component.literal("Invalid theme • nothing changed").withColor(MenuTheme.RED)); return }
+        if (parsed == null) { notice.text(Component.literal("Invalid theme • nothing changed").withColor(MenuTheme.RED)); showMenuToast("Theme import could not be read", MenuToastKind.ERROR); return }
         // A widget import uses only overrides; selecting a global preset is deliberately a global action.
         draft = if (widget == null) parsed else parsed.copy(preset = ThemeConfig.preset)
         applyDraft(); rebuild(); notice.text(Component.literal("Theme imported • review the preview before closing"))
+        showMenuToast("Theme imported", MenuToastKind.SUCCESS)
     }
     override fun removed() {
         if (dirty) {
@@ -164,8 +165,8 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
         }
         super.removed()
     }
-    override fun onClose() { MC.instance.setScreen(parent) }
-    private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    override fun onClose() { closeMenuTo(parent) }
+    private fun rebuild() { rebuildMenu() }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(5); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }

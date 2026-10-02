@@ -59,7 +59,10 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             })
             val perRow = if (panelWidth < 420) 2 else 4
             if (!more || height >= 340) TrackerPage.entries.chunked(perRow).forEach { tabs -> child(row().apply { tabs.forEach { tab ->
-                child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) { change(filter.copy(page = tab)); rebuild() }
+                child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) {
+                    val direction = if (tab.ordinal < filter.page.ordinal) -1 else 1
+                    change(filter.copy(page = tab)); rebuildMenu(direction)
+                }
                     .apply { if (filter.page == tab) message = message.copy().withColor(MenuTheme.ACCENT) }
                     .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
             } }) }
@@ -82,13 +85,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 setMaxLength(100); text(this@DungeonScreen.filter.query); setHint(Component.literal("Search item name or ID…"))
                 onChanged().subscribe { change(this@DungeonScreen.filter.copy(query = it)) }
             })
-            if (more && height >= 340) child(UIContainers.verticalScroll(Sizing.fill(), Sizing.fixed(if (height < 400) 58 else 100), filters()).apply { scrollStep(20); scrollbarThiccness(2) })
+            if (more && height >= 340) child(menuScroll(Sizing.fill(), Sizing.fixed(if (height < 400) 58 else 100), filters()).apply { scrollStep(20); scrollbarThiccness(2) })
             status = label("Loading saved records…", MenuTheme.MUTED); child(status)
-            results = UIContainers.verticalScroll(Sizing.fill(), Sizing.expand(), column()).apply {
+            results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
             }; child(results)
             child(row().apply {
-                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView() })
+                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView(-1) })
                 pageLabel = label("").apply { horizontalSizing(Sizing.expand()) }; child(pageLabel)
                 child(button("›", 28) { page++; renderView() })
             })
@@ -164,7 +167,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             }
         }
     }
-    private fun renderView() {
+    private fun renderView(direction: Int = 1) {
+        contentChanged(direction)
         val filters = listOfNotNull(filter.floor, filter.mode?.let { if (it == "M") "Master" else "Normal" }, filter.chest,
             filter.from.takeIf(String::isNotEmpty)?.let { "From $it" }, filter.until.takeIf(String::isNotEmpty)?.let { "To $it" },
             filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
@@ -278,7 +282,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun duration(value: Long) = "${value / 3600000}h ${value / 60000 % 60}m ${value / 1000 % 60}s"
     private fun date(value: Long) = Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     private fun menu(button: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(button, options)
-    private fun rebuild() { uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount() }
+    private fun rebuild() { rebuildMenu() }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }

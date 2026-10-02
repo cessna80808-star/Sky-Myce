@@ -2,13 +2,19 @@ package me.mycellium.skymyce.features.general.overlays
 
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GeneralConfig
+import me.mycellium.skymyce.config.misc.ThemeConfig
+import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.core.HorizontalAlignment
 import me.mycellium.skymyce.hud.hudColumn
 import me.mycellium.skymyce.hud.hudLabel
+import me.mycellium.skymyce.hud.hudOpacity
 import me.mycellium.skymyce.hud.updateText
 import me.mycellium.skymyce.hud.updateTextLines
 import me.mycellium.skymyce.hud.widget.Anchor
 import me.mycellium.skymyce.hud.widget.Widget
+import me.mycellium.skymyce.hud.widget.WidgetEditorScreen
+import me.mycellium.skymyce.ui.motionEnvelope
+import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils
 import net.minecraft.world.item.ItemStack
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
@@ -46,10 +52,14 @@ object AbilityCooldownOverlay : SkyMyceModule() {
     }
 
     val notiWidget = Widget("ability_reset_display", "Ability Reset Display", 480, 270, 1.5f, anchor = Anchor.CENTER) {
+        val editor = MC.screen is WidgetEditorScreen
+        // Retained transient rows remain legible while arranging their existing editor preview.
+        if (editor) notifications.children().forEach { (it as? LabelComponent)?.hudOpacity(1.0) }
         if (!GeneralConfig.displayAbilityNotification) return@Widget null
         val now = System.currentTimeMillis().milliseconds
 
         val lines = mutableListOf<String>()
+        val opacities = mutableListOf<Double>()
         for ((id, cooldown) in cooldowns) {
             val time = now - cooldown.first
             val duration = maxOf(cooldown.second, cooldown.third)
@@ -57,11 +67,13 @@ object AbilityCooldownOverlay : SkyMyceModule() {
             if ((time - duration) !in 0.seconds..5.seconds) continue
 
             lines += "§a${id.toItem().hoverName.stripped}"
+            opacities += if (editor) 1.0 else motionEnvelope((time - duration).inWholeMilliseconds.toDouble(),
+                5000.0, ThemeConfig.animationMode)
         }
 
         if (lines.isEmpty()) return@Widget null
 
-        notifications.updateTextLines(lines)
+        notifications.updateTextLines(lines, opacities)
     }
 
     @Subscription

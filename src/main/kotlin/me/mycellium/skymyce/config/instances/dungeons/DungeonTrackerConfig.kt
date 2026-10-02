@@ -5,6 +5,7 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig.AuctionType
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig.BazaarType
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
+import me.mycellium.skymyce.ui.navigateMenu
 import me.mycellium.skymyce.utils.MC
 
 object DungeonTrackerConfig : CategoryKt("Dungeons Tracker") {
@@ -20,7 +21,7 @@ object DungeonTrackerConfig : CategoryKt("Dungeons Tracker") {
 
             onClick {
                 MC.instance.execute {
-                    MC.instance.setScreen(DungeonScreen())
+                    navigateMenu(DungeonScreen())
                 }
             }
         }
