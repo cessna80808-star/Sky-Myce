@@ -5,7 +5,7 @@ import { SharedWealth, WEALTH_TTL, validateWealth } from "./wealth";
 import { DigestNews, DigestRng, type DigestConfig } from "./digest";
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand } from "./cosmetics";
 import { verifiedInteraction, discordCommand } from "./discord";
-import { deferInteraction, handleAccountInteraction, type DiscordAccountsConfig } from "./discord-accounts";
+import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, type DiscordAccountsConfig } from "./discord-accounts";
 import { handleDrmRequest, type DrmConfig } from "./drm";
 import type { AccountsConfig } from "./accounts";
 import { handleLoaderDownload } from "./discord-download";
@@ -87,6 +87,7 @@ export default {
       const data = await verifiedInteraction(request, discordEnv);
       if (!data) return new Response("Invalid signature or interaction", { status: 401 });
       if (data.type === 1) return Response.json({ type: 1 });
+      if (data.type === 4) return handleAccountAutocomplete(data, env, backend ? "backend" : "user");
       const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
       if (promptResponse) return promptResponse;
       const accountResponse = await handleAccountInteraction(data, env, ctx, backend ? "backend" : "user");
@@ -269,11 +270,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
             lease: data.lease, challenge: session.challenge, signature: data.installationSignature });
           if (!authorization.ok) {
             if (authorization.error?.endsWith("unavailable")) ws.close(1013, "Authorization service unavailable");
-            else ws.close(4005, authorization.error ?? "not_authorized");
+            else ws.close(authorization.error === "authorization_renewal_required" ? 4006 : 4005, authorization.error ?? "not_authorized");
             return;
           }
           Object.assign(session, { accountId: authorization.accountId, discordId: authorization.discordId,
-            installationId: authorization.installationId, generation: authorization.generation, leaseExpiresAt: authorization.expiresAt });
+            installationId: authorization.installationId, generation: authorization.generation, leaseExpiresAt: authorization.expiresAt,
+            buildId: authorization.buildId, loaderVersion: authorization.loaderVersion, connectionId: authorization.connectionId });
         }
         if (ws.readyState !== WebSocket.OPEN) return;
         this.registerUser(profile.id, profile.name);
@@ -298,7 +300,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       return;
     }
 
-    if (!await this.authorized(ws, session)) return;
+    if (!await this.authorized(ws, session, true)) return;
     if (data.type === "irc_send" || data.type === "irc_subscribe") {
       if (!session.accountId || encoder.encode(raw).length > 2048) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized" })); return; }
       try { await this.irc.message(ws, session, data); }
@@ -608,7 +610,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     return rows.length < 250;
   }
 
-  private async authorized(ws: WebSocket, session: IrcSession): Promise<boolean> {
+  private async authorized(ws: WebSocket, session: IrcSession, heartbeat = false): Promise<boolean> {
     if (session.bridge) return true;
     if (legacyRelay(this.env)) return true;
     if (ws.readyState !== WebSocket.OPEN) return false;
@@ -619,8 +621,13 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (!session.leaseExpiresAt || session.leaseExpiresAt <= Date.now()) {
         ws.close(4006, "Authorization renewal required"); return false;
       }
+      if (!session.buildId || !session.loaderVersion) {
+        ws.close(4006, "Authorization renewal required"); return false;
+      }
       const state = await this.env.ACCOUNT_STORE.getByName("global").checkSession({ accountId: session.accountId,
-        uuid: session.uuid, installationId: session.installationId, generation: session.generation });
+        uuid: session.uuid, installationId: session.installationId, generation: session.generation,
+        buildId: session.buildId, loaderVersion: session.loaderVersion, heartbeat,
+        heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId });
       if (!state.ok) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error === "license_revoked" ? "license_revoked" : "not_authorized" }));
@@ -676,13 +683,21 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   webSocketClose(ws: WebSocket, code: number, _reason: string, wasClean: boolean): void {
     const session = ws.deserializeAttachment() as Session;
+    this.recordDisconnect(session);
     console.info({ event: "websocket_close", code, clean: wasClean, authenticated: !!session.name,
       lifetimeMs: session.started === undefined ? undefined : Date.now() - session.started });
     // Safe with automatic close replies; also completes the handshake in local runtimes.
     ws.close(1000, "Client disconnected");
   }
   webSocketError(ws: WebSocket): void {
+    this.recordDisconnect(ws.deserializeAttachment() as Session);
     console.error({ event: "websocket_error", authenticated: !!(ws.deserializeAttachment() as Session).name });
     ws.close(1011, "Connection error");
+  }
+  private recordDisconnect(session: Session): void {
+    if (session.accountId && session.uuid && session.installationId && session.generation !== undefined && session.connectionId) {
+      this.ctx.waitUntil(this.env.ACCOUNT_STORE.getByName("global").markSessionOffline(session.accountId, session.uuid,
+        session.installationId, session.generation, session.connectionId).catch(() => {}));
+    }
   }
 }

@@ -1,5 +1,7 @@
 /** Private loader downloads use a short-lived bearer in the URL fragment, never a query string or request log. */
-export type DiscordDownloadConfig = {
+import { deny, loaderRelease } from "./drm";
+import type { AccountsConfig } from "./accounts";
+export type DiscordDownloadConfig = AccountsConfig & {
   PRIVATE_ARTIFACTS?: R2Bucket;
   SKYMYCE_LOADER_R2_KEY?: string;
   SKYMYCE_PUBLIC_URL?: string;
@@ -8,6 +10,19 @@ export type DiscordDownloadConfig = {
 const encoder = new TextEncoder();
 const lifetime = 15 * 60_000;
 export const loaderObjectKey = (env: DiscordDownloadConfig) => env.SKYMYCE_LOADER_R2_KEY ?? "loaders/Sky-Myce-Loader.jar";
+/** Prefer the existing signed release; legacy private objects retain their configured version gate. */
+export async function approvedLoader(env: DiscordDownloadConfig): Promise<{ key: string; version: string; minecraft: string }> {
+  if (!env.PRIVATE_ARTIFACTS) throw Error("Loader unavailable");
+  if (await env.PRIVATE_ARTIFACTS.head(env.LOADER_MANIFEST_KEY ?? "loaders/current.json")) {
+    const { manifest } = await loaderRelease(env);
+    return { key: manifest.artifact, version: manifest.version, minecraft: manifest.minecraft };
+  }
+  const key = loaderObjectKey(env), artifact = await env.PRIVATE_ARTIFACTS.head(key);
+  const version = /Sky-Myce-Loader-(\d{1,5}\.\d{1,5}\.\d{1,5})\.jar$/.exec(key)?.[1] ?? artifact?.customMetadata?.version;
+  if (!artifact || !version || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(version)) throw Error("Loader version unavailable");
+  if (env.ACCOUNT_STORE && !(await env.ACCOUNT_STORE.getByName("global").buildAllowed("loader", version)).ok) deny("BUILD_REVOKED");
+  return { key, version, minecraft: env.MINECRAFT_VERSION ?? "26.1.2" };
+}
 const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 function decode(value: string): Uint8Array {
   return Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), char => char.charCodeAt(0));
@@ -52,10 +67,17 @@ if(!response.ok)throw Error();const url=URL.createObjectURL(await response.blob(
       "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'` } });
   }
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers });
-  if (!env.PRIVATE_ARTIFACTS || !await validLoaderDownload(env, request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "")) {
+  const token = request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
+  if (!env.PRIVATE_ARTIFACTS || !await validLoaderDownload(env, token)) {
     return new Response("Sky-Myce download unavailable or expired", { status: 403, headers });
   }
-  const object = await env.PRIVATE_ARTIFACTS.get(loaderObjectKey(env));
+  if (env.ACCOUNT_STORE) {
+    const subject = JSON.parse(new TextDecoder().decode(decode(token.split(".")[0]))).sub as string;
+    if (!(await env.ACCOUNT_STORE.getByName("global").loaderEligibility(subject)).ok) return new Response("Sky-Myce download unavailable", { status: 403, headers });
+  }
+  let key: string;
+  try { key = (await approvedLoader(env)).key; } catch { return new Response("Sky-Myce Loader unavailable", { status: 403, headers }); }
+  const object = await env.PRIVATE_ARTIFACTS.get(key);
   if (!object) return new Response("Sky-Myce Loader unavailable", { status: 503, headers });
   return new Response(object.body, { headers: { ...headers, "Content-Type": "application/java-archive",
     "Content-Disposition": 'attachment; filename="Sky-Myce-Loader.jar"', "Content-Length": String(object.size) } });

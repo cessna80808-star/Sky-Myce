@@ -12,7 +12,7 @@ export type InstallationInput = { purpose: AuthenticationPurpose | "manifest" | 
 export type LeaseClaims = { product: "sky-myce"; protocol: 3; accountId: string; discordId: string; uuid: string;
   installationId: string; deviceHash: string; hardwareHash?: string; keyFingerprint: string; version: string; minecraft: string;
   iat: number; exp: number; offlineUntil: number; generation: number; jti: string; challengeId: string; clientNonce: string; features: string[];
-  platform?: ClientPlatform; launchSessionId?: string };
+  platform?: ClientPlatform; launchSessionId?: string; loaderVersion?: string };
 export type SignedManifest = { payload: string; signature: string; kid: string };
 export type ReleaseManifest = { product: string; protocol: number; minecraft: string; version: string;
   minimumLoaderVersion: string; artifact: string; sha256: string; issuedAt: number; expiresAt: number };
@@ -101,6 +101,7 @@ export async function validateLease(env: DrmConfig, token: unknown): Promise<Lea
     if ((claims.platform !== undefined || claims.launchSessionId !== undefined) &&
       (!platformValid(claims.platform) || typeof claims.launchSessionId !== "string" || !launchId.test(claims.launchSessionId))) deny("invalid_lease");
     if (claims.hardwareHash !== undefined && (typeof claims.hardwareHash !== "string" || !/^[a-f0-9]{64}$/.test(claims.hardwareHash))) deny("invalid_lease");
+    if (claims.loaderVersion !== undefined && (typeof claims.loaderVersion !== "string" || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(claims.loaderVersion))) deny("invalid_lease");
     return claims as LeaseClaims;
   } catch (error) { if (error instanceof AuthorizationError) throw error; return deny("invalid_lease"); }
 }
@@ -122,10 +123,14 @@ export async function releaseManifest(env: AccountsConfig): Promise<{ signed: Si
       !Number.isSafeInteger(manifest.issuedAt) || !Number.isSafeInteger(manifest.expiresAt) ||
       manifest.issuedAt > Date.now() + 30000 || manifest.expiresAt <= Date.now() ||
       versionDenial({ minecraftVersion: manifest.minecraft, modVersion: manifest.version, loaderVersion: manifest.minimumLoaderVersion }, env)) deny("artifact_unavailable");
+    if (env.ACCOUNT_STORE) {
+      const allowed = await env.ACCOUNT_STORE.getByName("global").buildAllowed("mod", manifest.version);
+      if (!allowed.ok) deny(allowed.error ?? "BUILD_REVOKED");
+    }
     return { signed, manifest };
-  } catch { return deny("artifact_unavailable"); }
+  } catch (error) { if (error instanceof AuthorizationError && error.code === "BUILD_REVOKED") throw error; return deny("artifact_unavailable"); }
 }
-async function loaderRelease(env: AccountsConfig) {
+export async function loaderRelease(env: AccountsConfig) {
   if (!env.PRIVATE_ARTIFACTS) deny("artifact_unavailable");
   const object = await env.PRIVATE_ARTIFACTS.get(env.LOADER_MANIFEST_KEY ?? "loaders/current.json");
   if (!object || object.size > 16384) deny("artifact_unavailable");
@@ -138,8 +143,12 @@ async function loaderRelease(env: AccountsConfig) {
       !/^[a-f0-9]{64}$/.test(manifest.sha256) || !Number.isSafeInteger(manifest.size) || manifest.size < 1 || manifest.size > 64 * 1024 * 1024 ||
       !Number.isSafeInteger(manifest.issuedAt) || !Number.isSafeInteger(manifest.expiresAt) || manifest.issuedAt > Date.now() + 30000 ||
       manifest.expiresAt <= Date.now() || manifest.expiresAt <= manifest.issuedAt || manifest.expiresAt - manifest.issuedAt > 7 * 86400000) deny("artifact_unavailable");
+    if (env.ACCOUNT_STORE) {
+      const allowed = await env.ACCOUNT_STORE.getByName("global").buildAllowed("loader", manifest.version);
+      if (!allowed.ok) deny(allowed.error ?? "BUILD_REVOKED");
+    }
     return { signed, manifest };
-  } catch { return deny("artifact_unavailable"); }
+  } catch (error) { if (error instanceof AuthorizationError && error.code === "BUILD_REVOKED") throw error; return deny("artifact_unavailable"); }
 }
 /** Public HTTP boundary: bounded JSON, fixed routes, one global identity store. */
 export async function handleDrmRequest(request: Request, env: AccountsConfig): Promise<Response | null> {

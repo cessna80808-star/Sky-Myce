@@ -34,7 +34,7 @@ export async function checkIrc(script, proof) {
     const now = Date.now(), claims = { product: "sky-myce", protocol: 3, accountId: person.accountId, discordId: person.discordId,
       uuid: person.uuid, installationId: person.installationId, deviceHash: person.device,
       keyFingerprint: createHash("sha256").update(person.key.publicKey.export({ format: "der", type: "spki" })).digest("hex"),
-      version: "2.4.2", minecraft: "26.1.2", iat: now, exp: now + 300000, offlineUntil: now + 1200000,
+      version: "2.4.2", loaderVersion: "1.0.0", minecraft: "26.1.2", iat: now, exp: now + 300000, offlineUntil: now + 1200000,
       generation: 0, jti: randomUUID(), challengeId: randomUUID(), clientNonce: randomUUID(), features: ["relay", "irc", "cosmetics"], ...changes };
     const body = `${b64({ alg: "EdDSA", typ: "JWT", kid: "test" })}.${b64(claims)}`;
     return `${body}.${sign(null, Buffer.from(body), signing.privateKey).toString("base64url")}`;

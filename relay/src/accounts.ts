@@ -5,6 +5,7 @@ import { ACTIVATION_TTL, DEVICE_RESET_COOLDOWN, licenseDenial, type DeveloperAct
 import { AuthorizationError, bootstrapPurpose, createLease, decode64, deny, ensureSigningConfigured, installationKey, installationMessage, installationVersionDenial, randomToken,
   seconds, sha256, validateLaunchInput, validateLease, verifyInstallation, type AuthenticationPurpose, type ClientPlatform, type DrmConfig, type InstallationInput, type LeaseClaims } from "./drm";
 import { PromptJobs, type PromptActor, type PromptConfig } from "./prompts";
+import { deliverAccountAlert } from "./discord-notifications";
 
 export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore> };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
@@ -14,9 +15,28 @@ type ChallengeRow = { id: string; nonce: string; input: string; approval_hash: s
 export type AccountSummary = { accountId: string; discordId: string; status: string; isAdmin: boolean; activated: boolean; licenseStatus: string; licenseExpiresAt: number | null;
   deviceRegistered: boolean; hwidResetAt: number | null; hwidBoundAt: number | null; nextHwidChangeAllowedAt: number | null; uuids: { uuid: string; name: string }[] };
 export type AccountResult = { ok: boolean; error?: string; account?: AccountSummary; activationKey?: string; activationId?: string;
-  expiresAt?: number; invalidated?: string; invalidatedAccounts?: string[]; audit?: Record<string, SqlStorageValue>[]; warningId?: string; adminAdded?: boolean };
+  expiresAt?: number; invalidated?: string; invalidatedAccounts?: string[]; audit?: Record<string, SqlStorageValue>[]; warningId?: string; adminAdded?: boolean; details?: AccountDetails };
 export type SessionResult = { ok: boolean; error?: string; accountId?: string; discordId?: string; installationId?: string;
-  deviceId?: string; generation?: number; expiresAt?: number; uuid?: string; loaderVersion?: string };
+  deviceId?: string; generation?: number; expiresAt?: number; uuid?: string; buildId?: string; loaderVersion?: string; connectionId?: string };
+export type AuditValue = string | number | boolean | null | { name: string; uuid: string }[];
+export type ManagementOptions = Record<string, string | number | boolean>;
+export type AuditEvent = { id: number; at: number; actor: string; account_id: string | null; action: string; override: number;
+  severity: string; metadata: Record<string, AuditValue> };
+export type AccountAlert = { id: string; auditId: number; recipientId: string; claimToken: string; attempts: number; repeats: number; event: AuditEvent };
+export type AccountDetails = { account: AccountSummary; createdAt: number; lastSeen: number; discordUsername: string | null; displayName: string | null;
+  buildId: string | null; loaderVersion: string | null; lease: { issuedAt: number; expiresAt: number } | null;
+  session: { sessionId: string; minecraftUuid: string; minecraftName: string; buildId: string; connectedAt: number; lastHeartbeat: number; leaseExpiresAt: number; state: "online" | "offline" } | null;
+  debug?: { deviceReference: string | null; generation: number; protocol: number; policyVersion: string; installationId: string | null } };
+export type ManagementResult = AccountResult & { details?: AccountDetails; accounts?: AccountDetails[]; affectedAccounts?: AccountDetails[]; overview?: Record<string, number>;
+  event?: AuditEvent; events?: AuditEvent[]; nextBefore?: number; builds?: Record<string, SqlStorageValue>[]; token?: string;
+  action?: string; target?: string; options?: ManagementOptions };
+type ManagementKind = "backend" | "user";
+type ManagementConfirmation = { token: string; actor_id: string; guild_id: string; kind: ManagementKind; action: string; target: string;
+  options: string; generation: number; expires_at: number; used_at: number | null; related_state: string };
+type RuntimeRow = { installation_id: string; uuid: string; account_id: string; session_id: string; build_id: string; loader_version: string;
+  generation: number; lease_issued_at: number; lease_expires_at: number; connected_at: number | null; last_heartbeat: number | null; connection_id: string | null };
+type SessionCheck = { accountId: string; uuid: string; installationId: string; generation: number; buildId?: string; loaderVersion?: string; connectionId?: string; heartbeat?: boolean; heartbeatAt?: number };
+const ADMIN_ALERT_IDS = ["978376257534328883", "1250627753191931914"];
 const snowflake = /^[0-9]{17,20}$/, uuid = /^[a-f0-9]{32}$/, hash = /^[a-f0-9]{64}$/;
 const failure = (error: unknown): { ok: false; error: string } => ({ ok: false, error: error instanceof AuthorizationError ? error.code : "authorization_unavailable" });
 
@@ -88,6 +108,35 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(activation_keys)").toArray().some(column => column.name === "hardware_transfer")) {
       ctx.storage.sql.exec("ALTER TABLE activation_keys ADD COLUMN hardware_transfer INTEGER NOT NULL DEFAULT 0 CHECK(hardware_transfer IN (0,1))");
     }
+    ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS account_discord_names (discord_id TEXT PRIMARY KEY, username TEXT NOT NULL, display_name TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS account_runtime (installation_id TEXT NOT NULL, uuid TEXT NOT NULL, account_id TEXT NOT NULL,
+        session_id TEXT NOT NULL, build_id TEXT NOT NULL, loader_version TEXT NOT NULL, generation INTEGER NOT NULL,
+        lease_issued_at INTEGER NOT NULL, lease_expires_at INTEGER NOT NULL, connected_at INTEGER, last_heartbeat INTEGER, connection_id TEXT,
+        PRIMARY KEY(installation_id,uuid));
+      CREATE INDEX IF NOT EXISTS account_runtime_owner ON account_runtime(account_id,lease_issued_at);
+      CREATE TABLE IF NOT EXISTS account_management_confirmations (token TEXT PRIMARY KEY, actor_id TEXT NOT NULL, guild_id TEXT NOT NULL,
+        kind TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, options TEXT NOT NULL, generation INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL, used_at INTEGER, related_state TEXT NOT NULL DEFAULT '');
+      CREATE INDEX IF NOT EXISTS account_confirmation_expiry ON account_management_confirmations(expires_at);
+      CREATE TABLE IF NOT EXISTS account_key_recovery (discord_id TEXT PRIMARY KEY,last_issued_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS account_loader_delivery (discord_id TEXT PRIMARY KEY,last_requested_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS account_build_policy (kind TEXT NOT NULL,version TEXT NOT NULL,revoked_at INTEGER,actor TEXT NOT NULL,
+        reason TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(kind,version));
+      CREATE TABLE IF NOT EXISTS account_alerts (id TEXT PRIMARY KEY,audit_id INTEGER NOT NULL,recipient_id TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,repeats INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL,lease_until INTEGER NOT NULL DEFAULT 0,claim_token TEXT);
+      CREATE INDEX IF NOT EXISTS account_alert_due ON account_alerts(next_at);
+      CREATE TABLE IF NOT EXISTS account_alert_dedup (id TEXT PRIMARY KEY,last_at INTEGER NOT NULL,audit_id INTEGER NOT NULL);
+    `);
+    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_audit)").toArray().some(column => column.name === "severity")) {
+      ctx.storage.sql.exec("ALTER TABLE account_audit ADD COLUMN severity TEXT NOT NULL DEFAULT 'information'");
+    }
+    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_runtime)").toArray().some(column => column.name === "connection_id")) {
+      ctx.storage.sql.exec("ALTER TABLE account_runtime ADD COLUMN connection_id TEXT");
+    }
+    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_management_confirmations)").toArray().some(column => column.name === "related_state")) {
+      ctx.storage.sql.exec("ALTER TABLE account_management_confirmations ADD COLUMN related_state TEXT NOT NULL DEFAULT ''");
+    }
     if (env.ADMIN_BOOTSTRAP_USER_ID !== undefined) {
       if (typeof env.ADMIN_BOOTSTRAP_USER_ID !== "string" || !snowflake.test(env.ADMIN_BOOTSTRAP_USER_ID)) throw new Error("Invalid ADMIN_BOOTSTRAP_USER_ID");
       const bootstrapped = ctx.storage.transactionSync(() => {
@@ -113,7 +162,14 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   async promptRunner(input: Record<string, unknown>, nonce: string) {
     const result = this.prompts.runner(input, nonce); await this.prompts.arm(); return result;
   }
-  async alarm(): Promise<void> { await this.prompts.alarm(); }
+  async alarm(): Promise<void> {
+    await this.prompts.alarm();
+    await Promise.all(this.claimAccountAlerts(4).map(async alert => {
+      this.completeAccountAlert(alert.id, alert.claimToken, await deliverAccountAlert(this.env, alert));
+    }));
+    const due = this.nextAccountAlertAt(), current = await this.ctx.storage.getAlarm();
+    if (due !== null && (current === null || due < current)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+  }
   private byDiscord(discordId: string): AccountRow | undefined {
     return this.ctx.storage.sql.exec<AccountRow>("SELECT * FROM sky_accounts WHERE discord_id=?", discordId).toArray()[0];
   }
@@ -141,6 +197,175 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     const account = this.ctx.storage.sql.exec<AccountRow>("SELECT a.* FROM sky_accounts a JOIN account_devices d ON a.account_id=d.account_id WHERE d.device_hash=? AND d.revoked_at IS NULL", deviceHash).toArray()[0];
     return account ? this.summary(account) : null;
   }
+  cacheDiscordIdentity(actor: DeveloperActor, id: string, identity: { username: string; displayName: string }): AccountResult {
+    try {
+      if (!snowflake.test(id) || actor.guildId !== this.env.DISCORD_GUILD_ID || (actor.id !== id && !this.isAdmin(actor))) deny("forbidden");
+      if (typeof identity?.username !== "string" || typeof identity.displayName !== "string" ||
+        !identity.username.trim() || identity.username.length > 100 || identity.displayName.length > 100 ||
+        /[\x00-\x1f\x7f]/.test(identity.username + identity.displayName)) deny("invalid_request");
+      this.ctx.storage.sql.exec("INSERT INTO account_discord_names VALUES(?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,updated_at=excluded.updated_at",
+        id, identity.username, identity.displayName || identity.username, Date.now());
+      return { ok: true };
+    } catch (error) { return failure(error); }
+  }
+  private details(account: AccountRow, debug = false): AccountDetails {
+    const name = this.ctx.storage.sql.exec<{ username: string; display_name: string }>("SELECT username,display_name FROM account_discord_names WHERE discord_id=?", account.discord_id).toArray()[0];
+    const runtime = this.ctx.storage.sql.exec<RuntimeRow>("SELECT * FROM account_runtime WHERE account_id=? ORDER BY lease_issued_at DESC LIMIT 1", account.account_id).toArray()[0];
+    const player = runtime && this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, runtime.uuid).toArray()[0];
+    const online = runtime && runtime.connected_at !== null && runtime.last_heartbeat !== null && runtime.last_heartbeat > Date.now() - 90_000 &&
+      runtime.lease_expires_at > Date.now() && runtime.generation === account.generation && !licenseDenial(account) &&
+      this.buildAllowed("mod", runtime.build_id).ok && this.buildAllowed("loader", runtime.loader_version).ok;
+    return { account: this.summary(account), createdAt: account.created_at, lastSeen: account.last_seen,
+      discordUsername: name?.username ?? null, displayName: name?.display_name ?? null,
+      buildId: runtime?.build_id ?? null, loaderVersion: runtime?.loader_version ?? null,
+      lease: runtime ? { issuedAt: runtime.lease_issued_at, expiresAt: runtime.lease_expires_at } : null,
+      session: runtime?.connected_at !== null && runtime?.connected_at !== undefined ? { sessionId: runtime.session_id,
+        minecraftUuid: runtime.uuid, minecraftName: player?.name ?? "Minecraft account", buildId: runtime.build_id,
+        connectedAt: runtime.connected_at, lastHeartbeat: runtime.last_heartbeat ?? runtime.connected_at,
+        leaseExpiresAt: runtime.lease_expires_at, state: online ? "online" : "offline" } : null,
+      ...(debug ? { debug: { deviceReference: account.device_hash, generation: account.generation, protocol: 3,
+        policyVersion: "persistent-hwid-v1", installationId: runtime?.installation_id ?? null } } : {}) };
+  }
+  managementRead(actor: DeveloperActor, action: string, target = "", options: Record<string, unknown> = {}): ManagementResult {
+    try {
+      if (!this.isAdmin(actor)) deny("admin_required");
+      this.limit(`management-read:${actor.id}`, 120);
+      if (action === "search") {
+        if (typeof options.query !== "string" || !options.query.trim() || options.query.length > 100) deny("invalid_request");
+        const query = options.query.trim().toLowerCase(), compact = query.replaceAll("-", "");
+        const rows = this.ctx.storage.sql.exec<AccountRow>(`SELECT DISTINCT a.* FROM sky_accounts a LEFT JOIN account_discord_names d ON a.discord_id=d.discord_id
+          LEFT JOIN minecraft_accounts m ON a.account_id=m.account_id WHERE instr(lower(d.username),?)>0 OR instr(lower(d.display_name),?)>0 OR
+          instr(lower(m.name),?)>0 OR m.uuid=? OR a.account_id=? OR a.discord_id=? ORDER BY a.last_seen DESC LIMIT 25`,
+          query, query, query, compact, query, query).toArray();
+        return { ok: true, accounts: rows.map(row => this.details(row)) };
+      }
+      if (action === "overview") {
+        const now = Date.now();
+        const count = (query: string, ...values: SqlStorageValue[]) => this.ctx.storage.sql.exec<{ n: number }>(query, ...values).one().n;
+        return { ok: true, overview: {
+          active: count("SELECT COUNT(*) AS n FROM sky_accounts WHERE status='active' AND license_status='active' AND (license_expires_at IS NULL OR license_expires_at>?)", now),
+          revoked: count("SELECT COUNT(*) AS n FROM sky_accounts WHERE license_status='revoked'"),
+          pending: count("SELECT COUNT(*) AS n FROM sky_accounts WHERE status='active' AND license_status='active' AND activated_at IS NULL AND (license_expires_at IS NULL OR license_expires_at>?)", now),
+          online: count(`SELECT COUNT(DISTINCT a.account_id) AS n FROM sky_accounts a JOIN account_runtime r ON a.account_id=r.account_id
+            WHERE a.status='active' AND a.license_status='active' AND (a.license_expires_at IS NULL OR a.license_expires_at>?)
+            AND r.generation=a.generation AND r.connected_at IS NOT NULL AND r.last_heartbeat>? AND r.lease_expires_at>?
+            AND NOT EXISTS (SELECT 1 FROM account_build_policy b WHERE b.revoked_at IS NOT NULL AND ((b.kind='mod' AND b.version=r.build_id) OR (b.kind='loader' AND b.version=r.loader_version)))`, now, now - 90_000, now),
+          transfersThisWeek: count("SELECT COUNT(*) AS n FROM account_audit WHERE action='device_transferred' AND override=0 AND at>=?", now - DEVICE_RESET_COOLDOWN),
+          securityWarnings: count("SELECT COUNT(*) AS n FROM account_audit WHERE severity IN ('warning','security','critical') AND at>=?", now - ACTIVATION_TTL),
+        } };
+      }
+      if (action === "builds") return { ok: true, builds: this.ctx.storage.sql.exec("SELECT * FROM account_build_policy ORDER BY kind,version LIMIT 100").toArray() };
+      if (action === "event") {
+        if (!Number.isSafeInteger(options.id) || Number(options.id) < 1) deny("invalid_request");
+        const row = this.ctx.storage.sql.exec("SELECT * FROM account_audit WHERE id=?", options.id as number).toArray()[0];
+        if (!row) deny("event_not_found"); return { ok: true, event: this.auditEvent(row) };
+      }
+      const account = target ? this.byDiscord(target) : undefined;
+      if (target && (!snowflake.test(target) || !account)) deny("account_required");
+      if (action === "audit") {
+        const where: string[] = [], values: SqlStorageValue[] = [];
+        if (account) { where.push("account_id=?"); values.push(account.account_id); }
+        if (options.event !== undefined) { if (typeof options.event !== "string" || !/^[a-z_]{1,64}$/.test(options.event)) deny("invalid_request"); where.push("action=?"); values.push(options.event); }
+        if (options.severity !== undefined) { if (!["information", "warning", "security", "critical"].includes(String(options.severity))) deny("invalid_request"); where.push("severity=?"); values.push(String(options.severity)); }
+        for (const [key, column, sign] of [["before", "id", "<"], ["since", "at", ">="]] as const) {
+          if (options[key] !== undefined) { if (!Number.isSafeInteger(options[key]) || Number(options[key]) < 0) deny("invalid_request"); where.push(`${column}${sign}?`); values.push(options[key] as number); }
+        }
+        const limit = options.limit ?? 10; if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 25) deny("invalid_request");
+        const rows = this.ctx.storage.sql.exec(`SELECT * FROM account_audit${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`, ...values, Number(limit) + 1).toArray();
+        const events = rows.slice(0, Number(limit)).map(row => this.auditEvent(row));
+        return { ok: true, ...(account ? { account: this.summary(account) } : {}), events,
+          audit: rows.slice(0, Number(limit)), ...(rows.length > Number(limit) ? { nextBefore: events.at(-1)!.id } : {}) };
+      }
+      if (!["info", "debug", "sessions", "uuids"].includes(action)) deny("invalid_action");
+      if (!account) deny("account_required");
+      return { ok: true, account: this.summary(account), details: this.details(account, action === "debug") };
+    } catch (error) { return failure(error); }
+  }
+  private managementGeneration(action: string, target: string, options: Record<string, unknown>): number {
+    if (action.startsWith("build_")) return this.ctx.storage.sql.exec<{ revision: number }>("SELECT revision FROM account_build_policy WHERE kind=? AND version=?", String(options.kind ?? "mod"), target).toArray()[0]?.revision ?? 0;
+    return this.byDiscord(target)?.generation ?? -1;
+  }
+  private managementRelatedState(action: string, target: string, options: Record<string, unknown>): string {
+    if (action === "hwid_bind") {
+      const device = this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM account_devices WHERE device_hash=?", String(options.deviceHash)).toArray()[0];
+      const owner = device && this.byId(device.account_id);
+      return JSON.stringify(owner ? { accountId: owner.account_id, generation: owner.generation } : null);
+    }
+    if (action === "account_unlink" && options.uuid === undefined) {
+      const account = this.byDiscord(target);
+      return JSON.stringify(account ? this.ctx.storage.sql.exec<{ uuid: string }>("SELECT uuid FROM minecraft_accounts WHERE account_id=? ORDER BY uuid", account.account_id).toArray().map(player => player.uuid) : []);
+    }
+    return "";
+  }
+  prepareManagement(actor: DeveloperActor, kind: ManagementKind, action: string, target: string, options: Record<string, unknown> = {}): ManagementResult {
+    try {
+      if (actor.guildId !== this.env.DISCORD_GUILD_ID || !snowflake.test(actor.id) || !snowflake.test(actor.interactionId)) deny("discord_authorization_required");
+      if (kind === "backend" ? !this.isAdmin(actor) : kind !== "user" || actor.id !== target) deny(kind === "backend" ? "admin_required" : "forbidden");
+      const allowed = kind === "backend" ? ["license_revoke", "account_suspend", "account_unlink", "hwid_reset", "hwid_revoke", "hwid_bind", "session_kick", "build_revoke", "admin_add"] : ["unlink", "reset"];
+      if (!allowed.includes(action) || Object.keys(options).length > 8 || Object.entries(options).some(([key, value]) =>
+        key === "managementToken" || !/^[a-zA-Z_-]{1,40}$/.test(key) || !["string", "number", "boolean"].includes(typeof value) ||
+        typeof value === "number" && !Number.isFinite(value) || typeof value === "string" && value.length > 500)) deny("invalid_action");
+      if (action.startsWith("build_")) { if (!/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(target) || !["mod", "loader"].includes(String(options.kind ?? "mod"))) deny("invalid_build"); }
+      else if (!snowflake.test(target)) deny("invalid_discord_id");
+      const account = this.byDiscord(target);
+      if (!action.startsWith("build_") && !account && action !== "admin_add") deny("account_required");
+      if (action === "hwid_bind" && (typeof options.deviceHash !== "string" || !hash.test(options.deviceHash))) deny("invalid_device");
+      if (options.uuid !== undefined && (!account || typeof options.uuid !== "string" ||
+        !this.ctx.storage.sql.exec("SELECT uuid FROM minecraft_accounts WHERE uuid=? AND account_id=?", options.uuid, account.account_id).toArray().length)) deny("minecraft_link_required");
+      this.interaction(actor); this.limit(`management-prepare:${actor.id}`, 20);
+      const token = randomToken(), expiresAt = Date.now() + 120_000;
+      this.ctx.storage.sql.exec("DELETE FROM account_management_confirmations WHERE expires_at<=?", Date.now());
+      this.ctx.storage.sql.exec(`INSERT INTO account_management_confirmations(token,actor_id,guild_id,kind,action,target,options,generation,expires_at,used_at,related_state)
+        VALUES(?,?,?,?,?,?,?,?,?,NULL,?)`, token, actor.id, actor.guildId, kind, action, target,
+        JSON.stringify(options), this.managementGeneration(action, target, options), expiresAt, this.managementRelatedState(action, target, options));
+      const affected = kind === "backend" && account ? [account] : [];
+      if (action === "hwid_bind") {
+        const device = this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM account_devices WHERE device_hash=?", options.deviceHash as string).toArray()[0];
+        const owner = device && this.byId(device.account_id);
+        if (owner && owner.account_id !== account!.account_id) affected.push(owner);
+      }
+      return { ok: true, token, expiresAt, action, target, options: options as ManagementOptions, ...(account ? { account: this.summary(account), details: this.details(account) } : {}),
+        ...(kind === "backend" ? { affectedAccounts: affected.map(owner => this.details(owner)) } : {}) };
+    } catch (error) { return failure(error); }
+  }
+  private consumeManagement(actor: DeveloperActor, kind: ManagementKind, action: string, target: string, options: Record<string, unknown>): void {
+    if (options.managementToken === undefined) return;
+    const row = this.ctx.storage.sql.exec<ManagementConfirmation>("SELECT * FROM account_management_confirmations WHERE token=?", String(options.managementToken)).toArray()[0];
+    if (!row || row.used_at !== null || row.expires_at <= Date.now() || row.actor_id !== actor.id || row.guild_id !== actor.guildId || row.kind !== kind || row.action !== action || row.target !== target) deny("confirmation_expired");
+    const actual = Object.entries(options).filter(([key]) => key !== "managementToken").sort(([a], [b]) => a.localeCompare(b));
+    if (JSON.stringify(actual) !== JSON.stringify(Object.entries(JSON.parse(row.options)).sort(([a], [b]) => a.localeCompare(b))) ||
+        row.generation !== this.managementGeneration(action, target, options) || row.related_state !== this.managementRelatedState(action, target, options)) deny("confirmation_stale");
+    this.ctx.storage.sql.exec("UPDATE account_management_confirmations SET used_at=? WHERE token=?", Date.now(), row.token);
+  }
+  async confirmManagement(actor: DeveloperActor, kind: ManagementKind, token: string, confirm: boolean): Promise<ManagementResult> {
+    try {
+      if (actor.guildId !== this.env.DISCORD_GUILD_ID || !snowflake.test(actor.id) || !snowflake.test(actor.interactionId) || typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token) || typeof confirm !== "boolean") deny("confirmation_expired");
+      if (kind === "backend" ? !this.isAdmin(actor) : kind !== "user") deny(kind === "backend" ? "admin_required" : "forbidden");
+      const row = this.ctx.storage.sql.exec<ManagementConfirmation>("SELECT * FROM account_management_confirmations WHERE token=?", token).toArray()[0];
+      if (!row || row.used_at !== null || row.expires_at <= Date.now() || row.actor_id !== actor.id || row.guild_id !== actor.guildId || row.kind !== kind || kind === "user" && row.target !== actor.id) deny("confirmation_expired");
+      if (!confirm) { this.interaction(actor); this.ctx.storage.sql.exec("UPDATE account_management_confirmations SET used_at=? WHERE token=?", Date.now(), token); return { ok: true, action: "cancelled" }; }
+      const options = { ...JSON.parse(row.options), managementToken: token };
+      const result = kind === "backend" ? await this.developerCommand(actor, row.action, row.target, options) : await this.userCommand(actor, row.action, options);
+      return { ...result, action: row.action, target: row.target, options: JSON.parse(row.options) };
+    } catch (error) { return failure(error); }
+  }
+  buildAllowed(kind: string, version: string): AccountResult {
+    if (!["mod", "loader"].includes(kind) || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(version)) return { ok: false, error: "invalid_build" };
+    return this.ctx.storage.sql.exec("SELECT version FROM account_build_policy WHERE kind=? AND version=? AND revoked_at IS NOT NULL", kind, version).toArray().length ? { ok: false, error: "BUILD_REVOKED" } : { ok: true };
+  }
+  loaderEligibility(discordId: string): AccountResult {
+    if (typeof discordId !== "string" || !snowflake.test(discordId)) return { ok: false, error: "invalid_discord_id" };
+    const account = this.byDiscord(discordId), denial = licenseDenial(account);
+    if (denial) return { ok: false, error: denial };
+    return account!.enrollment_blocked ? { ok: false, error: "device_revoked" } : { ok: true };
+  }
+  private requireBuilds(input: InstallationInput, bootstrap = false): void {
+    // Bootstrap recovery grants loader bytes only; normal authorization independently checks both running builds.
+    if (bootstrap) return;
+    for (const [kind, version] of [["mod", input.modVersion], ["loader", input.loaderVersion]]) {
+      const result = this.buildAllowed(kind, version); if (!result.ok) deny(result.error!);
+    }
+  }
   private ensureAccount(discordId: string): AccountRow {
     if (!snowflake.test(discordId)) deny("invalid_discord_id");
     let account = this.byDiscord(discordId);
@@ -152,8 +377,74 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   }
   private audit(actor: string, accountId: string | null, action: string, metadata: Record<string, unknown> = {}, override = false): void {
     // Callers supply fixed safe fields only; never serialize request bodies, keys, signatures, or credentials.
-    this.ctx.storage.sql.exec("INSERT INTO account_audit(at,actor,account_id,action,override,metadata) VALUES(?,?,?,?,?,?)",
-      Date.now(), actor, accountId, action, override ? 1 : 0, JSON.stringify(metadata));
+    const account = accountId ? this.byId(accountId) : undefined;
+    const identity = account && this.ctx.storage.sql.exec<{ username: string; display_name: string }>("SELECT username,display_name FROM account_discord_names WHERE discord_id=?", account.discord_id).toArray()[0];
+    const minecraftAccounts = account ? this.ctx.storage.sql.exec<{ name: string; uuid: string }>("SELECT name,uuid FROM minecraft_accounts WHERE account_id=? ORDER BY linked_at,uuid LIMIT 6", account.account_id).toArray() : [];
+    const runtime = accountId ? this.ctx.storage.sql.exec<RuntimeRow>("SELECT * FROM account_runtime WHERE account_id=? ORDER BY lease_issued_at DESC LIMIT 1", accountId).toArray()[0] : undefined;
+    const player = runtime && this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM minecraft_accounts WHERE account_id=? AND uuid=?", accountId!, runtime.uuid).toArray()[0];
+    const context = { ...(account ? { discordId: account.discord_id, discordUsername: identity?.username ?? null,
+      discordName: identity?.display_name ?? identity?.username ?? null, deviceReference: account.device_hash, minecraftAccounts } : {}),
+      ...(runtime ? { minecraftUuid: runtime.uuid, minecraftName: player?.name ?? null, buildId: runtime.build_id, loaderVersion: runtime.loader_version, sessionId: runtime.session_id } : {}), serverTime: Date.now(), ...metadata };
+    const error = String(metadata.error ?? "");
+    const severity = action === "signing_configuration_failure" ? "critical" :
+      ["activation_replay", "challenge_replay", "hwid_reset", "hwid_revoke", "build_revoke"].includes(action) || ["invalid_signature", "invalid_lease", "installation_proof_invalid", "challenge_replayed"].includes(error) ? "security" :
+        ["device_transferred", "warning_issued"].includes(action) || ["HWID_MISMATCH", "invalid_activation_key", "BUILD_REVOKED"].includes(error) ? "warning" : "information";
+    const now = Date.now(), id = this.ctx.storage.sql.exec<{ id: number }>("INSERT INTO account_audit(at,actor,account_id,action,override,metadata,severity) VALUES(?,?,?,?,?,?,?) RETURNING id",
+      now, actor, accountId, action, override ? 1 : 0, JSON.stringify(context), severity).one().id;
+    if (severity === "information" && !["activation_issued", "minecraft_uuid_added", "license_restore", "admin_added", "license_revoke", "account_suspend"].includes(action)) return;
+    const key = `${accountId ?? "system"}:${action}:${error}`;
+    this.ctx.storage.sql.exec("DELETE FROM account_alert_dedup WHERE last_at<?", now - ACTIVATION_TTL);
+    const previous = this.ctx.storage.sql.exec<{ last_at: number; audit_id: number }>("SELECT last_at,audit_id FROM account_alert_dedup WHERE id=?", key).toArray()[0];
+    if (previous && previous.last_at > now - 60_000) {
+      this.ctx.storage.sql.exec("UPDATE account_alerts SET repeats=repeats+1 WHERE audit_id=?", previous.audit_id); return;
+    }
+    // ponytail: bounded best-effort alert queue; the durable audit remains authoritative if delivery capacity is exhausted.
+    if (this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM account_alerts").one().n + ADMIN_ALERT_IDS.length > 500) return;
+    this.ctx.storage.sql.exec("INSERT INTO account_alert_dedup VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET last_at=excluded.last_at,audit_id=excluded.audit_id", key, now, id);
+    for (const recipient of ADMIN_ALERT_IDS) this.ctx.storage.sql.exec("INSERT INTO account_alerts(id,audit_id,recipient_id,repeats,next_at) VALUES(?,?,?,0,?)", `${id}:${recipient}`, id, recipient, now);
+    this.ctx.waitUntil(Promise.resolve().then(() => this.armAccountAlerts()));
+  }
+  private async armAccountAlerts(): Promise<void> {
+    const due = this.nextAccountAlertAt(); if (due === null) return;
+    const alarm = await this.ctx.storage.getAlarm(), next = Math.max(Date.now() + 1000, due);
+    if (alarm === null || alarm > next) await this.ctx.storage.setAlarm(next);
+  }
+  private auditEvent(row: Record<string, SqlStorageValue>): AuditEvent {
+    return { id: Number(row.id), at: Number(row.at), actor: String(row.actor), account_id: row.account_id === null ? null : String(row.account_id),
+      action: String(row.action), override: Number(row.override), severity: String(row.severity ?? "information"), metadata: JSON.parse(String(row.metadata)) };
+  }
+  claimAccountAlerts(limit = 5): AccountAlert[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10) return [];
+    return this.ctx.storage.transactionSync(() => {
+      const now = Date.now();
+      this.ctx.storage.sql.exec("DELETE FROM account_alerts WHERE audit_id IN (SELECT id FROM account_audit WHERE at<?)", now - 7 * ACTIVATION_TTL);
+      const rows = this.ctx.storage.sql.exec<{ id: string; audit_id: number; recipient_id: string; attempts: number; repeats: number }>(
+        "SELECT * FROM account_alerts WHERE next_at<=? AND lease_until<=? ORDER BY next_at LIMIT ?", now, now, limit).toArray();
+      return rows.flatMap(row => {
+        const event = this.ctx.storage.sql.exec("SELECT * FROM account_audit WHERE id=?", row.audit_id).toArray()[0];
+        if (!event) { this.ctx.storage.sql.exec("DELETE FROM account_alerts WHERE id=?", row.id); return []; }
+        const claimToken = randomToken();
+        this.ctx.storage.sql.exec("UPDATE account_alerts SET lease_until=?,claim_token=? WHERE id=?", now + 30_000, claimToken, row.id);
+        return [{ id: row.id, auditId: row.audit_id, recipientId: row.recipient_id, claimToken, attempts: row.attempts, repeats: row.repeats, event: this.auditEvent(event) }];
+      });
+    });
+  }
+  completeAccountAlert(id: string, claimToken: string, delivered: boolean, retryAfterMs = 0): void {
+    const row = this.ctx.storage.sql.exec<{ attempts: number; claim_token: string; audit_id: number; recipient_id: string }>("SELECT attempts,claim_token,audit_id,recipient_id FROM account_alerts WHERE id=?", id).toArray()[0];
+    if (!row || row.claim_token !== claimToken) return;
+    if (delivered || row.attempts >= 4) {
+      this.ctx.storage.sql.exec("DELETE FROM account_alerts WHERE id=?", id);
+      if (!delivered) this.audit("system", null, "notification_delivery_failed", { auditId: row.audit_id, recipientId: row.recipient_id,
+        attempts: row.attempts + 1, reason: "Administrator DM delivery failed after bounded retries", source: "notification" });
+      return;
+    }
+    const delay = Math.max(Number.isFinite(retryAfterMs) ? Math.min(Math.max(0, retryAfterMs), ACTIVATION_TTL) : 0,
+      Math.min(300_000, 1000 * 2 ** Math.min(row.attempts + 1, 9)));
+    this.ctx.storage.sql.exec("UPDATE account_alerts SET attempts=attempts+1,next_at=?,lease_until=0,claim_token=NULL WHERE id=?", Date.now() + delay, id);
+    this.ctx.waitUntil(this.armAccountAlerts());
+  }
+  nextAccountAlertAt(): number | null {
+    return this.ctx.storage.sql.exec<{ due: number | null }>("SELECT MIN(MAX(next_at,lease_until)) AS due FROM account_alerts").one().due;
   }
   private limit(id: string, maximum: number, interval = 60000): void {
     const now = Date.now();
@@ -299,9 +590,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       if (!uuid.test(id)) deny("invalid_uuid");
       const account = this.byDiscord(discordId); if (!account) deny("account_required");
       const owner = this.getAccountByUuid(id); if (owner?.accountId !== account.account_id) deny("minecraft_link_required");
+      const name = owner.uuids.find(player => player.uuid === id)!.name;
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations VALUES('*',?)", id);
       this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE uuid=?", id);
-      this.invalidate(account.account_id); this.audit(discordId, account.account_id, "minecraft_uuid_removed", { uuid: id });
+      this.invalidate(account.account_id); this.audit(discordId, account.account_id, "minecraft_uuid_removed", { uuid: id, minecraftUuid: id, minecraftName: name });
       return { ok: true, invalidated: account.account_id, account: this.summary(this.byId(account.account_id)!) };
     }); } catch (error) { return failure(error); }
   }
@@ -309,7 +601,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     try {
       this.interaction(actor); this.limit(`user:${actor.id}`, 12);
       if (action === "link") return this.consumeMinecraftLink(actor.id, String(options.code ?? ""));
-      if (action === "unlink") return this.unlinkMinecraftUuid(actor.id, String(options.uuid ?? ""));
+      if (action === "unlink") return this.ctx.storage.transactionSync(() => {
+        this.consumeManagement(actor, "user", action, actor.id, options);
+        return this.unlinkMinecraftUuid(actor.id, String(options.uuid ?? ""));
+      });
       if (action === "approve") {
         const code = normalizedCode(options.code); if (!code) deny("invalid_approval"); const digest = await sha256(code);
         return this.ctx.storage.transactionSync(() => {
@@ -321,12 +616,27 @@ export class AccountStore extends DurableObject<AccountsConfig> {
           this.audit(actor.id, account!.account_id, "installation_approved"); return { ok: true };
         });
       }
-      const activationKey = action === "reset" ? randomToken() : undefined;
+      const activationKey = action === "reset" || action === "key" ? randomToken() : undefined;
       const activationHash = activationKey ? await sha256(activationKey) : undefined;
       return this.ctx.storage.transactionSync(() => {
         const account = this.byDiscord(actor.id); if (!account) deny("account_required");
-        if (action === "reset") this.transferAllowed(account); else if (action !== "status") deny("invalid_action");
-        return { ok: true, account: this.summary(this.byId(account.account_id)!), ...(action === "reset" ? {
+        this.consumeManagement(actor, "user", action, actor.id, options);
+        if (action === "key") {
+          const denial = licenseDenial(account); if (denial) deny(denial); if (account.enrollment_blocked) deny("device_revoked");
+          const previous = this.ctx.storage.sql.exec<{ last_issued_at: number }>("SELECT last_issued_at FROM account_key_recovery WHERE discord_id=?", actor.id).toArray()[0];
+          if (previous && Date.now() - previous.last_issued_at < 60_000) deny("key_reissue_cooldown");
+          this.ctx.storage.sql.exec("INSERT INTO account_key_recovery VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET last_issued_at=excluded.last_issued_at", actor.id, Date.now());
+          return { ok: true, account: this.summary(account), ...this.issueActivation(account, actor.id, activationKey!, activationHash!) };
+        }
+        if (action === "reset") this.transferAllowed(account);
+        else if (action === "loader") {
+          const denial = licenseDenial(account); if (denial) deny(denial); if (account.enrollment_blocked) deny("device_revoked");
+          const previous = this.ctx.storage.sql.exec<{ last_requested_at: number }>("SELECT last_requested_at FROM account_loader_delivery WHERE discord_id=?", actor.id).toArray()[0];
+          if (previous && Date.now() - previous.last_requested_at < 60_000) deny("loader_delivery_cooldown");
+          this.ctx.storage.sql.exec("INSERT INTO account_loader_delivery VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET last_requested_at=excluded.last_requested_at", actor.id, Date.now());
+        }
+        else if (action !== "status") deny("invalid_action");
+        return { ok: true, account: this.summary(this.byId(account.account_id)!), ...(action === "status" ? { details: this.details(account) } : {}), ...(action === "reset" ? {
           ...this.issueActivation(account, actor.id, activationKey!, activationHash!, account.device_hash !== null) } : {}) };
       });
     } catch (error) { return failure(error); }
@@ -334,12 +644,22 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   async developerCommand(actor: DeveloperActor, action: string, target: string, options: Record<string, unknown> = {}): Promise<AccountResult> {
     try {
       if (!this.isAdmin(actor)) { this.audit(actor.id, null, "admin_denied"); deny("admin_required"); }
-      if (!snowflake.test(target)) deny("invalid_discord_id");
+      if (action === "build_revoke" || action === "build_restore") {
+        if (!/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(target) || !["mod", "loader"].includes(String(options.kind ?? "mod"))) deny("invalid_build");
+      } else if (!snowflake.test(target)) deny("invalid_discord_id");
       this.interaction(actor); this.limit(`developer:${actor.id}`, 30);
       const activationKey = action === "authorise" || action === "hwid_reset" ? randomToken() : undefined;
       const activationHash = activationKey ? await sha256(activationKey) : undefined;
       return this.ctx.storage.transactionSync(() => {
         if (!this.isAdmin(actor)) deny("admin_required"); // Recheck durable authority after any cryptographic await.
+        this.consumeManagement(actor, "backend", action, target, options);
+        if (action === "build_revoke" || action === "build_restore") {
+          const kind = String(options.kind ?? "mod"), now = Date.now(), reason = typeof options.reason === "string" ? options.reason.slice(0, 500) : action;
+          this.ctx.storage.sql.exec(`INSERT INTO account_build_policy VALUES(?,?,?,?,?,1) ON CONFLICT(kind,version) DO UPDATE SET
+            revoked_at=excluded.revoked_at,actor=excluded.actor,reason=excluded.reason,revision=account_build_policy.revision+1`, kind, target, action === "build_revoke" ? now : null, actor.id, reason);
+          this.audit(actor.id, null, action, { buildId: target, buildKind: kind, reason, source: "administrator", administratorId: actor.id });
+          return { ok: true, invalidatedAccounts: this.ctx.storage.sql.exec<{ account_id: string }>(`SELECT DISTINCT account_id FROM account_runtime WHERE ${kind === "mod" ? "build_id" : "loader_version"}=?`, target).toArray().map(row => row.account_id) };
+        }
         let account = this.byDiscord(target);
         if (action === "admin_add") {
           account = account ?? this.ensureAccount(target);
@@ -358,6 +678,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         }
         if (!account) deny("account_required");
         let invalidated: string | undefined; const invalidatedAccounts: string[] = [];
+        let auditMetadata: Record<string, unknown> = { source: "administrator", administratorId: actor.id, requestId: actor.interactionId };
         if (action === "audit") return { ok: true, audit: this.ctx.storage.sql.exec("SELECT * FROM account_audit WHERE account_id=? ORDER BY id DESC LIMIT 100", account.account_id).toArray() };
         if (action === "license_status" || action === "account_lookup") return { ok: true, account: this.summary(account) };
         if (action === "license_revoke" || action === "license_restore") {
@@ -371,10 +692,14 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         } else if (action === "account_unlink") {
           if (options.uuid !== undefined && (typeof options.uuid !== "string" || !uuid.test(options.uuid))) deny("invalid_uuid");
           if (options.uuid) {
+            const player = this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string).toArray()[0];
+            if (!player) deny("minecraft_link_required");
+            auditMetadata = { ...auditMetadata, uuid: options.uuid, minecraftUuid: options.uuid, minecraftName: player.name };
             this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations SELECT '*',uuid FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string);
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string);
           }
           else {
+            auditMetadata = { ...auditMetadata, minecraftAccounts: this.summary(account).uuids };
             this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations SELECT '*',uuid FROM minecraft_accounts WHERE account_id=?", account.account_id);
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=?", account.account_id);
             this.reset(account, actor.id, true);
@@ -399,7 +724,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
           if (typeof options.reason !== "string" || !options.reason.trim() || options.reason.length > 500) deny("invalid_warning");
           const warningId = crypto.randomUUID();
           this.ctx.storage.sql.exec("INSERT INTO account_warnings VALUES(?,?,?,?,?,NULL)", warningId, account.account_id, actor.id, options.reason, Date.now());
-          this.audit(actor.id, account.account_id, "warning_issued", { warningId }); return { ok: true, warningId };
+          this.audit(actor.id, account.account_id, "warning_issued", { warningId, reason: options.reason, ...auditMetadata }); return { ok: true, warningId };
         } else if (action === "warning_remove") {
           if (typeof options.warningId !== "string") deny("invalid_warning");
           this.ctx.storage.sql.exec("UPDATE account_warnings SET removed_at=? WHERE id=? AND account_id=?", Date.now(), options.warningId, account.account_id);
@@ -408,7 +733,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         this.audit(actor.id, account.account_id, action, action.startsWith("hwid_") ? { discordId: account.discord_id,
           previousHwid: account.device_hash, newHwid: action === "hwid_bind" ? options.deviceHash : null,
           reason: typeof options.reason === "string" ? options.reason.slice(0, 500) : action === "hwid_reset" ? "administrator_reset" : action,
-          source: "administrator", administratorId: actor.id, requestId: actor.interactionId } : {}, action.startsWith("hwid_"));
+          source: "administrator", administratorId: actor.id, requestId: actor.interactionId } : auditMetadata, action.startsWith("hwid_"));
         return { ok: true, account: this.summary(this.byId(account.account_id)!), invalidated, invalidatedAccounts: [...invalidatedAccounts, ...invalidated ? [invalidated] : []],
           ...(action === "hwid_reset" ? this.issueActivation(account, actor.id, activationKey!, activationHash!) : {}) };
       });
@@ -423,6 +748,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       typeof raw.clientNonce !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(raw.clientNonce)) deny("invalid_request");
     const input = raw as InstallationInput; validateLaunchInput(input);
     const invalidVersion = installationVersionDenial(input, this.env); if (invalidVersion) deny(invalidVersion);
+    this.requireBuilds(input, bootstrapPurpose(input.purpose));
     await installationKey(input.publicKey); const approvalCode = newLinkCode(), approvalHash = await sha256(normalizedCode(approvalCode)!);
     const challengeId = crypto.randomUUID(), nonce = randomToken(), now = Date.now(), expiresAt = now + 300000;
     this.ctx.storage.sql.exec("DELETE FROM account_challenges WHERE expires_at<=?", now);
@@ -441,13 +767,27 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     const input: InstallationInput = JSON.parse(row.input); if (input.purpose !== purpose) deny("invalid_challenge");
     return { row, input };
   }
+  private replayedChallenge(id: unknown): { accountId: string | null; metadata: Record<string, unknown> } | null {
+    if (typeof id !== "string" || id.length > 64) return null;
+    const row = this.ctx.storage.sql.exec<ChallengeRow>("SELECT * FROM account_challenges WHERE id=? AND used_at IS NOT NULL", id).toArray()[0];
+    if (!row) return null; // Missing or expired anonymous requests do not create administrator notifications.
+    const input: InstallationInput = JSON.parse(row.input);
+    const accountId = row.discord_id ? this.byDiscord(row.discord_id)?.account_id :
+      this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM installations WHERE installation_id=?", input.installationId).toArray()[0]?.account_id;
+    return { accountId: accountId ?? null, metadata: { buildId: input.modVersion, loaderVersion: input.loaderVersion,
+      sessionId: input.launchSessionId ?? null, installationId: input.installationId, reason: "A consumed authorization challenge was presented again", source: "authentication" } };
+  }
   async authenticateInstallation(body: Record<string, unknown>, requestedPurpose: AuthenticationPurpose): Promise<{ ok: boolean; error?: string; lease?: string; expiresAt?: number; serverTime?: number }> {
     const bootstrap = bootstrapPurpose(requestedPurpose), purpose = requestedPurpose.endsWith("activate") ? "activate" : "renew";
     let auditAccount: string | null = null;
+    let auditContext: Record<string, unknown> = {};
     let auditAction = purpose === "activate" ? "activation_denied" : "lease_denied";
     try {
-      await ensureSigningConfigured(this.env);
+      try { await ensureSigningConfigured(this.env); }
+      catch (error) { this.audit("system", null, "signing_configuration_failure", { reason: "Release signing configuration could not be verified", source: "backend" }); throw error; }
       const { row, input } = this.pending(body.challengeId, requestedPurpose);
+      auditContext = { buildId: input.modVersion, loaderVersion: input.loaderVersion, sessionId: input.launchSessionId ?? null,
+        installationId: input.installationId, attemptedDeviceReference: input.deviceHash };
       auditAccount = row.discord_id ? this.byDiscord(row.discord_id)?.account_id ?? null :
         this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM installations WHERE installation_id=?", input.installationId).toArray()[0]?.account_id ?? null;
       this.limit(`proof:${row.id}`, 6);
@@ -455,12 +795,14 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       if (!body.minecraftProof || typeof body.minecraftProof !== "object" || Array.isArray(body.minecraftProof)) deny("minecraft_proof_required");
       const profile = await verifyAccount(body.minecraftProof as Record<string, unknown>, row.nonce);
       if ("error" in profile) deny(profile.retryable ? "minecraft_verification_unavailable" : "minecraft_proof_invalid");
+      auditContext = { ...auditContext, minecraftUuid: profile.id, minecraftName: profile.name };
       const activationHash = typeof body.activationKey === "string" && /^[A-Za-z0-9_-]{43}$/.test(body.activationKey) ? await sha256(body.activationKey) : null;
       if (purpose === "activate" && body.activationKey !== undefined && !activationHash) deny("invalid_activation_key");
       const fingerprint = await sha256(decode64(input.publicKey, 256));
       const claims = this.ctx.storage.transactionSync((): LeaseClaims => {
         const current = this.pending(row.id, requestedPurpose); // Recheck after cryptographic awaits, including concurrent consumption.
         const invalidVersion = installationVersionDenial(current.input, this.env); if (invalidVersion) deny(invalidVersion);
+        this.requireBuilds(current.input, bootstrap);
         let account: AccountRow;
         if (purpose === "activate") {
           const key = activationHash && this.ctx.storage.sql.exec<{ key_id: string; account_id: string; expires_at: number; used_at: number | null; revoked_at: number | null; hardware_transfer: number }>("SELECT * FROM activation_keys WHERE key_hash=?", activationHash).toArray()[0];
@@ -491,7 +833,8 @@ export class AccountStore extends DurableObject<AccountsConfig> {
           // A reset needs a fresh DM key, including when the user keeps the same installation.
           // Use the existing loader prompt response; this never grants a lease on renewal.
           if (install.revoked_at !== null && account.device_hash === null && !account.enrollment_blocked) deny("installation_required");
-          const status = this.checkSession({ accountId: account.account_id, uuid: profile.id, installationId: input.installationId, generation: account.generation });
+          const status = this.sessionState({ accountId: account.account_id, uuid: profile.id, installationId: input.installationId,
+            generation: account.generation, buildId: input.modVersion, loaderVersion: input.loaderVersion }, !bootstrap);
           if (!status.ok) deny(status.error!); this.link(account, profile.id, profile.name);
         }
         this.verifyHardware(input, bootstrap);
@@ -501,7 +844,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         const offlineUntil = Math.min(exp + seconds(this.env.OFFLINE_GRACE_SECONDS, 900, 0, 3600), account.license_expires_at ?? Infinity);
         this.audit(account.discord_id, account.account_id, bootstrap ? "loader_update_authorized" : "lease_issued", { uuid: profile.id, installationId: input.installationId, expiresAt: exp, hardwareState: "HWID_MATCH" });
         return { product: "sky-myce", protocol: 3, accountId: account.account_id, discordId: account.discord_id, uuid: profile.id,
-          installationId: input.installationId, deviceHash: input.deviceHash, keyFingerprint: fingerprint, version: input.modVersion,
+          installationId: input.installationId, deviceHash: input.deviceHash, keyFingerprint: fingerprint, version: input.modVersion, loaderVersion: input.loaderVersion,
           minecraft: input.minecraftVersion, iat: now, exp, offlineUntil, generation: account.generation, jti: crypto.randomUUID(),
           challengeId: row.id, clientNonce: input.clientNonce, features: ["relay", "irc", "cosmetics"],
           ...(input.hardwareHash !== undefined ? { hardwareHash: input.hardwareHash } : {}),
@@ -511,25 +854,52 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       const lease = await createLease(this.env, claims);
       const current = this.currentLease(claims);
       if (!current.ok) deny(current.error!); // Revocation while signing cannot issue a usable new lease.
+      const previousRuntime = this.ctx.storage.sql.exec<RuntimeRow>("SELECT * FROM account_runtime WHERE installation_id=? AND uuid=?", claims.installationId, claims.uuid).toArray()[0];
+      const sessionId = claims.launchSessionId ?? (previousRuntime?.generation === claims.generation ? previousRuntime.session_id : claims.jti);
+      this.ctx.storage.sql.exec(`INSERT INTO account_runtime(installation_id,uuid,account_id,session_id,build_id,loader_version,generation,lease_issued_at,lease_expires_at,connected_at,last_heartbeat,connection_id)
+        VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,NULL) ON CONFLICT(installation_id,uuid) DO UPDATE SET
+        account_id=excluded.account_id,session_id=excluded.session_id,build_id=excluded.build_id,loader_version=excluded.loader_version,generation=excluded.generation,
+        lease_issued_at=excluded.lease_issued_at,lease_expires_at=excluded.lease_expires_at,
+        connected_at=CASE WHEN account_runtime.session_id=excluded.session_id AND account_runtime.generation=excluded.generation THEN account_runtime.connected_at ELSE NULL END,
+        last_heartbeat=CASE WHEN account_runtime.session_id=excluded.session_id AND account_runtime.generation=excluded.generation THEN account_runtime.last_heartbeat ELSE NULL END,
+        connection_id=CASE WHEN account_runtime.session_id=excluded.session_id AND account_runtime.generation=excluded.generation THEN account_runtime.connection_id ELSE NULL END`,
+        claims.installationId, claims.uuid, claims.accountId, sessionId, claims.version,
+        input.loaderVersion, claims.generation, claims.iat, claims.exp);
       return { ok: true, lease, expiresAt: claims.exp, serverTime: claims.iat };
     } catch (error) {
       const result = failure(error);
-      if (result.error !== "approval_required") this.audit("installation", auditAccount, auditAction, { error: result.error });
+      const replay = result.error === "invalid_challenge" ? this.replayedChallenge(body.challengeId) : null;
+      if (result.error !== "approval_required") this.audit("installation", replay?.accountId ?? auditAccount, replay ? "challenge_replay" : auditAction, { ...auditContext, ...replay?.metadata, error: result.error,
+        ...(result.error === "HWID_MISMATCH" ? { reason: "Second-device authorization attempt denied" } : {}) });
       return result;
     }
   }
-  checkSession(input: { accountId: string; uuid: string; installationId: string; generation: number }): SessionResult {
+  checkSession(input: SessionCheck): SessionResult { return this.sessionState(input); }
+  private sessionState(input: SessionCheck, checkBuilds = true): SessionResult {
     const account = this.byId(input.accountId), denial = licenseDenial(account); if (denial) return { ok: false, error: denial };
     if (account!.generation !== input.generation) return { ok: false, error: "authorization_revoked" };
     const install = this.ctx.storage.sql.exec<InstallationRow>("SELECT * FROM installations WHERE installation_id=?", input.installationId).toArray()[0];
     if (!install || install.account_id !== account!.account_id || install.revoked_at !== null || install.device_hash !== account!.device_hash) return { ok: false, error: "device_revoked" };
     const linked = this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM minecraft_accounts WHERE uuid=?", input.uuid).toArray()[0];
     if (!linked || linked.account_id !== account!.account_id) return { ok: false, error: "minecraft_link_required" };
+    const runtime = this.ctx.storage.sql.exec<RuntimeRow>("SELECT * FROM account_runtime WHERE installation_id=? AND uuid=?", input.installationId, input.uuid).toArray()[0];
+    const buildId = input.buildId ?? runtime?.build_id, loaderVersion = input.loaderVersion ?? runtime?.loader_version;
+    if (checkBuilds) for (const [kind, version] of [["mod", buildId], ["loader", loaderVersion]]) {
+      if (version) { const allowed = this.buildAllowed(kind!, version); if (!allowed.ok) return { ok: false, error: allowed.error }; }
+    }
+    if (runtime?.connected_at !== null && runtime?.connected_at !== undefined && runtime.generation === input.generation &&
+        runtime.connection_id !== null && input.connectionId === runtime.connection_id) {
+      const heartbeatAt = input.heartbeat ? Date.now() : input.heartbeatAt;
+      if (heartbeatAt !== undefined && Number.isSafeInteger(heartbeatAt) && heartbeatAt <= Date.now() && heartbeatAt >= runtime.connected_at) {
+        this.ctx.storage.sql.exec("UPDATE account_runtime SET last_heartbeat=MAX(COALESCE(last_heartbeat,0),?) WHERE installation_id=? AND uuid=?", heartbeatAt, input.installationId, input.uuid);
+      }
+    }
     return { ok: true, accountId: account!.account_id, discordId: account!.discord_id, installationId: install.installation_id,
-      deviceId: install.fingerprint, generation: account!.generation, uuid: input.uuid };
+      deviceId: install.fingerprint, generation: account!.generation, uuid: input.uuid, ...(buildId ? { buildId } : {}), ...(loaderVersion ? { loaderVersion } : {}) };
   }
   private currentLease(claims: LeaseClaims): SessionResult {
-    const status = this.checkSession({ accountId: claims.accountId, uuid: claims.uuid, installationId: claims.installationId, generation: claims.generation });
+    if (claims.loaderVersion === undefined) return { ok: false, error: "authorization_renewal_required" };
+    const status = this.checkSession({ accountId: claims.accountId, uuid: claims.uuid, installationId: claims.installationId, generation: claims.generation, buildId: claims.version, loaderVersion: claims.loaderVersion });
     if (!status.ok) return status;
     const installation = this.ctx.storage.sql.exec<InstallationRow>("SELECT * FROM installations WHERE installation_id=?", claims.installationId).one();
     if (installation.fingerprint !== claims.keyFingerprint || installation.device_hash !== claims.deviceHash || status.discordId !== claims.discordId ||
@@ -539,6 +909,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     if (hardwareHash !== null && hardwareHash !== claims.hardwareHash) return { ok: false, error: "invalid_lease" };
     if (installation.hardware_hash !== null && installation.hardware_hash !== claims.hardwareHash) return { ok: false, error: "invalid_lease" };
     return { ...status, expiresAt: claims.exp };
+  }
+  markSessionOffline(accountId: string, playerUuid: string, installationId: string, generation: number, connectionId: string): void {
+    this.ctx.storage.sql.exec("UPDATE account_runtime SET connected_at=NULL,last_heartbeat=NULL WHERE account_id=? AND uuid=? AND installation_id=? AND generation=? AND connection_id=?",
+      accountId, playerUuid, installationId, generation, connectionId);
   }
   async authorizeSession(input: { uuid: string; lease: string; challenge: string; signature: string }): Promise<SessionResult> {
     let auditAccount: string | null = null;
@@ -554,8 +928,13 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         const nonce = `relay:${input.challenge}`;
         if (this.ctx.storage.sql.exec("SELECT id FROM account_requests WHERE id=?", nonce).toArray().length) deny("challenge_replayed");
         this.ctx.storage.sql.exec("INSERT INTO account_requests VALUES(?,?)", nonce, Date.now() + 300000);
+        this.ctx.storage.sql.exec(`INSERT INTO account_runtime(installation_id,uuid,account_id,session_id,build_id,loader_version,generation,lease_issued_at,lease_expires_at,connected_at,last_heartbeat,connection_id)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(installation_id,uuid) DO UPDATE SET
+          connected_at=COALESCE(account_runtime.connected_at,excluded.connected_at),last_heartbeat=excluded.last_heartbeat,connection_id=excluded.connection_id`,
+          claims.installationId, claims.uuid, claims.accountId, claims.launchSessionId ?? claims.jti, claims.version,
+          claims.loaderVersion!, claims.generation, claims.iat, claims.exp, Date.now(), Date.now(), input.challenge);
         this.audit("installation", auditAccount, "authentication_success", { uuid: claims.uuid, installationId: claims.installationId });
-        return status;
+        return { ...status, connectionId: input.challenge };
       });
     } catch (error) { const result = failure(error); this.audit("installation", auditAccount, "authentication_failure", { error: result.error }); return result; }
   }
@@ -572,7 +951,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
         this.verifyHardware(input);
         this.ctx.storage.sql.exec("UPDATE account_challenges SET used_at=? WHERE id=?", Date.now(), row.id); return { ...status, loaderVersion: input.loaderVersion };
       });
-    } catch (error) { const result = failure(error); this.audit("installation", auditAccount, "artifact_download_denied", { error: result.error }); return result; }
+    } catch (error) {
+      const result = failure(error), replay = result.error === "invalid_challenge" ? this.replayedChallenge(body.challengeId) : null;
+      this.audit("installation", replay?.accountId ?? auditAccount, replay ? "challenge_replay" : "artifact_download_denied", { ...replay?.metadata, error: result.error }); return result;
+    }
   }
   canUseIrc(discordId: string): SessionResult {
     const account = this.byDiscord(discordId), denial = licenseDenial(account); if (denial) return { ok: false, error: denial };

@@ -35,9 +35,43 @@ test('backend commands are disabled by default and cannot leak into the user com
     const reason = command.options.find(option => option.name === 'reason');
     assert.equal(reason.type, 3); assert.equal(reason.required, false); assert.equal(reason.max_length, 500);
   }
-  assert.deepEqual(userCommands.map(command => command.name), ['account', 'hwid', 'cosmetics']);
-  assert.ok(userCommands[0].options.some(command => command.name === 'approve'));
+  assert.deepEqual(userCommands.map(command => command.name), ['status', 'key', 'loader', 'help', 'account', 'hwid', 'cosmetics']);
+  assert.ok(userCommands.find(command => command.name === 'account').options.some(command => command.name === 'approve'));
   assert.ok(userCommands.find(command => command.name === 'hwid').options.every(command => !command.options.some(option => option.name === 'reason')));
+});
+
+test('licensing UX schemas use native users, scoped account autocomplete and useful bounded descriptions', () => {
+  const license = backendCommands.find(command => command.name === 'license');
+  for (const name of ['whitelist', 'key', 'info', 'debug', 'revoke', 'restore', 'extend', 'reset-hardware', 'force-logout', 'uuids', 'uuid-remove', 'audit', 'sessions']) {
+    const sub = license.options.find(option => option.name === name);
+    assert.ok(sub, `Missing /license ${name}`);
+    const user = sub.options.find(option => option.name === 'user');
+    assert.equal(user.type, 6); assert.equal(user.required, true, `/license ${name} selects its target through Discord`);
+  }
+  const account = license.options.find(option => option.name === 'uuid-remove').options.find(option => option.name === 'account');
+  assert.equal(account.type, 3); assert.equal(account.required, true); assert.equal(account.autocomplete, true);
+  assert.equal(account.max_length, 32);
+  for (const name of ['revoke', 'reset-hardware', 'force-logout', 'uuid-remove']) {
+    assert.ok(!license.options.find(option => option.name === name).options.some(option => option.name === 'confirm'), 'The native confirmation UI handles destructive approval');
+  }
+  const management = backendCommands.find(command => command.name === 'skyhawk');
+  assert.ok(management.options.some(option => option.name === 'overview'));
+  const eventId = management.options.find(option => option.name === 'event').options.find(option => option.name === 'id');
+  assert.equal(eventId.type, 4); assert.equal(eventId.required, true); assert.equal(eventId.min_value, 1);
+  assert.equal(management.options.find(option => option.name === 'search').options.find(option => option.name === 'query').autocomplete, true);
+  const fallback = management.options.find(option => option.name === 'lookup').options.find(option => option.name === 'discord-id');
+  assert.equal(fallback.type, 3); assert.equal(fallback.max_length, 20); assert.equal(fallback.min_length, 17);
+  const builds = backendCommands.find(command => command.name === 'build');
+  for (const name of ['revoke', 'restore']) assert.equal(builds.options.find(option => option.name === name).options.find(option => option.name === 'build').autocomplete, true);
+  for (const name of ['status', 'key', 'loader', 'help']) {
+    const user = userCommands.find(command => command.name === name);
+    assert.ok(user); assert.ok(!user.options?.length); assert.equal(user.default_member_permissions, undefined);
+  }
+  const descriptions = entries => { for (const entry of entries) {
+    if (entry.description !== undefined) assert.ok(entry.description.trim().length > 0 && entry.description.length <= 100);
+    if (entry.options) descriptions(entry.options);
+  } };
+  descriptions([...backendCommands, ...userCommands]);
 });
 
 test('prompt commands accept inline text or an attachment and register individually without altering old commands', async () => {
@@ -106,7 +140,7 @@ test('frontend cosmetics preserve existing syntax and targeted registration pres
   assert.deepEqual(unlink.options.map(({ name, type, required }) => ({ name, type, required })), [{ name: 'confirm', type: 5, required: true }]);
   const extra = { type: 1, name: 'existing-feature', description: 'Retain this unclassified feature' };
   let current = userCommands.filter(command => command.name !== 'cosmetics').map((command, index) => ({ ...structuredClone(command), id: String(index) }));
-  current[0].options.push(extra);
+  current.find(command => command.name === 'account').options.push(extra);
   current.push({ id: 'other', type: 1, name: 'other', description: 'Unrelated existing command' });
   const before = structuredClone(current), calls = [];
   const api = async (path, method = 'GET', body) => {

@@ -14,7 +14,7 @@ export type IrcConfig = {
 };
 export type IrcSession = {
   bridge?: boolean; room?: string; ircSubscribed?: boolean; accountId?: string; discordId?: string;
-  uuid?: string; name?: string; installationId?: string; generation?: number; leaseExpiresAt?: number;
+  uuid?: string; name?: string; installationId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
 };
 const encoder = new TextEncoder();
 const snowflake = /^\d{17,20}$/;

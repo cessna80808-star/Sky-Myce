@@ -10,8 +10,11 @@ async function load(entry) {
 const { accountCommand, handleAccountInteraction } = await load('discord-accounts.ts');
 const { createLoaderDownload, validLoaderDownload, handleLoaderDownload } = await load('discord-download.ts');
 const { verifiedInteraction } = await load('discord.ts');
+const { deliverAccountAlert } = await load('discord-notifications.ts');
 const actor = { id: '11111111111111111', guildId: '22222222222222222', roles: [], interactionId: '33333333333333333' };
 const config = { DISCORD_GUILD_ID: actor.guildId, DEVELOPER_ROLE_ID: '44444444444444444', DEVELOPER_USER_IDS: actor.id };
+const privateArtifacts = { head: async key => key.endsWith('.json') ? null : { size: 3, customMetadata: { version: '1.0.10' } },
+  get: async () => ({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }) };
 const command = (name = 'account', sub = 'status', options = []) => ({ type: 2, id: actor.interactionId, guild_id: actor.guildId,
   application_id: '55555555555555555', token: 'interaction-token-never-log-this', member: { user: { id: actor.id }, roles: actor.roles },
   data: { name, options: sub ? [{ type: 1, name: sub, options }] : options } });
@@ -103,12 +106,15 @@ test('admin add binds authorization to caller, validates a human target and stay
     for(const bot of [true,false]) {
       const pending=[],calls=[];let writes=0;
       globalThis.fetch=async(url,options)=>{calls.push({url,options});return Response.json(url.endsWith('/users/'+target)?{id:target,bot}:{});};
+      const execute=async(caller,action,id)=>{writes++;assert.equal(caller.id,actor.id);assert.equal(action,'admin_add');assert.equal(id,target);return{ok:true,adminAdded:true,action,target:id,options:{}};};
       const env={...config,ROOMS:'friends',DISCORD_BACKEND_BOT_TOKEN:'test-only',DISCORD_AUDIT_CHANNEL_ID:'99999999999999999',
-        ACCOUNT_STORE:{getByName:()=>({isAdmin:async caller=>caller.id===actor.id,developerCommand:async(caller,action,id)=>{
-          writes++;assert.equal(caller.id,actor.id);assert.equal(action,'admin_add');assert.equal(id,target);return{ok:true,adminAdded:true};}})}};
+        ACCOUNT_STORE:{getByName:()=>({isAdmin:async caller=>caller.id===actor.id,developerCommand:execute,
+          prepareManagement:async()=>({ok:true,token:'t'.repeat(43),action:'admin_add',target,options:{},expiresAt:Date.now()+120000}),
+          confirmManagement:async caller=>execute(caller,'admin_add',target)})}};
       assert.deepEqual(await handleAccountInteraction(data,env,{waitUntil:p=>pending.push(p)},'backend').json(),{type:5,data:{flags:64}});
-      await Promise.all(pending);assert.equal(writes,bot?0:1);
-      const edit=JSON.parse(calls.find(call=>call.options.method==='PATCH').options.body);
+      await Promise.all(pending);assert.equal(writes,0,'Administrator grants wait for confirmation');
+      if(!bot){pending.length=0;handleAccountInteraction({...data,type:3,data:{component_type:2,custom_id:`sky:confirm:${'t'.repeat(43)}`}},env,{waitUntil:p=>pending.push(p)},'backend');await Promise.all(pending);assert.equal(writes,1);}
+      const edit=JSON.parse(calls.findLast(call=>call.options.method==='PATCH').options.body);
       assert.match(edit.content,bot?/human Discord account/:/now a Sky-Myce admin/);assert.deepEqual(edit.allowed_mentions,{parse:[]});
       assert.ok(calls.every(call=>!call.url.includes('/users/@me/channels')));
     }
@@ -129,9 +135,10 @@ test('status remains pending until activation; invalid authorise targets cannot 
     return Response.json({});
   };
   const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only',
-    PRIVATE_ARTIFACTS: { head: async () => ({ size: 1 }) },
+    PRIVATE_ARTIFACTS: privateArtifacts,
     ACCOUNT_STORE: { getByName: () => ({
       isAdmin: async () => true,
+      buildAllowed: async () => ({ ok: true }),
       userCommand: async () => ({ ok: true, account: { status: 'active', activated: false, licenseStatus: 'active',
         licenseExpiresAt: null, deviceRegistered: false, hwidResetAt: null, uuids: [] } }),
       developerCommand: async () => { writes++; throw new Error('Must not issue activation'); },
@@ -157,8 +164,8 @@ test('blocked activation DM reports failure privately and never posts the activa
   };
   try {
     const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only',
-      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, developerCommand: async () => ({ ok: true, activationKey: 'never-public-test-key' }) }) },
-      PRIVATE_ARTIFACTS: { head: async () => ({ size: 1 }) } };
+      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async () => ({ ok: true, activationKey: 'never-public-test-key' }) }) },
+      PRIVATE_ARTIFACTS: privateArtifacts };
     const response = handleAccountInteraction(command('authorise', null, [{ type: 6, name: 'user', value: '66666666666666666' }]), env,
       { waitUntil: promise => pending.push(promise) }, 'backend');
     assert.equal((await response.json()).type, 5); await Promise.all(pending);
@@ -196,22 +203,23 @@ test('authorise defers promptly, privately delivers code and loader instructions
   try {
     const data = command('authorise', null, [{ type: 3, name: 'user', value: '66666666666666666' }]);
     const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'backend-token', DISCORD_AUDIT_CHANNEL_ID: '99999999999999999',
-      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, developerCommand: async (signedActor, action, target) => {
+      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async (signedActor, action, target) => {
         assert.equal(signedActor.id, actor.id); assert.equal(action, 'authorise'); assert.equal(target, '66666666666666666');
         return { ok: true, activationKey: key };
       } }) },
-      PRIVATE_ARTIFACTS: { head: async () => ({ size: 3 }), get: async () => ({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }) } };
+      PRIVATE_ARTIFACTS: privateArtifacts };
     const response = handleAccountInteraction(data, env, { waitUntil: promise => pending.push(promise) }, 'backend');
     assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } });
     await Promise.all(pending);
     const dm = calls.find(call => call.options.body instanceof FormData);
     assert.ok(dm); assert.match(dm.options.body.get('payload_json'), new RegExp(key));
     assert.match(dm.options.body.get('payload_json'), /pending activation/);
-    assert.match(dm.options.body.get('payload_json'), /Minecraft 26.1.2.*Java 25/);
-    assert.match(dm.options.body.get('payload_json'), /Enter this code and press Confirm/);
+    assert.match(dm.options.body.get('payload_json'), /Minecraft 26.1.2/);
+    assert.match(dm.options.body.get('payload_json'), /Java 25/);
+    assert.match(dm.options.body.get('payload_json'), /Enter this code.*press Confirm/);
     assert.match(dm.options.body.get('payload_json'), /starts Minecraft automatically/);
-    assert.match(dm.options.body.get('payload_json'), /Future updates are checked before startup/);
-    assert.match(dm.options.body.get('payload_json'), /Loader button.*main menu.*available/);
+    assert.match(dm.options.body.get('payload_json'), /Updates are checked before startup/);
+    assert.match(dm.options.body.get('payload_json'), /Get key.*Help/);
     assert.doesNotMatch(dm.options.body.get('payload_json'), /account approve|request Discord approval/);
     assert.match(dm.url, /77777777777777777/);
     assert.ok(calls.filter(call => !(call.options.body instanceof FormData)).every(call => !String(call.options.body).includes(key)));
@@ -259,17 +267,28 @@ async function responseFor(data, result, kind = 'backend', dmBlocked = false) {
     return Response.json({});
   };
   try {
-    const store = { isAdmin: async () => true, developerCommand: async () => result, userCommand: async () => result };
+    const parsed = accountCommand(data, kind);
+    const store = { isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async () => result, userCommand: async () => result,
+      managementRead: async () => ({ ...result, ...result.audit ? { events: result.audit.slice(0, 8).map(event => ({ ...event, severity: event.severity ?? 'information', metadata: JSON.parse(event.metadata ?? '{}') })) } : {} }),
+      prepareManagement: async () => ({ ...result, token: 't'.repeat(43), action: parsed.action, target: parsed.target, options: parsed.options }),
+      confirmManagement: async () => ({ ...result, action: parsed.action, target: parsed.target, options: parsed.options }) };
     const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only', USER_BOT_TOKEN: 'test-only-user', DISCORD_SECURITY_CHANNEL_ID: '88888888888888888',
       ACCOUNT_STORE: { getByName: () => store }, RELAY_ROOMS: { getByName: () => ({ invalidateAccount: async () => {} }) },
-      PRIVATE_ARTIFACTS: { head: async () => ({ size: 3 }), get: async () => ({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }) } };
+      PRIVATE_ARTIFACTS: privateArtifacts };
     const response = handleAccountInteraction(data, env, { waitUntil: promise => pending.push(promise) }, kind);
     assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } });
     await Promise.all(pending);
-    const reply = JSON.parse(calls.find(call => call.options.method === 'PATCH').options.body);
+    const initial = JSON.parse(calls.findLast(call => call.options.method === 'PATCH').options.body);
+    const confirm = initial.components?.flatMap(row => row.components).find(button => button.custom_id?.startsWith('sky:confirm:'));
+    if (confirm) {
+      pending.length = 0;
+      handleAccountInteraction({ ...data, type: 3, data: { component_type: 2, custom_id: confirm.custom_id } }, env, { waitUntil: promise => pending.push(promise) }, kind);
+      await Promise.all(pending);
+    }
+    const reply = JSON.parse(calls.findLast(call => call.options.method === 'PATCH').options.body);
     assert.deepEqual(reply.allowed_mentions, { parse: [] });
     assert.ok(reply.content.length <= 1900);
-    return { content: reply.content, calls };
+    return { content: reply.content, text: [reply.content, ...(reply.embeds ?? []).flatMap(embed => [embed.title, embed.description, ...(embed.fields ?? []).map(field => `${field.name}\n${field.value}`)])].join('\n'), data: reply, calls };
   } finally { globalThis.fetch = originalFetch; }
 }
 const accountSummary = { accountId: 'account-reference', discordId: '66666666666666666', status: 'active', isAdmin: false,
@@ -345,7 +364,7 @@ test('administrative outcomes describe the action and preserve the target and co
     const reply = await responseFor(command(name, sub, [targetOption, ...options]), { ok: true, account: accountSummary,
       ...(name === 'hwid' && sub === 'reset' ? { activationKey: 'test-reset-key', expiresAt: Date.now() + 86400000 } : {}) });
     assert.match(reply.content, expected);
-    assert.ok(reply.content.includes('<@66666666666666666>'));
+    assert.ok(reply.text.includes('<@66666666666666666>'));
   }
 });
 
@@ -385,11 +404,37 @@ test('replacement activation preserves activated wording and sends the expiring 
 test('private audit responses show bounded readable events without raw metadata', async () => {
   const audit = Array.from({ length: 20 }, (_, index) => ({ id: 100 - index, at: Date.now() - index * 1000,
     actor: actor.id, action: 'license_revoke', override: index === 0 ? 1 : 0, metadata: '{"private":"do-not-render-metadata"}' }));
-  const { content } = await responseFor(command('audit', null, [targetOption]), { ok: true, audit });
-  assert.match(content, /Latest 8 events/);
-  assert.match(content, /license revoke.*\n.*Ref 100.*Admin override/);
-  assert.match(content, /<t:\d+:R>/);
-  assert.doesNotMatch(content, /Ref 92|do-not-render-metadata|"actor"/);
+  const { content, text, data } = await responseFor(command('audit', null, [targetOption]), { ok: true, audit });
+  assert.match(content, /8 events/);
+  assert.equal(data.embeds[0].fields.length, 8); assert.match(text, /license revoke.*Admin override/s); assert.match(text, /<t:\d+:R>/);
+  assert.doesNotMatch(text, /Ref 92|do-not-render-metadata|"actor"/);
   const empty = await responseFor(command('audit', null, [targetOption]), { ok: true, audit: [] });
-  assert.match(empty.content, /No account events/);
+  assert.match(empty.content, /No events match/);
+});
+
+test('administrator alerts send bounded useful context only to fixed private recipients and omit credentials', async () => {
+  const originalFetch = globalThis.fetch, calls = [];
+  const alert = { id: 'private-outbox-reference', auditId: 123, recipientId: '978376257534328883', claimToken: 'private-claim-token', repeats: 2, attempts: 0,
+    event: { id: 123, at: Date.now(), actor: actor.id, account_id: 'private-account-reference', action: 'lease_denied', override: 0, severity: 'warning',
+      metadata: { discordId: '66666666666666666', discordName: 'Current Display Name', discordUsername: 'RenamedUser', minecraftName: 'Alice', minecraftUuid: 'a'.repeat(32),
+        buildId: '2.4.2', loaderVersion: '1.0.10', sessionId: 'opaque-session-reference', reason: 'Second-device authorization attempt denied', error: 'HWID_MISMATCH',
+        activationKey: 'never-render-this-key', signature: 'never-render-this-proof', hardwareHash: 'f'.repeat(64), raw: 'never-render-this-raw-value' } } };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options }); assert.equal(options.redirect, 'manual'); assert.ok(options.signal);
+    return Response.json(url.endsWith('/users/@me/channels') ? { id: '77777777777777777' } : {});
+  };
+  try {
+    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'never-render-this-bot-token' }, { ...alert, recipientId: '66666666666666666' }), false);
+    assert.equal(calls.length, 0, 'An arbitrary recipient cannot turn the alert sender into a messaging endpoint');
+    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'never-render-this-bot-token' }, alert), true);
+    assert.equal(JSON.parse(calls[0].options.body).recipient_id, alert.recipientId);
+    const payload = JSON.parse(calls[1].options.body), text = JSON.stringify(payload);
+    assert.ok(payload.embeds?.length); assert.match(text, /Current Display Name|RenamedUser/); assert.match(text, /Alice/); assert.match(text, /2\.4\.2/);
+    assert.match(text, /Second-device/); assert.equal(payload.enforce_nonce, true); assert.deepEqual(payload.allowed_mentions, { parse: [] });
+    assert.ok(text.length < 6000);
+    for (const secret of ['private-claim-token', 'never-render-this-key', 'never-render-this-proof', 'never-render-this-bot-token', 'never-render-this-raw-value', 'f'.repeat(64)]) assert.ok(!text.includes(secret));
+    assert.ok(payload.components.flatMap(row => row.components).every(button => button.custom_id.startsWith('sky:admin:') && button.custom_id.length <= 100));
+    globalThis.fetch = async () => Response.json({}, { status: 403 });
+    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'test-only' }, alert), false, 'Blocked DMs return an outbox retry outcome');
+  } finally { globalThis.fetch = originalFetch; }
 });

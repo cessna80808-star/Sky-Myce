@@ -23,7 +23,14 @@ The User Bot process must never receive the Backend Bot token or administrative 
 
 ## Account operations
 
-Register `/account status`, `/account approve code`, `/account link code`, `/account unlink uuid confirm`, the preserved `/account reset confirm`, and `/hwid reset confirm`. All act on the authenticated Discord caller. Bare `/account` is not an operation. UUID selection can remove only an already-owned association; it cannot claim another Minecraft identity.
+Start with `/status`, `/key`, `/loader` or `/help`. These commands act on your
+own account and respond privately. `/status` explains your license, linked
+Minecraft accounts, registered device and access. `/key` privately delivers an
+eligible activation key; the backend decides whether a replacement is allowed
+and applies its limits. `/loader` provides the authorized current loader with
+its Minecraft/version details. `/help` explains setup and the next step.
+
+Keep the existing `/account status`, `/account approve code`, `/account link code`, `/account unlink uuid confirm`, `/account reset confirm`, and `/hwid reset confirm` commands registered. All act on the authenticated Discord caller. Bare `/account` is not an operation. UUID selection can remove only an already-owned association; it cannot claim another Minecraft identity. Existing cosmetics commands remain available. See [the Discord command guide](../docs/discord-ux.md) for user and administrator workflows.
 
 The existing architecture proves Minecraft identity in the authenticated loader/game session, issues a five-minute server-stored challenge, and binds its consumption to the intended Discord identity. `/account link` submits that private challenge; it does not start a speculative OAuth flow. `/account approve` approves loader enrollment. The device is enrolled once and remains registered through Minecraft/loader restarts, OS reboot/sleep/login, reconnects, lease renewal, network changes and supported updates. Linux uses the same persistent binding as Windows; normal use needs no reset.
 
