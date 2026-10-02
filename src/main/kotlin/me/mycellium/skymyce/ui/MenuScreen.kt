@@ -10,6 +10,7 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.general.AuctionHouseScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsScreen
@@ -173,6 +174,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected abstract fun buildContent(root: FlowLayout)
 
     final override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
+        RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
         if (invalid) { onClose(); return }
         val mode = ThemeConfig.animationMode
         opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, mode)
@@ -202,7 +204,11 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         }
         val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision, canvas.dirtyRegion)
+        }
     }
+
+    /** Capture these only when a developer requests a report, on the client thread. */
+    fun cacheSizes(): Map<String, Long> = canvas.cacheSizes() + ("snapshots.page" to if (outgoing == null) 0L else 1L)
 
     private fun shellPose(): MotionPose {
         val progress = opening.sample()

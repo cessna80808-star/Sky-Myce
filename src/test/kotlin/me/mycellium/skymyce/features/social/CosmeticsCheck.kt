@@ -146,6 +146,21 @@ fun checkCosmetics() {
     check(retained.size == 2 && "MenuSearch" in retained.names(301001))
     retained.observe("invalid name", null, 301002); check(retained.size == 2)
     retained.expire(901002); check(retained.size == 0)
+    val stable = CosmeticIdentities(3)
+    stable.observe("Alice", profile.uuid, 1000, priority = true)
+    repeat(20) { stable.observe("Alice", profile.uuid, 1001L + it) }
+    stable.observe("PreviousName", profile.uuid, 1100) // Bulk data cannot override a priority identity.
+    check(stable.resolved()[profile.uuid] == "Alice" && stable.size == 1)
+    stable.observe("NewName", profile.uuid, 1200, priority = true)
+    check(stable.resolved()[profile.uuid] == "NewName" && stable.size == 1)
+    stable.observe("NewName", UUID(0, 44), 1300, priority = true)
+    check(profile.uuid !in stable.resolved() && stable.resolved()[UUID(0, 44)] == "NewName")
+    stable.observe("Lookup", null, 1400, priority = true)
+    stable.complete(listOf("Lookup"), mapOf("lookup" to UUID(0, 55)), 1500)
+    repeat(20) { stable.observe("Lookup", null, 1501L + it, priority = true) }
+    check(stable.names(301499).isEmpty() && stable.names(301500) == listOf("Lookup")) // Re-observation preserves lookup TTL.
+    stable.expire(901521)
+    check(stable.size == 0)
     val crowded = CosmeticIdentities()
     repeat(700) { crowded.observe("Cached$it", null, 1000) }
     crowded.observe("GuildSender", null, 1100, priority = true)

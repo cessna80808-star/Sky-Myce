@@ -2,6 +2,7 @@ package me.mycellium.skymyce.hud
 
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import io.wispforest.owo.ui.core.CursorStyle
 import me.mycellium.skymyce.hud.widget.Widget
 import me.mycellium.skymyce.hud.widget.WidgetManager
@@ -56,7 +57,7 @@ object HudRenderer : SkyMyceModule() {
             }
             ScreenEvents.remove(screen).register {
                 pressedWidget = null
-                WidgetManager.widgets.forEach { it.adapter?.cursorAdapter?.applyStyle(CursorStyle.NONE) }
+                WidgetManager.forEachWidget { it.adapter?.cursorAdapter?.applyStyle(CursorStyle.NONE) }
             }
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, client -> client.execute { dispose() } }
@@ -64,18 +65,20 @@ object HudRenderer : SkyMyceModule() {
     }
 
     private fun hovered(mouseX: Int, mouseY: Int): Widget? = if (!interactive) null else
-        WidgetManager.widgets.asReversed().firstOrNull { it.isRenderable && it.inBounds(mouseX, mouseY) }
+        WidgetManager.widgetAt(mouseX, mouseY)
 
     fun render(context: GuiGraphicsExtractor, partialTicks: Float) {
+        RuntimeProfiler.measure(RuntimeProfiler.Area.HUD) {
         if (!isEnabled() || MC.instance.options.hideGui || MC.instance.player == null || MC.screen is WidgetEditorScreen) return
         val window = MC.instance.window
         val mouseX = if (interactive) (MC.instance.mouseHandler.xpos() * window.guiScaledWidth / window.screenWidth).toInt() else -1000000
         val mouseY = if (interactive) (MC.instance.mouseHandler.ypos() * window.guiScaledHeight / window.screenHeight).toInt() else -1000000
-        WidgetManager.widgets.forEach { it.render(context, mouseX, mouseY, partialTicks) }
+        WidgetManager.forEachWidget { it.render(context, mouseX, mouseY, partialTicks) }
+        }
     }
 
     private fun dispose() {
         pressedWidget = null
-        WidgetManager.widgets.forEach { it.dispose() }
+        WidgetManager.forEachWidget { it.dispose() }
     }
 }

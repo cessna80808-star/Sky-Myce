@@ -2,6 +2,7 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
@@ -11,6 +12,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.inventory.Slot
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -18,6 +20,7 @@ import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.InventoryChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.SlotClickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
@@ -32,6 +35,7 @@ object GearLending : SkyMyceModule() {
     private var current: GearLedger? = null
     private val capture = TradeCapture()
     private var screenId = -1
+    private var observedScreen: AbstractContainerScreen<*>? = null
     private var tradeId = UUID.randomUUID().toString()
 
     val ledger: GearLedger? get() {
@@ -44,26 +48,48 @@ object GearLending : SkyMyceModule() {
         return current
     }
 
-    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) sampleTrade() } }
+    override fun init() { ClientTickEvents.END_CLIENT_TICK.register {
+        if (isEnabled()) RuntimeProfiler.measure(RuntimeProfiler.Area.TRADE_CAPTURE) { tickTrade() }
+    } }
+
+    private fun tickTrade() {
+        if (!LocationAPI.isOnSkyBlock) { reset(); return }
+        val screen = MC.instance.screen as? AbstractContainerScreen<*> ?: run { observedScreen = null; screenId = -1; return }
+        if (screen === observedScreen && screen.menu.containerId == screenId) {
+            // A long unchanged trade remains eligible for the same five-second server
+            // completion window, without decoding all 32 item slots every tick.
+            capture.keepAlive(System.currentTimeMillis())
+        } else sampleTrade()
+    }
 
     @Subscription(ContainerInitializedEvent::class, SlotClickEvent::class)
     fun sampleBeforeClick() { sampleTrade() }
 
-    private fun sampleTrade() {
-        if (!LocationAPI.isOnSkyBlock) { capture.clear(); screenId = -1; return }
-        val screen = MC.instance.screen as? AbstractContainerScreen<*> ?: run { screenId = -1; return }
-        val friend = tradePartner(screen.title.stripped) ?: run { capture.clear(); screenId = -1; return }
+    @Subscription
+    fun onInventory(event: InventoryChangeEvent) {
+        // SBAPI posts at Slot.set HEAD: the incoming item is authoritative while
+        // the native Slot still contains its previous item during this callback.
+        if (!event.isInPlayerInventory && event.screen === observedScreen && capture.active) sampleTrade(event.slot, event.item)
+    }
+
+    private fun sampleTrade(changedSlot: Slot? = null, changedItem: ItemStack? = null) {
+        if (!LocationAPI.isOnSkyBlock) { reset(); return }
+        val screen = MC.instance.screen as? AbstractContainerScreen<*> ?: run { observedScreen = null; screenId = -1; return }
+        val newScreen = screen !== observedScreen || screenId != screen.menu.containerId
+        observedScreen = screen
+        val friend = tradePartner(screen.title.stripped) ?: run { capture.clear(); screenId = screen.menu.containerId; return }
         // The chest title can truncate names to ten characters. Confirm friendship using the
         // full name in the server's completion message before storing anything locally.
         ledger ?: return
-        if (screenId != screen.menu.containerId) {
+        if (newScreen) {
             screenId = screen.menu.containerId
             tradeId = UUID.randomUUID().toString()
         }
         val slots = screen.menu.slots.takeWhile { it.container !is Inventory }
         if (slots.size < 36) return
-        val sent = (0..3).flatMap { row -> (0..3).map { col -> slots[row * 9 + col].item } }
-        val received = (0..3).flatMap { row -> (5..8).map { col -> slots[row * 9 + col].item } }
+        fun current(slot: Slot): ItemStack = if (slot === changedSlot && changedItem != null) changedItem else slot.item
+        val sent = (0..3).flatMap { row -> (0..3).map { col -> current(slots[row * 9 + col]) } }
+        val received = (0..3).flatMap { row -> (5..8).map { col -> current(slots[row * 9 + col]) } }
         capture.observe(GearTrade(tradeId, System.currentTimeMillis(), friend, null,
             ProfileAPI.profileName, sent.mapNotNull(::item), received.mapNotNull(::item),
             sent.firstNotNullOfOrNull(::coins), received.firstNotNullOfOrNull(::coins)), System.currentTimeMillis())
@@ -100,5 +126,8 @@ object GearLending : SkyMyceModule() {
     }
 
     @Subscription(ServerDisconnectEvent::class, ProfileChangeEvent::class)
-    fun reset() { capture.clear(); screenId = -1 }
+    fun reset() { capture.clear(); observedScreen = null; screenId = -1 }
+    override fun onDisable() { reset() }
+    fun diagnostics(): Map<String, Long> = mapOf("trade.capture" to if (capture.active) 1L else 0L,
+        "trade.retained_screen" to if (observedScreen != null) 1L else 0L, "trade.records" to (current?.trades?.size ?: 0).toLong())
 }

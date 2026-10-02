@@ -33,6 +33,9 @@ internal fun dungeonTrackerPreviewLines(enabled: Boolean): List<String>? = dunge
 object DungeonTrackerWidget : SkyMyceModule() {
     private val content by lazy { hudPanel(padding = 6) }
     private val previewContent by lazy { hudPanel(padding = 6) }
+    private var seenRevision = -1L
+    private var seenFloor: tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor? = null
+    private var cachedLines = emptyList<String>()
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
         dungeonTrackerPreviewLines(DungeonTrackerConfig.dungeonTrackerWidget)?.let { previewContent.updateTextLines(it) }
@@ -41,6 +44,14 @@ object DungeonTrackerWidget : SkyMyceModule() {
                 SkyBlockIsland.inAnyIsland(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS),
                 DungeonAPI.started, DungeonAPI.completed)) return@Widget null
 
+        if (seenRevision != DungeonTracker.revision || seenFloor != DungeonTracker.currentFloor) {
+            seenRevision = DungeonTracker.revision; seenFloor = DungeonTracker.currentFloor
+            cachedLines = trackerLines()
+        }
+        content.updateTextLines(cachedLines)
+    }
+
+    private fun trackerLines(): List<String> {
         val stats = DungeonTracker.profitData[DungeonTracker.currentFloor]
         val title = DungeonTracker.currentFloor?.name ?: "?"
 
@@ -78,6 +89,6 @@ object DungeonTrackerWidget : SkyMyceModule() {
             }
         }
 
-        content.updateTextLines(lines)
+        return lines
     }
 }

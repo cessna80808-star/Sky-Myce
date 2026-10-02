@@ -18,6 +18,9 @@ import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.base.predicates.OnlyIn
+import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerCloseEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.SlotClickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
@@ -73,8 +76,27 @@ object DungeonApi : SkyMyceModule() {
     private var chestContents: Map<SkyBlockId, Int> = emptyMap()
     private var chestSlots: List<Slot> = emptyList()
 
+    private fun clearChest(forgetFloor: Boolean = false) {
+        if (forgetFloor) chestFloor = null
+        chestType = null
+        chestContents = emptyMap()
+        chestSlots = emptyList()
+        DungeonChestProtection.resetWarning()
+    }
+
+    @Subscription(ContainerCloseEvent::class)
+    fun onChestClose() = clearChest()
+
+    @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class)
+    fun onContextChange() = clearChest(forgetFloor = true)
+
     @Subscription
     fun getChestFloor(event: ContainerInitializedEvent) {
+        clearChest()
+        if (LocationAPI.island !in arrayOf(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS)) {
+            chestFloor = null
+            return
+        }
         chestFloor = chestNames[event.title] ?: if (LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) {
             DungeonAPI.dungeonFloor
         } else {
@@ -82,7 +104,6 @@ object DungeonApi : SkyMyceModule() {
         }
 
         chestType = DungeonChest.fromName(event.title)
-        DungeonChestProtection.resetWarning()
         if (chestType != null) {
             try {
                 chestSlots = event.containerSlots.filter {
@@ -102,9 +123,9 @@ object DungeonApi : SkyMyceModule() {
                 chestSlots = emptyList()
                 chestContents = emptyMap()
             }
-            displayDevMessage("chest floor: $chestFloor")
-            displayDevMessage("chest type: $chestType")
-            displayDevMessage("chest contents: $chestContents")
+            displayDevMessage { "chest floor: $chestFloor" }
+            displayDevMessage { "chest type: $chestType" }
+            displayDevMessage { "chest contents: $chestContents" }
             DungeonChestInitializedEvent(
                 chestFloor ?: return,
                 chestType ?: return,
@@ -121,7 +142,7 @@ object DungeonApi : SkyMyceModule() {
         val lore = event.item.get(DataComponents.LORE)?.lines
         when (event.item.customName?.stripped) {
             "Open Reward Chest" -> {
-                displayDevMessage("Chest: $dungeonChest")
+                displayDevMessage { "Chest: $dungeonChest" }
                 val cost = lore?.firstNotNullOfOrNull { costRegex.find(it.string) }?.groupValues?.getOrNull(1)
                     ?.replace(",", "")?.toLongOrNull()?.takeIf { it >= 0 }
                 if (DungeonChestProtection.shouldBlock(dungeonChest, chestContents, cost)) {

@@ -10,6 +10,7 @@ import me.mycellium.skymyce.config.Config
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.config.instances.dungeons.PartyFinder
 import me.mycellium.skymyce.features.dev.DevTooltips
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.features.digest.DigestActivities
 import me.mycellium.skymyce.features.digest.DigestRng
@@ -35,6 +36,7 @@ import me.mycellium.skymyce.hud.HudRenderer
 import me.mycellium.skymyce.hud.widget.WidgetManager
 import me.mycellium.skymyce.utils.ServerUtils
 import net.fabricmc.api.ClientModInitializer
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.resources.Identifier
 import org.slf4j.LoggerFactory
@@ -61,6 +63,7 @@ object SkyMyce : ClientModInitializer {
 
         // Fabric key mappings must register before GameOptions exists. Execution is gated below.
         initializeModules()
+        ClientLifecycleEvents.CLIENT_STOPPING.register { RuntimeProfiler.shutdown() }
         LoaderClient.observe { allowed ->
             ModuleManager.modules.forEach {
                 if (allowed) { SkyBlockAPI.eventBus.unregister(it); SkyBlockAPI.eventBus.register(it); it.enable() }

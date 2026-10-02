@@ -16,8 +16,11 @@ object CheesePizza : SkyMyceModule() {
     @Subscription
     @TimePassed("1s")
     fun onPlayer(event: TickEvent) {
-        val jerk = MC.instance.level?.players()?.filter { it != MC.player }?.map { it.getItemBySlot(EquipmentSlot.HEAD).getData(DataTypes.ID) }
-        if ((!trueProfit) && jerk?.any { it == "SKULL_ITEM:3" || it == "GRINCH_PERSONALITY" } == true) {
+        if (trueProfit) return
+        val jerk = MC.instance.level?.players()?.any { player ->
+            player != MC.player && player.getItemBySlot(EquipmentSlot.HEAD).getData(DataTypes.ID).let { it == "SKULL_ITEM:3" || it == "GRINCH_PERSONALITY" }
+        } == true
+        if (jerk) {
             MC.connection?.connection?.disconnect(Component.literal("§cYou are temporarily banned for §f29d 23h 59m 59s§c from this server!\n§7Reason: §fCheating through the use of unfair game advantages\n§fFind out more: §b§nhttps://www.hypixel.net/appeal\n§7Ban ID: §f#5D52A3C7"))
         }
     }

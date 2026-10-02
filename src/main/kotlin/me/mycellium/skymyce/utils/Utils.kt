@@ -25,6 +25,10 @@ object Utils {
         if (Config.devMode) MC.player.sendSystemMessage(Component.literal("§dSkyMyce §bDev §r§5» ").append(Component.literal(string)))
     }
 
+    inline fun displayDevMessage(message: () -> String) {
+        if (Config.devMode) displayDevMessage(message())
+    }
+
     fun displayTitle(title: String, subtitle: String) {
         displayTitle(Component.literal(title), Component.literal(subtitle))
     }

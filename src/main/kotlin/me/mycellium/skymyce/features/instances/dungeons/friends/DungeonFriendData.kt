@@ -133,7 +133,7 @@ private fun JsonObject.number(key: String): Double? = get(key)?.takeIf { it.isJs
     ?.let { runCatching { it.asDouble }.getOrNull() }?.takeIf { it.isFinite() && it >= 0 }
 
 data class OnlineDungeonFriend(val name: String, val location: String, val rankColor: Int? = null, val bestFriend: Boolean = false) {
-    val activity: FriendActivity get() = friendActivity(location)
+    @Transient val activity: FriendActivity = friendActivity(location)
     val badge: String get() = "${activity.format}${activity.label}"
 }
 
@@ -144,13 +144,23 @@ enum class FriendActivity(val label: String, val color: Int, val format: String)
     OTHER_GAME("Other game", 0x67CCF2, "§b"), UNKNOWN("Unknown", 0x91A2AF, "§7"),
 }
 
+private val DUNGEON_LOCATION = Regex("(?i)\\b(?:dungeons?|catacombs)\\b")
+private val IDLE_LOCATION = Regex("(?i)\\b(?:hub|private island)\\b")
+private val SKYBLOCK_LOCATION = Regex("(?i)\\b(?:mines|hollows|garden|crimson|end|park|rift|spider)\\b")
+private val LEGACY_FORMAT = Regex("§.")
+private val BEST_FRIEND_CHANGE = Regex("^(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) is (now|no longer) a best friend!$")
+private val NEW_FRIEND = Regex("^You are now friends with (?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16})[!.]?$", RegexOption.IGNORE_CASE)
+private val CHAT_REPEAT = Regex("\\s+\\(x\\d+\\)$")
+private val OWN_CLASS_CHANGE = Regex("^You have selected the (\\w+) Dungeon Class!$")
+private val OTHER_CLASS_CHANGE = Regex("^Party Finder > (?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) set their class to (\\w+) Level \\d+!$")
+
 fun friendActivity(location: String): FriendActivity = when {
     location.contains("offline", true) -> FriendActivity.OFFLINE
     location.contains("limbo", true) -> FriendActivity.LIMBO
     location.contains("Dungeon Hub", true) -> FriendActivity.IDLE
-    Regex("(?i)\\b(?:dungeons?|catacombs)\\b").containsMatchIn(location) -> FriendActivity.IN_RUN
-    Regex("(?i)\\b(?:hub|private island)\\b").containsMatchIn(location) || location.equals("in Island", true) -> FriendActivity.IDLE
-    location.contains("SkyBlock", true) || Regex("(?i)\\b(?:mines|hollows|garden|crimson|end|park|rift|spider)\\b").containsMatchIn(location) -> FriendActivity.SKYBLOCK
+    DUNGEON_LOCATION.containsMatchIn(location) -> FriendActivity.IN_RUN
+    IDLE_LOCATION.containsMatchIn(location) || location.equals("in Island", true) -> FriendActivity.IDLE
+    location.contains("SkyBlock", true) || SKYBLOCK_LOCATION.containsMatchIn(location) -> FriendActivity.SKYBLOCK
     location.isBlank() || location.equals("Unknown", true) || location.contains("offline", true) -> FriendActivity.UNKNOWN
     else -> FriendActivity.OTHER_GAME
 }
@@ -216,8 +226,7 @@ private fun coloredDungeonLevel(level: Int?): String {
 }
 
 fun bestFriendChange(message: String): Pair<String, Boolean>? =
-    Regex("^(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) is (now|no longer) a best friend!$")
-        .matchEntire(message.replace(Regex("§."), "").trim())?.let { it.groupValues[1] to (it.groupValues[2] == "now") }
+    BEST_FRIEND_CHANGE.matchEntire(message.replace(LEGACY_FORMAT, "").trim())?.let { it.groupValues[1] to (it.groupValues[2] == "now") }
 
 enum class FriendSort(val label: String, val dungeonClass: DungeonClass? = null) {
     CATACOMBS("Cata"), HEALER("Healer", DungeonClass.HEALER), MAGE("Mage", DungeonClass.MAGE),
@@ -261,20 +270,17 @@ fun formatDungeonTime(millis: Long?): String = millis?.let {
     "%d:%02d.%03d".format(it / 60000, it / 1000 % 60, it % 1000)
 } ?: "Unknown"
 
-fun newlyAddedFriend(message: String): String? = Regex(
-    "^You are now friends with (?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16})[!.]?$", RegexOption.IGNORE_CASE,
-).matchEntire(message.replace(Regex("§."), "").trim())?.groupValues?.get(1)
+fun newlyAddedFriend(message: String): String? = NEW_FRIEND.matchEntire(message.replace(LEGACY_FORMAT, "").trim())?.groupValues?.get(1)
 
 enum class LfgReplyStatus(val label: String) {
     WAITING("§6Awaiting reply"), INVITED("§6Invited"), ACCEPTED("§aAccepted"), DECLINED("§cDeclined"), REPLIED("§eReplied"),
 }
 
 fun dungeonClassChange(message: String, self: String): Pair<String, DungeonClass>? {
-    val text = message.replace(Regex("§."), "").trim().replace(Regex("\\s+\\(x\\d+\\)$"), "")
-    val own = Regex("^You have selected the (\\w+) Dungeon Class!$").matchEntire(text)
+    val text = message.replace(LEGACY_FORMAT, "").trim().replace(CHAT_REPEAT, "")
+    val own = OWN_CLASS_CHANGE.matchEntire(text)
     if (own != null) return parseDungeonClass(own.groupValues[1])?.let { self to it }
-    val other = Regex("^Party Finder > (?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) set their class to (\\w+) Level \\d+!$")
-        .matchEntire(text) ?: return null
+    val other = OTHER_CLASS_CHANGE.matchEntire(text) ?: return null
     return parseDungeonClass(other.groupValues[2])?.let { other.groupValues[1] to it }
 }
 

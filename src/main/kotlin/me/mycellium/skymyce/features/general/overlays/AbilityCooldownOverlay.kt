@@ -29,7 +29,14 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 object AbilityCooldownOverlay : SkyMyceModule() {
-    private val cooldowns: MutableMap<SkyBlockId, Triple<Duration, Duration, Duration>> = mutableMapOf()
+    private data class Cooldown(val started: Duration, val ability: Duration, val duration: Duration, var notification: String? = null)
+    private val cooldowns = mutableMapOf<SkyBlockId, Cooldown>()
+    private val notificationLines = ArrayList<String>()
+    private val notificationOpacities = ArrayList<Double>()
+    private var displayId: SkyBlockId? = null
+    private var displaySeconds = Long.MIN_VALUE
+    private var displayReady = false
+    private var displayText = ""
     private val cooldownLabel by lazy { hudLabel() }
     private val notifications by lazy { hudColumn().apply { horizontalAlignment(HorizontalAlignment.CENTER) } }
 
@@ -40,14 +47,15 @@ object AbilityCooldownOverlay : SkyMyceModule() {
         val id = PlayerUtils.activeItem.getSkyBlockId() ?: return@Widget null
         val cooldown = cooldowns[id] ?: return@Widget null
 
-        val time = now - cooldown.first
-        val duration = maxOf(cooldown.second, cooldown.third)
-
-        cooldownLabel.updateText(if (time < duration) {
-            "§cCooldown: ${(duration - time).inWholeSeconds.seconds}"
-        } else {
-            "§aAbility Ready!"
-        })
+        val time = now - cooldown.started
+        val duration = maxOf(cooldown.ability, cooldown.duration)
+        val ready = time >= duration
+        val seconds = (duration - time).inWholeSeconds
+        if (displayId != id || displaySeconds != seconds || displayReady != ready) {
+            displayId = id; displaySeconds = seconds; displayReady = ready
+            displayText = if (ready) "§aAbility Ready!" else "§cCooldown: ${seconds.seconds}"
+        }
+        cooldownLabel.updateText(displayText)
         cooldownLabel
     }
 
@@ -58,22 +66,22 @@ object AbilityCooldownOverlay : SkyMyceModule() {
         if (!GeneralConfig.displayAbilityNotification) return@Widget null
         val now = System.currentTimeMillis().milliseconds
 
-        val lines = mutableListOf<String>()
-        val opacities = mutableListOf<Double>()
+        notificationLines.clear()
+        notificationOpacities.clear()
         for ((id, cooldown) in cooldowns) {
-            val time = now - cooldown.first
-            val duration = maxOf(cooldown.second, cooldown.third)
+            val time = now - cooldown.started
+            val duration = maxOf(cooldown.ability, cooldown.duration)
 
             if ((time - duration) !in 0.seconds..5.seconds) continue
 
-            lines += "§a${id.toItem().hoverName.stripped}"
-            opacities += if (editor) 1.0 else motionEnvelope((time - duration).inWholeMilliseconds.toDouble(),
+            notificationLines += cooldown.notification ?: "§a${id.toItem().hoverName.stripped}".also { cooldown.notification = it }
+            notificationOpacities += if (editor) 1.0 else motionEnvelope((time - duration).inWholeMilliseconds.toDouble(),
                 5000.0, ThemeConfig.animationMode)
         }
 
-        if (lines.isEmpty()) return@Widget null
+        if (notificationLines.isEmpty()) return@Widget null
 
-        notifications.updateTextLines(lines, opacities)
+        notifications.updateTextLines(notificationLines, notificationOpacities)
     }
 
     @Subscription
@@ -100,9 +108,9 @@ object AbilityCooldownOverlay : SkyMyceModule() {
         }
 
         cooldowns[id]?.let {
-            if ((now - it.first) < cooldown) return
+            if ((now - it.started) < cooldown) return
         }
 
-        cooldowns[id] = Triple(now, cooldown, duration)
+        cooldowns[id] = Cooldown(now, cooldown, duration, cooldowns[id]?.notification)
     }
 }

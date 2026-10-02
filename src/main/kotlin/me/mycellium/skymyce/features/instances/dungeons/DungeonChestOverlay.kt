@@ -14,8 +14,9 @@ import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.inventory.Slot
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerCloseEvent
+import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
-import java.awt.Color
 
 
 object DungeonChestOverlay : SkyMyceModule() {
@@ -30,6 +31,9 @@ object DungeonChestOverlay : SkyMyceModule() {
 
     var items: Map<Slot, ChestOverlayItem>? = emptyMap()
     var clickedTimestamp = 0L
+    @Subscription(ContainerCloseEvent::class, ServerDisconnectEvent::class)
+    fun clearContainer() { items = null; clickedTimestamp = 0L }
+    override fun onDisable() { clearContainer() }
 
     @Subscription
     fun onChestInit(event: ContainerInitializedEvent) {
@@ -73,7 +77,7 @@ object DungeonChestOverlay : SkyMyceModule() {
                     event.slot.y,
                     event.slot.x + 16,
                     event.slot.y + 16,
-                    Color(255, 0, 0, 255 - (time * 255).toInt()).rgb
+                    ((255 - (time * 255).toInt()).coerceIn(0, 255) shl 24) or 0xFF0000
                 )
             }
         }

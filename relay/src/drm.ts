@@ -2,6 +2,19 @@ import type { AccountStore, AccountsConfig } from "./accounts";
 import { versionAllowed, versionDenial } from "./licensing";
 
 const encoder = new TextEncoder();
+// Immutable crypto setup only: signatures and mutable account authority are always checked afresh.
+const publicKeys = new Map<string, Promise<CryptoKey>>();
+const privateKeys = new Map<string, Promise<CryptoKey>>();
+const signingConfigurations = new Map<string, Promise<void>>();
+function setup<T>(cache: Map<string, Promise<T>>, identity: string, maximum: number, load: () => Promise<T>): Promise<T> {
+  const existing = cache.get(identity);
+  if (existing) { cache.delete(identity); cache.set(identity, existing); return existing; }
+  const pending = load();
+  cache.set(identity, pending);
+  if (cache.size > maximum) cache.delete(cache.keys().next().value!);
+  void pending.catch(() => { if (cache.get(identity) === pending) cache.delete(identity); });
+  return pending;
+}
 export type DrmConfig = { DRM_SIGNING_PRIVATE_KEY?: string; DRM_PUBLIC_KEYS?: string; DRM_KEY_ID?: string;
   LEASE_TTL_SECONDS?: string; OFFLINE_GRACE_SECONDS?: string; PRIVATE_ARTIFACTS?: R2Bucket; ARTIFACT_MANIFEST_KEY?: string; LOADER_MANIFEST_KEY?: string };
 export type AuthenticationPurpose = "activate" | "renew" | "bootstrap-activate" | "bootstrap-renew";
@@ -53,7 +66,7 @@ export function installationMessage(input: InstallationInput, nonce: string): st
     `Sky-Myce installation v${input.platform === undefined ? 1 : 2}\n${fields}${launch}`;
 }
 export async function installationKey(publicKey: string): Promise<CryptoKey> {
-  try { return await crypto.subtle.importKey("spki", decode64(publicKey, 256), "Ed25519", false, ["verify"]); }
+  try { return await setup(publicKeys, publicKey, 256, () => crypto.subtle.importKey("spki", decode64(publicKey, 256), "Ed25519", false, ["verify"])); }
   catch { return deny("invalid_installation_key"); }
 }
 export async function verifyInstallation(publicKey: string, signature: unknown, message: string): Promise<boolean> {
@@ -62,7 +75,8 @@ export async function verifyInstallation(publicKey: string, signature: unknown, 
 }
 async function signingKey(env: DrmConfig): Promise<CryptoKey> {
   if (!env.DRM_SIGNING_PRIVATE_KEY || !env.DRM_KEY_ID) deny("authorization_unavailable");
-  try { return await crypto.subtle.importKey("pkcs8", decode64(env.DRM_SIGNING_PRIVATE_KEY, 512), "Ed25519", false, ["sign"]); }
+  const encoded = env.DRM_SIGNING_PRIVATE_KEY;
+  try { return await setup(privateKeys, encoded, 4, () => crypto.subtle.importKey("pkcs8", decode64(encoded, 512), "Ed25519", false, ["sign"])); }
   catch { return deny("authorization_unavailable"); }
 }
 async function verificationKey(env: DrmConfig, kid: unknown): Promise<CryptoKey> {
@@ -74,8 +88,12 @@ async function verificationKey(env: DrmConfig, kid: unknown): Promise<CryptoKey>
   } catch { return deny("invalid_signature"); }
 }
 export async function ensureSigningConfigured(env: DrmConfig): Promise<void> {
-  const key = await signingKey(env), proof = encoder.encode("Sky-Myce signing configuration");
-  if (!await crypto.subtle.verify("Ed25519", await verificationKey(env, env.DRM_KEY_ID), await crypto.subtle.sign("Ed25519", key, proof), proof)) deny("authorization_unavailable");
+  const config = { DRM_SIGNING_PRIVATE_KEY: env.DRM_SIGNING_PRIVATE_KEY, DRM_PUBLIC_KEYS: env.DRM_PUBLIC_KEYS, DRM_KEY_ID: env.DRM_KEY_ID };
+  const identity = JSON.stringify([config.DRM_SIGNING_PRIVATE_KEY, config.DRM_PUBLIC_KEYS, config.DRM_KEY_ID]);
+  return setup(signingConfigurations, identity, 4, async () => {
+    const key = await signingKey(config), proof = encoder.encode("Sky-Myce signing configuration");
+    if (!await crypto.subtle.verify("Ed25519", await verificationKey(config, config.DRM_KEY_ID), await crypto.subtle.sign("Ed25519", key, proof), proof)) deny("authorization_unavailable");
+  });
 }
 export async function createLease(env: DrmConfig, claims: LeaseClaims): Promise<string> {
   const header = encode64(encoder.encode(JSON.stringify({ alg: "EdDSA", typ: "JWT", kid: env.DRM_KEY_ID })));

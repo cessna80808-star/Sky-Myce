@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import kotlinx.coroutines.delay
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.features.general.auction.AuctionIndex
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.nbt.NbtAccounter
 import net.minecraft.nbt.NbtIo
@@ -28,6 +29,9 @@ object AuctionAPI : SkyMyceModule() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ItemStack>) = size > 128
     }
     private val decoding = mutableSetOf<String>()
+    fun diagnostics(): Map<String, Long> = mapOf("auction.worker" to if (worker) 1L else 0L,
+        "auction.itemCache" to itemCache.size.toLong(), "auction.decoding" to decoding.size.toLong(),
+        "auction.rows" to index.view.auctions.size.toLong())
 
     fun beginBrowserSession(force: Boolean = false) {
         val now = System.currentTimeMillis()
@@ -65,7 +69,7 @@ object AuctionAPI : SkyMyceModule() {
         }
     }
 
-    internal fun fetchPage(page: Int): AuctionPage {
+    internal fun fetchPage(page: Int): AuctionPage = RuntimeProfiler.measure(RuntimeProfiler.Area.AUCTION_HTTP) {
         val connection = URI(auctionPageUrl(page)).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 8000; connection.readTimeout = 8000
         connection.instanceFollowRedirects = false
@@ -88,7 +92,8 @@ object AuctionAPI : SkyMyceModule() {
                 }
                 output.toByteArray()
             }
-            return parseAuctionPage(JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject, page)
+            RuntimeProfiler.network(RuntimeProfiler.Area.AUCTION_HTTP, bytes.size.toLong())
+            parseAuctionPage(JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject, page)
         } finally { connection.disconnect() }
     }
 
@@ -103,13 +108,15 @@ object AuctionAPI : SkyMyceModule() {
         val remaining get() = end - System.currentTimeMillis()
         val expired get() = remaining <= 0
         val priceLabel get() = if (isBin) "BIN price" else if (hasBids) "Current bid" else "Starting bid"
-        val searchText = (name + " " + lore.replace(Regex("§."), "") + " " + category).lowercase()
+        val searchText = (name + " " + lore.replace(AUCTION_STYLE, "") + " " + category).lowercase()
     }
     private class AuctionFetchFailure(message: String) : Exception(message)
 }
 
 internal const val MAX_PAGE_BYTES = 8 * 1024 * 1024
 internal const val MAX_ITEM_ENCODED = 32768
+private val AUCTION_UUID = Regex("[a-f0-9]{32}")
+private val AUCTION_STYLE = Regex("§.")
 internal fun auctionPageUrl(page: Int): String {
     require(page in 0 until AuctionIndex.MAX_PAGES)
     return "https://api.hypixel.net/v2/skyblock/auctions?page=$page"
@@ -129,7 +136,7 @@ internal fun parseAuctionPage(json: JsonObject, requestedPage: Int): AuctionAPI.
         fun text(key: String, max: Int): String = value.get(key)?.asString.orEmpty().take(max).filter { c -> !c.isISOControl() || c == '\n' }
         val id = text("uuid", 36).replace("-", "")
         val seller = text("auctioneer", 36).replace("-", "")
-        require(id.matches(Regex("[a-f0-9]{32}")) && seller.matches(Regex("[a-f0-9]{32}")))
+        require(id.matches(AUCTION_UUID) && seller.matches(AUCTION_UUID))
         val start = value.get("start").asLong; val end = value.get("end").asLong
         val bid = value.get("starting_bid").asLong
         val highest = value.get("highest_bid_amount")?.asLong ?: 0L

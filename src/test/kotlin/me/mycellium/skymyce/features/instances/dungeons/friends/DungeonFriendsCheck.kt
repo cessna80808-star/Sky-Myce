@@ -21,6 +21,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /** Run with ./gradlew dungeonFriendsCheck; requires no Minecraft client or API credentials. */
 fun main() {
+    checkFriendWork()
     me.mycellium.skymyce.features.general.checkPersonalBestCommand()
     me.mycellium.skymyce.features.general.auction.checkAuctions()
     me.mycellium.skymyce.features.instances.dungeons.tracker.checkTracker()
@@ -770,12 +771,20 @@ fun main() {
         store.save(saved)
         DungeonFriendStatsCache.clear()
         DungeonFriendStatsCache.initialize(savedFile)
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("low", 1000) == Long.MAX_VALUE)
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("hidden", 1000) == Long.MAX_VALUE)
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("high", 0) == 1L)
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("high", 1) == 1L)
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("newfriend", 1000) == 1000L)
         DungeonFriendStatsCache.request("low")
         DungeonFriendStatsCache.request("high")
         DungeonFriendStatsCache.request("hidden")
         DungeonFriendStatsCache.request("newfriend")
         check(DungeonFriendStatsCache.status == "Loading PBs: 2 queued")
+        check(DungeonFriendStatsCache.nextAutomaticRefresh("high", 1000) == Long.MAX_VALUE) // Pending fetches are not re-enqueued every tick.
+        val beforeRefreshVersion = DungeonFriendStatsCache.version
         DungeonFriendStatsCache.refresh()
+        check(DungeonFriendStatsCache.version > beforeRefreshVersion) // Explicit refresh wakes exact-deadline batches.
         check(DungeonFriendStatsCache.get("low")?.catacombs == 40)
         DungeonFriendStatsCache.disconnect()
         check(DungeonFriendStatsCache.pendingCount == 0)
@@ -911,6 +920,11 @@ private fun checkFullFriendRoster() {
         store.save(scanner.savedFriends, scanner.savedAllFriends)
         val restored = FriendListScanner(store.load(), store.loadAll())
         check(restored.all == scanner.all && restored.hasScannedAll && restored.tick(0) == null)
+        restored.all.values.forEach { friend ->
+            check(friend.activity == friendActivity(friend.location))
+            check(friend.badge == "${friend.activity.format}${friend.activity.label}")
+        }
+        check(!Files.readString(rosterPath).contains("\"activity\""))
         restored.refresh(0, full = true)
         restored.tick(0)
         restored.receive("Friends (Page 1 of 3)\nPartial is offline\n--------------------", 1)
@@ -1144,6 +1158,15 @@ private fun checkSocialFeatures() {
     check(capture.complete("Alice", 1001) == null)
     capture.observe(trade, 1000)
     check(capture.complete("Bob", 6001) == null)
+    capture.observe(trade, 1000)
+    capture.keepAlive(60000) // An unchanged, still-open trade remains observable.
+    check(capture.active && capture.complete("Bob", 65000)?.sent == listOf(item))
+    check(!capture.active && capture.complete("Bob", 65001) == null)
+    capture.keepAlive(70000) // A tick cannot resurrect a consumed completion.
+    check(capture.complete("Bob", 70001) == null)
+    capture.observe(trade, 1000)
+    capture.keepAlive(60000)
+    check(capture.complete("Bob", 65001) == null) // The unchanged post-close TTL remains five seconds.
     capture.observe(trade, 1000)
     capture.clear() // Cancel/disconnect; later confirmation cannot resurrect an old offer.
     check(capture.complete("Bob", 1001) == null)

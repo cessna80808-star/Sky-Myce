@@ -10,17 +10,19 @@ import kotlin.time.Duration
 /** Optional provider integration follows DungeonProgressHud; no extra bundled mod or API key is needed. */
 object DungeonFriendProfileProvider {
     private val viewerRequests = ProfileLookupCooldown()
+    private val skyblockerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblocker") }
+    internal val viewerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblockpv") }
     val nextViewerRequest: Long get() = viewerRequests.nextRequest
-    val available: Boolean get() = listOf("skyblocker", "skyblockpv").any { FabricLoader.getInstance().isModLoaded(it) }
+    val available: Boolean get() = skyblockerAvailable || viewerAvailable
 
     fun fetch(name: String, uuid: UUID): DungeonFriendStats? {
-        if (FabricLoader.getInstance().isModLoaded("skyblocker")) {
+        if (skyblockerAvailable) {
             runCatching {
                 val json = fetchSkyblockerProfiles(uuid)
                 DungeonFriendStats.fromProfiles(json, uuid.toString().replace("-", ""))
             }.getOrNull()?.let { return it }
         }
-        if (FabricLoader.getInstance().isModLoaded("skyblockpv")) {
+        if (viewerAvailable) {
             runCatching {
                 val selected = fetchViewerProfile(uuid) ?: return DungeonFriendStats(StatsState.NO_PROFILE)
                 val backing = getter(selected, "getBackingProfile") ?: error("No profile data")
@@ -39,7 +41,7 @@ object DungeonFriendProfileProvider {
     }
 
     internal fun profilePresence(uuid: UUID): Boolean? = runCatching {
-        if (!FabricLoader.getInstance().isModLoaded("skyblocker")) return null
+        if (!skyblockerAvailable) return null
         publicProfilePresence(fetchSkyblockerProfiles(uuid))
     }.getOrNull()
 

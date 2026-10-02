@@ -113,7 +113,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
             else if (!DungeonFriends.scanner.hasScannedAll) "Friend cache incomplete • open Party Finder to finish loading it"
             else "${DungeonFriends.scanner.all.size} cached friends • online status from Party Finder"
         if (scanStatus.text().string != status) scanStatus.text(Component.literal(status))
-        val state = listOf(FriendWealthCache.version, DungeonFriends.scanner.all.toMap(), ledger, ledger?.trades, ledger?.error,
+        val state = listOf(FriendWealthCache.version, DungeonFriends.scanner, DungeonFriends.scanner.version, ledger, ledger?.trades, ledger?.error,
             DungeonFriendsSettings.error, LocationAPI.onHypixel, FriendWealthCache.available)
         if (state != previous) { previous = state; updateRows() }
     }

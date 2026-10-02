@@ -88,7 +88,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             missingClasses = null
         }
         val state = listOf(
-            DungeonFriendStatsCache.version, DungeonFriends.scanner.online.toMap(), floor, sort, ascending, wantedClasses(),
+            DungeonFriendStatsCache.version, DungeonFriends.scanner, DungeonFriends.scanner.version, floor, sort, ascending, wantedClasses(),
             DungeonFriendsSettings.secondaryClasses, DungeonFriends.replies.version, showLowCata, search,
             me.mycellium.skymyce.features.social.CosmeticsClient.revision,
         )

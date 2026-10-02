@@ -1,5 +1,12 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipInputStream
+import net.fabricmc.loom.build.nesting.NestableJarGenerationTask
 
 plugins {
 	id("net.fabricmc.fabric-loom")
@@ -32,6 +39,85 @@ repositories {
 	maven("https://jitpack.io")
 }
 
+// Fabric already selects our newer SkyBlock API and identical config mods. Keep the
+// viewer, its entrypoints and every other library; omit only those shadowed copies.
+val profileViewerRuntime = configurations.create("profileViewerRuntime") { isTransitive = false }
+val compactProfileViewer by tasks.registering {
+    val original = providers.provider { profileViewerRuntime.singleFile }
+    val output = layout.buildDirectory.file("shared-runtime/skyblock-profile-viewer.jar")
+    inputs.file(original)
+    outputs.file(output)
+    doLast {
+        val shared = setOf("skyblock-api", "resourcefulconfig", "resourcefulconfigkt", "tech_thatgravyboat_repo-lib_repo-lib")
+        ZipFile(original.get()).use { source ->
+            @Suppress("UNCHECKED_CAST")
+            val metadata = source.getInputStream(source.getEntry("fabric.mod.json")).reader().use {
+                JsonSlurper().parse(it) as MutableMap<String, Any>
+            }
+            @Suppress("UNCHECKED_CAST")
+            val nested = metadata["jars"] as List<Map<String, String>>
+            val omitted = nested.mapNotNull { entry ->
+                val path = entry.getValue("file")
+                val bytes = source.getInputStream(source.getEntry(path)).use { it.readBytes() }
+                ZipInputStream(bytes.inputStream()).use { jar ->
+                    var item = jar.nextEntry
+                    while (item != null && item.name != "fabric.mod.json") item = jar.nextEntry
+                    if (item == null) null else {
+                        val mod = JsonSlurper().parseText(jar.readBytes().toString(Charsets.UTF_8)) as Map<*, *>
+                        path.takeIf { mod["id"] in shared }
+                    }
+                }
+            }.toSet()
+            check(omitted.size == shared.size) { "Profile viewer shared runtime changed; review its nested mods" }
+            metadata["jars"] = nested.filterNot { it["file"] in omitted }
+            val destination = output.get().asFile.apply { parentFile.mkdirs() }
+            ZipOutputStream(destination.outputStream()).use { target ->
+                source.entries().asSequence().filterNot { it.name in omitted }.forEach { entry ->
+                    target.putNextEntry(ZipEntry(entry.name).apply { time = 0 })
+                    if (entry.name == "fabric.mod.json") target.write(JsonOutput.toJson(metadata).toByteArray())
+                    else source.getInputStream(entry).use { it.copyTo(target) }
+                    target.closeEntry()
+                }
+            }
+        }
+    }
+}
+
+val sharedRuntimeCheck by tasks.registering {
+    group = "verification"
+    description = "Checks compact viewer retains every class/resource and resolves every nested mod"
+    dependsOn(compactProfileViewer)
+    doLast {
+        ZipFile(profileViewerRuntime.singleFile).use { original ->
+            ZipFile(compactProfileViewer.get().outputs.files.singleFile).use { compact ->
+                fun metadata(zip: ZipFile): Map<*, *> = zip.getInputStream(zip.getEntry("fabric.mod.json")).reader().use {
+                    JsonSlurper().parse(it) as Map<*, *>
+                }
+                val before = metadata(original)
+                val after = metadata(compact)
+                check(before.filterKeys { it != "jars" } == after.filterKeys { it != "jars" })
+                val retained = compact.entries().asSequence().map { it.name }.toSet()
+                val removed = original.entries().asSequence().map { it.name }.filterNot { it in retained }.toList()
+                check(removed.size == 4 && removed.all { it.startsWith("META-INF/jars/") })
+                @Suppress("UNCHECKED_CAST")
+                val nested = after["jars"] as List<Map<String, String>>
+                check(nested.all { it["file"] in retained }) { "Dangling nested mod declaration" }
+                for (name in retained - "fabric.mod.json") {
+                    val expected = original.getInputStream(original.getEntry(name)).use { it.readBytes() }
+                    val actual = compact.getInputStream(compact.getEntry(name)).use { it.readBytes() }
+                    check(expected.contentEquals(actual)) { "Viewer class/resource changed: $name" }
+                }
+                // The two omitted config jars must be exactly the ones we include directly.
+                for (name in removed.filter { it.contains("resourcefulconfig") }) {
+                    val replacement = configurations.runtimeClasspath.get().single { it.name == name.substringAfterLast('/') }
+                    check(original.getInputStream(original.getEntry(name)).use { it.readBytes() }.contentEquals(replacement.readBytes()))
+                }
+                logger.lifecycle("Shared runtime checks passed: viewer classes/assets/metadata intact; 4 shadowed libraries omitted")
+            }
+        }
+    }
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft("com.mojang:minecraft:${providers.gradleProperty("minecraft_version").get()}")
@@ -58,6 +144,7 @@ dependencies {
 
 	// Pin the 26.1 release by Modrinth version ID; it also bundles its own runtime libraries.
 	runtimeOnly("maven.modrinth:skyblock-profile-viewer:${providers.gradleProperty("skyblockpv_version").get()}")
+    add(profileViewerRuntime.name, "maven.modrinth:skyblock-profile-viewer:${providers.gradleProperty("skyblockpv_version").get()}")
 	include("maven.modrinth:skyblock-profile-viewer:${providers.gradleProperty("skyblockpv_version").get()}")
 
 	// Resourceful Config
@@ -70,6 +157,17 @@ dependencies {
 	// owo lib
 	implementation("io.wispforest:owo-lib:${providers.gradleProperty("owo_version").get()}")
 	include("io.wispforest:owo-sentinel:${providers.gradleProperty("owo_version").get()}")
+}
+
+// Keep Loom's module coordinates/capabilities and normal nesting/metadata machinery.
+// Replace only this task's generated viewer copy with the verified shared-runtime copy.
+tasks.named<NestableJarGenerationTask>("processIncludeJars") {
+    dependsOn(compactProfileViewer)
+    inputs.files(compactProfileViewer)
+    doLast {
+        val name = "skyblock-profile-viewer-${providers.gradleProperty("skyblockpv_version").get()}.jar"
+        compactProfileViewer.get().outputs.files.singleFile.copyTo(outputDirectory.file(name).get().asFile, overwrite = true)
+    }
 }
 
 tasks.processResources {
@@ -203,7 +301,32 @@ val menuMotionCheck by tasks.registering(JavaExec::class) {
     workingDir = layout.buildDirectory.dir("menu-motion-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck) }
+val runtimeProfilerCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks opt-in developer profiling counters, JFR lifecycle and cleanup"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.dev.RuntimeProfilerCheckKt"
+}
+val featureWorkCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks feature work invalidation, bounded identities and hot-path allocation"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.performance.FeatureWorkCheckKt"
+}
+val menuCanvasBenchmark by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Measures warmed 60-card canvas work without enforcing noisy timing thresholds"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.hud.MenuCanvasBenchmark"
+    workingDir = layout.buildDirectory.dir("menu-canvas-benchmark").get().asFile
+    systemProperty("java.awt.headless", "true")
+    args("current", ".", "bulk")
+    doFirst { workingDir.mkdirs() }
+}
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

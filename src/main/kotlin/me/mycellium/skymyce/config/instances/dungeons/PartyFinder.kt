@@ -24,6 +24,8 @@ import tech.thatgravyboat.skyblockapi.api.events.screen.SlotClickEvent
 import java.util.UUID
 
 private val MEMBER_LINE_REGEX = Regex("^(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}):\\s*(\\w+)\\s+\\(\\d+\\)$")
+private val FORMAT_REGEX = Regex("§.")
+private val FLOOR_REGEX = Regex("^Floor:\\s*(?:Floor\\s+)?([1-7]|VII|VI|IV|V|III|II|I)$", RegexOption.IGNORE_CASE)
 
 data class PartyListing(
     val slotIndex: Int,
@@ -87,7 +89,7 @@ object PartyFinder : SkyMyceModule() {
         screen = null; listings.clear(); dimmed.clear(); invalidateMatcher()
 
         if (title.startsWith("Party Finder", ignoreCase = true)) {
-            displayDevMessage("[PartyFinder] Detected container: title='$title', slots=${event.containerSlots.size}")
+            displayDevMessage { "[PartyFinder] Detected container: title='$title', slots=${event.containerSlots.size}" }
             val listings = parsePartyListings(event)
             if (LocationAPI.isOnSkyBlock) {
                 screen = event.screen
@@ -96,7 +98,7 @@ object PartyFinder : SkyMyceModule() {
                     DungeonFriendStatsCache.request(it.name.string, it.uuid, priority = true)
                 }
             }
-            displayDevMessage("[PartyFinder] Parsed ${listings.size} listing(s): $listings")
+            displayDevMessage { "[PartyFinder] Parsed ${listings.size} listing(s): $listings" }
             DungeonFriends.onListings(listings)
         }
     }
@@ -108,15 +110,15 @@ private fun parsePartyListings(event: ContainerInitializedEvent): List<PartyList
         .mapNotNull { slot ->
             val item = slot.item
             if (item.isEmpty) {
-                displayDevMessage("[PartyFinder] Slot ${slot.index}: empty")
+                displayDevMessage { "[PartyFinder] Slot ${slot.index}: empty" }
                 return@mapNotNull null
             }
             if (item.item != Items.PLAYER_HEAD) {
-                displayDevMessage("[PartyFinder] Slot ${slot.index}: ignored ${item.item}")
+                displayDevMessage { "[PartyFinder] Slot ${slot.index}: ignored ${item.item}" }
                 return@mapNotNull null
             }
 
-            displayDevMessage("[PartyFinder] Slot ${slot.index}: detected player head")
+            displayDevMessage { "[PartyFinder] Slot ${slot.index}: detected player head" }
             parsePartyItem(slot.index, item)
         }
 }
@@ -127,10 +129,10 @@ private fun parsePartyItem(slotIndex: Int, item: ItemStack): PartyListing? {
 
     val loreLines = item.get(DataComponents.LORE)?.lines?.map { it.string }
     if (loreLines == null) {
-        displayDevMessage("[PartyFinder] Slot $slotIndex: player head has no lore")
+        displayDevMessage { "[PartyFinder] Slot $slotIndex: player head has no lore" }
         return null
     }
-    displayDevMessage("[PartyFinder] Slot $slotIndex: profileUuid=$leaderUuid, lore=$loreLines")
+    displayDevMessage { "[PartyFinder] Slot $slotIndex: profileUuid=$leaderUuid, lore=$loreLines" }
     return partyListingFromLore(slotIndex, leaderUuid, loreLines)
 }
 
@@ -142,7 +144,7 @@ fun partyListingFromLore(slotIndex: Int, leaderUuid: UUID?, loreLines: List<Stri
     var inMembersSection = false
 
     for (line in loreLines) {
-        val cleanLine = line.replace(Regex("§."), "").trim()
+        val cleanLine = line.replace(FORMAT_REGEX, "").trim()
 
         when {
             cleanLine.equals("Members:", ignoreCase = true) -> {
@@ -171,10 +173,9 @@ fun partyListingFromLore(slotIndex: Int, leaderUuid: UUID?, loreLines: List<Stri
 }
 
 fun partyListingFloor(lines: List<String>): DungeonFloor? {
-    val clean = lines.map { it.replace(Regex("§."), "").trim() }
+    val clean = lines.map { it.replace(FORMAT_REGEX, "").trim() }
     val master = clean.any { it.startsWith("Dungeon:") && it.contains("Master Mode", true) }
-    val floor = clean.firstNotNullOfOrNull { Regex("^Floor:\\s*(?:Floor\\s+)?([1-7]|VII|VI|IV|V|III|II|I)$", RegexOption.IGNORE_CASE)
-        .matchEntire(it)?.groupValues?.get(1) } ?: return null
+    val floor = clean.firstNotNullOfOrNull { FLOOR_REGEX.matchEntire(it)?.groupValues?.get(1) } ?: return null
     val number = floor.toIntOrNull() ?: (listOf("I", "II", "III", "IV", "V", "VI", "VII").indexOf(floor.uppercase()) + 1)
     return DungeonFloor.entries.firstOrNull { it.name == "${if (master) "M" else "F"}$number" }
 }

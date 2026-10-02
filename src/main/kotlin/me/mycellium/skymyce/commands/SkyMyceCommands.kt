@@ -16,6 +16,8 @@ import me.mycellium.skymyce.features.general.AuctionHouseScreen
 import me.mycellium.skymyce.features.general.PersonalBestCommand
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache
 import me.mycellium.skymyce.features.digest.DailyDigest
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
+import me.mycellium.skymyce.features.dev.profilingCommand
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
@@ -46,12 +48,12 @@ object SkyMyceCommands : SkyMyceModule() {
 
     override fun init() {
         settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Myce Menu", Config.openConfigKey, KeyMapping.Category.MISC))
-        ClientTickEvents.END_CLIENT_TICK.register { client ->
+        ClientTickEvents.END_CLIENT_TICK.register { client -> RuntimeProfiler.measure(RuntimeProfiler.Area.COMMAND_TICK) {
             while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) openMenu()
             // One shared scheduler, including explicit lookups without the party-finder module or Hypixel.
             if (isEnabled() && client.player != null) DungeonFriendStatsCache.tick()
             PersonalBestCommand.tick(isEnabled())
-        }
+        } }
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             dispatcher.register(root("skymyce"))
             dispatcher.register(root("sm"))
@@ -108,6 +110,7 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(auction())
             .then(hud())
             .then(modules())
+            .then(profilingCommand())
             .then(troll())
     }
 

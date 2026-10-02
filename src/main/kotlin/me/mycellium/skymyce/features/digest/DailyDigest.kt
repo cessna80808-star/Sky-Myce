@@ -331,6 +331,9 @@ object DailyDigest : SkyMyceModule() {
     }
 
     private fun changed() { rebuildView(); persist() }
+    fun diagnostics(): Map<String, Long> = mapOf("digest.profiles" to profiles.size.toLong(),
+        "digest.wake" to if (wake?.isDone == false) 1L else 0L, "digest.subscription_request" to if (pendingSubscription != null) 1L else 0L,
+        "digest.news_requests" to news.pendingCount.toLong(), "digest.write_task" to if (::writer.isInitialized && writer.scheduled) 1L else 0L)
 
     private fun persist() {
         if (!loaded) return

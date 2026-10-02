@@ -6,6 +6,7 @@ import me.mycellium.skymyce.api.events.PlayerMessageEvent
 import me.mycellium.skymyce.config.misc.CosmeticsConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.network.chat.Component
@@ -50,14 +51,14 @@ class CosmeticCache(private val maximum: Int = 512) {
     fun apply(profile: CosmeticProfile, now: Long): Boolean {
         val previous = values[profile.uuid]?.profile
         if (previous != null && (profile.revision < previous.revision || profile.revision == previous.revision && profile != previous)) return false
-        values.remove(profile.uuid); values[profile.uuid] = Entry(profile, now)
+        values.putLast(profile.uuid, Entry(profile, now))
         while (values.size > maximum) values.remove(values.keys.first())
         return true
     }
     fun get(uuid: UUID, now: Long, touch: Boolean = false): CosmeticProfile? {
         val entry = values[uuid]?.takeIf { now - it.received in 0..600000 } ?: return null
         // Rendered players survive background lookup pressure without extending their offline lifetime.
-        if (touch) { values.remove(uuid); values[uuid] = entry }
+        if (touch) values.putLast(uuid, entry)
         return entry.profile
     }
     fun clear() = values.clear()
@@ -71,10 +72,18 @@ internal class CosmeticIdentities(private val maximum: Int = 512) {
     private val entries = linkedMapOf<String, Entry>()
     init { require(maximum in 1..512) }
     fun observe(name: String, uuid: UUID?, now: Long, priority: Boolean = false) {
-        if (!name.matches(Regex("[A-Za-z0-9_]{1,16}"))) return
+        if (!NAME.matches(name)) return
         val key = name.lowercase()
         val previous = entries[key]
         if (!priority && uuid != null && entries.any { it.key != key && it.value.uuid == uuid && it.value.priorityUntil > now }) return
+        // The normal roster refresh reports the same identity repeatedly. Preserve its
+        // lookup/priority state without sweeping duplicate UUIDs or replacing the DTO.
+        if (previous != null && (uuid == null || previous.uuid == uuid && !previous.byName) && previous.name == name) {
+            previous.seen = now
+            previous.priorityUntil = maxOf(previous.priorityUntil, if (priority) now + 600000 else 0)
+            entries.putLast(key, previous)
+            return
+        }
         if (previous == null && entries.size >= maximum) {
             if (!priority) return // Bulk cache scans cannot displace recent chat, tab or menu identities.
             entries.remove(entries.entries.firstOrNull { it.value.priorityUntil <= now }?.key ?: entries.keys.first())
@@ -99,6 +108,7 @@ internal class CosmeticIdentities(private val maximum: Int = 512) {
     fun reconnect() { entries.values.forEach { it.checked = null } }
     fun clear() = entries.clear()
     val size get() = entries.size
+    private companion object { val NAME = Regex("[A-Za-z0-9_]{1,16}") }
 }
 
 internal data class CosmeticLookupResult(val records: List<CosmeticProfile>, val identities: Map<String, UUID>)
@@ -148,9 +158,9 @@ object CosmeticsClient : SkyMyceModule() {
     var linkExpires = 0L
         private set
 
-    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { tick() } }
+    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
     override fun tick() {
-        if (!me.mycellium.skymyce.loader.LoaderClient.localAllowed) { if (enabled || identity != null) clear(); return }
+        if (!isEnabled()) { if (enabled || identity != null) clear(); return }
         val now = System.currentTimeMillis()
         if (!LocationAPI.onHypixel || MC.instance.player == null || identity != null && identity != MC.instance.user.profileId) {
             if (identity != null || enabled) clear()
@@ -167,6 +177,10 @@ object CosmeticsClient : SkyMyceModule() {
         if (now < nextTick) return
         nextTick = now + 1000
         if (cache.expire(now)) revision++
+        if (linkCode != null && now >= linkExpires) { linkCode = null; revision++ }
+        // Owner refresh/link UI remains usable with rendering disabled. Background
+        // discovery has no consumers when both visual options are off.
+        if (!wanted && !forceOwn) return
         // Reuse cached social identities without issuing friend scans or Mojang requests.
         val roster = MC.connection?.onlinePlayers.orEmpty().asSequence().take(256).toList()
         FriendsAPI.friends.asSequence().take(512).forEach { identities.observe(it.name, it.uuid, now) }
@@ -180,8 +194,6 @@ object CosmeticsClient : SkyMyceModule() {
         identities.expire(now)
         checked.keys.retainAll(identities.resolved().keys)
         updateNames(now)
-        if (linkCode != null && now >= linkExpires) { linkCode = null; revision++ }
-        if (!wanted && !forceOwn) return
         if (!DungeonFriendRelay.connected || !DungeonFriendRelay.cosmeticsAvailable) {
             status = if (DungeonFriendRelay.connected) "Relay does not support cosmetics" else "Relay offline • cached cosmetics expire after 10 minutes"; return
         }
@@ -233,6 +245,7 @@ object CosmeticsClient : SkyMyceModule() {
         if (namesEnabled || namesChanged) MC.instance.gui.chat.rescaleChat()
         identity = null; enabled = false; forceOwn = false; nextTick = 0
     }
+    override fun onDisable() { DungeonFriendRelay.disableCosmetics(); clear() }
     fun event(json: JsonObject) {
         if (!enabled || !LocationAPI.onHypixel) return
         val record = parseCosmeticProfile(json) ?: return
@@ -267,4 +280,6 @@ object CosmeticsClient : SkyMyceModule() {
         if (CosmeticNames.update(known)) MC.instance.gui.chat.rescaleChat()
     }
     @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? = if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis(), touch = true) else null
+    fun diagnostics(): Map<String, Long> = mapOf("cosmetics.records" to cache.size.toLong(), "cosmetics.identities" to identities.size.toLong(),
+        "cosmetics.checked" to checked.size.toLong(), "cosmetics.pending" to if (lookup != null) 1L else 0L)
 }

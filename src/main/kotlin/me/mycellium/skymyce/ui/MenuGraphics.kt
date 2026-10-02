@@ -85,8 +85,18 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
     }
     private fun sync() {
         val m = pose()
-        canvas.transform = MenuCanvas.Transform(m.m00().toDouble(), m.m01().toDouble(), m.m10().toDouble(), m.m11().toDouble(), m.m20().toDouble(), m.m21().toDouble())
-        canvas.clip = scissorStack.peek()?.let { MenuCanvas.Clip(it.position().x(), it.position().y(), it.width(), it.height()) }
+        val current = canvas.transform
+        val a = m.m00().toDouble(); val b = m.m01().toDouble(); val c = m.m10().toDouble()
+        val d = m.m11().toDouble(); val x = m.m20().toDouble(); val y = m.m21().toDouble()
+        if (current.a.toBits() != a.toBits() || current.b.toBits() != b.toBits() || current.c.toBits() != c.toBits() ||
+            current.d.toBits() != d.toBits() || current.x.toBits() != x.toBits() || current.y.toBits() != y.toBits())
+            canvas.transform = MenuCanvas.Transform(a, b, c, d, x, y)
+        val scissor = scissorStack.peek()
+        val clip = canvas.clip
+        if (scissor == null) canvas.clip = null
+        else if (clip == null || clip.x != scissor.position().x() || clip.y != scissor.position().y() ||
+            clip.width != scissor.width() || clip.height != scissor.height())
+            canvas.clip = MenuCanvas.Clip(scissor.position().x(), scissor.position().y(), scissor.width(), scissor.height())
     }
     override fun fill(x1: Int, y1: Int, x2: Int, y2: Int, color: Int) {
         sync(); canvas.fill(minOf(x1, x2).toDouble(), minOf(y1, y2).toDouble(), kotlin.math.abs(x2 - x1).toDouble(), kotlin.math.abs(y2 - y1).toDouble(), color)
@@ -138,7 +148,10 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
         pose().popMatrix()
     }
     fun styledText(text: FormattedCharSequence, x: Double, y: Double, color: Int, size: Double = 10.0) {
-        sync(); canvas.text(menuTextRuns(text, color), x, y, size)
+        styledText(menuTextRuns(text, color), x, y, size)
+    }
+    internal fun styledText(runs: List<MenuCanvas.Run>, x: Double, y: Double, size: Double = 10.0) {
+        sync(); canvas.text(runs, x, y, size)
     }
 }
 

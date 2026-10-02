@@ -4,6 +4,7 @@ import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CancellationException
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.config.misc.PartyCommandsConfig
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
@@ -53,6 +54,17 @@ object DungeonFriendStatsCache {
     fun verified(name: String): DungeonFriendStats? = cache[name.lowercase()]
         ?.takeIf { it.verifiedUntil > System.currentTimeMillis() }?.stats
     val canFetch: Boolean get() = DungeonFriendRelay.sharedStatsAvailable || DungeonFriendProfileProvider.available || PartyCommandsConfig.hypixelApiKey.isNotBlank()
+    fun diagnostics(): Map<String, Long> = mapOf("stats.cached" to cache.size.toLong(), "stats.queued" to pending.size.toLong(),
+        "stats.sharedLookups" to sharedLookups.size.toLong(), "stats.apiJob" to if (inFlight != null) 1L else 0L)
+
+    /** Exact existing automatic policy, for event-driven queueing without delaying cache expiry. */
+    fun nextAutomaticRefresh(name: String, now: Long): Long {
+        val key = name.lowercase()
+        if (isPending(key)) return Long.MAX_VALUE
+        val record = cache[key] ?: return now
+        return if (record.stats.state == StatsState.UNAVAILABLE || (record.stats.catacombs ?: 0) > 40)
+            maxOf(now, record.expires) else Long.MAX_VALUE
+    }
 
     fun updateClass(name: String, uuid: String?, clazz: DungeonClass): Boolean {
         val key = name.lowercase()
@@ -149,6 +161,7 @@ object DungeonFriendStatsCache {
         pending.clear()
         sharedLookups.clear()
         feedback = ""
+        version++ // Queue generation/capability changes must wake automatic scheduling.
     }
 
     fun clear() {
@@ -165,7 +178,11 @@ object DungeonFriendStatsCache {
 
     /** Retain displayed PBs and the server's retry deadline while requesting fresh stats. */
     fun refresh() {
-        cache.replaceAll { _, value -> if ((value.stats.catacombs ?: 0) > 40) value.copy(expires = 0L) else value }
+        var changed = false
+        cache.replaceAll { _, value -> if ((value.stats.catacombs ?: 0) > 40 && value.expires != 0L) {
+            changed = true; value.copy(expires = 0L)
+        } else value }
+        if (changed) version++
     }
 
     /** Live relay reports update eligibility and visible rows without another refresh or API lookup. */
@@ -257,6 +274,7 @@ object DungeonFriendStatsCache {
         }
         if (!canFetch) {
             feedback = "Use SkyBlockPv / SkyBlocker or add an API key"
+            if (pending.isNotEmpty() || sharedLookups.isNotEmpty()) version++
             pending.clear()
             sharedLookups.clear()
             return
@@ -271,7 +289,7 @@ object DungeonFriendStatsCache {
         val fetch = queuedNeedsFetch(request.key, now)
         pending.remove(request.key)
         val sharedLookup = sharedLookups.remove(request.key)
-        if (!fetch) { completedCount++; return }
+        if (!fetch) { completedCount++; version++; return }
         val knownUuid = request.value.uuid?.toString()?.replace("-", "") ?: cache[request.key]?.uuid
         inFlight = request.key
         val token = generation
@@ -295,32 +313,35 @@ object DungeonFriendStatsCache {
                 }
                 require(resolvedUuid!!.matches(Regex("[a-fA-F0-9]{32}")))
                 val profileUuid = UUID.fromString(resolvedUuid.replace(Regex("(.{8})(.{4})(.{4})(.{4})(.{12})"), "$1-$2-$3-$4-$5"))
-                val provided = DungeonFriendProfileProvider.fetch(request.key, profileUuid)
-                result = if (provided != null) provided else {
-                    check(key.isNotEmpty()) { "Profile providers unavailable" }
-                    Http.get(
-                        "https://api.hypixel.net/v2/skyblock/profiles",
-                        queries = mapOf("uuid" to resolvedUuid),
-                        headers = mapOf("API-Key" to key),
-                    ) {
-                        fun header(name: String) = headers.entries.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
-                        val reset = header("RateLimit-Reset")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60L
-                        if (header("RateLimit-Remaining")?.toIntOrNull() == 0) retryAfter = maxOf(retryAfter, reset * 1000)
-                        val body = asText() // Consume/close the response even on errors.
-                        when (statusCode) {
-                            429 -> {
-                                retryAfter = maxOf(reset, header("Retry-After")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60) * 1000
-                                message = "API rate limit reached; waiting before retrying"
-                                DungeonFriendStats(StatsState.UNAVAILABLE)
-                            }
-                            401, 403 -> {
-                                retryAfter = 300000
-                                message = "API key rejected; update it in API setup"
-                                DungeonFriendStats(StatsState.UNAVAILABLE)
-                            }
-                            else -> {
-                                check(isOk)
-                                DungeonFriendStats.fromProfiles(JsonParser.parseString(body).asJsonObject, resolvedUuid)
+                RuntimeProfiler.measure(RuntimeProfiler.Area.FRIEND_API) {
+                    val provided = DungeonFriendProfileProvider.fetch(request.key, profileUuid)
+                    result = if (provided != null) provided else {
+                        check(key.isNotEmpty()) { "Profile providers unavailable" }
+                        Http.get(
+                            "https://api.hypixel.net/v2/skyblock/profiles",
+                            queries = mapOf("uuid" to resolvedUuid),
+                            headers = mapOf("API-Key" to key),
+                        ) {
+                            fun header(name: String) = headers.entries.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
+                            val reset = header("RateLimit-Reset")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60L
+                            if (header("RateLimit-Remaining")?.toIntOrNull() == 0) retryAfter = maxOf(retryAfter, reset * 1000)
+                            val body = asText() // Consume/close the response even on errors.
+                            if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.FRIEND_API, body.toByteArray(Charsets.UTF_8).size.toLong())
+                            when (statusCode) {
+                                429 -> {
+                                    retryAfter = maxOf(reset, header("Retry-After")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60) * 1000
+                                    message = "API rate limit reached; waiting before retrying"
+                                    DungeonFriendStats(StatsState.UNAVAILABLE)
+                                }
+                                401, 403 -> {
+                                    retryAfter = 300000
+                                    message = "API key rejected; update it in API setup"
+                                    DungeonFriendStats(StatsState.UNAVAILABLE)
+                                }
+                                else -> {
+                                    check(isOk)
+                                    DungeonFriendStats.fromProfiles(JsonParser.parseString(body).asJsonObject, resolvedUuid)
+                                }
                             }
                         }
                     }
@@ -337,6 +358,7 @@ object DungeonFriendStatsCache {
                 val requestFeedback = message
                 MC.instance.execute {
                     inFlight = null
+                    version++ // Even a discarded generation releases automatic request ownership.
                     if (token == generation) {
                         completedCount++
                         val time = System.currentTimeMillis()

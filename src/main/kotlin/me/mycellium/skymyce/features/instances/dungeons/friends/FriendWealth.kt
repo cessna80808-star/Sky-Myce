@@ -3,9 +3,8 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.utils.MC
-import net.fabricmc.loader.api.FabricLoader
-import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import tech.thatgravyboat.skyblockapi.utils.http.Http
 import java.util.UUID
@@ -15,6 +14,15 @@ import java.nio.file.Path
 import kotlin.time.Duration.Companion.seconds
 
 internal const val FRIEND_WEALTH_TTL = 86400000L
+private val WEALTH_NAME = Regex("[A-Za-z0-9_]{1,16}")
+
+/** Empty work queues poll roster/provider changes at most once a second; user actions wake immediately. */
+internal class WealthRosterGate {
+    private var next = 0L
+    fun ready(now: Long) = now >= next
+    fun idle(now: Long, deadline: Long = Long.MAX_VALUE) { next = minOf(now + 1000, deadline) }
+    fun wake() { next = 0L }
+}
 
 data class FriendWealth(
     val networth: Double? = null, val purse: Double? = null, val bank: Double? = null,
@@ -31,6 +39,13 @@ data class FriendWealth(
         false -> skyBlockLocation
         true -> (online || expires == 0L) && now >= expires
         null -> now - fetchedAt >= 60000
+    }
+
+    internal fun nextRefresh(now: Long, online: Boolean, skyBlockLocation: Boolean): Long = when {
+        hasProfile == null -> maxOf(now, fetchedAt + 60000)
+        hasProfile == false && !skyBlockLocation -> Long.MAX_VALUE
+        hasProfile == true && !online && expires != 0L -> Long.MAX_VALUE
+        else -> maxOf(now, fetchedAt + FRIEND_WEALTH_TTL, if (hasProfile == true) expires else 0L)
     }
 }
 
@@ -94,14 +109,20 @@ object FriendWealthCache {
     private val manualRefresh = linkedSetOf<String>()
     private val waiting = mutableMapOf<String, Long>()
     private var nextManualRefresh = 0L
+    private val rosterGate = WealthRosterGate()
+    private var rosterVersion = -1L
+    private var rosterOwner: UUID? = null
+    private var sharedAvailable = false
     var version = 0L
         private set
-    private val providerAvailable get() = FabricLoader.getInstance().isModLoaded("skyblockpv")
+    private val providerAvailable get() = DungeonFriendProfileProvider.viewerAvailable
     val available get() = providerAvailable || DungeonFriendRelay.sharedWealthAvailable
     val busy get() = loading != null
     fun get(name: String) = entries[name.lowercase()]
     fun isLoading(name: String) = loading == name.lowercase()
     fun isQueued(name: String) = name.lowercase() in manualRefresh
+    fun diagnostics(): Map<String, Long> = mapOf("wealth.cached" to entries.size.toLong(), "wealth.apiJob" to if (busy) 1L else 0L,
+        "wealth.manualQueue" to manualRefresh.size.toLong(), "wealth.retrying" to waiting.size.toLong())
     fun canRefresh(now: Long = System.currentTimeMillis()) = manualRefresh.isEmpty() && now >= nextManualRefresh
 
     fun refreshStatus(now: Long = System.currentTimeMillis()): String = when {
@@ -124,6 +145,7 @@ object FriendWealthCache {
     }
 
     fun save(force: Boolean = false) {
+        if (force) rosterGate.wake()
         val persistence = store ?: return
         if (!dirty || (!force && System.currentTimeMillis() < nextSave)) return
         nextSave = System.currentTimeMillis() + 5000
@@ -131,12 +153,13 @@ object FriendWealthCache {
         catch (_: Exception) { SkyMyce.logger.warn("Could not save friend wealth cache; will retry") }
     }
 
-    fun checkNewFriend(name: String) { newFriends += name.lowercase() }
+    fun checkNewFriend(name: String) { newFriends += name.lowercase(); rosterGate.wake() }
 
     fun refresh(friends: Collection<String>, now: Long = System.currentTimeMillis()) {
         if (!canRefresh(now)) return
         nextManualRefresh = now + 60000
         manualRefresh += friends.map { it.lowercase() }.filter { get(it)?.canRefreshManually(now) != false }
+        rosterGate.wake()
         version++
     }
 
@@ -158,18 +181,24 @@ object FriendWealthCache {
     internal fun canLookup(name: String, now: Long): Boolean =
         now >= nextRequest && now >= (waiting[name.lowercase()] ?: 0L)
 
-    fun tick(friends: Collection<OnlineDungeonFriend>, online: Set<String>) {
+    fun tick(friends: Collection<OnlineDungeonFriend>, online: Set<String>, revision: Long = 0L, owner: UUID? = null) {
         save()
+        if (revision != rosterVersion || owner != rosterOwner || sharedAvailable != DungeonFriendRelay.sharedWealthAvailable) {
+            rosterVersion = revision
+            rosterOwner = owner
+            sharedAvailable = DungeonFriendRelay.sharedWealthAvailable
+            rosterGate.wake()
+        }
         if (!available || busy) return
         val now = System.currentTimeMillis()
-        if (now < nextRequest || (!DungeonFriendRelay.sharedWealthAvailable && now < DungeonFriendProfileProvider.nextViewerRequest)) return
+        if (!rosterGate.ready(now) || now < nextRequest || (!DungeonFriendRelay.sharedWealthAvailable && now < DungeonFriendProfileProvider.nextViewerRequest)) return
         val roster = friends.mapTo(mutableSetOf()) { it.name.lowercase() }
         manualRefresh.retainAll(roster)
         newFriends.retainAll(roster)
-        val candidates = friends.filter { it.name.matches(Regex("[A-Za-z0-9_]{1,16}")) && canLookup(it.name, now) }
+        val candidates = friends.filter { it.name.matches(WEALTH_NAME) && canLookup(it.name, now) }
         candidates.forEach { friend ->
             val key = friend.name.lowercase()
-            val uuid = FriendsAPI.getFriend(friend.name)?.uuid?.toString()
+            val uuid = DungeonFriends.friendUuid(friend.name)?.toString()
             val entry = get(key)
             if (entry?.uuid != null && uuid != null && uuid != entry.uuid) { entries.remove(key); dirty = true; version++ }
         }
@@ -181,13 +210,23 @@ object FriendWealthCache {
             ?: candidates.firstOrNull { friend ->
                 get(friend.name)?.shouldRefresh(now, friend.name.lowercase() in online,
                     friend.location.contains("SkyBlock", true) || friend.activity == FriendActivity.IN_RUN) == true
-            } ?: return
+            } ?: run {
+                // Wake on the exact existing freshness/retry deadline even inside the idle polling interval.
+                val deadline = friends.minOfOrNull { candidate ->
+                    if (!WEALTH_NAME.matches(candidate.name)) return@minOfOrNull Long.MAX_VALUE
+                    val key = candidate.name.lowercase()
+                    maxOf(waiting[key] ?: 0L, get(key)?.nextRefresh(now, key in online,
+                        candidate.location.contains("SkyBlock", true) || candidate.activity == FriendActivity.IN_RUN) ?: now)
+                } ?: Long.MAX_VALUE
+                rosterGate.idle(now, deadline)
+                return
+            }
         val name = friend.name
         val newlyAdded = name.lowercase() in newFriends
         val manual = name.lowercase() in manualRefresh
         loading = name.lowercase()
         version++
-        val knownUuid = FriendsAPI.getFriend(name)?.uuid ?: get(name)?.uuid?.let(UUID::fromString)
+        val knownUuid = DungeonFriends.friendUuid(name) ?: get(name)?.uuid?.let(UUID::fromString)
         val alreadyAbsent = !newlyAdded && get(name) == null && DungeonFriendStatsCache.get(name)?.state == StatsState.NO_PROFILE &&
             !friend.location.contains("SkyBlock", true) && friend.activity != FriendActivity.IN_RUN
         val sharedAvailable = DungeonFriendRelay.sharedWealthAvailable
@@ -198,7 +237,7 @@ object FriendWealthCache {
             var retryAt = 0L
             var sharedHit = false
             var upload: String? = null
-            val result = runCatching {
+            val result = RuntimeProfiler.measure(RuntimeProfiler.Area.FRIEND_API) { runCatching {
                 val response = sharedLookup?.get(6, TimeUnit.SECONDS)
                 retryAt = wealthLookupRetryAt(response, sharedAvailable, System.currentTimeMillis())
                 if (retryAt > System.currentTimeMillis()) return@runCatching null
@@ -237,7 +276,7 @@ object FriendWealthCache {
             }.getOrElse {
                 if (it is ProfileLookupDeferred) { retryAt = it.retryAt; null }
                 else FriendWealth(status = "API unavailable or rate limited; retrying later")
-            }
+            } }
             MC.instance.execute {
                 loading = null
                 val completedAt = System.currentTimeMillis()

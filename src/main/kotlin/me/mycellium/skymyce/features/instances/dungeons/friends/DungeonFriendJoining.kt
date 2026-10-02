@@ -218,6 +218,8 @@ class DungeonFriendJoining {
         private set
     var statusPlayer = ""
         private set
+    val hasCommandWork get() = incoming.isNotEmpty() || invitations.isNotEmpty()
+    val pendingCount get() = incoming.size + invitations.size + if (outgoing != null) 1 else 0
     fun busy(now: Long): Boolean = outgoing != null || now < acceptingUntil
 
     fun expectsInvite(name: String, now: Long): Boolean = outgoing?.let {

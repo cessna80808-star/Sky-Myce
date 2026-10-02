@@ -109,6 +109,8 @@ object DigestRng : SkyMyceModule() {
     private var inventoryCheck: ScheduledFuture<*>? = null
     private var context = 0L
     private var rareSlots = emptySet<Int>()
+    fun diagnostics(): Map<String, Long> = mapOf("digest.inventory_task" to if (inventoryCheck?.isDone == false) 1L else 0L,
+        "digest.recent_drops" to recent.size.toLong(), "digest.rare_slots" to rareSlots.size.toLong())
 
     fun clearContext() {
         recent.clear()

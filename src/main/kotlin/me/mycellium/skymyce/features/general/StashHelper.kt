@@ -9,6 +9,8 @@ import net.minecraft.world.inventory.Slot
 import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerCloseEvent
+import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.SlotClickEvent
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
 import tech.thatgravyboat.skyblockapi.api.remote.hypixel.pricing.Pricing
@@ -17,6 +19,9 @@ import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 object StashHelper : SkyMyceModule() {
     private val materialRegex = Regex("^(.+) x(\\d+)$")
     private var worthlessItems: MutableSet<Slot>? = null
+    @Subscription(ContainerCloseEvent::class, ServerDisconnectEvent::class)
+    fun clearContainer() { worthlessItems = null }
+    override fun onDisable() { clearContainer() }
 
     @Subscription
     fun onOpenContainer(event: ContainerInitializedEvent) {

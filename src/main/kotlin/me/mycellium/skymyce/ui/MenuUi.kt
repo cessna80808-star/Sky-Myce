@@ -155,6 +155,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     private var wrappedLanguage: net.minecraft.locale.Language? = null
     private var lines = emptyList<net.minecraft.util.FormattedCharSequence>()
     private var lineWidths = IntArray(0)
+    private var lineRuns = emptyList<List<MenuCanvas.Run>>()
+    private var runColor = 0
 
     init {
         onPress { button ->
@@ -219,13 +221,18 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             wrappedLanguage = language
             lines = menuTextLines(wrappedMessage!!, available).take(if (navigation) 2 else 1)
             lineWidths = IntArray(lines.size) { kotlin.math.ceil(menuTextWidth(lines[it])).toInt() }
+            lineRuns = emptyList()
+        }
+        val color = MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED)
+        if (lineRuns.size != lines.size || runColor != color) {
+            lineRuns = lines.map { menuTextRuns(it, color) }; runColor = color
         }
         val lineHeight = MenuCanvas.lineHeight()
         graphics.enableScissor(x + 3, y + 1, x + width - 3, y + height - 1)
-        lines.forEachIndexed { index, line ->
+        lines.forEachIndexed { index, _ ->
             val left = if (navigation) x + 8 else x + (width - lineWidths[index]) / 2
-            graphics.text(MC.font, line, left, y + (height - lines.size * lineHeight) / 2 + index * lineHeight,
-                MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED), false)
+            graphics.styledText(lineRuns[index], left.toDouble(),
+                (y + (height - lines.size * lineHeight) / 2 + index * lineHeight).toDouble())
         }
         graphics.disableScissor()
     }
@@ -235,6 +242,11 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
 }
 
 open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
+    private var measuredLines: List<net.minecraft.util.FormattedCharSequence>? = null
+    private var measuredFontSize = 0f
+    private var lineWidths = IntArray(0)
+    private var lineRuns = emptyList<List<MenuCanvas.Run>>()
+    private var runColor = 0
     var fontSize = 10f
         set(value) { field = value; lineHeight(MenuCanvas.lineHeight(value.toDouble())) }
     init { lineHeight(MenuCanvas.lineHeight()) }
@@ -242,12 +254,19 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     private fun wrap() {
         wrappedText = menuTextLines(text(), if (horizontalSizing().get().isContent) maxWidth() else width(), fontSize.toDouble())
     }
+    private fun cacheLines() {
+        if (measuredLines === wrappedText && measuredFontSize == fontSize) return
+        measuredLines = wrappedText; measuredFontSize = fontSize
+        lineWidths = IntArray(wrappedText.size) { kotlin.math.ceil(menuTextWidth(wrappedText[it], fontSize.toDouble())).toInt() }
+        lineRuns = emptyList()
+    }
     override fun determineHorizontalContentSize(sizing: Sizing): Int =
         kotlin.math.ceil(menuTextLines(text(), maxWidth(), fontSize.toDouble()).maxOfOrNull { menuTextWidth(it, fontSize.toDouble()) } ?: 0.0).toInt()
     override fun determineVerticalContentSize(sizing: Sizing): Int { wrap(); return textHeight() }
     override fun inflate(space: Size) { super.inflate(space); wrap() }
     // Owo's default drawing adds a Minecraft baseline offset. Canvas positions are top-of-line.
     override fun drawText(draw: LabelDrawFunction) {
+        cacheLines()
         val left = x() + if (horizontalSizing().get().isContent) horizontalSizing().get().value else 0
         var top = y() + if (verticalSizing().get().isContent) verticalSizing().get().value else 0
         top += when (verticalTextAlignment()) {
@@ -257,16 +276,22 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
         }
         wrappedText.forEachIndexed { index, line ->
             val offset = when (horizontalTextAlignment()) {
-                HorizontalAlignment.CENTER -> (width() - kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()) / 2
-                HorizontalAlignment.RIGHT -> width() - kotlin.math.ceil(menuTextWidth(line, fontSize.toDouble())).toInt()
+                HorizontalAlignment.CENTER -> (width() - lineWidths[index]) / 2
+                HorizontalAlignment.RIGHT -> width() - lineWidths[index]
                 else -> 0
             }
             draw.draw(left + offset, top + index * (lineHeight() + lineSpacing()), line, shadow(), color().get())
         }
     }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
-        drawText { x, y, text, _, color ->
-            (g as MenuGraphics).styledText(text, x.toDouble(), y.toDouble(), color.argb(), fontSize.toDouble())
+        cacheLines()
+        val color = color().get().argb()
+        if (lineRuns.size != wrappedText.size || runColor != color) {
+            lineRuns = wrappedText.map { menuTextRuns(it, color) }; runColor = color
+        }
+        var index = 0
+        drawText { x, y, _, _, _ ->
+            (g as MenuGraphics).styledText(lineRuns[index++], x.toDouble(), y.toDouble(), fontSize.toDouble())
         }
     }
     override fun styleAt(mouseX: Int, mouseY: Int): Style? {

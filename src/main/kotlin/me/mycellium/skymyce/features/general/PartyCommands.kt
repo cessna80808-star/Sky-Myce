@@ -68,8 +68,8 @@ object PartyCommands : SkyMyceModule() {
             if (now - cooldownTimestamp < PartyCommandsConfig.partyCommandCooldown.seconds) return@let
             cooldownTimestamp = now
 
-            displayDevMessage("command: $command")
-            displayDevMessage("args: $args")
+            displayDevMessage { "command: $command" }
+            displayDevMessage { "args: $args" }
 
             when (command) {
                 PartyCommandTypes.INVITE -> {

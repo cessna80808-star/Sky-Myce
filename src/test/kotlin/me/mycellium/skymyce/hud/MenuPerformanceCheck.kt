@@ -38,7 +38,7 @@ internal fun checkMenuPerformance() {
             index and 1 != 0, index and 2 != 0, underline = true)
     }
     fun reference(size: Double, scale: Double, transform: MenuCanvas.Transform, clip: MenuCanvas.Clip,
-                  premultiplied: Boolean = false): BufferedImage {
+                  premultiplied: Boolean = false, top: Double = 4.5): BufferedImage {
         val image = BufferedImage((440 * scale).toInt(), (80 * scale).toInt(),
             if (premultiplied) BufferedImage.TYPE_INT_ARGB_PRE else BufferedImage.TYPE_INT_ARGB)
         val g = image.createGraphics()
@@ -50,7 +50,7 @@ internal fun checkMenuPerformance() {
         g.clip(Rectangle2D.Double(clip.x.toDouble(), clip.y.toDouble(), clip.width.toDouble(), clip.height.toDouble()))
         g.transform(AffineTransform(transform.a, transform.b, transform.c, transform.d, transform.x, transform.y))
         var left = 7.25
-        val baseline = 4.5 + maxOf(regular.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent,
+        val baseline = top + maxOf(regular.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent,
             fallback.deriveFont(size.toFloat()).getLineMetrics("Ag", frc).ascent)
         runs.forEach { run ->
             g.color = Color(run.color, true)
@@ -66,9 +66,9 @@ internal fun checkMenuPerformance() {
         g.dispose()
         return image
     }
-    fun paint(size: Double, scale: Double, transform: MenuCanvas.Transform, clip: MenuCanvas.Clip): IntArray = MenuCanvas().run {
+    fun paint(size: Double, scale: Double, transform: MenuCanvas.Transform, clip: MenuCanvas.Clip, top: Double = 4.5): IntArray = MenuCanvas().run {
         begin(); this.transform = transform; this.clip = clip
-        text(runs, 7.25, 4.5, size)
+        text(runs, 7.25, top, size)
         val image = finish(440, 80, scale)
         check(image.type == BufferedImage.TYPE_INT_ARGB) { "Canvas requires straight ARGB for the fast upload path" }
         pixels(image)
@@ -82,6 +82,16 @@ internal fun checkMenuPerformance() {
             }
             val old = pixels(reference(size, scale, transform, clip, premultiplied = true))
             check(actual.indices.all { actual[it] ushr 24 == old[it] ushr 24 }) { "Straight ARGB changed glyph alpha coverage" }
+        }
+    }
+    // Entire-line culling must agree with the uncached reference even at narrow, transformed clip edges.
+    for (scale in listOf(1.0, 1.5, 2.0)) for (transform in transforms) {
+        for (top in listOf(-90.0, -17.25, -4.5, 4.5, 63.75, 90.0)) for (clipY in listOf(0, 8, 24, 64, 78)) {
+            val clip = MenuCanvas.Clip(0, clipY, 440, 2)
+            check(paint(17.25, scale, transform, clip, top).contentEquals(
+                pixels(reference(17.25, scale, transform, clip, top = top)))) {
+                "Line culling clipped fallback/combining/underline pixels at scale $scale/top $top/clip $clip"
+            }
         }
     }
     // Arbitrary input and heading sizes evict old entries instead of retaining every string/glyph forever.

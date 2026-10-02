@@ -6,6 +6,8 @@ import io.wispforest.owo.ui.core.Size
 import io.wispforest.owo.ui.core.Sizing
 import me.mycellium.skymyce.hud.widget.Anchor
 import me.mycellium.skymyce.hud.widget.WidgetConfig
+import me.mycellium.skymyce.hud.widget.forEachAlive
+import me.mycellium.skymyce.hud.widget.lastAliveOrNull
 import me.mycellium.skymyce.hud.widget.hudEditorControlAt
 import me.mycellium.skymyce.hud.widget.hudEditorCoordinate
 import me.mycellium.skymyce.hud.widget.hudEditorToolbar
@@ -18,6 +20,22 @@ import me.mycellium.skymyce.ui.menuTextWidth
 
 /** Exercises retained owo layout without a Minecraft window or a test framework. */
 fun main() {
+    val firstOwned = Any(); val secondOwned = Any(); val laterOwned = Any()
+    val released = java.lang.ref.WeakReference(Any()).apply { clear() }
+    val owned = mutableListOf(java.lang.ref.WeakReference(firstOwned), released, java.lang.ref.WeakReference(secondOwned))
+    val visited = mutableListOf<Any>()
+    owned.forEachAlive { value ->
+        visited += value
+        if (value === firstOwned) owned += java.lang.ref.WeakReference(laterOwned)
+    }
+    check(visited == listOf(firstOwned, secondOwned) && owned.size == 3) {
+        "A render traversal retained released widgets or rendered a newly registered widget too early"
+    }
+    check(owned.lastAliveOrNull { true } === laterOwned) { "Overlapping widgets lost reverse pointer priority" }
+    owned.last().clear()
+    check(owned.lastAliveOrNull { true } === secondOwned && owned.size == 2)
+    visited.clear(); owned.forEachAlive { visited += it }
+    check(visited == listOf(firstOwned, secondOwned))
     checkSettings()
     checkThemes()
     me.mycellium.skymyce.features.digest.digestUiCheck()

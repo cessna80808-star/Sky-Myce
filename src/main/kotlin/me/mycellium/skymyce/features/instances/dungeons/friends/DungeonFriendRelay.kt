@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import com.google.gson.JsonObject
 import me.mycellium.mixin.MinecraftAccountKeyAccessor
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.loader.LoaderClient
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
 import me.mycellium.skymyce.utils.MC
@@ -41,6 +42,17 @@ internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean,
 internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..65536 &&
     (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result"))
 
+/** Allocate a callback snapshot only when something actually expires. Completions may enqueue new requests. */
+internal fun expireRelayRequests(requests: MutableMap<String, Pair<Long, CompletableFuture<JsonObject?>>>, now: Long, cancelled: Boolean = true) {
+    if (requests.isEmpty()) return
+    var expired: MutableList<String>? = null
+    for ((id, request) in requests) if (request.first <= now || cancelled && request.second.isCancelled) {
+        if (expired == null) expired = mutableListOf()
+        expired.add(id)
+    }
+    expired?.forEach { requests.remove(it)?.second?.complete(null) }
+}
+
 /** Exception messages can contain URLs, tokens or response bodies. Keep types and call sites only. */
 internal fun relayErrorDetail(error: Throwable?): String = generateSequence(error) { it.cause }
     .take(8).joinToString(" <- ") { cause ->
@@ -75,6 +87,7 @@ class RelayDeliveries {
         val failed: (String) -> Unit, var transmit: (() -> Boolean)?, val notifyOnClear: Boolean)
     private val pending = linkedMapOf<String, Pending>()
     val full get() = pending.size >= 16
+    val size get() = pending.size
     fun add(id: String, name: String, now: Long, received: () -> Unit, failed: (String) -> Unit,
             notifyOnClear: Boolean = false, transmit: (() -> Boolean)? = null) {
         check(!full && id !in pending)
@@ -107,7 +120,7 @@ class RelayDeliveries {
 object DungeonFriendRelay {
     data class PartyPolicy(val uuid: String, val policy: DungeonJoinPolicy)
     private val gson = Gson()
-    private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+    private val client by lazy { HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build() }
     private val deliveries = RelayDeliveries()
     private val statsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val digestRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
@@ -128,7 +141,9 @@ object DungeonFriendRelay {
     var onDigestEvent: ((JsonObject) -> Unit)? = null
     var onDigestReady: (() -> Unit)? = null
     var onDigestClosed: (() -> Unit)? = null
-    private val partyPolicies = mutableMapOf<String, Pair<Long, PartyPolicy?>>()
+    private val partyPolicies = object : LinkedHashMap<String, Pair<Long, PartyPolicy?>>(128, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, PartyPolicy?>>) = size > 1024
+    }
     private var policiesAvailable = false
     private var policyRequest: Pair<String, List<String>>? = null
     private var policyDeadline = 0L
@@ -154,6 +169,10 @@ object DungeonFriendRelay {
         private set
     var status = "Relay not configured"
         private set
+    fun diagnostics(): Map<String, Long> = mapOf("relay.socket" to if (socket != null) 1L else 0L,
+        "relay.connecting" to if (connecting) 1L else 0L, "relay.deliveries" to deliveries.size.toLong(),
+        "relay.statsRequests" to statsRequests.size.toLong(), "relay.digestRequests" to digestRequests.size.toLong(),
+        "relay.cosmeticsRequests" to cosmeticsRequests.size.toLong(), "relay.partyPolicies" to partyPolicies.size.toLong())
 
     fun tick(active: Boolean) {
         val url = DungeonFriendsSettings.relayUrl
@@ -183,9 +202,9 @@ object DungeonFriendRelay {
         val now = DungeonFriends.now()
         if (now >= policyDeadline) policyRequest = null
         deliveries.tick(now)
-        statsRequests.filterValues { it.first <= now }.keys.toList().forEach { statsRequests.remove(it)?.second?.complete(null) }
-        digestRequests.filterValues { it.first <= now || it.second.isCancelled }.keys.toList().forEach { digestRequests.remove(it)?.second?.complete(null) }
-        cosmeticsRequests.filterValues { it.first <= now || it.second.isCancelled }.keys.toList().forEach { cosmeticsRequests.remove(it)?.second?.complete(null) }
+        expireRelayRequests(statsRequests, now, cancelled = false)
+        expireRelayRequests(digestRequests, now)
+        expireRelayRequests(cosmeticsRequests, now)
         if ((connecting || socket != null) && now >= deadline) failed("Relay timed out; reconnecting")
         if (connected && now >= nextPing) { packet("ping"); nextPing = now + 45000 }
         if (socket != null || connecting || now < retry.nextAttempt) return
@@ -219,11 +238,12 @@ object DungeonFriendRelay {
                     val message = text.toString()
                     text.setLength(0)
                     // Decode bounded batch packets on the WebSocket executor, never during a client tick.
-                    val decoded = if (message == "pong") null else runCatching {
+                    if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.RELAY_MESSAGE, message.toByteArray(Charsets.UTF_8).size.toLong())
+                    val decoded = if (message == "pong") null else RuntimeProfiler.measure(RuntimeProfiler.Area.RELAY_MESSAGE) { runCatching {
                         JsonParser.parseString(message).asJsonObject.also {
                             check(relayPacketSizeAllowed(message.length, it.get("type")?.asString))
                         }
-                    }
+                    } }
                     MC.instance.execute {
                         if (token == generation) {
                             deadline = DungeonFriends.now() + if (connected) 90000 else 30000
@@ -510,6 +530,8 @@ object DungeonFriendRelay {
     fun partyPolicy(name: String): PartyPolicy? = partyPolicies[name.lowercase()]?.takeIf { it.first > DungeonFriends.now() }?.second
 
     private fun cachePolicy(name: String, value: JsonObject?) {
+        val now = DungeonFriends.now()
+        partyPolicies.entries.removeIf { it.value.first <= now }
         val policy = value?.let {
             val uuid = it.get("uuid").asString
             val floor = tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.valueOf(it.get("floor").asString)
@@ -520,7 +542,7 @@ object DungeonFriendRelay {
             }
             PartyPolicy(uuid, DungeonJoinPolicy(floor, limit, it.get("open").asBoolean))
         }
-        partyPolicies[name] = DungeonFriends.now() + 20000 to policy
+        partyPolicies[name] = now + 20000 to policy
     }
 
     fun requestPolicies(names: List<String>) {
@@ -558,10 +580,11 @@ object DungeonFriendRelay {
             "uuid" to wealth.uuid.replace("-", ""), "wealth" to wealth, "fetchedAt" to wealth.fetchedAt, "upload" to upload))
     }
 
-    private fun packet(data: Any) {
-        val ws = socket ?: return
+    private fun packet(data: Any) = RuntimeProfiler.measure(RuntimeProfiler.Area.RELAY_SEND) {
+        val ws = socket ?: return@measure
         val token = generation
         val text = if (data is String) data else gson.toJson(data)
+        if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.RELAY_SEND, text.toByteArray(Charsets.UTF_8).size.toLong())
         sending = sending.thenCompose {
             if (token == generation) ws.sendText(text, true) else CompletableFuture.completedFuture(ws)
         }.whenComplete { _, error ->

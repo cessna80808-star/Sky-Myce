@@ -890,7 +890,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     if (runtime?.connected_at !== null && runtime?.connected_at !== undefined && runtime.generation === input.generation &&
         runtime.connection_id !== null && input.connectionId === runtime.connection_id) {
       const heartbeatAt = input.heartbeat ? Date.now() : input.heartbeatAt;
-      if (heartbeatAt !== undefined && Number.isSafeInteger(heartbeatAt) && heartbeatAt <= Date.now() && heartbeatAt >= runtime.connected_at) {
+      if (heartbeatAt !== undefined && Number.isSafeInteger(heartbeatAt) && heartbeatAt <= Date.now() && heartbeatAt >= runtime.connected_at && heartbeatAt > (runtime.last_heartbeat ?? 0)) {
         this.ctx.storage.sql.exec("UPDATE account_runtime SET last_heartbeat=MAX(COALESCE(last_heartbeat,0),?) WHERE installation_id=? AND uuid=?", heartbeatAt, input.installationId, input.uuid);
       }
     }

@@ -19,18 +19,20 @@ data class GearTrade(
     val sentCoins: String? = null, val receivedCoins: String? = null,
 )
 
-internal fun tradePartner(title: String): String? =
-    Regex("^You {5,}(?:\\[[^]]+] )?([A-Za-z0-9_]{1,16})\\s*$").matchEntire(title)?.groupValues?.get(1)
+private val TRADE_PARTNER = Regex("^You {5,}(?:\\[[^]]+] )?([A-Za-z0-9_]{1,16})\\s*$")
+private val TRADE_COMPLETED = Regex("^Trade completed with (?:\\[[^]]+] )?([A-Za-z0-9_]{1,16})!$")
+internal fun tradePartner(title: String): String? = TRADE_PARTNER.matchEntire(title)?.groupValues?.get(1)
 
-internal fun completedTradePartner(text: String): String? =
-    Regex("^Trade completed with (?:\\[[^]]+] )?([A-Za-z0-9_]{1,16})!$").matchEntire(text)?.groupValues?.get(1)
+internal fun completedTradePartner(text: String): String? = TRADE_COMPLETED.matchEntire(text)?.groupValues?.get(1)
 
 /** Closing a window alone never records a trade. A matching server confirmation consumes it once. */
 internal class TradeCapture {
     private var pending: GearTrade? = null
     private var seenAt = 0L
     fun observe(trade: GearTrade, now: Long) { pending = trade; seenAt = now }
+    fun keepAlive(now: Long) { if (pending != null) seenAt = now }
     fun clear() { pending = null }
+    val active get() = pending != null
     fun complete(name: String, now: Long): GearTrade? {
         val trade = pending ?: return null
         pending = null

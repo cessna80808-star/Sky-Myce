@@ -1,0 +1,350 @@
+[
+  {
+    "path": "skymyce-2.4.12.jar",
+    "bytes": 13430609,
+    "id": "skymyce",
+    "version": "2.4.12",
+    "depends": {
+      "fabricloader": ">=0.19.3",
+      "minecraft": "~26.1.2",
+      "java": ">=25",
+      "skymyce-loader": ">=1.0.10",
+      "fabric-api": "*",
+      "fabric-language-kotlin": "*",
+      "skyblockpv": ">=1.8.9"
+    },
+    "nested": [
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/mod-api-1.0.2.jar",
+        "bytes": 55989,
+        "id": "net_hypixel_mod-api",
+        "version": "1.0.2",
+        "depends": {},
+        "nested": [],
+        "compressed_in_parent": 47039
+      },
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/owo-sentinel-0.13.1+26.1.jar",
+        "bytes": 16887,
+        "id": "owo-sentinel",
+        "version": "0.13.1+26.1",
+        "depends": {
+          "fabricloader": "*",
+          "minecraft": ">=1.18"
+        },
+        "nested": [],
+        "compressed_in_parent": 15595
+      },
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/resourcefulconfig-fabric-26.1-4.0.1.jar",
+        "bytes": 439690,
+        "id": "resourcefulconfig",
+        "version": "4.0.1",
+        "depends": {
+          "fabricloader": ">=0.14.21",
+          "minecraft": ">=26.1"
+        },
+        "nested": [],
+        "compressed_in_parent": 372444
+      },
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/resourcefulconfigkt-26.1-rc-1-4.0.0-beta.1.jar",
+        "bytes": 153429,
+        "id": "resourcefulconfigkt",
+        "version": "4.0.0-beta.1",
+        "depends": {
+          "minecraft": ">=1.21.11",
+          "resourcefulconfig": ">=4.0.0-beta.2"
+        },
+        "nested": [],
+        "compressed_in_parent": 132576
+      },
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-api-4.2.19-26.1-runtime.jar",
+        "bytes": 5192370,
+        "id": "skyblock-api",
+        "version": "4.2.19",
+        "depends": {
+          "fabricloader": ">=0.19.2",
+          "fabric-api": "*",
+          "fabric-language-kotlin": ">=1.13.8+kotlin.2.3.0",
+          "minecraft": "26.1.x",
+          "hypixel-mod-api": ">=1.0.2+build.1+mc26.1"
+        },
+        "nested": [
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-api-4.2.19-26.1-runtime.jar!/META-INF/jars/hypixel-mod-api-1.0.2+build.1+mc26.1.jar",
+            "bytes": 93769,
+            "id": "hypixel-mod-api",
+            "version": "1.0.2+build.1+mc26.1",
+            "depends": {
+              "fabricloader": ">=0.18.4",
+              "fabric-api": "*",
+              "minecraft": ">=26.1"
+            },
+            "nested": [
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-api-4.2.19-26.1-runtime.jar!/META-INF/jars/hypixel-mod-api-1.0.2+build.1+mc26.1.jar!/META-INF/jars/mod-api-1.0.2.jar",
+                "bytes": 55989,
+                "id": "net_hypixel_mod-api",
+                "version": "1.0.2",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 47039
+              }
+            ],
+            "compressed_in_parent": 92039
+          },
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-api-4.2.19-26.1-runtime.jar!/META-INF/jars/item-data-fixer-1.0.12-26.1-dev.jar",
+            "bytes": 86830,
+            "id": "meowdding-item-dfu",
+            "version": "1.0.12",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 81672
+          },
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-api-4.2.19-26.1-runtime.jar!/META-INF/jars/repo-lib-4.1.5.jar",
+            "bytes": 2316639,
+            "id": "tech_thatgravyboat_repo-lib_repo-lib",
+            "version": "4.1.5",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 2304064
+          }
+        ],
+        "compressed_in_parent": 4939205
+      },
+      {
+        "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar",
+        "bytes": 4998941,
+        "id": "skyblockpv",
+        "version": "1.8.9",
+        "depends": {
+          "fabricloader": ">=0.16.10",
+          "minecraft": "26.1.x",
+          "fabric-api": "*",
+          "fabric-language-kotlin": ">=1.13.12+kotlin.2.4.0",
+          "resourcefullib": ">=4.0.1",
+          "olympus": ">=1.8.0",
+          "skyblock-api": ">=4.2.18",
+          "meowdding-lib": ">=4.2.12",
+          "resourcefulconfigkt": ">=4.0.0-beta.1",
+          "resourcefulconfig": ">=4.0.1"
+        },
+        "nested": [
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar",
+            "bytes": 2198600,
+            "id": "meowdding-lib",
+            "version": "4.2.12",
+            "depends": {
+              "fabricloader": ">=0.16.10",
+              "minecraft": "26.1.x",
+              "fabric-api": "*",
+              "fabric-language-kotlin": ">=1.13.10+kotlin.2.3.20",
+              "resourcefullib": ">=4.0.1",
+              "olympus": ">=1.8.0",
+              "skyblock-api": ">=4.2.0-beta.1",
+              "placeholder-api": ">=3.0.0-beta.2+26.1"
+            },
+            "nested": [
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar!/META-INF/jars/Keval-jvm-1.1.1.jar",
+                "bytes": 93603,
+                "id": "com_notkamui_libs_keval-jvm",
+                "version": "1.1.1",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 80678
+              },
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar!/META-INF/jars/mixinconstraints-1.0.8.jar",
+                "bytes": 28523,
+                "id": "com_moulberry_mixinconstraints",
+                "version": "1.0.8",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 24062
+              },
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar!/META-INF/jars/patches-1.0.8.jar",
+                "bytes": 79893,
+                "id": "meowdding-patches",
+                "version": "1.0.8",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 74514
+              },
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar!/META-INF/jars/placeholder-api-3.0.0-beta.2+26.1.jar",
+                "bytes": 247011,
+                "id": "placeholder-api",
+                "version": "3.0.0-beta.2+26.1",
+                "depends": {
+                  "fabricloader": ">=0.16.10",
+                  "minecraft": ">=1.21.5-beta.3"
+                },
+                "nested": [],
+                "compressed_in_parent": 227610
+              },
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/meowdding-lib-4.2.12-26.1-dev.jar!/META-INF/jars/remote-repo-1.0.9.jar",
+                "bytes": 1034593,
+                "id": "me_owdding_repo_remote-repo",
+                "version": "1.0.9",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 1029465
+              }
+            ],
+            "compressed_in_parent": 2144640
+          },
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/olympus-fabric-26.1-1.8.0.jar",
+            "bytes": 323884,
+            "id": "olympus",
+            "version": "1.8.0",
+            "depends": {
+              "fabric-api": "*",
+              "minecraft": ">=26.1",
+              "java": ">=25",
+              "resourcefullib": ">=4.0.0"
+            },
+            "nested": [],
+            "compressed_in_parent": 251577
+          },
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/placeholder-api-3.0.0-beta.2+26.1.jar",
+            "bytes": 247011,
+            "id": "placeholder-api",
+            "version": "3.0.0-beta.2+26.1",
+            "depends": {
+              "fabricloader": ">=0.16.10",
+              "minecraft": ">=1.21.5-beta.3"
+            },
+            "nested": [],
+            "compressed_in_parent": 227610
+          },
+          {
+            "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/resourcefullib-fabric-26.1-4.0.1.jar",
+            "bytes": 452977,
+            "id": "resourcefullib",
+            "version": "4.0.1",
+            "depends": {
+              "fabric-api": "*",
+              "minecraft": ">=1.21.11"
+            },
+            "nested": [
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/resourcefullib-fabric-26.1-4.0.1.jar!/META-INF/jars/bytecodecs-1.1.3.jar",
+                "bytes": 78894,
+                "id": "com_teamresourceful_bytecodecs",
+                "version": "1.1.3",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 68114
+              },
+              {
+                "path": "skymyce-2.4.12.jar!/META-INF/jars/skyblock-profile-viewer-iVpdy3W0.jar!/META-INF/jars/resourcefullib-fabric-26.1-4.0.1.jar!/META-INF/jars/yabn-1.0.3.jar",
+                "bytes": 32286,
+                "id": "com_teamresourceful_yabn",
+                "version": "1.0.3",
+                "depends": {},
+                "nested": [],
+                "compressed_in_parent": 27124
+              }
+            ],
+            "compressed_in_parent": 402431
+          }
+        ],
+        "compressed_in_parent": 4818110
+      }
+    ]
+  },
+  {
+    "path": "Sky-Myce-Loader.jar",
+    "bytes": 2537443,
+    "id": "skymyce-loader",
+    "version": "1.0.10",
+    "depends": {
+      "fabricloader": ">=0.19.3",
+      "minecraft": "~26.1.2",
+      "java": ">=25",
+      "fabric-api": "*",
+      "fabric-language-kotlin": "*",
+      "owo": ">=0.13.1+26.1"
+    },
+    "nested": [
+      {
+        "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar",
+        "bytes": 2263241,
+        "id": "owo",
+        "version": "0.13.1+26.1",
+        "depends": {
+          "fabricloader": ">=0.15.0",
+          "fabric-api": ">=0.100",
+          "minecraft": ">=26.1"
+        },
+        "nested": [
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/endec-0.1.12.jar",
+            "bytes": 237040,
+            "id": "io_wispforest_endec",
+            "version": "0.1.12",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 211432
+          },
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/gson-0.1.7.jar",
+            "bytes": 21158,
+            "id": "io_wispforest_endec_gson",
+            "version": "0.1.7",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 19052
+          },
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/jankson-0.1.7.jar",
+            "bytes": 21560,
+            "id": "io_wispforest_endec_jankson",
+            "version": "0.1.7",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 19341
+          },
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/jankson-1.2.2.jar",
+            "bytes": 75792,
+            "id": "blue_endless_jankson",
+            "version": "1.2.2",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 69298
+          },
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/kdl4j-1.0.1.jar",
+            "bytes": 134695,
+            "id": "com_github_kdl-org_kdl4j",
+            "version": "1.0.1",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 122658
+          },
+          {
+            "path": "Sky-Myce-Loader.jar!/META-INF/jars/owo-lib.jar!/META-INF/jars/netty-0.1.6.jar",
+            "bytes": 10137,
+            "id": "io_wispforest_endec_netty",
+            "version": "0.1.6",
+            "depends": {},
+            "nested": [],
+            "compressed_in_parent": 8529
+          }
+        ],
+        "compressed_in_parent": 2074311
+      }
+    ]
+  }
+]

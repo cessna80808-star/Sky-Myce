@@ -121,6 +121,22 @@ export async function checkDiscordUx(script, minecraftProof) {
     const openedSession = await store.authorizeSession({ uuid: 'a'.repeat(32), lease: enrolled.body.lease, challenge: relayChallenge,
       signature: sign(null, Buffer.from(`Sky-Myce relay v3\n${relayChallenge}\n${enrolled.body.lease}`), installation.privateKey).toString('base64') });
     assert.equal(openedSession.ok, true);
+    await sql.exec('CREATE TABLE heartbeat_write_probe (id INTEGER PRIMARY KEY)');
+    await sql.exec('CREATE TRIGGER count_heartbeat_writes AFTER UPDATE OF last_heartbeat ON account_runtime BEGIN INSERT INTO heartbeat_write_probe(id) VALUES(NULL); END');
+    const observedHeartbeat = (await sql.exec('SELECT last_heartbeat FROM account_runtime WHERE account_id=?', openedSession.accountId))[0].last_heartbeat;
+    const heartbeatCheck = { accountId: openedSession.accountId, uuid: openedSession.uuid, installationId: openedSession.installationId,
+      generation: openedSession.generation, connectionId: openedSession.connectionId };
+    for (let i = 0; i < 50; i++) assert.equal((await store.checkSession({ ...heartbeatCheck, heartbeatAt: observedHeartbeat })).ok, true);
+    assert.equal((await sql.exec('SELECT COUNT(*) AS n FROM heartbeat_write_probe'))[0].n, 0, 'Repeated actual ping timestamps keep all authorization checks but produce no redundant writes');
+    const newerHeartbeat = Date.now();
+    assert.ok(newerHeartbeat > observedHeartbeat);
+    assert.equal((await store.checkSession({ ...heartbeatCheck, heartbeatAt: newerHeartbeat })).ok, true);
+    await store.checkSession({ ...heartbeatCheck, heartbeatAt: observedHeartbeat });
+    await store.checkSession({ ...heartbeatCheck, connectionId: 'retired-connection', heartbeatAt: Date.now() });
+    assert.equal((await sql.exec('SELECT COUNT(*) AS n FROM heartbeat_write_probe'))[0].n, 1, 'Only a newer observation from the current connection writes telemetry');
+    assert.equal((await sql.exec('SELECT last_heartbeat FROM account_runtime WHERE account_id=?', openedSession.accountId))[0].last_heartbeat, newerHeartbeat);
+    await sql.exec('DROP TRIGGER count_heartbeat_writes');
+    await sql.exec('DROP TABLE heartbeat_write_probe');
     const installationRequest = async (purpose, changes = {}) => {
       const info = { ...input, purpose, clientNonce: randomUUID(), ...changes };
       const pending = await store.challenge(info, `ux-proof-${sequence++}`); assert.ok(pending.challengeId);

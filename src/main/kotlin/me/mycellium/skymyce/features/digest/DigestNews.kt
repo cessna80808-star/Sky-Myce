@@ -64,6 +64,7 @@ class DigestNewsRepository(
     private val pending = mutableMapOf<NewsSource, CompletableFuture<JsonObject?>>()
     private val nextAttempt = mutableMapOf<NewsSource, Long>()
     private var generation = 0
+    val pendingCount get() = pending.size
     fun state(source: NewsSource): DigestNewsState = states.getValue(source)
 
     fun restore(source: NewsSource, state: DigestNewsState) {

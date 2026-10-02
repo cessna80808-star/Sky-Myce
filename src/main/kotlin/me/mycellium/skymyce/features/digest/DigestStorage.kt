@@ -115,6 +115,7 @@ class DigestStateWriter(private val store: DigestStateStore, private val schedul
     private val running = AtomicBoolean()
     private val closed = AtomicBoolean()
     private val ioLock = Any()
+    val scheduled get() = running.get()
 
     fun submit(state: DigestSavedState) {
         latest.set(state)

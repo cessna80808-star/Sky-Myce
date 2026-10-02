@@ -78,6 +78,12 @@ object WidgetManager : SkyMyceModule() {
             return instances.mapNotNull { it.get() }
         }
 
+    /** The render loop keeps weak ownership without materializing a widget list each frame. */
+    fun forEachWidget(action: (Widget) -> Unit) = instances.forEachAlive(action)
+
+    fun widgetAt(mouseX: Int, mouseY: Int): Widget? =
+        instances.lastAliveOrNull { it.isRenderable && it.inBounds(mouseX, mouseY) }
+
     val renderableWidgets: List<Widget>
         get() = widgets.filter { it.isRenderable }
 
@@ -85,6 +91,23 @@ object WidgetManager : SkyMyceModule() {
         val now = System.currentTimeMillis()
         return widgets.filter { (now - it.sinceActive) < 10000 }
     }
+}
+
+internal fun <T : Any> MutableList<WeakReference<T>>.forEachAlive(action: (T) -> Unit) {
+    var index = 0
+    var remaining = size // Widgets registered by a builder join the next frame, as with the old snapshot.
+    while (remaining-- > 0) {
+        val value = this[index].get()
+        if (value == null) removeAt(index) else { index++; action(value) }
+    }
+}
+
+internal fun <T : Any> MutableList<WeakReference<T>>.lastAliveOrNull(predicate: (T) -> Boolean): T? {
+    for (index in lastIndex downTo 0) {
+        val value = this[index].get()
+        if (value == null) removeAt(index) else if (predicate(value)) return value
+    }
+    return null
 }
 
 data class WidgetConfig(
