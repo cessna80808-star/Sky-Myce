@@ -1,9 +1,9 @@
-# Admin interaction forwarding repair — prepared October 2, 2026
+# Admin interaction forwarding repair — deployed October 2, 2026
 
-The legacy `skyblock-relay` Admin interaction endpoint forwards slash commands
-but drops the new `sky:confirm:*` and `sky:cancel:*` button interactions. Its
-fallback produces **Unsupported command** before the account backend receives
-the click. The same filter drops account-view buttons, autocomplete, and the
+The legacy `skyblock-relay` Admin interaction endpoint previously forwarded slash
+commands but dropped the new `sky:confirm:*` and `sky:cancel:*` button interactions.
+Its fallback produced **Unsupported command** before the account backend received
+the click. The same filter dropped account-view buttons, autocomplete, and the
 new `build` and `skyhawk` command roots.
 
 The repaired forwarder retains exact Discord-signed bodies and headers, the
@@ -35,10 +35,20 @@ No real Discord messages or account/device changes were issued during testing.
 Prepared deployment config, bundles and runtime evidence are under
 `build/admin-ux-before` and `build/admin-ux-prepared`.
 
-**Production activation is pending explicit approval.** Automatic approval review
-rejected deployment to the legacy Worker because the bot-fix request did not
-explicitly authorize that production mutation. Mod 2.4.13, loader 1.0.13 and
-their current account Worker release selectors remain live and unchanged.
+The user approved production activation. `skyblock-relay` is deployed on version
+`a115fa6d-966d-4815-bbe4-f41c69a060e7`, with bundle SHA-256
+`94305c1d6075caddb6c7cb30c692023406aeca732a3d81cef9644f32dddf8598`.
+The downloaded live bundle matches the exact tested replacement. Post-deployment
+checks confirm all existing bindings, secret names/types, runtime settings,
+routes, schedules and migration tag `v1` are preserved. Both Workers return
+health 200 and reject unsigned interactions with 401. Mod 2.4.13, loader 1.0.13,
+the account Worker version and both release manifests remain unchanged.
+Live deployment evidence is under `build/admin-ux-after` and
+`build/admin-ux-live-endpoints.json`.
+
+A real Discord button click still needs user verification. Run a fresh command
+to obtain new Confirm/Cancel buttons; previously displayed confirmations expire
+after two minutes and cannot be reused.
 
 # Mod 2.4.13 / loader 1.0.13 — deployed October 2, 2026
 
