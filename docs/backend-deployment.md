@@ -1,3 +1,29 @@
+# Loader 1.0.12 protocol repair — prepared October 2, 2026
+
+The live account Worker rejects the current hardware-bound v3 installation proof
+as `installation_proof_invalid`. An anonymous compatibility check with fresh keys
+confirmed that the same endpoint accepts the older v2 transcript and proceeds to
+`minecraft_proof_required`. No Minecraft credentials or account proofs were used.
+
+The prepared rollout targets only `sky-myce-backend` (`--env backend`), deploys
+the repository's v3 verifier, and selects private
+`loaders/Sky-Myce-Loader-1.0.12.jar` with `loaders/manifest-1.0.12.json`.
+Minimum loader becomes 1.0.11. The signed protected mod remains the exact existing
+2.4.12 bytes; its re-signed metadata at
+`releases/manifest-2.4.12-loader-1.0.11.json` raises the matching minimum loader.
+Installation proofs, lease verification and renewals are owned by the separate loader JAR.
+Keep the existing signer, secret bindings, storage namespaces and account/device
+records. Upload and verify the new loader first, then both signed manifests, before
+deploying the configured Worker. This rollout is **prepared, not deployed**.
+
+After deployment, repeat the anonymous v3 check: it must pass installation proof
+verification and stop at `minecraft_proof_required`. Verify the live loader
+manifest against the pinned `production-20260927` public key and its artifact
+hash, then verify startup and later renewal in the user's existing instance.
+An unsupported loader, missing account proof or unauthenticated artifact request
+must still be rejected. A new activation code or HWID reset cannot fix a protocol
+mismatch.
+
 # Loader 1.0.1 / mod 2.4.4 deployment — September 27, 2026
 
 This section supersedes the older release status recorded below.

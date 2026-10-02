@@ -24,6 +24,7 @@ internal fun accountAccessError(code: String): String? = when (code) {
     "device_revoked" -> "Device registration is blocked for this account. Ask an admin to review it before retrying. (device_revoked)"
     "minecraft_account_owned" -> "This Minecraft account is linked to another Sky-Myce account. Ask an admin to review the link. (minecraft_account_owned)"
     "minecraft_proof_invalid", "minecraft_proof_required" -> "Minecraft sign-in could not be verified. Close the game, sign in again through your launcher, then retry. (minecraft_proof_invalid)"
+    "installation_proof_invalid" -> "Sky-Myce could not verify this installation. Retry, or ask an admin to check that the backend supports your Loader version. Keep your device identity; a new activation code cannot fix this error. (installation_proof_invalid)"
     "version_denied" -> "These Minecraft or Loader versions are not supported by the current release. Ask an admin for the current loader and required Minecraft version. (version_denied)"
     "loader_update_required" -> "This backend requires the current Sky-Myce Loader to verify launch sessions. Update the loader, then close and relaunch Minecraft. (loader_update_required)"
     "launch_authorization_required" -> "This launch needs fresh authorization. Close Minecraft and relaunch this instance. Your registered device stays the same; a new activation code is not needed for launch reauthorization. (launch_authorization_required)"

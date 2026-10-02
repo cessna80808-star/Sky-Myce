@@ -346,6 +346,14 @@ isolation, validation and delivery limits.
 
 ## Building and deployment configuration
 
+Loader 1.0.12 reports a rejected installation proof separately from account
+restrictions. Startup logs include only recognized authorization codes; unknown
+server text and account credentials are never logged. The hardware-bound v3
+installation proof requires the matching backend from this repository. A backend
+that verifies only v2 rejects it as `installation_proof_invalid`; deploy the v3
+verifier rather than downgrading the proof or resetting device identity. The prepared
+production rollout requires loader 1.0.11 or newer, the first configured v3 build.
+
 Loader 1.0.11 fixes local/default builds that previously embedded
 `configure-before-distribution.invalid` and an empty trust key. Java HTTP DNS
 failures can wrap `UnresolvedAddressException`, an `IllegalArgumentException`,

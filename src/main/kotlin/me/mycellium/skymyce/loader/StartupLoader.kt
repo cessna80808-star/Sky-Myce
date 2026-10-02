@@ -44,7 +44,12 @@ internal fun startupFailureDiagnostic(failure: Throwable): String {
     val causes = generateSequence(failure) { it.cause }.toList()
     val location = causes.asSequence().flatMap { it.stackTrace.asSequence() }
         .firstOrNull { it.className.startsWith("me.mycellium.skymyce.loader.") }
+    val denial = causes.filterIsInstance<AuthorizationDenied>().firstOrNull()?.let {
+        if (accountAccessError(it.code) != null || startupActivationAllowed(it.code) ||
+            it.code in setOf("license_revoked", "account_suspended", "installation_revoked", "license_expired")) it.code else "unrecognized_error"
+    }
     return "Startup failed: ${failure.javaClass.simpleName} / ${causes.last().javaClass.simpleName}" +
+        (denial?.let { " (authorization=$it)" } ?: "") +
         (location?.let { " at ${it.className}.${it.methodName}:${it.lineNumber}" } ?: "")
 }
 

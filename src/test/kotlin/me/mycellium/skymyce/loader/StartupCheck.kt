@@ -34,6 +34,12 @@ fun checkStartup() {
     check("launch settings" !in startupError(IllegalArgumentException(token)))
     val diagnostic = startupFailureDiagnostic(dns)
     check("IOException" in diagnostic && "UnresolvedAddressException" in diagnostic && token !in diagnostic)
+    val rejectedInstallation = AuthorizationDenied("installation_proof_invalid")
+    check("backend supports your Loader version" in startupError(rejectedInstallation))
+    check(!startupActivationAllowed(rejectedInstallation.code))
+    check("authorization=installation_proof_invalid" in startupFailureDiagnostic(IOException(token, rejectedInstallation)))
+    val unknownDenial = startupFailureDiagnostic(AuthorizationDenied(token))
+    check("authorization=unrecognized_error" in unknownDenial && token !in unknownDenial)
     val pair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     val base64 = Base64.getEncoder()
     val pem = "-----BEGIN RSA PRIVATE KEY-----\n${base64.encodeToString(pair.private.encoded)}\n-----END RSA PRIVATE KEY-----"
