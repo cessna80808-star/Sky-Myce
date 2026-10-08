@@ -3,6 +3,8 @@ package me.mycellium.skymyce.features.instances.dungeons.routing
 import java.util.Collections
 import java.util.PriorityQueue
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 data class GridCell(val x: Int, val y: Int, val z: Int)
 
@@ -47,7 +49,7 @@ class RoomTransform(val origin: GridCell, val quarterTurns: Int) {
     }
 }
 
-/** Cost counts horizontal and vertical movement blocks, including an optional final endpoint. */
+/** Cost uses the planner's costScale, including an optional final endpoint. */
 @ConsistentCopyVisibility
 data class RoomRoute internal constructor(val targetOrder: List<String>, val path: List<GridCell>, val cost: Int)
 
@@ -79,15 +81,17 @@ fun RoomRoute.liveStart(
 /**
  * Immutable room-local graph. The caller supplies every safe directed connection after
  * checking player clearance, supports, doors and loaded geometry. This class never infers
- * a connection across a wall, a diagonal, or a larger elevation change.
+ * a connection across a wall or a larger elevation change.
  */
 class RoomNavigation private constructor(
     val cells: List<GridCell>,
     val targets: Map<String, GridCell>,
     val healer: GridCell?,
     private val indices: Map<GridCell, Int>,
-    private val adjacent: Array<IntArray>
+    private val adjacent: Array<IntArray>,
+    private val standingFeet: Map<GridCell, RoomPoint>,
 ) {
+    val costScale = if (standingFeet.isEmpty()) 1 else 100
     private class Search(val distances: IntArray, val parents: IntArray)
     private data class SearchNode(val node: Int, val distance: Int)
     private val targetNodes = targets.mapValues { indices.getValue(it.value) }
@@ -97,7 +101,7 @@ class RoomNavigation private constructor(
     companion object {
         const val MAX_NODES = 16_384
         const val MAX_TARGETS = 12
-        private const val MAX_NEIGHBORS = 14
+        private const val MAX_NEIGHBORS = 26
         private const val INFINITE = Int.MAX_VALUE / 4
         private val targetId = Regex("[A-Za-z0-9_.-]{1,64}")
         private val cellOrder = compareBy<GridCell>({ it.x }, { it.y }, { it.z })
@@ -107,12 +111,17 @@ class RoomNavigation private constructor(
             cells: Collection<GridCell>,
             adjacency: Map<GridCell, Collection<GridCell>>,
             targets: Map<String, GridCell>,
-            healer: GridCell? = null
+            healer: GridCell? = null,
+            standingFeet: Map<GridCell, RoomPoint> = emptyMap(),
         ): RoomNavigation? {
             if (cells.isEmpty() || cells.size > MAX_NODES || targets.size > MAX_TARGETS || adjacency.size > cells.size) return null
             val nodes = cells.toSet()
             if (nodes.size != cells.size || healer != null && healer !in nodes ||
                 targets.any { !targetId.matches(it.key) || it.value !in nodes }) return null
+            if (standingFeet.isNotEmpty() && (standingFeet.keys != nodes || standingFeet.any { (cell, point) ->
+                abs(point.x - cell.x - 0.5) > 0.00001 || abs(point.z - cell.z - 0.5) > 0.00001 ||
+                    point.y <= cell.y - 1.0 || point.y > cell.y + 0.00001
+            })) return null
             if (adjacency.any { (from, next) ->
                 from !in nodes || next.size > MAX_NEIGHBORS || next.toSet().size != next.size ||
                     next.any { it !in nodes || !localConnection(from, it) }
@@ -122,13 +131,15 @@ class RoomNavigation private constructor(
             val adjacent = Array(ordered.size) { index ->
                 adjacency[ordered[index]].orEmpty().map { indices.getValue(it) }.sorted().toIntArray()
             }
-            return RoomNavigation(immutable(ordered), Collections.unmodifiableMap(targets.toSortedMap()), healer, indices, adjacent)
+            return RoomNavigation(immutable(ordered), Collections.unmodifiableMap(targets.toSortedMap()), healer, indices, adjacent,
+                Collections.unmodifiableMap(LinkedHashMap(standingFeet)))
         }
 
         private fun localConnection(from: GridCell, to: GridCell): Boolean {
-            val horizontal = abs(from.x.toLong() - to.x) + abs(from.z.toLong() - to.z)
+            val dx = abs(from.x.toLong() - to.x)
+            val dz = abs(from.z.toLong() - to.z)
             val vertical = abs(from.y.toLong() - to.y)
-            return horizontal == 1L && vertical <= 1L || horizontal == 0L && vertical == 1L
+            return dx <= 1L && dz <= 1L && dx + dz > 0L && vertical <= 1L || dx + dz == 0L && vertical == 1L
         }
 
         private fun <T> immutable(values: Collection<T>): List<T> = Collections.unmodifiableList(ArrayList(values))
@@ -156,7 +167,8 @@ class RoomNavigation private constructor(
             ?.filter(remaining::contains)?.takeIf { it.size == ids.size }
         val previousCost = previous?.let { routeCost(it, fromStart) }
         val optimalCost = routeCost(optimal, fromStart) ?: return null
-        val retainPrevious = previous != null && previousCost != null && previousCost - optimalCost <= minimumImprovement
+        val retainPrevious = previous != null && previousCost != null &&
+            previousCost.toLong() - optimalCost <= minimumImprovement.toLong() * costScale
         val order = if (retainPrevious) previous!! else optimal
         val path = arrayListOf(cells[startNode])
         var source = startNode
@@ -243,7 +255,12 @@ class RoomNavigation private constructor(
                 // A step/jump has horizontal and vertical segments; do not favor stairs by edge count.
                 val from = cells[current]
                 val to = cells[next]
-                val candidate = distance + abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
+                val a = standingFeet[from]
+                val b = standingFeet[to]
+                val cost = if (a != null && b != null) {
+                    ((hypot(b.x - a.x, b.z - a.z) + abs(b.y - a.y)) * costScale).roundToInt().coerceAtLeast(1)
+                } else abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
+                val candidate = distance + cost
                 if (distances[next] >= 0 && candidate >= distances[next]) continue
                 distances[next] = candidate
                 parents[next] = current
@@ -255,7 +272,7 @@ class RoomNavigation private constructor(
 
     private fun pathTo(start: Int, end: Int, search: Search): List<GridCell>? {
         if (search.distances[end] < 0) return null
-        val path = ArrayList<GridCell>(search.distances[end] + 1)
+        val path = ArrayList<GridCell>(minOf(cells.size, search.distances[end] / costScale + 1))
         var current = end
         while (current != start) {
             path.add(cells[current])

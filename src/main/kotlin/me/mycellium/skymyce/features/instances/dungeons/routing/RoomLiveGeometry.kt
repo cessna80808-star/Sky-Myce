@@ -1,12 +1,16 @@
 package me.mycellium.skymyce.features.instances.dungeons.routing
 
-import java.util.ArrayDeque
 import java.util.Collections
+import java.util.PriorityQueue
+import kotlin.math.abs
+import kotlin.math.hypot
 
 /** Owned by the completed builder; its backing collections are never mutated after publication. */
-class RoomLiveGeometrySnapshot internal constructor(cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>) {
+class RoomLiveGeometrySnapshot internal constructor(cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>,
+    feet: Map<GridCell, RoomPoint> = emptyMap()) {
     val cells: Set<GridCell> = Collections.unmodifiableSet(cells)
     val adjacency: Map<GridCell, Set<GridCell>> = Collections.unmodifiableMap(adjacency)
+    val feet: Map<GridCell, RoomPoint> = Collections.unmodifiableMap(feet)
 }
 
 /** Floods only safe directed connections from an actual player start; callbacks run in step(). */
@@ -15,6 +19,7 @@ class RoomLiveGeometry(
     private val contains: (GridCell) -> Boolean,
     private val canStand: (GridCell) -> Boolean,
     private val canConnect: (GridCell, GridCell) -> Boolean,
+    private val resolveFeet: (GridCell) -> RoomPoint = { RoomPoint(it.x + 0.5, it.y.toDouble(), it.z + 0.5) },
 ) {
     var status = RoomGeometryStatus.BUILDING
         private set
@@ -24,14 +29,39 @@ class RoomLiveGeometry(
         private set
     private val accepted = LinkedHashSet<GridCell>()
     private val standing = HashMap<GridCell, Boolean>()
+    private val feet = LinkedHashMap<GridCell, RoomPoint>()
     private val adjacent = LinkedHashMap<GridCell, Set<GridCell>>()
-    private val queue = ArrayDeque<GridCell>()
+    private data class Frontier(val cell: GridCell, val cost: Double, val priority: Double)
+    private val queue = PriorityQueue(compareBy<Frontier>({ it.priority }, { it.cost }, { it.cell.x }, { it.cell.y }, { it.cell.z }))
+    private val distances = HashMap<GridCell, Double>()
+    private var goals = emptyList<GridCell>()
+    private var current: GridCell? = null
     private var connections = linkedSetOf<GridCell>()
     private var neighbor = 0
     private var started = false
+    val nodeCount get() = accepted.size
+
+    fun observesBlock(block: GridCell): Boolean = nearbyRoomGeometry(standing.keys, block)
+
+    /** Focus the same flood on missing targets; the horizontal heuristic never crosses unchecked edges. */
+    fun prioritize(targets: Collection<GridCell>) {
+        val next = targets.distinct().take(RoomNavigation.MAX_TARGETS).sortedWith(compareBy({ it.x }, { it.y }, { it.z }))
+        if (next == goals) return
+        goals = next
+        val pending = queue.map { it.cell }.distinct()
+        queue.clear()
+        for (cell in pending) enqueue(cell, distances.getValue(cell))
+    }
+
+    private fun enqueue(cell: GridCell, cost: Double) {
+        val remaining = goals.minOfOrNull { hypot(it.x.toDouble() - cell.x, it.z.toDouble() - cell.z) } ?: 0.0
+        queue.add(Frontier(cell, cost, cost + remaining))
+    }
 
     companion object {
-        private val offsets = listOf(GridCell(-1, 0, 0), GridCell(1, 0, 0), GridCell(0, 0, -1), GridCell(0, 0, 1))
+        private val offsets = (-1..1).flatMap { x -> (-1..1).mapNotNull { z ->
+            GridCell(x, 0, z).takeIf { x != 0 || z != 0 }
+        } }
             .flatMap { direction -> (-1..1).map { GridCell(direction.x, it, direction.z) } } +
             listOf(GridCell(0, -1, 0), GridCell(0, 1, 0))
     }
@@ -49,19 +79,26 @@ class RoomLiveGeometry(
                 started = true
                 if (!contains(seed) || !canStand(seed)) return incomplete("Player has no loaded safe standing cell")
                 standing[seed] = true
+                feet[seed] = resolveFeet(seed)
                 accepted.add(seed)
-                queue.add(seed)
+                distances[seed] = 0.0
+                enqueue(seed, 0.0)
                 cellReads++
                 worked = true
             }
-            while (queue.isNotEmpty()) {
+            while (current != null || queue.isNotEmpty()) {
                 if (worked && System.nanoTime() - begin >= maxNanos) return false
-                val from = queue.first()
+                if (current == null) {
+                    val entry = queue.remove()
+                    if (entry.cell in adjacent || entry.cost != distances[entry.cell]) continue
+                    current = entry.cell
+                }
+                val from = current!!
                 if (neighbor == offsets.size) {
                     adjacent[from] = Collections.unmodifiableSet(connections)
                     connections = linkedSetOf()
                     neighbor = 0
-                    queue.removeFirst()
+                    current = null
                     continue
                 }
                 val offset = offsets[neighbor]
@@ -81,18 +118,34 @@ class RoomLiveGeometry(
                     if (to !in accepted) {
                         if (accepted.size >= RoomNavigation.MAX_NODES) return incomplete("Live geometry exceeds 16384 reachable cells")
                         accepted.add(to)
-                        queue.add(to)
+                        feet[to] = resolveFeet(to)
                     }
                     connections.add(to)
+                    val a = feet.getValue(from)
+                    val b = feet.getValue(to)
+                    val distance = distances.getValue(from) + hypot(b.x - a.x, b.z - a.z) + abs(b.y - a.y)
+                    if (to !in adjacent && distance < (distances[to] ?: Double.POSITIVE_INFINITY)) {
+                        distances[to] = distance
+                        enqueue(to, distance)
+                    }
                 }
                 neighbor++
             }
-            result = RoomLiveGeometrySnapshot(accepted, adjacent)
+            result = RoomLiveGeometrySnapshot(accepted, adjacent, feet)
             status = RoomGeometryStatus.READY
             return true
         } catch (_: RuntimeException) {
             return incomplete("Live collision geometry became unavailable")
         }
+    }
+
+    /** A frozen graph of checked edges can guide nearby targets while the rest of the room is scanned. */
+    fun snapshot(): RoomLiveGeometrySnapshot? {
+        result?.let { return it }
+        if (status != RoomGeometryStatus.BUILDING || accepted.isEmpty()) return null
+        val edges = LinkedHashMap(adjacent)
+        current?.let { edges[it] = Collections.unmodifiableSet(LinkedHashSet(connections)) }
+        return RoomLiveGeometrySnapshot(LinkedHashSet(accepted), edges, LinkedHashMap(feet))
     }
 
     private fun incomplete(reason: String): Boolean {
@@ -101,9 +154,19 @@ class RoomLiveGeometry(
         result = null
         accepted.clear()
         standing.clear()
+        feet.clear()
         adjacent.clear()
         queue.clear()
+        distances.clear()
+        current = null
         connections.clear()
         return true
     }
+}
+
+/** Body, support and neighboring collision-shape reads around a standing cell. */
+internal fun nearbyRoomGeometry(cells: Set<GridCell>, block: GridCell): Boolean {
+    for (x in block.x - 1..block.x + 1) for (y in block.y - 3..block.y + 2) for (z in block.z - 1..block.z + 1)
+        if (GridCell(x, y, z) in cells) return true
+    return false
 }

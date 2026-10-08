@@ -41,7 +41,7 @@ internal fun roomConnectorWaypoints(from: RoomPoint, to: RoomPoint): List<RoomPo
     ) return null
     if (from == to) return listOf(from)
     if (horizontal < GEOMETRY_EPSILON * GEOMETRY_EPSILON) return listOf(from, to)
-    val upperY = maxOf(from.y, to.y) + if (to.y - from.y > GEOMETRY_EPSILON) JUMP_HEADROOM else 0.0
+    val upperY = maxOf(from.y, to.y) + if (to.y - from.y > SUPPORT_DEPTH) JUMP_HEADROOM else 0.0
     return listOf(from, RoomPoint(from.x, upperY, from.z), RoomPoint(to.x, upperY, to.z), to)
         .distinct()
 }
@@ -98,6 +98,17 @@ private fun interpolate(from: RoomPoint, to: RoomPoint, amount: Double) = RoomPo
     from.z + (to.z - from.z) * amount,
 )
 
+internal fun roomStandingPoint(cell: GridCell, heights: Sequence<Double>, canStand: (RoomPoint) -> Boolean,
+    climbable: Boolean = false): RoomPoint? {
+    for (height in heights.filter { it.isFinite() && it > cell.y - 1.0 + GEOMETRY_EPSILON && it <= cell.y + GEOMETRY_EPSILON }
+        .distinct().sortedDescending()) {
+        val point = RoomPoint(cell.x + 0.5, height, cell.z + 0.5)
+        if (canStand(point)) return point
+    }
+    val center = RoomPoint(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)
+    return center.takeIf { climbable && canStand(it) }
+}
+
 enum class RoomGeometryStatus { BUILDING, READY, INCOMPLETE }
 
 /** An immutable room-local snapshot; only the incremental builder reads the client world. */
@@ -107,12 +118,13 @@ class RoomGeometry private constructor(
     targets: Map<String, GridCell>,
     val healer: GridCell,
     copyGeometry: Boolean,
+    val standingFeet: Map<GridCell, RoomPoint> = emptyMap(),
 ) {
     internal constructor(cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>, targets: Map<String, GridCell>, healer: GridCell) :
         this(cells, adjacency, targets, healer, true)
 
     internal constructor(snapshot: RoomLiveGeometrySnapshot, targets: Map<String, GridCell>, healer: GridCell) :
-        this(snapshot.cells, snapshot.adjacency, targets, healer, false)
+        this(snapshot.cells, snapshot.adjacency, targets, healer, false, snapshot.feet)
 
     val cells: Set<GridCell> = if (copyGeometry) Collections.unmodifiableSet(LinkedHashSet(cells)) else cells
     val adjacency: Map<GridCell, Set<GridCell>> = if (copyGeometry) Collections.unmodifiableMap(adjacency.mapValues {
@@ -186,7 +198,9 @@ class RoomGeometryBuilder(private val level: ClientLevel, private val room: Dete
 }
 
 object RoomWorldGeometry {
-    fun feet(room: DetectedRoom, cell: GridCell): Vec3 = room.transform.toWorld(cell).let {
+    fun feet(room: DetectedRoom, cell: GridCell, geometry: RoomGeometry? = null): Vec3 = geometry?.standingFeet?.get(cell)?.let {
+        Vec3(it.x, it.y, it.z)
+    } ?: room.transform.toWorld(cell).let {
         Vec3(it.x + 0.5, it.y.toDouble(), it.z + 0.5)
     }
 
@@ -215,11 +229,11 @@ object RoomWorldGeometry {
             for (wx in x - 2..x + 2) for (wy in y - 1..y + 1) for (wz in z - 2..z + 2) {
                 val cell = room.transform.toLocal(GridCell(wx, wy, wz))
                 if (cell !in geometry.cells) continue
-                val distance = feet(room, cell).distanceToSqr(actualPlayer)
+                val distance = feet(room, cell, geometry).distanceToSqr(actualPlayer)
                 if (distance <= 4.0) candidates.add(cell to distance)
             }
             candidates.sortBy { it.second }
-            candidates.firstOrNull { validConnector(level, actualPlayer, feet(room, it.first)) }?.first
+            candidates.firstOrNull { validConnector(level, actualPlayer, feet(room, it.first, geometry)) }?.first
         } catch (_: RuntimeException) { null }
     }
 
@@ -244,6 +258,18 @@ object RoomWorldGeometry {
     }
 
     internal fun validCell(level: ClientLevel, feet: Vec3): Boolean = validConnector(level, feet, feet)
+
+    /** A grid Y identifies (Y-1, Y]; the collision surface supplies the actual carpet/slab/stair height. */
+    internal fun standingPoint(level: ClientLevel, cell: GridCell): RoomPoint? {
+        val center = Vec3(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)
+        if (!MC.instance.isSameThread || !loadedEnvelope(level, center, center)) return null
+        val probe = AABB(center.x - BODY_RADIUS, center.y - 1.0, center.z - BODY_RADIUS,
+            center.x + BODY_RADIUS, center.y + GEOMETRY_EPSILON, center.z + BODY_RADIUS)
+        val heights = level.getBlockCollisions(null, probe).flatMap { it.toAabbs() }.asSequence()
+            .filter { it.minX < probe.maxX && it.maxX > probe.minX && it.minZ < probe.maxZ && it.maxZ > probe.minZ }
+            .map { it.maxY }
+        return roomStandingPoint(cell, heights, { validCell(level, it.vector()) }, climbable(level, center))
+    }
 
     /** Collision iteration examines adjacent blocks, so require a one-block chunk margin. */
     internal fun loadedEnvelope(level: ClientLevel, from: Vec3, to: Vec3): Boolean {

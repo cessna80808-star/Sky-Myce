@@ -1,3 +1,40 @@
+# Mod 2.4.16 routing response and surface fixes — deployed October 8, 2026
+
+Production `sky-myce-backend` (`--env backend`) selects mod 2.4.16 on Worker
+version `b18c9415-b8e5-4007-8a4c-f79b05006ad1`, deployed at 10:45:31 UTC.
+Supported loaders discover the release on the next Minecraft launch.
+
+The room scan now prioritizes observed targets and publishes immutable checked
+geometry while the rest of the room is scanned. Mob observations refresh every
+100 ms, and irrelevant or repeated collision-equivalent block updates do not
+restart the scan. Native collision surfaces supply actual carpet, slab and stair
+heights; validated diagonals and physical movement costs avoid artificial
+integer-height detours. Filled waypoints, thin beams and compact distance labels
+replace the oversized text. An uncleared room with no registered targets keeps
+the exit waypoint without showing an exit-only clear route.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.16 | `releases/Sky-Myce-2.4.16.jar` | `releases/manifest-2.4.16.json` | `301b0d330a2fefb088d1a04409a675c5024beb341303e2a78af0f1b4eb717f27` |
+
+The mod manifest expires **October 15, 2026, at 10:43:50 UTC**. The published
+loader remains 1.0.14 with its existing October 15, 07:39:02 UTC manifest expiry.
+Minecraft 26.1.2, minimum loader 1.0.11 and the signing trust root are preserved.
+
+Java 25 `check build`, `npm test`, `npm run check` and the backend packaging dry
+run passed. Routing checks cover surface heights, safe diagonal movement,
+physical costs, progressive immutable snapshots, target-prioritized scans,
+geometry-update filtering and bounded waypoint text scale. Both private R2
+readbacks match the checked files exactly. Live mod and loader manifests have
+valid signatures and matching artifact hashes; health and anonymous access
+denial checks passed.
+
+Post-deployment bindings differ only in `SKY_MYCE_VERSION` and
+`ARTIFACT_MANIFEST_KEY`. Runtime settings, other bindings, secret names/types
+and empty schedules are preserved. Evidence in the external directory below
+uses `release-2.4.16-*` filenames. No live Minecraft dungeon run was performed;
+route timing and appearance still need gameplay verification.
+
 # Mod 2.4.15 routing repair — deployed October 8, 2026
 
 Production `sky-myce-backend` (`--env backend`) now selects mod 2.4.15 on

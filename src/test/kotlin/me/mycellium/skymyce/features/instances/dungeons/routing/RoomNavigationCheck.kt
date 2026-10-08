@@ -300,7 +300,7 @@ private fun checkValidationAndSnapshots() {
     check(RoomNavigation.create(listOf(start), emptyMap(), mapOf("" to start), start) == null)
     check(RoomNavigation.create(listOf(start), mapOf(healer to emptyList()), emptyMap(), start) == null)
     check(RoomNavigation.create(listOf(start), mapOf(start to listOf(healer)), emptyMap(), start) == null)
-    for (unsafe in listOf(GridCell(2, 0, 0), GridCell(1, 0, 1), GridCell(0, 2, 0), GridCell(1, 2, 0))) {
+    for (unsafe in listOf(GridCell(2, 0, 0), GridCell(2, 0, 1), GridCell(0, 2, 0), GridCell(1, 2, 0))) {
         check(RoomNavigation.create(listOf(start, unsafe), mapOf(start to listOf(unsafe)), emptyMap(), unsafe) == null)
     }
     check(RoomNavigation.create(listOf(start), mapOf(start to listOf(start)), emptyMap(), start) == null)
@@ -329,7 +329,19 @@ private fun checkValidationAndSnapshots() {
     check(maximumNodes.navigation.plan(maximumNodes.cells.first(), emptySet())?.cost == RoomNavigation.MAX_NODES - 1)
 }
 
+private fun checkSurfaceCostStability() {
+    val room = line(7, mapOf("A" to 0, "B" to 5), 6)
+    val points = room.cells.associateWith { RoomPoint(it.x + 0.5, it.y.toDouble(), it.z + 0.5) }.toMutableMap()
+    val graph = requireNotNull(RoomNavigation.create(room.cells, room.adjacency, room.targets, room.healer, points))
+    points.clear()
+    check(graph.costScale == 100)
+    check(graph.plan(room.cells[4], room.targets.keys, listOf("B", "A"), 3)?.targetOrder == listOf("B", "A"))
+    check(graph.plan(room.cells[4], room.targets.keys, listOf("B", "A"), 1)?.targetOrder == listOf("A", "B"))
+    check(graph.plan(room.cells[4], room.targets.keys, minimumImprovement = 0)?.cost == 1000)
+}
+
 fun checkRoomNavigation() {
+    checkSurfaceCostStability()
     checkRotations()
     checkOptimalRoutes()
     checkElevationsAndDirection()

@@ -200,6 +200,8 @@ private fun checkApproachProbeBudgets() {
 }
 
 fun checkRoomRoutingUpdates() {
+    check(kotlin.math.abs(roomWaypointTextScale(2.0) / 2 - roomWaypointTextScale(40.0) / 40) < 0.00001)
+    check(roomWaypointTextScale(0.0) == 0.035f && roomWaypointTextScale(200.0) == 2.8f)
     checkMovement()
     checkTeleportAndImmediateChanges()
     checkLifecycle()

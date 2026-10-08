@@ -33,6 +33,81 @@ private class GeometryFixture(
             }
         },
         climbable = { point -> worldReads++; ladder(point) })
+
+    fun standing(cell: GridCell): RoomPoint? = roomStandingPoint(cell, solids.asSequence().filter { box ->
+        box.min.x < cell.x + 0.8 && box.max.x > cell.x + 0.2 &&
+            box.min.z < cell.z + 0.8 && box.max.z > cell.z + 0.2
+    }.map { it.max.y }, { route(it, it) }, ladder(RoomPoint(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)))
+}
+
+private fun checkSurfaceHeightsAndProgress() {
+    val shapes = GeometryFixture(listOf(
+        solid(0.0, -1.0, 0.0, 5.0, 0.0, 1.0),
+        solid(1.0, 0.0, 0.0, 2.0, 0.0625, 1.0), // Carpet.
+        solid(2.0, 0.0, 0.0, 3.0, 0.5, 1.0), // Bottom slab.
+        solid(3.0, 0.0, 0.0, 4.0, 0.5, 1.0),
+        solid(3.5, 0.5, 0.0, 4.0, 1.0, 1.0), // Stair's upper tread.
+        solid(4.0, 0.0, 0.0, 5.0, 1.0, 1.0),
+    ))
+    val cells = listOf(GridCell(0, 0, 0)) + (1..4).map { GridCell(it, 1, 0) }
+    val surfaces = cells.associateWith { requireNotNull(shapes.standing(it)) }
+    check(surfaces.values.map { it.y } == listOf(0.0, 0.0625, 0.5, 1.0, 1.0))
+    check(shapes.standing(GridCell(1, 0, 0)) == null) // Do not put feet inside the carpet.
+    val builder = RoomLiveGeometry(cells.first(), { it in cells }, { shapes.standing(it) != null },
+        { from, to -> shapes.route(surfaces.getValue(from), surfaces.getValue(to)) }, surfaces::getValue)
+    while (!builder.step(maxNanos = Long.MAX_VALUE)) { }
+    val complete = requireNotNull(builder.result)
+    check(complete.feet == surfaces && complete.cells == cells.toSet())
+    val route = requireNotNull(RoomNavigation.create(complete.cells, complete.adjacency,
+        mapOf("star" to cells.last()), standingFeet = complete.feet)?.plan(cells.first(), setOf("star")))
+    check(route.path == cells && route.cost == 500) // Four horizontal blocks and one actual vertical block.
+    check(route.path.zipWithNext().all { (a, b) -> shapes.route(complete.feet.getValue(a), complete.feet.getValue(b)) })
+
+    val seed = GridCell(0, 0, 0)
+    val diagonal = GridCell(1, 0, 1)
+    val open = GeometryFixture(listOf(solid(-1.0, -1.0, -1.0, 26.0, 0.0, 26.0)))
+    val growing = RoomLiveGeometry(seed, { it.x in 0..24 && it.y == 0 && it.z in 0..24 },
+        { open.standing(it) != null }, { a, b -> open.route(open.standing(a)!!, open.standing(b)!!) })
+    check(!growing.step(maxEdges = 26, maxNanos = Long.MAX_VALUE))
+    val partial = requireNotNull(growing.snapshot())
+    val firstRoute = requireNotNull(RoomNavigation.create(partial.cells, partial.adjacency,
+        mapOf("star" to diagonal), standingFeet = partial.feet)?.plan(seed, setOf("star")))
+    check(firstRoute.path == listOf(seed, diagonal) && firstRoute.cost == 141)
+    check(partial.cells.size < 625 && growing.result == null) // Guidance does not wait for the whole room.
+    val frozenSize = partial.cells.size
+    val frozenEdges = partial.adjacency.toMap()
+    while (!growing.step(maxNanos = Long.MAX_VALUE)) { }
+    check(partial.cells.size == frozenSize && partial.adjacency == frozenEdges && partial.feet.keys == partial.cells)
+    check(runCatching { (partial.feet as MutableMap).clear() }.isFailure)
+    check(growing.result?.cells?.size == 625)
+    check(nearbyRoomGeometry(partial.cells, GridCell(0, -1, 0)))
+    check(!nearbyRoomGeometry(partial.cells, GridCell(20, 0, 20)))
+    check(growing.observesBlock(GridCell(20, 0, 20)))
+
+    val distant = GridCell(20, 0, 20)
+    val focused = RoomLiveGeometry(seed, { it.x in 0..24 && it.y == 0 && it.z in 0..24 },
+        { open.standing(it) != null }, { a, b -> open.route(open.standing(a)!!, open.standing(b)!!) })
+    focused.prioritize(listOf(distant))
+    var early: RoomLiveGeometrySnapshot? = null
+    for (tick in 1..20) {
+        check(!focused.step(maxNanos = Long.MAX_VALUE))
+        early = requireNotNull(focused.snapshot())
+        if (distant in early.cells) break
+    }
+    val directedToTarget = requireNotNull(early)
+    check(distant in directedToTarget.cells && directedToTarget.cells.size < 200)
+    val focusedPath = requireNotNull(RoomNavigation.create(directedToTarget.cells, directedToTarget.adjacency,
+        mapOf("star" to distant), standingFeet = directedToTarget.feet)?.plan(seed, setOf("star")))
+    check(focusedPath.cost == 2820 && focusedPath.path.size == 21)
+    focused.prioritize(listOf(GridCell(24, 0, 0))) // A new target cannot lose pending flood work.
+    while (!focused.step(maxNanos = Long.MAX_VALUE)) { }
+    check(focused.result?.cells?.size == 625)
+
+    val corner = GeometryFixture(listOf(solid(-1.0, -1.0, -1.0, 3.0, 0.0, 3.0),
+        solid(0.95, 0.0, 0.25, 1.05, 2.0, 0.75)))
+    val a = RoomPoint(0.5, 0.0, 0.5)
+    val b = RoomPoint(1.5, 0.0, 1.5)
+    check(corner.route(a, a) && corner.route(b, b) && !corner.route(a, b))
 }
 
 private fun checkLiveFlood() {
@@ -106,6 +181,7 @@ private fun checkLiveFlood() {
 
 fun checkRoomWorldGeometry() {
     checkLiveFlood()
+    checkSurfaceHeightsAndProgress()
     val floor = solid(-4.0, -1.0, -4.0, 4.0, 0.0, 4.0)
     val start = RoomPoint(0.5, 0.0, 0.5)
     val end = RoomPoint(1.5, 0.0, 0.5)
