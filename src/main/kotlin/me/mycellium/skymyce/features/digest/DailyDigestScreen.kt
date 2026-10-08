@@ -1,7 +1,6 @@
 package me.mycellium.skymyce.features.digest
 
 import me.mycellium.skymyce.config.SettingsScreen
-import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.hud.themed
 import io.wispforest.owo.ui.component.DropdownComponent
 import net.minecraft.client.gui.screens.ChatScreen
@@ -91,8 +90,10 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (page == "news") child(newsFilters())
             if (page == "rng") {
                 child(row().apply {
-                    child(button(if (community) "Local history" else "§bLocal history", 96) { community = false; historyPage = 0; rebuild() })
-                    child(button(if (community) "§bCommunity" else "Community", 96) { community = true; historyPage = 0; rebuild() }
+                    child(button("Local history", 96) { if (community) { community = false; historyPage = 0; rebuildMenu(-1) } }
+                        .apply { navigation = true; selected = { !community } })
+                    child(button("Community", 96) { if (!community) { community = true; historyPage = 0; rebuildMenu(1) } }
+                        .apply { navigation = true; selected = { community } }
                         .tip("Opt-in community reports are unverified. Enable receiving in Daily Digest settings."))
                 })
                 child(row().apply {
@@ -121,6 +122,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     override fun tick() {
         super.tick()
+        if (menuClosing) return
         if (!::refresh.isInitialized) return
         val state = DailyDigest.view()
         if (state.revision != previous.revision) {
@@ -131,7 +133,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (page == null && old.cards.map { it.id } == state.cards.map { it.id }) {
                 state.cards.forEach { card -> if (old.cards.firstOrNull { it.id == card.id } != card) updateCard(card) }
             } else if (page == null || old.cards.firstOrNull { it.id == page } != state.cards.firstOrNull { it.id == page }) {
-                updateContent()
+                updateContent(animate = false)
             }
         }
         val busy = previous.cards.any { (page == null || it.id == page) && it.loading }
@@ -150,9 +152,9 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         }
     }
 
-    private fun updateContent() {
+    private fun updateContent(animate: Boolean = true) {
         if (!::results.isInitialized) return
-        contentChanged()
+        if (animate) contentChanged()
         cards.clear()
         clocks.clear()
         results.child(column().apply {
@@ -171,7 +173,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                 gap(layout.gap)
                 verticalAlignment(VerticalAlignment.TOP)
                 group.forEach { state ->
-                    val panel = card().apply { horizontalSizing(Sizing.fixed(layout.cardWidth)) }
+                    val panel = card("digest/overview/${state.id}").apply { horizontalSizing(Sizing.fixed(layout.cardWidth)) }
                     panel.cursorStyle(CursorStyle.HAND)
                     panel.mouseDown().subscribe { click, _ ->
                         if (click.button() == 0) { navigate(state.id); true } else false
@@ -186,7 +188,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     private fun updateCard(state: DigestCardState) {
         cards[state.id]?.let { panel ->
-            contentChanged()
             clocks.removeAll { it.first == state.id }
             panel.clearChildren()
             populateCard(panel, state)
@@ -269,7 +270,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         })
     }
 
-    private fun entryCard(entry: DigestEntry) = card().apply {
+    private fun entryCard(entry: DigestEntry) = card("digest/entry/${entry.id}").apply {
         child(label(digestText(entry.title, 300), tone(entry.tone)))
         if (entry.meta.isNotBlank()) child(label(digestText(entry.meta, 500), MenuTheme.MUTED))
         if (entry.summary.isNotBlank()) child(label(digestText(entry.summary, 1200)))
@@ -315,7 +316,9 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private fun newsFilters() = column().apply {
         listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").chunked(if (menuWidth < 280) 2 else 3).forEach { filters -> child(row().apply {
         filters.forEach { (value, title) ->
-            child(button("${if (newsFilter == value) "§b" else ""}$title", if (value.isEmpty()) 34 else 96) { newsFilter = value; historyPage = 0; rebuild() })
+            child(button(title, if (value.isEmpty()) 34 else 96) {
+                if (newsFilter != value) { newsFilter = value; historyPage = 0; rebuild() }
+            }.apply { navigation = true; selected = { newsFilter == value } })
         }
         }) }
     }
@@ -332,11 +335,11 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
 
     private fun settingsButton() = button("Settings", if (mergedHeader) 54 else 64) {
         returningFromSettings = true
-        navigateMenu(SettingsScreen(this@DailyDigestScreen, if (page == "rng") SettingsTab.SOCIAL else SettingsTab.GENERAL))
-    }.tip("Automatic opening and news in General; RNG privacy in Social & Sharing; global colors in Theme & Appearance")
+        navigateMenu(SettingsScreen.forFeature(this@DailyDigestScreen, "daily-digest"))
+    }.tip("Utils → Progress → Daily Digest: automatic opening, news and RNG privacy")
 
     private fun navigate(next: String?) { page = next; historyPage = 0; rebuildMenu(if (next == null) -1 else 1) }
-    private fun resetList() { historyPage = 0; updateContent() }
+    private fun resetList() { historyPage = 0; updateContent(animate = false) }
     private fun rebuild() { rebuildMenu() }
     private fun pageTitle() = when (page) { "news" -> "DAILY NEWS"; "global" -> "GLOBAL STATUS"; "dailies" -> "PERSONAL DAILIES"; "rng" -> "RNG ACTIVITY"; else -> "DAILY DIGEST" }
     private fun footerText(view: DigestView) = digestText(view.status.ifBlank { "Local time • cached first • Tab to navigate • Esc to close" }, 200)
@@ -365,8 +368,10 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(layout.gap) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(6); verticalAlignment(VerticalAlignment.CENTER) }
     private fun cardSurface(): Surface = MenuTheme.panel(true)
-    private fun card() = column().apply { padding(Insets.of(if (DailyDigestConfig.compact) 8 else 11)); gap(7); surface(cardSurface()) }
-    private fun empty(title: String, body: String) = card().apply { child(label(title, MenuTheme.MUTED)); child(label(body, MenuTheme.MUTED)) }
+    private fun card(key: String) = MenuRevealCard(key, Sizing.fill(), Sizing.content()).apply {
+        padding(Insets.of(if (DailyDigestConfig.compact) 8 else 11)); gap(7); surface(cardSurface())
+    }
+    private fun empty(title: String, body: String) = card("digest/empty/$page/$title").apply { child(label(title, MenuTheme.MUTED)); child(label(body, MenuTheme.MUTED)) }
     private fun button(text: String, width: Int, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply {
         sizing(Sizing.fixed(width), Sizing.fixed(20)); textShadow(false)
         themed()

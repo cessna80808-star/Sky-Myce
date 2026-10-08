@@ -67,19 +67,18 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     private val texture = MenuTexture()
     private val appearance = MotionValue(0.0)
     private val controls = MotionValue(1.0)
+    private val tooltip = MenuTooltipMotion()
     private var closing = false
 
     override fun init() {
-        closing = false
-        appearance.snap(0.0); appearance.animateTo(1.0, 180, MotionEasing.QUICK, ThemeConfig.animationMode)
-        controls.snap(1.0)
+        appearance.animateTo(if (closing) 0.0 else 1.0, if (closing) 120 else 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+        controls.snap(if (controlsVisible) 1.0 else 0.0)
         ui?.dispose()
         selectedWidget = null
         clickedWidget = null
         selectedAnchor = null
         snapPosition = false
         anchorSelect = false
-        controlsVisible = true
         screenWidgets = WidgetManager.widgets.filter { it.prepareEditor() }
         helpLines = hudEditorHelp(width)
 
@@ -107,7 +106,8 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun removed() {
-        appearance.cancel(); controls.cancel(); closing = false
+        appearance.cancel(); controls.cancel(); tooltip.clear(); closing = false
+        canvas.close()
         texture.close()
         WidgetManager.save()
         ui?.dispose()
@@ -135,7 +135,8 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         val alpha = appearance.sample().coerceIn(0.0, 1.0)
         output.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, (25 * alpha).toInt()))
         canvas.begin()
-        val graphics = MenuGraphics(canvas, mouseX, mouseY)
+        tooltip.beginFrame()
+        val graphics = MenuGraphics(canvas, mouseX, mouseY, width, height, tooltip)
         // Widgets and their stored positions use Minecraft GUI coordinates, exactly like the live HUD.
         // Keep that one coordinate space for outlines, pointer input and saved positions.
         graphics.layer(alpha = alpha) {
@@ -169,8 +170,12 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             helpLines.forEachIndexed { index, line -> graphics.text(MC.font, line, 8, height - 6 - (helpLines.size - index) * lineHeight,
                 MenuTheme.alpha(MenuTheme.MUTED), false) }
             super.extractRenderState(graphics, mouseX, mouseY, a)
-            if (controlsVisible && !closing) ui?.drawTooltip(graphics, mouseX, mouseY, a)
+            if (controlsVisible && !closing) {
+                canvas.group = "tooltip"
+                try { ui?.drawTooltip(graphics, mouseX, mouseY, a) } finally { canvas.group = null }
+            }
         }
+        if (closing) tooltip.clear() else tooltip.endFrame(canvas)
         val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision, canvas.dirtyRegion)
     }

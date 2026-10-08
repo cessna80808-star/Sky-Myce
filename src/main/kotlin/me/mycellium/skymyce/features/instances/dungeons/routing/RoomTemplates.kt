@@ -17,6 +17,10 @@ import kotlin.math.abs
 data class RoomGrid(val spacing: Int, val offsetX: Int, val offsetZ: Int, val originY: Int)
 data class RoomBounds(val min: GridCell, val max: GridCell) {
     fun contains(cell: GridCell) = cell.x in min.x..max.x && cell.y in min.y..max.y && cell.z in min.z..max.z
+
+    /** Player membership tolerates an ordinary jump; geometry and authored nodes still use strict [contains]. */
+    fun containsPlayer(cell: GridCell, airborne: Boolean) = cell.x in min.x..max.x && cell.z in min.z..max.z &&
+        cell.y.toLong() in min.y.toLong()..(max.y.toLong() + if (airborne) 2 else 0)
 }
 data class RoomLandmark(val cell: GridCell, val block: String)
 
@@ -30,6 +34,7 @@ class RoomTemplate internal constructor(
     val adjacency: Map<GridCell, Set<GridCell>>,
     val targets: Map<String, GridCell>,
     val healer: GridCell,
+    val targetCounts: Map<String, Int?>,
 )
 
 data class RoomInstanceKey(val templateId: String, val origin: GridCell, val quarterTurns: Int)
@@ -101,10 +106,10 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
     companion object {
         const val MAX_BYTES = 4 * 1024 * 1024
         private const val MAX_MATCH_READS = 8192
-        private val idPattern = Regex("[a-z0-9][a-z0-9_.-]{0,63}")
-        private val blockPattern = Regex("[a-z0-9_.-]+:[a-z0-9_./-]+")
+        internal val idPattern = Regex("[a-z0-9][a-z0-9_.-]{0,63}")
+        internal val blockPattern = Regex("[a-z0-9_.-]+:[a-z0-9_./-]+")
         private val integerPattern = Regex("-?(?:0|[1-9][0-9]*)")
-        private val floorNames = setOf("E") + (1..7).flatMap { listOf("F$it", "M$it") }
+        internal val floorNames = setOf("E") + (1..7).flatMap { listOf("F$it", "M$it") }
 
         fun parse(bytes: ByteArray): RoomTemplateCatalog {
             require(bytes.size <= MAX_BYTES) { "Room catalog exceeds 4 MiB" }
@@ -156,6 +161,7 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
                     require(totalCells <= 131_072) { "Room catalog has too many walkable cells" }
                     val walkable = walkableList.toSet()
                     val targets = LinkedHashMap<String, GridCell>()
+                    val targetCounts = LinkedHashMap<String, Int?>()
                     for (target in row.required("targets").arrayValue(12)) {
                         val targetRow = target.objectValue()
                         val targetId = targetRow.required("id").stringValue()
@@ -163,6 +169,9 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
                         require(targetId.matches(idPattern) && position in walkable && targets.putIfAbsent(targetId, position) == null) {
                             "Invalid or duplicate room target"
                         }
+                        val count = targetRow.get("count")?.integerValue()
+                        require(count == null || count in 1..128) { "Invalid starred spawn count" }
+                        targetCounts[targetId] = count
                     }
                     val healer = row.required("healer").cellValue()
                     require(healer in walkable) { "Healer endpoint is not walkable" }
@@ -182,7 +191,7 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
                     }
                     RoomTemplate(id, immutableSet(floors), bounds, Collections.unmodifiableList(landmarks),
                         immutableSet(walkable), Collections.unmodifiableMap(adjacency.mapValues { immutableSet(it.value) }),
-                        Collections.unmodifiableMap(targets), healer)
+                        Collections.unmodifiableMap(targets), healer, Collections.unmodifiableMap(targetCounts))
                 }
                 return RoomTemplateCatalog(grid, Collections.unmodifiableList(rooms))
             } catch (exception: Exception) {
@@ -244,7 +253,7 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
             return GridCell(cell[0].integerValue(), cell[1].integerValue(), cell[2].integerValue())
         }
         private fun <T> immutableSet(values: Collection<T>): Set<T> = Collections.unmodifiableSet(LinkedHashSet(values))
-        private fun nonCollinear(cells: List<GridCell>): Boolean {
+        internal fun nonCollinear(cells: List<GridCell>): Boolean {
             val a = cells[0]
             val b = cells.firstOrNull { it.x != a.x || it.z != a.z } ?: return false
             val dx = b.x - a.x
@@ -259,21 +268,27 @@ class RoomTemplateCatalog private constructor(val grid: RoomGrid, val rooms: Lis
 
 enum class RoomTargetState { UNKNOWN, ACTIVE, CLEARED }
 
-/** Mob disappearance never proves completion; confirmed deaths survive temporary unloads. */
-class RoomTargetStates(targetIds: Collection<String>) {
+/** Completion needs the authored group count; disappearance or unseen members never prove a clear. */
+class RoomTargetStates(targetCounts: Map<String, Int?>) {
     private enum class Observation { ACTIVE, UNAVAILABLE, KILLED }
-    private val observations = targetIds.associateWith { mutableMapOf<Int, Observation>() }
+    private val expectedCounts = targetCounts.toMap()
+    private val observations = expectedCounts.mapValues { mutableMapOf<Int, Observation>() }
     private val incomplete = mutableSetOf<String>()
 
     init {
-        require(targetIds.size <= 12 && observations.size == targetIds.size)
+        require(expectedCounts.size <= 12 && expectedCounts.values.all { it == null || it in 1..128 })
+    }
+
+    constructor(targetIds: Collection<String>) : this(targetIds.associateWith { null }) {
+        require(observations.size == targetIds.size)
     }
 
     fun state(targetId: String): RoomTargetState {
         val mobs = observations[targetId]?.values ?: return RoomTargetState.UNKNOWN
         return when {
             Observation.ACTIVE in mobs -> RoomTargetState.ACTIVE
-            targetId !in incomplete && mobs.isNotEmpty() && mobs.all { it == Observation.KILLED } -> RoomTargetState.CLEARED
+            targetId !in incomplete && mobs.size == expectedCounts[targetId] &&
+                mobs.all { it == Observation.KILLED } -> RoomTargetState.CLEARED
             else -> RoomTargetState.UNKNOWN
         }
     }

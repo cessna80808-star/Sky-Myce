@@ -46,6 +46,9 @@ internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..6
 internal fun relayActive(inWorld: Boolean, globalEnabled: Boolean, friendsActive: Boolean, connected: Boolean) =
     inWorld && (globalEnabled || friendsActive || connected)
 
+internal fun globalRelaySessionCurrent(identity: String, activeLease: String?, endpoint: String, account: UUID, lease: String?) =
+    activeLease != null && activeLease == lease && identity == "$endpoint|$account"
+
 /** Allocate a callback snapshot only when something actually expires. Completions may enqueue new requests. */
 internal fun expireRelayRequests(requests: MutableMap<String, Pair<Long, CompletableFuture<JsonObject?>>>, now: Long, cancelled: Boolean = true) {
     if (requests.isEmpty()) return
@@ -129,6 +132,7 @@ object DungeonFriendRelay {
     private val statsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val digestRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val cosmeticsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
+    private val globalRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     var cosmeticsAvailable = false
         private set
     var cosmeticsNamesAvailable = false
@@ -178,7 +182,8 @@ object DungeonFriendRelay {
     fun diagnostics(): Map<String, Long> = mapOf("relay.socket" to if (socket != null) 1L else 0L,
         "relay.connecting" to if (connecting) 1L else 0L, "relay.deliveries" to deliveries.size.toLong(),
         "relay.statsRequests" to statsRequests.size.toLong(), "relay.digestRequests" to digestRequests.size.toLong(),
-        "relay.cosmeticsRequests" to cosmeticsRequests.size.toLong(), "relay.partyPolicies" to partyPolicies.size.toLong())
+        "relay.cosmeticsRequests" to cosmeticsRequests.size.toLong(), "relay.globalRequests" to globalRequests.size.toLong(),
+        "relay.partyPolicies" to partyPolicies.size.toLong())
 
     fun tick(active: Boolean) {
         val url = DungeonFriendsSettings.relayUrl
@@ -211,6 +216,7 @@ object DungeonFriendRelay {
         expireRelayRequests(statsRequests, now, cancelled = false)
         expireRelayRequests(digestRequests, now)
         expireRelayRequests(cosmeticsRequests, now)
+        expireRelayRequests(globalRequests, now, cancelled = false)
         if ((connecting || socket != null) && now >= deadline) failed("Relay timed out; reconnecting")
         if (connected && now >= nextPing) { packet("ping"); nextPing = now + 45000 }
         if (socket != null || connecting || now < retry.nextAttempt) return
@@ -343,12 +349,9 @@ object DungeonFriendRelay {
                                     }
                                     "irc_result" -> {
                                         check(connected)
-                                        if (json.has("error")) {
-                                            if (json.get("scope")?.asString == "global") {
-                                                if (currentGlobalSession()) RelayMessages.globalError(json.get("error")?.asString)
-                                            }
-                                            else RelayMessages.ircError()
-                                        }
+                                        if (json.get("scope")?.asString == "global") {
+                                            globalRequests.remove(json.get("id")?.asString)?.second?.complete(json)
+                                        } else if (json.has("error")) RelayMessages.ircError()
                                     }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
@@ -465,15 +468,20 @@ object DungeonFriendRelay {
         return true
     }
 
-    fun globalPacket(type: String, fields: Map<String, Any>): Boolean {
+    fun globalPacket(type: String, fields: Map<String, Any>, result: (String?) -> Unit): Boolean {
         if (!connected || !globalChatAvailable || !LoaderClient.onlineAllowed || !currentGlobalSession() ||
-            type !in setOf("irc_send", "irc_subscribe")) return false
-        packet(fields + mapOf("type" to type, "scope" to "global", "id" to UUID.randomUUID().toString().replace("-", "")))
+            globalRequests.size >= 8 || type !in setOf("irc_send", "irc_subscribe")) return false
+        val id = UUID.randomUUID().toString().replace("-", "")
+        val future = CompletableFuture<JsonObject?>()
+        globalRequests[id] = DungeonFriends.now() + 12000 to future
+        future.thenAccept { response -> result(if (response == null) "receipt_timeout" else response.get("error")?.asString) }
+        packet(fields + mapOf("type" to type, "scope" to "global", "id" to id))
         return true
     }
 
-    private fun currentGlobalSession() = identity == "${DungeonFriendsSettings.relayUrl}|${MC.instance.user.profileId}" &&
-        activeLease == LoaderClient.authorization.lease
+    internal fun currentGlobalSession() = connected && LoaderClient.onlineAllowed &&
+        globalRelaySessionCurrent(identity, activeLease, DungeonFriendsSettings.relayUrl, MC.instance.user.profileId,
+            LoaderClient.authorization.lease)
 
     fun sendUserMessage(name: String, text: String, received: () -> Unit, failed: (String) -> Unit): Boolean {
         if (!connected || !userMessagesAvailable) return false
@@ -655,6 +663,10 @@ object DungeonFriendRelay {
         me.mycellium.skymyce.features.social.CosmeticsClient.closed()
         cosmeticsRequests.values.forEach { it.second.complete(null) }
         cosmeticsRequests.clear()
+        val pendingGlobal = globalRequests.values.toList()
+        globalRequests.clear()
+        val globalFailure = JsonObject().apply { addProperty("error", "connection_lost") }
+        pendingGlobal.forEach { it.second.complete(globalFailure) }
         onDigestClosed?.invoke()
         connecting = false
         authenticating = false

@@ -2,6 +2,7 @@ package me.mycellium.skymyce.ui
 
 import io.wispforest.owo.ui.component.TextBoxComponent
 import io.wispforest.owo.ui.core.Sizing
+import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.mixin.MenuEditBoxAccessor
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -25,6 +26,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
     private var lastValue = ""
     private var caretEpoch = System.nanoTime()
     private val focusMotion = MotionValue(0.0)
+    private val hoverMotion = MotionValue(0.0)
 
     init { setTextShadow(false) }
 
@@ -102,13 +104,18 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
         if (!isVisible) return
         updateScroll()
         focusMotion.animateTo(if (isFocused) 1.0 else 0.0, 120, MotionEasing.QUICK,
-            me.mycellium.skymyce.config.misc.ThemeConfig.animationMode)
+            ThemeConfig.animationMode)
+        hoverMotion.animateTo(if (active && isMouseOver(mouseX.toDouble(), mouseY.toDouble())) 1.0 else 0.0,
+            110, MotionEasing.QUICK, ThemeConfig.animationMode)
         val focus = focusMotion.sample().coerceIn(0.0, 1.0)
+        val hover = hoverMotion.sample().coerceIn(0.0, 1.0)
         if (isBordered) {
             val graphics = g as MenuGraphics
             MenuTheme.glow(graphics, x, y, width, height, focus)
-            MenuTheme.box(graphics, x, y, width, height, MenuTheme.CARD,
-                MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (focus * 100).toInt()))
+            MenuTheme.box(graphics, x, y, width, height,
+                MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (focus * 7 + hover * 4).toInt()),
+                MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (maxOf(focus, hover * .35) * 100).toInt()))
+            MenuTheme.sheen(graphics, x, y, width, height, .35 + focus * .4 + hover * .25)
             if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
         }
         val left = origin().roundToInt()

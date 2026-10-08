@@ -73,12 +73,12 @@ object DungeonWinOverlay : SkyMyceModule() {
     private fun animateReveal() {
         val mode = ThemeConfig.animationMode
         // Reduced motion keeps the rank at its final position and only fades the run details.
-        val rankMode = if (mode == GuiMotion.FULL) mode else GuiMotion.OFF
+        val rankMode = if (mode.profile.pageOffset > 0.0) mode else GuiMotion.OFF
         rankTravel.animateTo(1.0, 1000, MotionEasing.SMOOTH, rankMode)
         rankScale.animateTo(1.0, 650, MotionEasing.SETTLE, rankMode)
         statReveals.forEachIndexed { index, reveal ->
             reveal.animateTo(1.0, 200, MotionEasing.QUICK, mode,
-                delayMillis = if (mode == GuiMotion.FULL) 650L + index * 50 else 0)
+                delayMillis = if (mode.profile.pageOffset > 0.0) 650L + index * mode.profile.staggerMillis else 0)
         }
     }
 

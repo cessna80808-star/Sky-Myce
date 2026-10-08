@@ -56,7 +56,7 @@ object RelayMessages {
     private val ircSeen = linkedSetOf<String>()
     private var ircNextSend = 0L
     private val global = GlobalChatState()
-    private var globalSubscription: Boolean? = null
+    private val globalSubscription = GlobalChatSubscription()
     private var globalAccount: java.util.UUID? = null
     private var globalNextSend = 0L
     private val conversations = RelayConversation()
@@ -91,7 +91,7 @@ object RelayMessages {
             if (conversations.channelCommand(command)) chatClosed()
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
-            conversations.clear(); nextSend = 0; irc.selected = false; ircSeen.clear(); globalSubscription = null
+            conversations.clear(); nextSend = 0; irc.selected = false; ircSeen.clear(); globalSubscription.reset()
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
@@ -167,15 +167,35 @@ object RelayMessages {
             globalAccount = account
             global.account(account.toString())
             globalNextSend = 0L
+            globalSubscription.reset()
         }
         if (!DungeonFriendRelay.connected || !DungeonFriendRelay.globalChatAvailable) return
         val enabled = GlobalChatConfig.enabled
-        if (globalSubscription != enabled && DungeonFriendRelay.globalPacket("irc_subscribe", mapOf("enabled" to enabled))) {
-            globalSubscription = enabled
+        val revision = globalSubscription.take(enabled, System.nanoTime()) ?: return
+        if (DungeonFriendRelay.globalPacket("irc_subscribe", mapOf("enabled" to enabled), currentGlobalResult { reason ->
+            if (globalSubscription.complete(revision, reason, System.nanoTime())) globalError(reason)
+        })) {
+            globalSubscription.queued(revision, enabled)
         }
     }
 
-    fun globalReady() { globalSubscription = null; globalTick() }
+    fun globalReady() {
+        globalSubscription.reset()
+        globalTick()
+    }
+
+    /** Late receipts cannot affect another account, endpoint or renewed authorization. */
+    private fun currentGlobalResult(action: (String?) -> Unit): (String?) -> Unit {
+        val client = MC.instance
+        val account = client.user.profileId
+        val lease = LoaderClient.authorization.lease
+        val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
+        return { reason ->
+            if (client.user.profileId == account && LoaderClient.authorization.lease == lease &&
+                me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl == endpoint &&
+                LoaderClient.onlineAllowed && client.player != null && client.connection != null) action(reason)
+        }
+    }
 
     fun selectGlobal() {
         session()
@@ -211,23 +231,25 @@ object RelayMessages {
         if (!DungeonFriendRelay.globalChatAvailable) { error("This relay does not support global chat yet."); return }
         val now = System.nanoTime()
         if (now < globalNextSend) { error("Wait a moment before sending another global message."); return }
-        if (DungeonFriendRelay.globalPacket("irc_send", mapOf("text" to text))) globalNextSend = now + 500_000_000
+        globalTick() // Queue opt-in first when the setting changed just before this command.
+        if (!globalSubscription.enabled) { globalError("not_subscribed"); return }
+        if (DungeonFriendRelay.globalPacket("irc_send", mapOf("text" to text), currentGlobalResult { reason ->
+            if (reason != null) {
+                if (reason == "not_subscribed") globalSubscription.reset()
+                globalError(reason)
+            }
+        })) globalNextSend = now + 500_000_000
         else globalError(null)
         // The authoritative broadcast includes the sender; no local echo or automatic resend.
     }
 
-    fun globalError(reason: String?) = error(when (reason) {
-        "rate_limited" -> "Global chat rate limit reached. Wait briefly and retry."
-        "duplicate_message", "duplicate" -> "That global message was already sent."
-        "invalid_message" -> "Global chat could not accept that message."
-        "global_chat_disabled", "irc_disabled" -> "Global Discord chat is not configured on this relay."
-        else -> "Global chat could not deliver the message. Nothing was sent to normal chat."
-    })
+    fun globalError(reason: String?) = error(globalDeliveryError(reason))
 
     fun receiveGlobal(json: com.google.gson.JsonObject, deliveredTo: String) {
         val client = MC.instance
         val delivery = global.receive(json, deliveredTo, client.user.profileId.toString(), GlobalChatConfig.enabled,
-            LoaderClient.onlineAllowed && client.player != null && client.connection != null, GlobalChatConfig.mentionSounds) ?: return
+            DungeonFriendRelay.currentGlobalSession() && client.player != null && client.connection != null,
+            GlobalChatConfig.mentionSounds) ?: return
         val message = delivery.message
         message.reply?.let { reply ->
             val preview = reply.text?.let { splitGlobalChatText(it.replace('\n', ' '), 96, 1).firstOrNull() }

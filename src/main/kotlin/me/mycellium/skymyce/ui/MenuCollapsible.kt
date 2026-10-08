@@ -25,7 +25,8 @@ class MenuCollapsible(horizontal: Sizing, vertical: Sizing, title: Component, ex
     private var paintedX = 0.0
     private var paintedY = 0.0
 
-    private val body = object : FlowLayout(Sizing.content(), Sizing.fixed(0), Algorithm.VERTICAL) {
+    // Already-expanded sections contribute their natural height to the first layout and scroll bounds.
+    private val body = object : FlowLayout(Sizing.content(), if (expanded) Sizing.content() else Sizing.fixed(0), Algorithm.VERTICAL) {
         override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
             val g = graphics as MenuGraphics
             val oldGroup = g.canvas.group

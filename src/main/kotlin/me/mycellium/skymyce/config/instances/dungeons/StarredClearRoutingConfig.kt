@@ -6,7 +6,7 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 object StarredClearRoutingConfig : CategoryKt("Starred Clear Routing") {
     val enabled by boolean(true) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Route through known starred spawns to the healer door. Requires dungeon-routing-rooms.json; /sm route status shows coverage.")
+        description = TranslatableValue.literal("Route through measured starred spawns to the healer door. /sm route status shows coverage; /sm route record captures a room template.")
     }
     val showTargets by boolean(true) { name = TranslatableValue.literal("Show Targets") }
     val showRoute by boolean(true) { name = TranslatableValue.literal("Show Route") }

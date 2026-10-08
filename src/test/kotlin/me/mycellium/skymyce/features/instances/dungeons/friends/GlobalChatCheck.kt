@@ -1,6 +1,8 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import com.google.gson.JsonObject
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
 
 private fun globalPacket(number: Int = 1, text: String = "Hello", mention: Boolean = false): JsonObject = JsonObject().apply {
     addProperty("type", "irc_message")
@@ -47,6 +49,48 @@ fun checkGlobalChat() {
     check(globalMessageError("x".repeat(1024)) == null && globalMessageError("x".repeat(1025)) != null)
     check(globalMessageError("normal conversation about politics or profanity") == null)
     check(globalMessageError("invalid\nMinecraft input") != null)
+    check("already sent" in globalDeliveryError("duplicate_text"))
+    check("not configured" in globalDeliveryError("not_configured"))
+    for (reason in listOf("receipt_timeout", "connection_lost")) check("unconfirmed" in globalDeliveryError(reason))
+
+    val account = UUID.randomUUID()
+    val endpoint = "wss://relay.example/websocket"
+    val identity = "$endpoint|$account"
+    check(globalRelaySessionCurrent(identity, "lease-a", endpoint, account, "lease-a"))
+    check(!globalRelaySessionCurrent(identity, "lease-a", endpoint, account, "lease-b"))
+    check(!globalRelaySessionCurrent(identity, "lease-a", "wss://other.example/websocket", account, "lease-a"))
+    check(!globalRelaySessionCurrent(identity, "lease-a", endpoint, UUID.randomUUID(), "lease-a"))
+    check(!globalRelaySessionCurrent(identity, null, endpoint, account, null))
+
+    val subscription = GlobalChatSubscription()
+    val firstSubscribe = requireNotNull(subscription.take(true, 0L))
+    subscription.queued(firstSubscribe, true)
+    check(subscription.enabled && subscription.take(true, 1L) == null)
+    check(subscription.complete(firstSubscribe, "temporarily_unavailable", 2L))
+    check(!subscription.enabled && subscription.take(true, 3L) == null)
+    val unsubscribe = requireNotNull(subscription.take(false, 3L)) // Opt-out bypasses a failed opt-in's backoff.
+    subscription.queued(unsubscribe, false)
+    check(!subscription.complete(firstSubscribe, "not_authorized", 4L)) // Old receipt cannot undo the new preference.
+    check(!subscription.enabled && subscription.take(false, 5L) == null)
+    val subscribeAgain = requireNotNull(subscription.take(true, 6L))
+    subscription.queued(subscribeAgain, true)
+    check(subscription.complete(subscribeAgain, "not_authorized", 7L))
+    val retry = requireNotNull(subscription.take(true, 5_000_000_008L))
+    subscription.queued(retry, true)
+    check(!subscription.complete(retry, "not_authorized", 5_000_000_009L)) // One notice for a continuing failure.
+    subscription.reset() // Reconnect invalidates receipts and subscribes again, with no automatic message resend.
+    check(!subscription.enabled && !subscription.complete(retry, null, 6_000_000_000L))
+    check(subscription.take(true, 6_000_000_000L) != null)
+
+    val receipt = CompletableFuture<JsonObject?>()
+    var completions = 0
+    receipt.thenAccept { check(it == null); completions++ }
+    val requests = mutableMapOf("global-send" to (12_000L to receipt))
+    expireRelayRequests(requests, 11_999L, cancelled = false)
+    check(!receipt.isDone && requests.size == 1)
+    expireRelayRequests(requests, 12_000L, cancelled = false)
+    expireRelayRequests(requests, 12_001L, cancelled = false)
+    check(receipt.isDone && requests.isEmpty() && completions == 1)
 
     val state = GlobalChatState()
     fun receive(value: JsonObject, enabled: Boolean = true, authorized: Boolean = true, sound: Boolean = true,
@@ -102,7 +146,7 @@ fun checkGlobalChat() {
     check(mode.command("chat guild") && !mode.selected)
     check(!mode.command("chat irc") && mode.selected && !mode.global)
     check(mode.command("chat p") && !mode.selected)
-    println("Global chat checks passed: strict public payloads, replies, personalized mention pings, account boundaries, replay/toggles, bounded Unicode wrapping and safe clickable links")
+    println("Global chat checks passed: strict public payloads, replies, mention pings, lease/account boundaries, subscription recovery, receipt expiry, replay/toggles, Unicode wrapping and safe links")
 }
 
 fun main() = checkGlobalChat()

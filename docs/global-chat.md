@@ -10,6 +10,8 @@ The existing `irc_subscribe`, `irc_send`, `irc_message` and `irc_result` frames 
 
 Minecraft names, UUIDs and Discord linkage come from the current verified installation session. Clients cannot choose their sender identity. Discord messages arrive through the User Bot's existing signed bridge at `/discord/bridge?room=global-chat`. The bridge accepts only the configured channel. Discord authors follow that channel's ordinary server permissions; they do not need a Minecraft license to post in Discord.
 
+The client accepts global messages only from its current account, relay endpoint and exact authorization lease. The relay checks lease expiration both before and after awaiting the account authority; a lease expiring during that check cannot send or receive a message. Delivery deadlines are also checked after awaited authorization, including before queued Discord posting. The User Bot requires the global-chat capability in authenticated readiness and accepts delivery results only for the global scope.
+
 Normal Minecraft frames contain display identity, message text, timestamp, source, an internal delivery ID, optional reply context and a recipient-specific `mention` flag. Other participants' raw Discord IDs, Minecraft UUIDs, license IDs, devices and session credentials are not included. Private bot/backend frames retain the identifiers needed for correlation. Messages render as literal chat components with the Sky-Hawk palette. Only safe HTTP(S) links become clickable; no attachments are downloaded.
 
 Discord text, embed titles/descriptions/authors/fields/footers/URLs and attachment links become a bounded text representation. Replies retain their relationship and display context, including replies to Minecraft-originated posts. Discord mention IDs map to the existing account association; Minecraft `@Name` mentions use the verified recipient name. The client plays one subtle sound per unique mentioned message, never for ordinary messages, disabled chat or duplicate delivery.
@@ -19,6 +21,8 @@ When Discord adds link previews after a cached message's initial delivery, its f
 ## Spam and failures
 
 The backend applies account-wide quotas across sockets and relay rooms, a global burst quota, a short minimum interval and repeated-text suppression. One accepted message's later embed continuation consumes the global quota without charging its sender a second message credit. It performs no profanity, political, keyword or other content classification. Limits result in temporary errors/cooldowns, never automatic license punishment.
+
+The Minecraft client tracks at most eight outstanding global send/subscription requests. A missing relay receipt after 12 seconds or a lost connection marks sending as **unconfirmed** and advises checking chat before retrying; it never resends automatically or falls through to Hypixel chat. These receipts confirm backend acceptance, not completed Discord delivery. Failed subscriptions retry after five seconds, suppress repeated notices, and honor local opt-out immediately; stale receipts cannot undo a later preference or affect a different account, endpoint or renewed lease.
 
 Minecraft messages are limited to 1,024 UTF-16 units; normalized Discord messages to 4,096. Minecraft presentation splits long text into bounded lines without separating surrogate pairs, with a visible truncation indicator when necessary. Unsafe formatting/control data is handled as a display-safety boundary, not a word blacklist.
 
@@ -59,6 +63,8 @@ The backend handlers are deployed on Worker version
 `b1410753-f299-4902-ad2e-4e9601ee84c0`. The separate User Bot Gateway service
 still needs its runtime rollout; live Minecraft/Discord chat remains unverified.
 
+The local changes described here have not been deployed by this implementation task. Publish compatible client/Worker updates and restart the existing User Bot together through the normal release process before verifying live delivery.
+
 ```powershell
 # Java 25, from the repository root
 .\gradlew.bat --offline globalChatCheck
@@ -73,6 +79,6 @@ npm run check
 npm test
 ```
 
-Local tests use synthetic identities, local Worker storage and mocked Discord delivery. They cover global cross-room delivery, sender authority, opt-in, revocation/expiry, hibernation/restart, spam, duplicate deliveries, outage receipts, replies, mentions, rich content and client validation. They send no real Discord messages. They do not establish a live rollout.
+Local tests use synthetic identities, local Worker storage and mocked Discord delivery. They cover global cross-room delivery, sender authority, opt-in, revocation/expiry (including expiry during authority RPCs), hibernation/restart, spam, duplicate deliveries, outage receipts, capability/scope binding, queued delivery deadlines, subscription recovery, replies, mentions, rich content and client validation. They send no real Discord messages. They do not establish a live rollout.
 
 Deployment and starting the Gateway service are separate operator actions. After rolling out the reviewed Worker and compatible client, configure and start the existing User Bot with the same dedicated channel. Verify two authorized Minecraft users in different locations, Discord replies/mentions/embeds, disabled chat and revoked access before treating live chat as verified. No new Discord application, OAuth credential, account enrollment or server permission rewrite is required.

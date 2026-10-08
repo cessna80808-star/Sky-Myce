@@ -61,6 +61,7 @@ object SkyMyce : ClientModInitializer {
         config = me.mycellium.skymyce.config.loadSkyMyceConfig()
         ThemeConfig.migrateDigestTheme()
         config.save()
+        me.mycellium.skymyce.ui.MenuShortcuts.initialize()
 
         // Fabric key mappings must register before GameOptions exists. Execution is gated below.
         initializeModules()

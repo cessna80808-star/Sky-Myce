@@ -1,6 +1,7 @@
 package me.mycellium.skymyce.features.instances.dungeons.routing
 
 import java.util.Collections
+import java.util.PriorityQueue
 import kotlin.math.abs
 
 data class GridCell(val x: Int, val y: Int, val z: Int)
@@ -46,9 +47,34 @@ class RoomTransform(val origin: GridCell, val quarterTurns: Int) {
     }
 }
 
-/** Cost counts validated movement edges, including the final segment to the healer. */
+/** Cost counts horizontal and vertical movement blocks, including the final healer segment. */
 @ConsistentCopyVisibility
 data class RoomRoute internal constructor(val targetOrder: List<String>, val path: List<GridCell>, val cost: Int)
+
+/** Selects a nearby route suffix only through a caller-validated connector, before the next target. */
+fun RoomRoute.liveStart(
+    previousCursor: Int,
+    targets: Map<String, GridCell>,
+    canConnect: (GridCell) -> Boolean,
+    distanceSquared: (GridCell) -> Double
+): Int? {
+    if (path.isEmpty()) return null
+    val end = if (targetOrder.isEmpty()) path.lastIndex else path.indexOf(targets[targetOrder.first()] ?: return null)
+    if (end < 0) return null
+    val cursor = previousCursor.coerceIn(0, end)
+    var best = -1
+    var nearest = Double.POSITIVE_INFINITY
+    for (index in maxOf(0, cursor - 4)..minOf(end, cursor + 8)) {
+        val cell = path[index]
+        val distance = distanceSquared(cell)
+        if (distance.isFinite() && distance >= 0 &&
+            (distance < nearest || distance == nearest && abs(index - cursor) < abs(best - cursor)) && canConnect(cell)) {
+            best = index
+            nearest = distance
+        }
+    }
+    return best.takeIf { it >= 0 }
+}
 
 /**
  * Immutable room-local graph. The caller supplies every safe directed connection after
@@ -63,6 +89,7 @@ class RoomNavigation private constructor(
     private val adjacent: Array<IntArray>
 ) {
     private class Search(val distances: IntArray, val parents: IntArray)
+    private data class SearchNode(val node: Int, val distance: Int)
     private val targetNodes = targets.mapValues { indices.getValue(it.value) }
     private val healerNode = indices.getValue(healer)
     private val fixedSearches = (targetNodes.values + healerNode).distinct().associateWith(::search)
@@ -109,7 +136,7 @@ class RoomNavigation private constructor(
     /**
      * Reuses endpoint searches, then searches from this actual player node once per replan.
      * Cleared IDs may disappear from previousOrder. A still valid order changes only when
-     * the optimal total route saves strictly more than minimumImprovement movement edges.
+     * the optimal total route saves strictly more than minimumImprovement movement blocks.
      */
     fun plan(
         start: GridCell,
@@ -127,7 +154,8 @@ class RoomNavigation private constructor(
             ?.filter(remaining::contains)?.takeIf { it.size == ids.size }
         val previousCost = previous?.let { routeCost(it, fromStart) }
         val optimalCost = routeCost(optimal, fromStart) ?: return null
-        val order = if (previous != null && previousCost != null && previousCost - optimalCost <= minimumImprovement) previous else optimal
+        val retainPrevious = previous != null && previousCost != null && previousCost - optimalCost <= minimumImprovement
+        val order = if (retainPrevious) previous!! else optimal
         val path = ArrayList<GridCell>()
         var source = startNode
         var searched = fromStart
@@ -137,7 +165,7 @@ class RoomNavigation private constructor(
             source = destination
             searched = fixedSearches.getValue(destination)
         }
-        return RoomRoute(immutable(order), immutable(path), path.size - 1)
+        return RoomRoute(immutable(order), immutable(path), if (retainPrevious) previousCost!! else optimalCost)
     }
 
     private fun optimalOrder(ids: List<String>, fromStart: Search): List<String>? {
@@ -203,18 +231,21 @@ class RoomNavigation private constructor(
     private fun search(start: Int): Search {
         val distances = IntArray(cells.size) { -1 }
         val parents = IntArray(cells.size) { -1 }
-        val queue = IntArray(cells.size)
+        val queue = PriorityQueue(compareBy<SearchNode>({ it.distance }, { it.node }))
         distances[start] = 0
-        queue[0] = start
-        var head = 0
-        var tail = 1
-        while (head < tail) {
-            val current = queue[head++]
+        queue.add(SearchNode(start, 0))
+        while (queue.isNotEmpty()) {
+            val (current, distance) = queue.remove()
+            if (distance != distances[current]) continue
             for (next in adjacent[current]) {
-                if (distances[next] >= 0) continue
-                distances[next] = distances[current] + 1
+                // A step/jump has horizontal and vertical segments; do not favor stairs by edge count.
+                val from = cells[current]
+                val to = cells[next]
+                val candidate = distance + abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
+                if (distances[next] >= 0 && candidate >= distances[next]) continue
+                distances[next] = candidate
                 parents[next] = current
-                queue[tail++] = next
+                queue.add(SearchNode(next, candidate))
             }
         }
         return Search(distances, parents)

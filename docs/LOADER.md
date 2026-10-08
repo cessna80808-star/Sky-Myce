@@ -226,7 +226,13 @@ loader manually; the bootstrap-only authenticated upgrade path remains available
 ## Device privacy and local key storage
 
 Identity is shared by Minecraft instances belonging to the same OS user in
-`~/.sky-myce/device-v1/`. It contains:
+`~/.sky-myce/device-v1/`. The home directory comes from Windows `USERPROFILE`
+or POSIX `HOME`, with JVM `user.home` as a fallback. A launcher JVM override
+therefore does not create another installation for the same OS user. If an
+existing identity is found only in the previous JVM home, it and its lease are
+copied atomically under file locks; the original is preserved. Conflicting
+identities stop authorization for manual review rather than replacing keys.
+It contains:
 
 - A random installation UUID and an Ed25519 keypair.
 - A persistent opaque device reference, created once and retained outside
@@ -238,6 +244,12 @@ Identity is shared by Minecraft instances belonging to the same OS user in
   Linux uses a readable DMI UUID, falling back to the
   persistent OS machine ID; macOS uses `IOPlatformUUID`. The selected source
   is retained so a newly readable source never changes an existing identity.
+- The enrolled UUID encoding and a comparison baseline. Compact and hyphenated
+  UUIDs, letter case, surrounding braces and ordinary whitespace normalize to
+  the same enrolled value. Standard existing v1 hashes remain compatible.
+  A verified historical lease can recover an older encoding or missing source,
+  even after expiry, but cannot authorize a launch. The baseline never replaces
+  a fresh hardware read and is never changed to accept different hardware.
 - The last signed lease, retained as a boundary/audit aid, **never** used to
   authorize an offline restart.
 
@@ -247,6 +259,17 @@ in authorization. The private key
 is protected with Windows DPAPI `CurrentUser`, with a product-specific entropy
 label and an owner-only ACL. On POSIX it is stored under a `0700` directory in
 a `0600` file. Creation is serialized with an OS file lock.
+Writes force file contents before atomic replacement; POSIX directory metadata
+is also forced where supported. Hardware diagnostics name the source, encoding,
+availability and baseline match without recording raw IDs or full hashes.
+
+Linux DMI probes accept both standard sysfs locations. Machine-ID probes accept
+`/etc/machine-id` and `/var/lib/dbus/machine-id` while retaining the enrolled
+source label. These providers do not depend on a distribution name, boot ID,
+process, network interface or hardware enumeration order. A missing or malformed
+selected identifier stops authorization; it never falls back to a cached hash.
+For reproducible native restart and manual reboot checks, see
+[HWID stability verification](hwid-stability.md).
 
 Copying the Minecraft instance does not copy this identity. Copying Windows
 key ciphertext to another machine/user does not make DPAPI decrypt it. A user

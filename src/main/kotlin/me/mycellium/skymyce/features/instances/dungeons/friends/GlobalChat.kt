@@ -32,6 +32,18 @@ internal fun globalMessageError(text: String): String? = when {
     else -> null
 }
 
+internal fun globalDeliveryError(reason: String?): String = when (reason) {
+    "rate_limited" -> "Global chat rate limit reached. Wait briefly and retry."
+    "duplicate_message", "duplicate_text", "duplicate" -> "That global message was already sent."
+    "invalid_message" -> "Global chat could not accept that message."
+    "not_configured", "global_chat_disabled", "irc_disabled" -> "Global Discord chat is not configured on this relay."
+    "not_authorized" -> "Global chat authorization failed. Reconnect and try again."
+    "not_subscribed" -> "Global chat is reconnecting. Wait a moment and retry."
+    "temporarily_unavailable" -> "Global chat is temporarily unavailable. Wait briefly and retry."
+    "receipt_timeout", "connection_lost" -> "Global message delivery is unconfirmed. Check chat before retrying; it was not resent automatically."
+    else -> "Global chat could not deliver the message. Nothing was sent to normal chat."
+}
+
 /** Reads only public presentation fields. Private account/message metadata never becomes chat text. */
 internal fun parseGlobalChat(json: JsonObject): GlobalChatMessage? = runCatching {
     fun string(key: String, value: JsonObject = json): String {
@@ -83,6 +95,34 @@ internal class GlobalChatState {
         while (seen.size > 512) seen.remove(seen.first())
         if (!enabled) return null
         return GlobalChatDelivery(message, message.mention && mentionSounds)
+    }
+}
+
+/** Changes opt-in immediately; failed receipts retry gently and cannot undo a later preference. */
+internal class GlobalChatSubscription {
+    private var desired: Boolean? = null
+    private var queued: Boolean? = null
+    private var revision = 0L
+    private var retryAfter = 0L
+    private var lastError: String? = null
+    val enabled get() = queued == true
+    fun reset() {
+        desired = null; queued = null; revision++; retryAfter = 0L; lastError = null
+    }
+    fun take(enabled: Boolean, now: Long): Long? {
+        if (desired != enabled) { desired = enabled; retryAfter = 0L; lastError = null }
+        if (queued == enabled || now < retryAfter) return null
+        return ++revision
+    }
+    fun queued(token: Long, enabled: Boolean) { if (token == revision) queued = enabled }
+    fun complete(token: Long, reason: String?, now: Long): Boolean {
+        if (token != revision) return false
+        if (reason == null) { lastError = null; return false }
+        queued = null
+        retryAfter = now + 5_000_000_000L
+        val notify = desired == true && reason != lastError && reason !in setOf("receipt_timeout", "connection_lost")
+        lastError = reason
+        return notify
     }
 }
 

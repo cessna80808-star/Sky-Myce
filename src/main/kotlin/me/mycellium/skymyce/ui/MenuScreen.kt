@@ -30,6 +30,9 @@ import org.lwjgl.glfw.GLFW
 /** Menu density is independent of Minecraft's GUI scale. */
 abstract class MenuScreen(title: Component, private val page: MenuPage? = null) : BaseOwoScreen<FlowLayout>(title) {
     protected open val modal = false
+    protected open val home = false
+    internal open val canonicalFeatureId get() = page?.featureId
+    protected open val menuCategory: MenuCategory? get() = canonicalFeatureId?.let { id -> MenuCatalog.definitions.firstOrNull { it.id == id }?.category } ?: MenuCategory.SETTINGS
     protected val menuLayout get() = MenuLayout.fit(width, height).let {
         if (modal) it.copy(width = minOf(it.width, 560), height = minOf(it.height, 280), sidebar = 0) else it
     }
@@ -40,20 +43,30 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open val menuParent: net.minecraft.client.gui.screens.Screen? get() = null
     private var builtLayout: MenuLayout? = null
     private var builtTheme = -1L
-    private val canvas = MenuCanvas()
-    private val texture = MenuTexture()
+    private var canvas = MenuCanvas()
+    private var texture = MenuTexture()
     private lateinit var viewport: MenuViewport
     private var dropdown: MenuDropdown? = null
     private var dropdownAnchor: ButtonComponent? = null
     private var closingDropdown: MenuDropdown? = null
     private var content: FlowLayout? = null
+    private var sidebar: FlowLayout? = null
+    private var navigationProgress = MotionValue(if (home) 0.0 else 1.0)
+    private var navigationSelection = MotionValue(0.0)
+    private var introductionClaimed = false
+    private var introductionChecked = false
     private var constructing = false
-    private val opening = MotionValue(0.0)
-    private val sidebarOpening = MotionValue(0.0)
+    private var opening = MotionValue(0.0)
+    private var sidebarOpening = MotionValue(0.0)
     private val pageOpening = MotionValue(0.0)
     private var pageDirection = 1
     private var outgoing: MenuCanvas.Snapshot? = null
     private var outgoingSize: Pair<Int, Int>? = null
+    private var modalUnderlay: MenuCanvas.Snapshot? = null
+    private var closingContent: MenuCanvas.Snapshot? = null
+    private var closingShellAlpha = 1.0
+    private val contentExit = MotionValue(1.0)
+    private var navigationMotion = emptyMap<String, MenuButton>()
     private var closing = false
     protected val menuClosing get() = closing
     private var closeDestination: net.minecraft.client.gui.screens.Screen? = null
@@ -85,8 +98,13 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected fun showMenuToast(message: String, kind: MenuToastKind = MenuToastKind.INFO) = toasts.show(message, kind)
     protected fun closeMenuTo(destination: net.minecraft.client.gui.screens.Screen?) {
         if (closing) return
+        if (!modal && destination is MenuScreen) { navigateMenu(destination); return }
         if (invalid || ThemeConfig.animationMode == GuiMotion.OFF) { navigateMenu(destination); return }
         closing = true; closeDestination = destination
+        closingContent = canvas.snapshot("content")
+        closingShellAlpha = paintedShell.alpha.coerceAtLeast(.001)
+        contentExit.snap(1.0)
+        contentExit.animateTo(0.0, 105, MotionEasing.QUICK, ThemeConfig.animationMode)
         closeMenuDropdown()
         opening.animateTo(0.0, 145, MotionEasing.SMOOTH, ThemeConfig.animationMode)
         sidebarOpening.animateTo(0.0, 90, mode = ThemeConfig.animationMode)
@@ -95,19 +113,48 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     override fun onClose() = closeMenuTo(menuParent)
 
     internal fun prepareNavigation(destination: MenuScreen) {
-        destination.outgoing = canvas.snapshot("content")
+        destination.outgoing = if (modal || destination.modal) null else canvas.snapshot("content")
+        destination.modalUnderlay = if (destination.modal) modalUnderlay ?: canvas.snapshot() else null
         destination.outgoingSize = width to height
-        destination.pageDirection = if (page != null && destination.page != null && destination.page.ordinal < page.ordinal) -1 else 1
-        // A normal page swap keeps the shell visible. A confirmation has a separate modal hierarchy.
-        destination.opening.snap(if (modal || destination.modal) 0.0 else 1.0)
-        destination.sidebarOpening.snap(if (modal || destination.modal) 0.0 else 1.0)
-        destination.pageOpening.snap(0.0)
+        destination.pageDirection = if ((destination.menuCategory?.ordinal ?: -1) < (menuCategory?.ordinal ?: -1)) -1 else 1
+        if (!modal && !destination.modal) {
+            // Keep the shell's current pose and deadline, even when navigation interrupts its entrance.
+            val shell = destination.opening; destination.opening = opening; opening = shell
+            val side = destination.sidebarOpening; destination.sidebarOpening = sidebarOpening; sidebarOpening = side
+            val navigation = destination.navigationProgress
+            destination.navigationProgress = navigationProgress; navigationProgress = navigation
+            val indicator = destination.navigationSelection
+            destination.navigationSelection = navigationSelection; navigationSelection = indicator
+            destination.introductionChecked = true
+            destination.introductionClaimed = introductionClaimed; introductionClaimed = false
+            destination.navigationMotion = navigationButtons().associateBy { it.message.string }
+        } else {
+            destination.opening.snap(if (destination.modal) 0.0 else 1.0)
+            destination.sidebarOpening.snap(if (destination.modal) 0.0 else 1.0)
+        }
+        destination.pageOpening.snap(if (modal && !destination.modal) 1.0 else 0.0)
+        // The previous frame's raster/texture remain valid until the next page paints into them.
+        // Removal closes only the destination's empty resources exchanged back to this screen.
+        destination.canvas.close(); destination.texture.close()
+        val nextCanvas = destination.canvas; destination.canvas = canvas; canvas = nextCanvas
+        val nextTexture = destination.texture; destination.texture = texture; texture = nextTexture
+    }
+
+    private fun navigationButtons(): List<MenuButton> {
+        val result = ArrayList<MenuButton>()
+        fun visit(component: UIComponent) {
+            if (component is MenuButton && component.navigation) result += component
+            if (component is ParentUIComponent) component.children().forEach(::visit)
+        }
+        sidebar?.let(::visit)
+        return result
     }
 
     protected fun openMenuDropdown(anchor: ButtonComponent, options: (DropdownComponent) -> Unit): DropdownComponent {
         closeMenuDropdown()
         // Anchor geometry is retained, so settle its content before opening an interactive popup.
         opening.snap(1.0); sidebarOpening.snap(1.0); pageOpening.snap(1.0); outgoing = null
+        navigationProgress.snap(if (home) 0.0 else 1.0)
         paintedShell = shellPose(); paintedContent = contentPose()
         val popup = MenuDropdown(anchor.width, ::closeMenuDropdown)
         options(popup)
@@ -130,18 +177,33 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     override fun isPauseScreen() = false
     override fun init() {
         val window = MC.instance.window
+        val previousViewport = if (::viewport.isInitialized) viewport else null
         viewport = MenuViewport.fit(window.width, window.height, window.guiScaledWidth, window.guiScaledHeight)
         width = viewport.width; height = viewport.height
-        closing = false; closeDestination = null
-        if (outgoingSize != null && outgoingSize != (width to height)) outgoing = null
+        if (!introductionChecked) {
+            introductionChecked = true
+            introductionClaimed = !modal && menuIntroduction.claim()
+            if (!introductionClaimed && !modal && outgoing == null) {
+                opening.snap(1.0); sidebarOpening.snap(1.0); pageOpening.snap(1.0)
+            }
+        }
+        if (!closing) { closingContent = null; contentExit.snap(1.0) }
+        if (previousViewport != null && previousViewport != viewport) { outgoing = null; modalUnderlay = null; closingContent = null }
+        if (outgoingSize != null && outgoingSize != (width to height)) { outgoing = null; modalUnderlay = null }
         outgoingSize = null
-        opening.animateTo(1.0, 245, MotionEasing.SETTLE, ThemeConfig.animationMode)
-        sidebarOpening.animateTo(1.0, 200, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis = 25)
-        pageOpening.animateTo(1.0, 230, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis = if (opening.sample() < 1.0) 45 else 0)
+        opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, ThemeConfig.animationMode)
+        sidebarOpening.animateTo(if (closing) 0.0 else 1.0, if (closing) 90 else 200, MotionEasing.QUICK, ThemeConfig.animationMode,
+            delayMillis = if (closing) 0 else 25)
+        pageOpening.animateTo(if (closing) 0.0 else 1.0, if (closing) 110 else 230, MotionEasing.QUICK, ThemeConfig.animationMode,
+            delayMillis = if (!closing && opening.sample() < 1.0) 45 else 0)
+        navigationProgress.animateTo(if (home) 0.0 else 1.0, ThemeConfig.animationMode.profile.layoutMillis,
+            ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
         super.init()
         if (!invalid && (builtLayout != menuLayout || builtTheme != me.mycellium.skymyce.hud.HudTheme.revision)) {
             uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount()
         }
+        navigationButtons().forEach { button -> navigationMotion[button.message.string]?.let(button::inheritMotion) }
+        navigationMotion = emptyMap()
     }
     final override fun build(root: FlowLayout) {
         closeMenuDropdown()
@@ -149,25 +211,35 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         builtLayout = menuLayout
         builtTheme = me.mycellium.skymyce.hud.HudTheme.revision
         constructing = true
-        root.surface(Surface { g, c -> (g as MenuGraphics).layer(alpha = opening.sample().coerceIn(0.0, 1.0)) {
-            MenuTheme.backdrop.draw(g, c)
+        root.surface(Surface { g, c ->
+            modalUnderlay?.let { canvas.replay(it) }
+            (g as MenuGraphics).layer(alpha = paintedShell.alpha) {
+                MenuTheme.backdrop.draw(g, c)
         } }).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
-        val frame = MenuLayer(Sizing.fixed(menuLayout.width), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.HORIZONTAL, "shell", ::shellPose).apply {
+        val frame = MenuLayer(Sizing.fixed(menuLayout.width), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.HORIZONTAL, "shell", { paintedShell }).apply {
             surface(Surface { g, c -> MenuTheme.panel().draw(g, c); drawAmbient(g as MenuGraphics, c) })
         }
         if (!modal) {
-            val side = menuSidebar(menuLayout, page, settingsCategory, ::selectSettings,
-                if (settingsCategory == null) this else menuParent, { settingsCategory })
-            val sideLayer = MenuLayer(Sizing.fixed(menuLayout.sidebar), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.VERTICAL, "sidebar", presentation = {
-                MotionPose(alpha = sidebarOpening.sample().coerceIn(0.0, 1.0))
-            })
-            sideLayer.child(side); frame.child(sideLayer)
+            // Reserve the final content width once; moving cards never relayout or rewrap page text.
+            frame.child(UIContainers.verticalFlow(Sizing.fixed(menuLayout.sidebar), Sizing.fill()))
         }
-        val body = MenuLayer(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), FlowLayout.Algorithm.VERTICAL, "content", ::contentPose, ::drawOutgoing)
+        val body = MenuLayer(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), FlowLayout.Algorithm.VERTICAL, "content", { paintedContent }, around = ::drawContent)
         content = body
         if (menuHeight > menuLayout.height) frame.child(menuScroll(Sizing.fixed(menuWidth), Sizing.fill(), body).apply {
             scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
         }) else frame.child(body)
+        if (!modal) {
+            val side = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
+                if (home) -1 else menuCategory?.ordinal ?: -1, navigationSelection,
+                { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
+                { navigateMenu(MenuDirectoryScreen(parent = this)) })
+            sidebar = side
+            // Paint navigation last: the original card surfaces pass over the incoming content.
+            frame.child(MenuLayer(Sizing.fixed(menuLayout.sidebar), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.VERTICAL,
+                "sidebar", { MotionPose(alpha = sidebarProgress) }).apply {
+                positioning(Positioning.absolute(0, 0)); allowOverflow(true); child(side)
+            })
+        }
         root.child(frame)
         try { buildContent(body) } finally { constructing = false }
     }
@@ -180,13 +252,30 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, mode)
         sidebarOpening.animateTo(if (closing) 0.0 else 1.0, 200, mode = mode)
         pageOpening.animateTo(if (closing) 0.0 else 1.0, 230, mode = mode)
+        navigationProgress.animateTo(if (home) 0.0 else 1.0, mode.profile.layoutMillis, mode.profile.hoverEasing, mode)
         if (closing && opening.sample() == 0.0 && !opening.running) {
-            if (MC.screen === this) navigateMenu(closeDestination)
+            if (MC.screen === this) {
+                val destination = closeDestination
+                navigateMenu(destination)
+                // Closing can complete during extraction. Paint the destination in this frame too.
+                if (destination != null && MC.screen === destination) destination.extractRenderState(g, mouseX, mouseY, partialTicks)
+            }
             return
         }
         canvas.begin()
         clearDetachedFocus()
-        paintedShell = shellPose(); paintedContent = contentPose()
+        val now = System.nanoTime()
+        paintedShell = shellPose(opening.sample(now))
+        sidebarProgress = sidebarOpening.sample(now).coerceIn(0.0, 1.0)
+        pageProgress = pageOpening.sample(now).coerceIn(0.0, 1.0)
+        navigationProgress.sample(now)
+        if (introductionClaimed && !opening.running && !sidebarOpening.running && !pageOpening.running && !navigationProgress.running &&
+            (sidebar as? MenuNavigation)?.revealsSettled != false) {
+            menuIntroduction.complete(); introductionClaimed = false
+        }
+        if (pageProgress >= 1.0) outgoing = null
+        if (outgoing == null) canvas.releaseTransition()
+        paintedContent = contentPose(pageProgress)
         val point = pointer(mouseX.toDouble(), mouseY.toDouble())
         val mx = point.first.toInt(); val my = point.second.toInt()
         tooltip.beginFrame()
@@ -199,8 +288,9 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             canvas.group = "tooltip"
             uiAdapter.drawTooltip(custom, mx, my, partialTicks)
             tooltip.endFrame(canvas)
-            canvas.group = null
+            canvas.group = "toast"
             toasts.draw(custom, width, height)
+            canvas.group = null
         }
         val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision, canvas.dirtyRegion)
@@ -210,20 +300,25 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     /** Capture these only when a developer requests a report, on the client thread. */
     fun cacheSizes(): Map<String, Long> = canvas.cacheSizes() + ("snapshots.page" to if (outgoing == null) 0L else 1L)
 
-    private fun shellPose(): MotionPose {
-        val progress = opening.sample()
-        val movement = if (ThemeConfig.animationMode == GuiMotion.FULL) 1 - progress else 0.0
-        return MotionPose(progress.coerceIn(0.0, 1.0), 1 - movement * .024, y = movement * 8,
+    private var sidebarProgress = 0.0
+    private var pageProgress = 0.0
+    private fun shellPose(progress: Double = opening.sample()): MotionPose {
+        val profile = ThemeConfig.animationMode.profile
+        val movement = 1 - progress
+        return MotionPose(progress.coerceIn(0.0, 1.0), 1 - movement * profile.shellScale, y = movement * profile.shellOffset,
             pivotX = width / 2.0, pivotY = height / 2.0)
     }
-    private fun contentPose(): MotionPose {
-        val progress = pageOpening.sample().coerceIn(0.0, 1.0)
-        val offset = if (ThemeConfig.animationMode == GuiMotion.FULL) (1 - progress) * 18 * pageDirection else 0.0
-        return MotionPose(alpha = progress, x = offset)
+    private fun contentPose(progress: Double = pageOpening.sample().coerceIn(0.0, 1.0)): MotionPose {
+        val profile = ThemeConfig.animationMode.profile
+        val offset = (1 - progress) * profile.pageOffset * pageDirection
+        val focus = if (modal || home) 1.0 else navigationProgress.sample().coerceIn(0.0, 1.0)
+        return MotionPose(alpha = (if (outgoing == null) progress else 1.0) * focus, x = offset,
+            scale = 1 - (1 - progress) * profile.pageScale,
+            pivotX = width / 2.0, pivotY = height / 2.0)
     }
     private fun drawAmbient(g: MenuGraphics, component: UIComponent) {
         val quality = ThemeConfig.graphicsQuality
-        if (!quality.ambient || ThemeConfig.animationMode != GuiMotion.FULL || closing) return
+        if (!quality.ambient || !ThemeConfig.animationMode.profile.ambient || closing) return
         val step = System.nanoTime() / quality.ambientIntervalNanos
         if (ambientStep != step) {
             ambientStep = step
@@ -236,23 +331,43 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
                 12, 1.3 + (i % 2) * .4, Color.ofArgb(ambientColor))
         }
     }
-    /** Called by the content layer before its new children. Both pages remain clipped to the body. */
-    private fun drawOutgoing(g: MenuGraphics) {
-        val body = content ?: return
-        val progress = pageOpening.sample().coerceIn(0.0, 1.0)
-        if (progress >= 1.0 || outgoing == null) { outgoing = null; return }
-        val oldGroup = canvas.group
-        canvas.group = "content"
-        val offset = if (ThemeConfig.animationMode == GuiMotion.FULL) -progress * 18 * pageDirection else 0.0
-        canvas.replay(outgoing!!, 1 - progress, offset, boundary = MenuCanvas.Clip(body.x(), body.y(), body.width(), minOf(body.height(), menuLayout.height)))
-        canvas.group = oldGroup
+    /** Both pages blend as isolated layers; the surrounding shell never fades or darkens during a swap. */
+    private fun drawContent(g: MenuGraphics, draw: () -> Unit) {
+        closingContent?.let { snapshot ->
+            contentExit.animateTo(0.0, 105, MotionEasing.QUICK, ThemeConfig.animationMode)
+            val fade = contentExit.sample().coerceIn(0.0, 1.0)
+            val parentOpacity = canvas.opacity
+            try {
+                canvas.opacity = 1.0
+                canvas.replay(snapshot, fade * (paintedShell.alpha / closingShellAlpha).coerceIn(0.0, 1.0),
+                    y = (1 - fade) * ThemeConfig.animationMode.profile.pageOffset * .25, boundary = g.canvasClip)
+            } finally { canvas.opacity = parentOpacity }
+            return
+        }
+        val body = content
+        val snapshot = outgoing
+        if (body == null || snapshot == null) { draw(); return }
+        val offset = -pageProgress * ThemeConfig.animationMode.profile.pageOffset * pageDirection
+        val transform = g.pose()
+        val left = transform.m00() * body.x() + transform.m20()
+        val top = transform.m11() * body.y() + transform.m21()
+        val right = left + transform.m00() * body.width()
+        val bottom = top + transform.m11() * body.height()
+        val scissor = g.canvasClip
+        val clipX = maxOf(kotlin.math.floor(left.toDouble()).toInt(), scissor?.x ?: Int.MIN_VALUE)
+        val clipY = maxOf(kotlin.math.floor(top.toDouble()).toInt(), scissor?.y ?: Int.MIN_VALUE)
+        val clipRight = minOf(kotlin.math.ceil(right.toDouble()).toInt(), scissor?.let { it.x + it.width } ?: Int.MAX_VALUE)
+        val clipBottom = minOf(kotlin.math.ceil(bottom.toDouble()).toInt(), scissor?.let { it.y + it.height } ?: Int.MAX_VALUE)
+        canvas.transition(snapshot, pageProgress, MenuCanvas.Clip(clipX, clipY,
+            (clipRight - clipX).coerceAtLeast(0), (clipBottom - clipY).coerceAtLeast(0)), offset, draw)
     }
     private fun pointer(x: Double, y: Double): Pair<Double, Double> {
         val sx = paintedShell.inverseX(viewport.x(x)); val sy = paintedShell.inverseY(viewport.y(y))
-        if (dropdown?.isInBoundingBox(sx, sy) == true) return sx to sy
+        dropdown?.pointer(sx, sy)?.let { return it }
+        (sidebar as? MenuNavigation)?.pointer(sx, sy)?.let { return it }
         val body = content ?: return sx to sy
         val bx = paintedContent.inverseX(sx); val by = paintedContent.inverseY(sy)
-        if (body.isInBoundingBox(bx, by)) return bx to by
+        if (body.isInBoundingBox(bx, by)) return menuCardPointer(body, bx, by) ?: (bx to by)
         // The strip vacated by moving content is paint-only; it must not activate retained controls.
         return if (body.isInBoundingBox(sx, sy)) -1.0 to -1.0 else sx to sy
     }
@@ -275,16 +390,21 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             if (component is ParentUIComponent) component.children().forEach(::release)
         }
         uiAdapter?.rootComponent?.let(::release)
-        outgoing = null; opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); tooltip.clear(); toasts.clear()
-        closeDestination = null
+        outgoing = null; modalUnderlay = null; navigationMotion = emptyMap()
+        closingContent = null; contentExit.cancel()
+        opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); navigationProgress.cancel(); navigationSelection.cancel(); tooltip.clear(); toasts.clear()
+        closeDestination = null; closing = false
         canvas.close(); texture.close(); super.removed()
     }
     override fun mouseMoved(x: Double, y: Double) { val p = pointer(x, y); super.mouseMoved(p.first, p.second) }
     override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (closing) return true
         clearDetachedFocus()
+        dropdown?.let {
+            if (it.pointer(paintedShell.inverseX(viewport.x(event.x())), paintedShell.inverseY(viewport.y(event.y()))) == null)
+                closeMenuDropdown()
+        }
         val mapped = pointer(event)
-        dropdown?.let { if (dismissMenuDropdownOutside(it, mapped)) closeMenuDropdown() }
         return super.mouseClicked(mapped, doubled)
     }
     override fun keyPressed(event: KeyEvent): Boolean {
@@ -323,52 +443,42 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
 
 }
 
-internal fun menuSidebar(layout: MenuLayout, page: MenuPage?, settingsCategory: SettingsTab? = null,
-                         selectSettings: (SettingsTab) -> Unit = {}, parent: net.minecraft.client.gui.screens.Screen? = null,
-                         currentSettings: () -> SettingsTab? = { settingsCategory }): FlowLayout =
-    UIContainers.verticalFlow(Sizing.fixed(layout.sidebar), Sizing.fixed(layout.height)).apply {
-        padding(Insets.of(7)); gap(6)
-        surface(Surface { g, c ->
-            MenuTheme.rounded(g, c.x() + 1, c.y() + 1, c.width() - 1, c.height() - 2, MenuTheme.SIDEBAR)
-            g.fill(c.x() + c.width() - 1, c.y() + 1, c.x() + c.width(), c.y() + c.height() - 1, MenuTheme.alpha(MenuTheme.BORDER))
-        })
-        child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-            gap(7); verticalAlignment(VerticalAlignment.CENTER); margins(Insets.vertical(9))
-            child(MenuLabel(Component.literal("SKY-MYCE")).color(Color.ofRgb(MenuTheme.TEXT)).horizontalSizing(Sizing.expand()))
-        })
-        child(UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(1)).surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER))))
-        val choices = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).gap(3)
-        if (settingsCategory != null) {
-            SettingsTab.entries.forEach { tab -> choices.child(nav(tab.title, { currentSettings() == tab }) { selectSettings(tab) }) }
-        } else {
-            MenuPage.entries.forEach { destination -> choices.child(nav(destination.title, { page == destination }) {
-                if (page != destination) openMenu(destination)
-            }) }
-        }
-        child(menuScroll(Sizing.fill(), Sizing.expand(), choices).apply {
-            scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(1)
-        })
-        child(UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(1)).surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER))))
-        child(nav(if (settingsCategory == null) "Settings" else "Back to menus", { false }) {
-            if (settingsCategory == null) navigateMenu(SettingsScreen(parent))
-            else navigateMenu(parent ?: DailyDigestScreen())
-        })
-        child(MenuLabel(Component.literal(me.mycellium.skymyce.SkyMyce.mod.metadata.version.friendlyString)).color(Color.ofRgb(MenuTheme.MUTED)))
-    }
-private fun nav(title: String, active: () -> Boolean, action: () -> Unit) = MenuButton(Component.literal(title)) { action() }.apply {
-        sizing(Sizing.fill(), Sizing.fixed(27)); navigation = true; selected = active
-        tooltip(Component.literal(title))
-    }
+fun openMenu(page: MenuPage? = null) {
+    val feature = page?.featureId
+    if (feature == null) navigateMenu(MenuHomeScreen()) else openMenuFeature(feature)
+}
 
-fun openMenu(page: MenuPage = MenuPage.DIGEST) {
-    navigateMenu(when (page) {
-        MenuPage.DIGEST -> DailyDigestScreen()
-        MenuPage.PARTY -> DungeonFriendsScreen()
-        MenuPage.FRIENDS -> FriendsSocialScreen()
-        MenuPage.DUNGEONS -> DungeonScreen()
-        MenuPage.AUCTIONS -> AuctionHouseScreen()
-        MenuPage.COSMETICS -> CosmeticsScreen()
-        MenuPage.HUD -> WidgetEditorScreen(MC.screen)
+fun openMenuCategory(category: MenuCategory) = navigateMenu(if (category == MenuCategory.SETTINGS)
+    SettingsScreen(MC.screen) else MenuDirectoryScreen(category, parent = MC.screen))
+
+fun openMenuFeature(id: String, configure: Boolean = false) {
+    val feature = MenuDirectory.catalog.findFeature(id) ?: return
+    MenuShortcuts.visit(id)
+    val parent = MC.screen
+    navigateMenu(if (configure && id != "cosmetics") SettingsScreen.forFeature(parent, id) else when (feature.tool) {
+        "daily-digest" -> DailyDigestScreen()
+        "party-finder" -> DungeonFriendsScreen()
+        "dungeon-tracker" -> DungeonScreen()
+        "auction-browser" -> AuctionHouseScreen()
+        "cosmetics" -> CosmeticsScreen()
+        "loans" -> FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)
+        "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
+        "player-utilities" -> FriendsSocialScreen()
+        "hud-editor" -> WidgetEditorScreen(parent)
+        else -> SettingsScreen.forFeature(parent, id)
+    })
+}
+
+fun openMenuSetting(path: String) {
+    if (MenuDirectory.catalog.settingEntry(path) == null) return
+    val owner = MenuDirectory.catalog.featureForPath(path)
+    if (owner != null) MenuShortcuts.visit(owner.id)
+    val parent = MC.screen
+    navigateMenu(when {
+        path.startsWith("Cosmetics/") -> CosmeticsScreen(focusPath = path)
+        path.startsWith("Theme & Appearance/") && path.substringAfterLast('/') !in listOf("animationMode", "graphicsQuality") ->
+            me.mycellium.skymyce.hud.ThemeEditorScreen(parent, focusKey = path.substringAfterLast('/'))
+        else -> SettingsScreen.forSetting(parent, path)
     })
 }
 
@@ -376,6 +486,7 @@ fun openMenu(page: MenuPage = MenuPage.DIGEST) {
 fun navigateMenu(destination: net.minecraft.client.gui.screens.Screen?) {
     val previous = MC.screen
     if (previous === destination) return
+    if (destination is MenuScreen) destination.canonicalFeatureId?.let(MenuShortcuts::visit)
     if (previous is MenuScreen && destination is MenuScreen) previous.prepareNavigation(destination)
     MC.instance.setScreen(destination)
 }

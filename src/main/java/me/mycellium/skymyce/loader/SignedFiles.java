@@ -4,6 +4,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.*;
@@ -77,9 +79,22 @@ public final class SignedFiles {
         if (!HexFormat.of().formatHex(digest.digest()).equals(manifest.get("sha256").getAsString())) throw new SecurityException("Artifact integrity check failed");
     }
     public static void atomicWrite(Path target, byte[] data) throws Exception {
-        Files.createDirectories(target.toAbsolutePath().getParent());
-        var temporary = Files.createTempFile(target.toAbsolutePath().getParent(), ".sky-myce-", ".tmp");
-        try { Files.write(temporary, data); Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+        var parent = target.toAbsolutePath().getParent();
+        Files.createDirectories(parent);
+        var temporary = Files.createTempFile(parent, ".sky-myce-", ".tmp");
+        try {
+            try (var channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                var buffer = ByteBuffer.wrap(data);
+                while (buffer.hasRemaining()) channel.write(buffer);
+                channel.force(true);
+            }
+            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            // Persist the rename on local POSIX filesystems. Windows cannot open directories this way.
+            if (Files.getFileStore(parent).supportsFileAttributeView("posix")) {
+                try (var directory = FileChannel.open(parent, StandardOpenOption.READ)) { directory.force(true); }
+                catch (FileSystemException | UnsupportedOperationException unsupported) { /* File contents are already forced and atomically committed. */ }
+            }
+        }
         finally { Files.deleteIfExists(temporary); }
     }
 }

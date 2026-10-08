@@ -129,6 +129,14 @@ private fun checkLifecycle() {
 }
 
 private fun checkRetriesAndClock() {
+    val (oscillating, failed) = started()
+    check(oscillating.complete(failed, false, 0))
+    oscillating.at(2.0, 100)
+    oscillating.at(0.0, 200)
+    check(oscillating.reason == RoomReplanReason.MOVED && oscillating.due(600))
+    val resumed = requireNotNull(oscillating.take(600))
+    check(oscillating.complete(resumed, true, 600)) // Returning cannot cancel work when no route exists.
+
     val (gate, initial) = started()
     check(gate.complete(initial, false, 10))
     check(gate.reason == RoomReplanReason.RETRY)

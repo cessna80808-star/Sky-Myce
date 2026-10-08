@@ -35,8 +35,9 @@ fun main() {
     val temporary = Files.createTempDirectory("sky-myce-loader-check")
     try {
         checkInstallation(temporary.resolve("hardware"))
-        val installation = Installation(temporary.resolve("identity"))
-        val reload = Installation(temporary.resolve("identity"))
+        checkInstallationDirectory(temporary.resolve("home-directory"))
+        val installation = fixtureInstallation(temporary.resolve("identity"))
+        val reload = fixtureInstallation(temporary.resolve("identity"))
         check(installation.id == reload.id && installation.publicKey == reload.publicKey && installation.deviceHash == reload.deviceHash && installation.hardwareHash == reload.hardwareHash)
         checkLaunchProof(installation, config)
         if (Files.getFileStore(temporary).supportsFileAttributeView("posix")) {
@@ -46,7 +47,7 @@ fun main() {
             val proof = "test Linux installation persistence"
             check(installation.sign(proof) == reload.sign(proof))
         }
-        val copiedGame = Installation(temporary.resolve("other-device"))
+        val copiedGame = fixtureInstallation(temporary.resolve("other-device"))
         check(copiedGame.id != installation.id && copiedGame.publicKey != installation.publicKey)
         val manifest = JsonObject().apply {
             addProperty("product", "sky-myce"); addProperty("protocol", 3); addProperty("minecraft", "26.1.2")
@@ -115,6 +116,30 @@ fun main() {
             return "$unsigned.${sign(unsigned.toByteArray())}"
         }
         val lease = token(claims)
+        fun reference(value: String, trust: Properties = config) = signedHardwareReference(value, trust, installation.id, installation.deviceHash, installation.publicKey)
+        check(reference(lease) == installation.hardwareHash)
+        val expiredClaims = claims.deepCopy().apply {
+            addProperty("iat", now - 600000); addProperty("exp", now - 300000); addProperty("offlineUntil", now - 1)
+            remove("platform"); remove("launchSessionId")
+        }
+        val expired = token(expiredClaims)
+        check(reference(expired) == installation.hardwareHash) // Signature still proves a prior encoding, never authorization.
+        val neverAuthorized = AuthorizationState()
+        reject { neverAuthorized.accept(expired, expiredClaims, now) }
+        check(!neverAuthorized.localAllowed && !neverAuthorized.onlineAllowed && !LaunchSession.authorized)
+        check(reference(lease.dropLast(10) + "AAAAAAAAAA") == null)
+        check(reference("not-a-signed-lease") == null)
+        val otherTrust = Properties().apply {
+            putAll(config)
+            setProperty("key.test", Base64.getEncoder().encodeToString(KeyPairGenerator.getInstance("Ed25519").generateKeyPair().public.encoded))
+        }
+        check(reference(lease, otherTrust) == null)
+        for ((key, value) in listOf("product" to "other", "installationId" to UUID.randomUUID().toString(),
+            "deviceHash" to "b".repeat(64), "keyFingerprint" to "b".repeat(64), "hardwareHash" to "not-a-hardware-hash")) {
+            check(reference(token(claims.deepCopy().apply { addProperty(key, value) })) == null)
+        }
+        check(reference(token(claims.deepCopy().apply { addProperty("protocol", 2) })) == null)
+        check(reference(token(claims.deepCopy().apply { remove("hardwareHash") })) == null)
         verifyLease(lease, config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce")
         reject { verifyLease(token(claims.deepCopy().apply { remove("hardwareHash") }), config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
         reject { verifyLease(lease.dropLast(10) + "AAAAAAAAAA", config, installation, uuid, "2.4.2", "request-1", "fresh-client-nonce") }
@@ -148,7 +173,7 @@ fun main() {
         state.accept(lease, claims, now); check(state.onlineAllowed)
         val beforeRevocation = state.generation
         state.deny(); state.unavailable(); check(!state.localAllowed && !state.onlineAllowed)
-        check(Installation(temporary.resolve("identity")).hardwareHash == installation.hardwareHash) // Session denial/expiry never resets hardware.
+        check(fixtureInstallation(temporary.resolve("identity")).hardwareHash == installation.hardwareHash) // Session denial/expiry never resets hardware.
         reject { state.accept(lease, claims, now, beforeRevocation) }
         check(!state.localAllowed) // An in-flight pre-revoke renewal cannot re-enable the mod.
         LaunchSession.accept()
@@ -206,8 +231,10 @@ private fun checkLaunchProcesses(identity: Path, expected: Installation) {
     val classpath = listOf(LaunchSessionCheckChild::class.java, Installation::class.java, SignedFiles::class.java, Unit::class.java, Gson::class.java)
         .map { Path.of(it.protectionDomain.codeSource.location.toURI()).toString() }.distinct().joinToString(File.pathSeparator)
     val ids = mutableSetOf(LaunchSession.id)
-    repeat(3) {
-        val child = ProcessBuilder(java.toString(), "-cp", classpath, LaunchSessionCheckChild::class.java.name, identity.toString())
+    for (identifier in listOf(FIXTURE_HARDWARE_UUID.replace("-", ""), "{${FIXTURE_HARDWARE_UUID.uppercase()}}", "\uFEFF$FIXTURE_HARDWARE_UUID")) {
+        // Windows argv can replace a Unicode BOM with '?'; keep the synthetic provider output byte-identical.
+        val encodedIdentifier = Base64.getEncoder().encodeToString(identifier.toByteArray(Charsets.UTF_8))
+        val child = ProcessBuilder(java.toString(), "-cp", classpath, LaunchSessionCheckChild::class.java.name, identity.toString(), encodedIdentifier)
             .redirectErrorStream(true).start()
         try {
             check(child.waitFor(30, TimeUnit.SECONDS)) { "Launch session child timed out" }
@@ -226,10 +253,13 @@ private fun checkLaunchProcesses(identity: Path, expected: Installation) {
 /** Independent game/loader JVMs, synthetic identity only; output never contains a private key. */
 object LaunchSessionCheckChild {
     @JvmStatic fun main(arguments: Array<String>) {
-        val installation = Installation(Path.of(arguments.single()))
-        val again = Installation(Path.of(arguments.single()))
+        require(arguments.size == 2)
+        val directory = Path.of(arguments[0])
+        val identifier = String(Base64.getDecoder().decode(arguments[1]), Charsets.UTF_8)
+        val installation = fixtureInstallation(directory, identifier)
+        val again = fixtureInstallation(directory, FIXTURE_HARDWARE_UUID)
         check(installation.id == again.id && installation.deviceHash == again.deviceHash && installation.publicKey == again.publicKey && installation.hardwareHash == again.hardwareHash)
-        check(Files.exists(Path.of(arguments.single()).resolve("last-signed-lease")))
+        check(Files.exists(directory.resolve("last-signed-lease")))
         println(Gson().toJson(mapOf("id" to installation.id, "deviceHash" to installation.deviceHash, "hardwareHash" to installation.hardwareHash, "publicKey" to installation.publicKey,
             "launchSessionId" to LaunchSession.id, "platform" to LaunchSession.platform, "authorized" to LaunchSession.authorized,
             "localAllowed" to AuthorizationState().localAllowed)))

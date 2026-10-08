@@ -6,6 +6,7 @@ import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.SliderComponent
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.core.*
+import io.wispforest.owo.ui.util.FocusHandler
 import io.wispforest.owo.ui.util.UISounds
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.hud.ThemePreset
@@ -39,14 +40,15 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
         fun fit(width: Int, height: Int): MenuLayout {
             val w = minOf(width - 16, (width * .76).toInt()).coerceIn(1, 1100)
             val h = minOf(height - 16, maxOf(260, (height * .78).toInt())).coerceIn(1, 650)
-            return MenuLayout(w, h, (w * .19).toInt().coerceAtLeast(72).coerceAtMost(w / 3))
+            return MenuLayout(w, h, minOf(52, w / 3).coerceAtLeast(1))
         }
     }
 }
 
-enum class MenuPage(val title: String) {
-    DIGEST("Daily Digest"), PARTY("Party Finder"), FRIENDS("Friends & loans"),
-    DUNGEONS("Dungeons"), AUCTIONS("Auctions"), COSMETICS("Cosmetics"), HUD("HUD editor")
+/** Existing caller labels remain compatible; their destinations use the shared feature identities. */
+enum class MenuPage(val title: String, val featureId: String) {
+    DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
+    DUNGEONS("Dungeons", "dungeon-tracker"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 
 object MenuTheme {
@@ -120,13 +122,20 @@ object MenuTheme {
         val opacity = (strength.coerceIn(0.0, 1.0) * 9).toInt()
         if (opacity > 0) rounded(g, x - 1, y - 1, w + 2, h + 2, alpha(ACCENT, opacity), 5)
     }
+    /** Transparent lighting keeps the configured panel opacity intact. */
+    fun sheen(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
+        if (ThemeConfig.graphicsQuality == GuiQuality.EXTREMELY_LIGHT || w < 10 || h < 10 || strength <= 0.0) return
+        val opacity = (strength.coerceIn(0.0, 1.0) * OPACITY * .12).toInt()
+        if (opacity == 0) return
+        val tint = blend(ACCENT, SECONDARY, 55)
+        g.drawGradientRect(x + 4, y + 2, w - 8, minOf(h - 4, 44),
+            alpha(tint, opacity), alpha(tint, opacity / 2), alpha(tint, 0), alpha(tint, 0))
+        g.fill(x + 6, y + 1, x + w - 6, y + 2, alpha(blend(BORDER, TEXT, 35), opacity + 8))
+    }
     fun panel(card: Boolean = false): Surface = Surface { g, c ->
         shadow(g, c.x(), c.y(), c.width(), c.height(), if (card) .35 else 1.0)
         box(g, c.x(), c.y(), c.width(), c.height(), if (card) CARD else PANEL)
-        if (ThemeConfig.graphicsQuality != GuiQuality.EXTREMELY_LIGHT && c.width() > 10 && c.height() > 10)
-            g.drawGradientRect(c.x() + 5, c.y() + 5, c.width() - 10, c.height() - 10,
-                alpha(blend(if (card) CARD else PANEL, ACCENT, if (card) 4 else 8), OPACITY),
-                alpha(if (card) CARD else PANEL, OPACITY), alpha(if (card) CARD else PANEL, OPACITY), alpha(if (card) CARD else PANEL, OPACITY))
+        sheen(g, c.x(), c.y(), c.width(), c.height(), if (card) .65 else 1.0)
     }
     fun tintedPanel(color: () -> Int): Surface = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), color()) }
     val backdrop = Surface { g, c -> g.fill(c.x(), c.y(), c.x() + c.width(), c.y() + c.height(), 0xA50B0811.toInt()) }
@@ -149,6 +158,10 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     private val pressMotion = MotionValue(0.0)
     private val toggleMotion = MotionValue(0.0)
     private var toggleInitialized = false
+    private var selectionInitialized = false
+    private var pressed = false
+    internal var paintedInteraction = MotionPose()
+        private set
     private var wrappedMessage: Component? = null
     private var wrappedWidth = -1
     private var wrappedNavigation = false
@@ -159,26 +172,63 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     private var runColor = 0
 
     init {
+        focusLost().subscribe { releasePress() }
         onPress { button ->
             pressMotion.snap(if (ThemeConfig.animationMode == GuiMotion.OFF) 0.0 else 1.0)
-            pressMotion.animateTo(0.0, 160, MotionEasing.SETTLE, ThemeConfig.animationMode)
+            if (!pressed) releasePress()
             action(button)
         }
     }
 
+    override fun onMouseDown(click: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (active && click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+            pressed = true
+            pressMotion.animateTo(1.0, 65, MotionEasing.QUICK, ThemeConfig.animationMode)
+        }
+        return super.onMouseDown(click, doubled)
+    }
+    override fun onMouseUp(click: MouseButtonEvent): Boolean {
+        if (click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) releasePress()
+        return super.onMouseUp(click)
+    }
+    private fun releasePress() {
+        pressed = false
+        pressMotion.animateTo(0.0, 155, MotionEasing.SETTLE, ThemeConfig.animationMode)
+    }
+    /** Match retained sidebar rows by their stable label when a screen changes. */
+    internal fun inheritMotion(previous: MenuButton) {
+        hoverMotion.snap(previous.hoverMotion.sample())
+        selectionMotion.snap(previous.selectionMotion.sample())
+        selectionInitialized = true
+        pressMotion.snap(previous.pressMotion.sample())
+        releasePress()
+    }
+
     override fun extractContents(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
-        hoverMotion.animateTo(if (active && (isHovered || isFocused)) 1.0 else 0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode)
-        selectionMotion.animateTo(if (selected()) 1.0 else 0.0, 170, MotionEasing.SMOOTH, ThemeConfig.animationMode)
+        hoverMotion.animateTo(if (active && (isHovered || isFocused)) 1.0 else 0.0, 110, ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
+        val selection = if (selected()) 1.0 else 0.0
+        // Rebuilt navigation keeps its selected state; only subsequent selections animate.
+        if (!selectionInitialized) { selectionMotion.snap(selection); selectionInitialized = true }
+        selectionMotion.animateTo(selection, 170, MotionEasing.QUICK, ThemeConfig.animationMode)
+        if (!active && pressed) releasePress()
         if (ThemeConfig.animationMode == GuiMotion.OFF) pressMotion.snap(0.0)
-        val hover = hoverMotion.sample().coerceIn(0.0, 1.0)
+        val hover = hoverMotion.sample().coerceIn(0.0, 1.04)
         val chosen = selectionMotion.sample().coerceIn(0.0, 1.0)
         val press = pressMotion.sample().coerceIn(0.0, 1.0)
-        graphics.layer(scale = 1.0 - .025 * press, pivotX = x + width / 2.0, pivotY = y + height / 2.0) {
-            paint(graphics, delta, hover, chosen)
+        val pose = interactionPose(hover, press)
+        paintedInteraction = pose
+        graphics.layer(y = pose.y, scale = pose.scale, pivotX = pose.pivotX, pivotY = pose.pivotY) {
+            paint(graphics, delta, hover, chosen, press)
         }
     }
-    private fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double) {
+    protected open fun interactionPose(hover: Double, press: Double): MotionPose {
+        val profile = ThemeConfig.animationMode.profile
+        return MotionPose(scale = 1.0 + hover * profile.hoverScale - press * profile.pressScale,
+            y = if (navigation || toggled != null) 0.0 else -hover * profile.cardLift * .25 + press,
+            pivotX = x + width / 2.0, pivotY = y + height / 2.0)
+    }
+    protected open fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
         toggled?.let { state ->
             val on = state()
             val target = if (on) 1.0 else 0.0
@@ -191,9 +241,13 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             val left = x + (width - w) / 2
             val top = y + (height - h) / 2
             MenuTheme.glow(graphics, left, top, w, h, hover * .7 + toggleProgress * .3)
+            MenuTheme.rounded(graphics, left - 1, top - 1, w + 2, h + 2, MenuTheme.blend(MenuTheme.PANEL, MenuTheme.BORDER, 45), h / 2 + 1)
             MenuTheme.rounded(graphics, left, top, w, h, MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (toggleProgress * 100).toInt()), h / 2)
-            graphics.drawCircle(left + h / 2 + (toggleProgress * (w - h)).toInt(), top + h / 2, 24,
-                (h / 2 - 2 + hover * .5), Color.ofRgb(MenuTheme.blend(MenuTheme.MUTED, MenuTheme.TEXT, (toggleProgress * 100).toInt())))
+            graphics.layer(x = toggleProgress * (w - h)) {
+                graphics.drawCircle(left + h / 2, top + h / 2 + 1, 24, h / 2 - 1.5, Color.ofArgb(MenuTheme.alpha(0x06040C, 24)))
+                graphics.drawCircle(left + h / 2, top + h / 2, 24,
+                    h / 2 - 2 + hover * .5, Color.ofRgb(MenuTheme.blend(MenuTheme.MUTED, MenuTheme.TEXT, (toggleProgress * 100).toInt())))
+            }
             if (isFocused && background) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
             return
         }
@@ -201,11 +255,12 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             renderer().draw(graphics, this, delta)
         } else if (background && (!navigation || chosen > 0.0 || hover > 0.0)) {
             graphics.layer(alpha = if (navigation) maxOf(chosen, hover) else 1.0) {
-                MenuTheme.shadow(graphics, x, y, width, height, if (navigation) hover * .25 else .3 + hover * .4)
-                MenuTheme.glow(graphics, x, y, width, height, hover * .5)
+                MenuTheme.shadow(graphics, x, y, width, height, (.2 + hover * .7) * ThemeConfig.animationMode.profile.shadowStrength)
+                MenuTheme.glow(graphics, x, y, width, height, hover * ThemeConfig.animationMode.profile.glowStrength)
                 MenuTheme.box(graphics, x, y, width, height,
-                    MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * 12 + chosen * 16).toInt()),
+                    MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * 12 + chosen * 16 + press * 9).toInt()),
                     MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (maxOf(chosen, hover * .65) * 100).toInt()))
+                MenuTheme.sheen(graphics, x, y, width, height, .45 + hover * .55)
                 if (navigation && chosen > 0.0) {
                     val indicatorHeight = ((height - 10) * chosen).toInt()
                     MenuTheme.rounded(graphics, x + 1, y + (height - indicatorHeight) / 2, 2, indicatorHeight, MenuTheme.ACCENT, 1)
@@ -223,7 +278,9 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             lineWidths = IntArray(lines.size) { kotlin.math.ceil(menuTextWidth(lines[it])).toInt() }
             lineRuns = emptyList()
         }
-        val color = MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED)
+        val textColor = if (!active) MenuTheme.MUTED else if (navigation)
+            MenuTheme.blend(MenuTheme.MUTED, MenuTheme.TEXT, (60 + maxOf(chosen, hover) * 40).toInt()) else MenuTheme.TEXT
+        val color = MenuTheme.alpha(textColor)
         if (lineRuns.size != lines.size || runColor != color) {
             lineRuns = lines.map { menuTextRuns(it, color) }; runColor = color
         }
@@ -231,7 +288,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         graphics.enableScissor(x + 3, y + 1, x + width - 3, y + height - 1)
         lines.forEachIndexed { index, _ ->
             val left = if (navigation) x + 8 else x + (width - lineWidths[index]) / 2
-            graphics.styledText(lineRuns[index], left.toDouble(),
+            val shift = if (navigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
+            graphics.styledText(lineRuns[index], left + shift,
                 (y + (height - lines.size * lineHeight) / 2 + index * lineHeight).toDouble())
         }
         graphics.disableScissor()
@@ -321,12 +379,17 @@ internal fun menuTextStyleAt(text: net.minecraft.util.FormattedCharSequence, x: 
 /** Keep owo's popup layout, but give its entries the same font, paint and input as the menus. */
 internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : DropdownComponent(Sizing.fixed(minimumWidth)) {
     private var entryWidth = minimumWidth.coerceAtLeast(32)
+    private val closingFocus = FocusHandler(this)
     private val appearance = MotionValue(0.0)
+    private var painted = MotionPose()
     private var opened = false
     var closing = false
         private set
     val finishedClosing get() = closing && appearance.sample() == 0.0 && !appearance.running
     init { entries.padding(Insets.of(5)); surface(MenuTheme.panel()); allowOverflow(true) }
+
+    // Owo draws focus highlights through the root, even after this popup is detached for its exit.
+    override fun focusHandler(): FocusHandler? = menuDropdownFocus(super.focusHandler(), closing, closingFocus)
 
     fun beginClose() {
         if (closing) return
@@ -334,14 +397,21 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         appearance.animateTo(0.0, 100, MotionEasing.QUICK, ThemeConfig.animationMode)
         children().filterIsInstance<MenuDropdown>().forEach { it.beginClose() }
     }
-    private fun beginOpen() { closing = false; opened = false; appearance.snap(0.0) }
+    private fun beginOpen() {
+        closing = false; opened = false; appearance.snap(0.0)
+        entries.children().filterIsInstance<MenuDropdownEntry>().forEach { it.resetAppearance() }
+    }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         if (!opened && !closing) {
             opened = true
             appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode)
         }
         appearance.animateTo(if (closing) 0.0 else 1.0, if (closing) 100 else 130, MotionEasing.QUICK, ThemeConfig.animationMode)
-        (g as MenuGraphics).layer(alpha = appearance.sample().coerceIn(0.0, 1.0)) {
+        val amount = appearance.sample().coerceIn(0.0, 1.0)
+        val profile = ThemeConfig.animationMode.profile
+        painted = MotionPose(alpha = amount, y = (1 - amount) * profile.revealOffset * .35,
+            scale = 1 - (1 - amount) * profile.pageScale * 2, pivotX = x().toDouble(), pivotY = y().toDouble())
+        (g as MenuGraphics).layer(painted.alpha, painted.x, painted.y, painted.scale, painted.pivotX, painted.pivotY) {
             super.draw(g, mouseX, mouseY, partialTicks, delta)
         }
         children().filterIsInstance<MenuDropdown>().filter { it.finishedClosing }.toList().forEach(::removeChild)
@@ -351,7 +421,7 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     private fun entry(text: Component, indicator: (() -> Boolean)? = null, nested: Boolean = false, action: () -> Unit): MenuDropdownEntry {
         entryWidth = maxOf(entryWidth, menuDropdownWidth(text, indicator != null || nested))
         entries.horizontalSizing(Sizing.fixed(entryWidth))
-        return MenuDropdownEntry(text, indicator, nested, minOf(entries.children().size, 5) * 14L, action).apply {
+        return MenuDropdownEntry(text, indicator, nested, minOf(entries.children().size, 5) * ThemeConfig.animationMode.profile.staggerMillis, action).apply {
             sizing(Sizing.fill(), Sizing.fixed(menuDropdownRowHeight()))
             margins(Insets.horizontal(3))
             entries.child(this)
@@ -405,6 +475,12 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
             focusHandler()?.focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE)
         }
     }
+    fun pointer(x: Double, y: Double): Pair<Double, Double>? {
+        if (closing) return null
+        val px = painted.inverseX(x); val py = painted.inverseY(y)
+        children().filterIsInstance<MenuDropdown>().asReversed().forEach { it.pointer(px, py)?.let { point -> return point } }
+        return if (px >= x() && py >= y() && px < x() + width() && py < y() + height()) px to py else null
+    }
     override fun isInBoundingBox(x: Double, y: Double): Boolean = !closing && (super.isInBoundingBox(x, y) ||
         children().filterIsInstance<MenuDropdown>().any { it.isInBoundingBox(x, y) })
     fun cycleFocus(forward: Boolean) {
@@ -419,6 +495,9 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     }
 }
 
+internal fun menuDropdownFocus(parent: FocusHandler?, closing: Boolean, exit: FocusHandler): FocusHandler? =
+    parent ?: if (closing) exit else null
+
 internal fun menuDropdownRowHeight() = MenuCanvas.lineHeight() + 8
 internal fun menuDropdownWidth(text: Component, indicator: Boolean) =
     kotlin.math.ceil(menuTextLines(text, Int.MAX_VALUE).maxOfOrNull { menuTextWidth(it) } ?: 0.0).toInt() + 26 + if (indicator) 22 else 0
@@ -427,6 +506,7 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
                                 private val action: () -> Unit) : MenuLabel(value) {
     private val hoverMotion = MotionValue(0.0)
     private val checkMotion = MotionValue(if (checked?.invoke() == true) 1.0 else 0.0)
+    private val pressMotion = MotionValue(0.0)
     private val appearance = MotionValue(0.0)
     private var appeared = false
     private val interactive get() = generateSequence(parent()) { it.parent() }.filterIsInstance<MenuDropdown>().none { it.closing }
@@ -434,13 +514,19 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
     override fun canFocus(source: UIComponent.FocusSource) = interactive
     override fun onMouseDown(click: MouseButtonEvent, doubled: Boolean): Boolean {
         if (!interactive || click.button() != GLFW.GLFW_MOUSE_BUTTON_LEFT) return false
-        action(); return true
+        activate(); return true
     }
     override fun onKeyPress(input: KeyEvent): Boolean {
         if (!interactive) return false
         if (input.key() !in listOf(GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER, GLFW.GLFW_KEY_SPACE) && !(nested && input.key() == GLFW.GLFW_KEY_RIGHT)) return super.onKeyPress(input)
-        action(); return true
+        activate(); return true
     }
+    private fun activate() {
+        pressMotion.snap(if (ThemeConfig.animationMode == GuiMotion.OFF) 0.0 else 1.0)
+        pressMotion.animateTo(0.0, 145, MotionEasing.SETTLE, ThemeConfig.animationMode)
+        action()
+    }
+    fun resetAppearance() { appeared = false; appearance.snap(0.0); hoverMotion.snap(0.0); pressMotion.snap(0.0) }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         if (!appeared) {
             appeared = true
@@ -449,9 +535,13 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
         val hover = interactive && (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) || focusHandler()?.focused() === this)
         hoverMotion.animateTo(if (hover) 1.0 else 0.0, 100, MotionEasing.QUICK, ThemeConfig.animationMode)
         val emphasis = hoverMotion.sample().coerceIn(0.0, 1.0)
+        if (ThemeConfig.animationMode == GuiMotion.OFF) pressMotion.snap(0.0)
+        val press = pressMotion.sample().coerceIn(0.0, 1.0)
         (g as MenuGraphics).layer(alpha = appearance.sample().coerceIn(0.0, 1.0)) {
             if (emphasis > 0.0) g.layer(alpha = emphasis) {
-                MenuTheme.rounded(g, x() - 3, y(), width() + 6, height(), MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 16))
+                MenuTheme.rounded(g, x() - 3, y(), width() + 6, height(), MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 16 + (press * 10).toInt()))
+                MenuTheme.sheen(g, x() - 3, y(), width() + 6, height(), .7)
+                MenuTheme.rounded(g, x() - 3, y() + 4, 2, height() - 8, MenuTheme.ACCENT, 1)
             }
             super.draw(g, mouseX, mouseY, partialTicks, delta)
             checked?.let {
@@ -459,7 +549,7 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
                 val progress = checkMotion.sample().coerceIn(0.0, 1.0)
                 val left = x() + width() - 18; val top = y() + (height() - 10) / 2
                 MenuTheme.rounded(g, left, top, 18, 10, MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (progress * 100).toInt()), 5)
-                g.drawCircle(left + 5 + (progress * 8).toInt(), top + 5, 20, 3.0, Color.ofRgb(MenuTheme.TEXT))
+                g.layer(x = progress * 8) { g.drawCircle(left + 5, top + 5, 20, 3.0, Color.ofRgb(MenuTheme.TEXT)) }
             }
             if (nested) {
                 val left = x() + width() - 5; val top = y() + height() / 2
@@ -491,40 +581,60 @@ class MenuSlider : SliderComponent(Sizing.fill()) {
     private val hoverMotion = MotionValue(0.0)
     private val pressMotion = MotionValue(0.0)
     private val valueMotion = MotionValue(0.0)
+    private val thumbMotion = MotionValue(0.0)
+    private var thumbInitialized = false
+    private var dragging = false
     init {
-        mouseDown().subscribe { click, _ ->
-            if (active && click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT)
-                pressMotion.animateTo(1.0, 70, MotionEasing.QUICK, ThemeConfig.animationMode)
-            false
-        }
-        focusLost().subscribe { pressMotion.animateTo(0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode) }
+        focusLost().subscribe { releaseDrag() }
         onChanged().subscribe {
-            valueMotion.snap(if (ThemeConfig.animationMode == GuiMotion.OFF) 0.0 else 1.0)
-            valueMotion.animateTo(0.0, 180, MotionEasing.SMOOTH, ThemeConfig.animationMode)
+            if (thumbInitialized) {
+                valueMotion.snap(if (ThemeConfig.animationMode == GuiMotion.OFF) 0.0 else 1.0)
+                valueMotion.animateTo(0.0, 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+            }
         }
     }
+    override fun onMouseDown(click: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (active && click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+            dragging = true
+            pressMotion.animateTo(1.0, 70, MotionEasing.QUICK, ThemeConfig.animationMode)
+        }
+        return super.onMouseDown(click, doubled)
+    }
     override fun onMouseUp(click: MouseButtonEvent): Boolean {
-        pressMotion.animateTo(0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode)
+        if (click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) releaseDrag()
         return super.onMouseUp(click)
+    }
+    private fun releaseDrag() {
+        dragging = false
+        pressMotion.animateTo(0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode)
     }
     override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
+        if (!active && dragging) releaseDrag()
+        if (!thumbInitialized || dragging) { thumbMotion.snap(value()); thumbInitialized = true }
+        else thumbMotion.animateTo(value(), 90, MotionEasing.QUICK, ThemeConfig.animationMode)
         hoverMotion.animateTo(if (active && (isHovered || isFocused)) 1.0 else 0.0, 110, MotionEasing.QUICK, ThemeConfig.animationMode)
         if (ThemeConfig.animationMode == GuiMotion.OFF) { pressMotion.snap(0.0); valueMotion.snap(0.0) }
         val hover = hoverMotion.sample().coerceIn(0.0, 1.0)
         val press = pressMotion.sample().coerceIn(0.0, 1.0)
         val changed = valueMotion.sample().coerceIn(0.0, 1.0)
         val center = y + height / 2
+        MenuTheme.rounded(graphics, x, center - 3, width, 6, MenuTheme.blend(MenuTheme.PANEL, MenuTheme.BORDER, 45), 3)
         MenuTheme.rounded(graphics, x, center - 2, width, 4, MenuTheme.BORDER, 2)
-        // The logical value and thumb always follow native pointer/keyboard input immediately.
-        val thumb = x + 4 + (value() * (width - 8)).toInt()
-        MenuTheme.rounded(graphics, x, center - 2, thumb - x, 4,
+        // Pointer tracking stays immediate; keyboard and programmatic changes settle visually.
+        val thumb = x + 4 + thumbMotion.sample().coerceIn(0.0, 1.0) * (width - 8).coerceAtLeast(0)
+        MenuTheme.rounded(graphics, x, center - 2, (thumb - x).toInt(), 4,
             MenuTheme.blend(MenuTheme.ACCENT, MenuTheme.SECONDARY, ((hover + changed) * 25).toInt()), 2)
         val halo = ((hover * .5 + changed * .5) * 12).toInt()
-        if (ThemeConfig.graphicsQuality.glow && halo > 0)
-            graphics.drawCircle(thumb, center, 24, 7.0, Color.ofArgb(MenuTheme.alpha(MenuTheme.ACCENT, halo)))
-        graphics.drawCircle(thumb, center, 24, 3.5 + hover * .7 + press * .4,
-            Color.ofRgb(if (active) MenuTheme.TEXT else MenuTheme.MUTED))
+        val thumbPixel = thumb.toInt()
+        graphics.layer(x = thumb - thumbPixel) {
+            if (ThemeConfig.graphicsQuality.glow && halo > 0)
+                graphics.drawCircle(thumbPixel, center, 24, 7.0, Color.ofArgb(MenuTheme.alpha(MenuTheme.ACCENT, halo)))
+            graphics.drawCircle(thumbPixel, center + 1, 24, 4.5 + hover * .7, Color.ofArgb(MenuTheme.alpha(0x06040C, 28)))
+            graphics.drawCircle(thumbPixel, center, 24, 3.5 + hover * .7 + press * .4,
+                Color.ofRgb(if (active) MenuTheme.TEXT else MenuTheme.MUTED))
+            graphics.drawCircle(thumbPixel, center, 20, 1.25 + press * .5, Color.ofRgb(MenuTheme.ACCENT))
+        }
         if (isFocused) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
     }
 }

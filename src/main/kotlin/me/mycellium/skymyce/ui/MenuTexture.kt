@@ -6,11 +6,32 @@ import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.renderer.texture.DynamicTexture
 import net.minecraft.util.ARGB
 import org.lwjgl.system.MemoryUtil
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 import java.awt.image.SinglePixelPackedSampleModel
 import java.nio.IntBuffer
 import java.awt.Rectangle
+
+/** Extracted GUI frames retain texture views until rendering, even after their screen changes. */
+internal class MenuTextureRetirement(private val fence: (Runnable) -> Unit) : AutoCloseable {
+    private val waiting = LinkedHashSet<AutoCloseable>()
+    private val fenced = LinkedHashSet<AutoCloseable>()
+
+    fun retire(resource: AutoCloseable) { if (resource !in fenced) waiting += resource }
+    fun afterTick() {
+        if (waiting.isEmpty()) return
+        val batch = waiting.toList()
+        waiting.clear(); fenced.addAll(batch)
+        fence(Runnable { batch.forEach { if (fenced.remove(it)) it.close() } })
+    }
+    override fun close() {
+        val batch = waiting + fenced
+        waiting.clear(); fenced.clear()
+        batch.forEach(AutoCloseable::close)
+    }
+}
 
 /** NativeImage stores straight RGBA; accept other raster layouts through getRGB. */
 internal fun menuTexturePixels(image: BufferedImage, target: IntArray, region: Rectangle = Rectangle(0, 0, image.width, image.height)) {
@@ -51,11 +72,12 @@ class MenuTexture : AutoCloseable {
         var current = texture
         val resized = current == null || current.pixels.width != image.width || current.pixels.height != image.height
         if (resized) {
-            close()
-            current = DynamicTexture("Sky-Myce custom menu", image.width, image.height, false)
-            texture = current
-            pixels = IntArray(Math.multiplyExact(image.width, image.height))
-            nativePixels = MemoryUtil.memIntBuffer(current.pixels.pointer, pixels.size)
+            val nextPixels = IntArray(Math.multiplyExact(image.width, image.height))
+            val next = DynamicTexture("Sky-Myce custom menu", image.width, image.height, false)
+            val nextNativePixels = MemoryUtil.memIntBuffer(next.pixels.pointer, nextPixels.size)
+            current?.let(retirement::retire)
+            current = next; texture = next; pixels = nextPixels; nativePixels = nextNativePixels
+            uploadedRevision = null
         }
         if (revision == null || uploadedRevision != revision) {
             val whole = Rectangle(0, 0, image.width, image.height)
@@ -76,10 +98,21 @@ class MenuTexture : AutoCloseable {
     }
 
     override fun close() {
-        texture?.close()
+        texture?.let { RenderSystem.assertOnRenderThread(); retirement.retire(it) }
         texture = null
         pixels = IntArray(0)
         nativePixels = null
         uploadedRevision = null
+    }
+
+    companion object {
+        private val retirement by lazy {
+            MenuTextureRetirement(RenderSystem::queueFencedTask).also { resources ->
+                // Fences queued during extraction may run before that frame's GUI renders.
+                // The next tick is the first safe point to fence the old extracted frame.
+                ClientTickEvents.END_CLIENT_TICK.register { resources.afterTick() }
+                ClientLifecycleEvents.CLIENT_STOPPING.register { resources.close() }
+            }
+        }
     }
 }

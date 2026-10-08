@@ -171,10 +171,10 @@ export class RoomIrc {
     if (!sender.accountId || !sender.installationId || !sender.uuid || !packetId.test(sender.uuid) ||
         !sender.name || !/^[A-Za-z0-9_]{1,16}$/.test(sender.name) || !sender.discordId || !snowflake.test(sender.discordId) ||
         !Number.isSafeInteger(sender.generation) || !sender.buildId || !sender.loaderVersion ||
-        !sender.leaseExpiresAt || sender.leaseExpiresAt <= Date.now()) return false;
+        !Number.isSafeInteger(sender.leaseExpiresAt) || sender.leaseExpiresAt! <= Date.now()) return false;
     const state = await this.env.ACCOUNT_STORE.getByName("global").checkSession({ accountId: sender.accountId,
       uuid: sender.uuid, installationId: sender.installationId, generation: sender.generation!, buildId: sender.buildId, loaderVersion: sender.loaderVersion });
-    return state.ok && state.discordId === sender.discordId;
+    return state.ok && state.discordId === sender.discordId && sender.leaseExpiresAt! > Date.now();
   }
 
   /** Binding-only coordinator RPC; the original authenticated socket supplies this identity. */
@@ -284,6 +284,7 @@ export class RoomIrc {
       if (peer.readyState !== WebSocket.OPEN) continue;
       const recipient = peer.deserializeAttachment() as IrcSession;
       if (recipient.bridge || !recipient.globalChatSubscribed || !await this.authorized(peer, recipient)) continue;
+      if (message.expiresAt <= Date.now()) break;
       const peerDelivery = `peer:${message.id}:${recipient.connectionId}`;
       if (sql.exec("SELECT 1 FROM global_chat_delivered WHERE id=?", peerDelivery).toArray().length) continue;
       const isMentioned = message.source === "discord" ? !!recipient.discordId && message.mentions.includes(recipient.discordId) :
@@ -343,12 +344,13 @@ export class RoomIrc {
       if (message.source === "minecraft" && (!message.sender || !await this.validSender(message.sender))) {
         sql.exec("DELETE FROM global_chat_outbox WHERE id=?", row.id); sql.exec("DELETE FROM global_chat_messages WHERE id=?", row.id); return;
       }
+      if (message.expiresAt <= Date.now()) return;
       if (row.destination !== "discord") {
         await this.env.RELAY_ROOMS.getByName(row.destination.slice("room:".length)).globalChatDeliver(message);
         sql.exec("DELETE FROM global_chat_outbox WHERE id=? AND destination=?", row.id, row.destination);
       } else {
         if (bridge?.readyState === WebSocket.OPEN) bridge.send(JSON.stringify({ type: "irc_message", scope: "global", room: GLOBAL_CHAT_ROOM, source: "minecraft", id: message.id, message_id: message.id,
-          from: message.from, text: message.text, timestamp: message.timestamp, discordId: message.discordId, uuid: message.uuid }));
+          from: message.from, text: message.text, timestamp: message.timestamp, expiresAt: message.expiresAt, discordId: message.discordId, uuid: message.uuid }));
       }
     }));
     sql.exec("DELETE FROM global_chat_messages WHERE id NOT IN (SELECT id FROM global_chat_outbox)");

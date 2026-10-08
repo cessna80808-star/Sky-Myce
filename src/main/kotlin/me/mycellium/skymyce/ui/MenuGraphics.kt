@@ -65,6 +65,7 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
     OwoUIGraphics(Minecraft.getInstance(), GuiRenderState(), mouseX, mouseY, {}) {
     override fun guiWidth() = menuWidth
     override fun guiHeight() = menuHeight
+    internal val canvasClip get(): MenuCanvas.Clip? { sync(); return canvas.clip }
     /** Compose effects without changing retained layout, focus, or component state. */
     fun layer(alpha: Double = 1.0, x: Double = 0.0, y: Double = 0.0, scale: Double = 1.0,
               pivotX: Double = 0.0, pivotY: Double = 0.0, draw: () -> Unit) {
@@ -141,7 +142,9 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
         val top = (y + 12).coerceAtMost(guiHeight() - height - 4).coerceAtLeast(4)
         pose().pushMatrix(); pose().identity()
         val progress = tooltipMotion?.show(lines) ?: 1.0
-        layer(alpha = progress) {
+        val lift = (1 - progress) * me.mycellium.skymyce.config.misc.ThemeConfig.animationMode.profile.revealOffset * .4
+        layer(alpha = progress, y = lift) {
+            MenuTheme.shadow(this, left, top, width, height, .6)
             MenuTheme.box(this, left, top, width, height, MenuTheme.SIDEBAR)
             lines.forEachIndexed { i, line -> styledText(line, (left + 7).toDouble(), (top + 6 + i * lineHeight).toDouble(), MenuTheme.alpha(MenuTheme.TEXT)) }
         }

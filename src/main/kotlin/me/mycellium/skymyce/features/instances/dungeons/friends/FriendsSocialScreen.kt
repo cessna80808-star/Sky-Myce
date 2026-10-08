@@ -20,7 +20,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Component.literal("Friends & loans"), MenuPage.FRIENDS) {
+class FriendsSocialScreen(private val tab: Tab = Tab.FRIENDS) : MenuScreen(Component.literal(tab.label), MenuPage.FRIENDS) {
+    override val menuCategory get() = if (tab == Tab.FRIENDS) MenuCategory.UTILS else MenuCategory.ECONOMY
+    internal override val canonicalFeatureId get() = when (tab) { Tab.FRIENDS -> "player-utilities"; Tab.LENDING -> "loans"; Tab.WEALTH -> "player-economy" }
     enum class Tab(val label: String) { FRIENDS("Friends"), LENDING("Lending log"), WEALTH("Friend wealth") }
     private var search = ""
     private var outstanding = false
@@ -51,19 +53,11 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
                 child(refreshButton)
                 child(button("Close", 44) { onClose() })
             })
-            Tab.entries.chunked(if (panelWidth < 310) 2 else 3).forEach { tabs -> child(row().apply {
-                tabs.forEach { value ->
-                    child(button("${if (tab == value) "§b" else ""}${value.label}", if (value == Tab.FRIENDS) 62 else 94) {
-                        val direction = if (value.ordinal < tab.ordinal) -1 else 1
-                        tab = value; rebuildMenu(direction)
-                    })
-                }
-            }) }
             child(row().apply {
                 child(label("Username", MUTED))
                 val field = MenuTextBox(Sizing.expand()).apply {
                     setMaxLength(16); text(search); setHint(Component.literal("Search usernames..."))
-                    onChanged().subscribe { search = it; updateRows() }
+                    onChanged().subscribe { search = it; updateRows(animate = false) }
                 }
                 child(field)
                 child(button("Clear", 40) { field.text("") })
@@ -100,6 +94,7 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
 
     override fun tick() {
         super.tick()
+        if (menuClosing) return
         val ledger = if (tab == Tab.LENDING) GearLending.ledger else null
         val wealth = tab == Tab.WEALTH
         val refreshing = wealth && !FriendWealthCache.canRefresh()
@@ -115,12 +110,12 @@ class FriendsSocialScreen(private var tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
         if (scanStatus.text().string != status) scanStatus.text(Component.literal(status))
         val state = listOf(FriendWealthCache.version, DungeonFriends.scanner, DungeonFriends.scanner.version, ledger, ledger?.trades, ledger?.error,
             DungeonFriendsSettings.error, LocationAPI.onHypixel, FriendWealthCache.available)
-        if (state != previous) { previous = state; updateRows() }
+        if (state != previous) { previous = state; updateRows(animate = false) }
     }
 
-    private fun updateRows() {
+    private fun updateRows(animate: Boolean = true) {
         if (!::results.isInitialized) return
-        contentChanged()
+        if (animate) contentChanged()
         results.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(6)
             when (tab) { Tab.FRIENDS -> friendRows(this); Tab.LENDING -> lendingRows(this); Tab.WEALTH -> wealthRows(this) }

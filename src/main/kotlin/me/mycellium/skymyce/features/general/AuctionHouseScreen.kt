@@ -140,6 +140,7 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
 
     override fun tick() {
         super.tick()
+        if (menuClosing) return
         if (!::scroll.isInitialized) return
         if (preferenceVersion != AuctionPreferences.revision) {
             preferenceVersion = AuctionPreferences.revision; search = AuctionPreferences.value.search; queryRevision++; rebuild()
@@ -154,9 +155,9 @@ class AuctionHouseScreen : MenuScreen(Component.literal("Sky-Hawk Auction House"
                 val found = query.results(snapshot.auctions)
                 MC.instance.execute {
                     filterBusy = false
-                    if (!closed && revision == queryRevision) {
-                        val changed = matches != found
-                        matches = found; renderResults(animate = changed)
+                    if (!closed && !menuClosing && revision == queryRevision) {
+                        if (matches != found) { matches = found; renderResults(animate = false) }
+                        else count.text(Component.literal("${matches.size} matches in ${AuctionAPI.index.view.auctions.size} indexed listings").withColor(MenuTheme.MUTED))
                     }
                 }
             }

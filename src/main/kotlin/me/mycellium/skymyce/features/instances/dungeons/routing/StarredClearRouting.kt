@@ -65,6 +65,8 @@ object StarredClearRouting : SkyMyceModule() {
     private var nextObservation = 0L
     private var nextPositionSample = 0L
     private var route: RoomRoute? = null
+    private var routeCursor = -1
+    private var lineStart = 0
     private var lines: List<PathLine> = emptyList()
     private var startLines: List<PathLine> = emptyList()
     private var markers: List<Marker> = emptyList()
@@ -73,17 +75,18 @@ object StarredClearRouting : SkyMyceModule() {
     private var lastMillis = 0.0
     private var complete = false
 
-    private data class PathLine(val from: Vec3, val to: Vec3, val healer: Boolean)
+    private data class PathLine(val from: Vec3, val to: Vec3, val healer: Boolean, val pathIndex: Int = 0)
     private data class Marker(val box: AABB, val pos: BlockPos, val label: String, val state: RoomTargetState, val next: Boolean)
 
     override fun init() {
         reload()
+        RoomTemplateRecorder.init()
         ClientTickEvents.END_CLIENT_TICK.register { tickRouting() }
         ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, false) }
         ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, true) }
     }
 
-    override fun onDisable() { MC.instance.execute { pauseRoom() } }
+    override fun onDisable() { MC.instance.execute { RoomTemplateRecorder.cancel(); pauseRoom() } }
 
     fun command() = literal("route")
         .executes { it.source.sendFeedback(Component.literal(summary())); 1 }
@@ -92,6 +95,7 @@ object StarredClearRouting : SkyMyceModule() {
             reload()
             it.source.sendFeedback(Component.literal("Reloading dungeon-routing-rooms.json")); 1
         })
+        .then(RoomTemplateRecorder.command({ catalog }, ::reload))
 
     private fun summary(): String {
         val base = "Sky-Hawk routing: $catalogStatus. $status"
@@ -140,6 +144,7 @@ object StarredClearRouting : SkyMyceModule() {
 
     private fun resetRun() {
         run++
+        RoomTemplateRecorder.cancel()
         clearRoom()
         progress.clear()
         finishedRooms.clear()
@@ -197,7 +202,8 @@ object StarredClearRouting : SkyMyceModule() {
             val position = player.position()
             val point = RoomPoint(position.x, position.y, position.z)
             val current = room
-            if (current != null && !contains(current, position)) clearRoom()
+            if (current != null && !current.template.bounds.containsPlayer(current.transform.toLocal(
+                    GridCell(floor(position.x).toInt(), floor(position.y).toInt(), floor(position.z).toInt())), !player.onGround())) clearRoom()
             if (room == null) {
                 if (now < nextRecognition) return@measure
                 nextRecognition = now + 2000
@@ -212,7 +218,7 @@ object StarredClearRouting : SkyMyceModule() {
                     progress.remove(oldest)
                     finishedRooms.remove(oldest)
                 }
-                targets = progress.getOrPut(found.key) { RoomTargetStates(found.template.targets.keys) }
+                targets = progress.getOrPut(found.key) { RoomTargetStates(found.template.targetCounts) }
                 complete = found.key in finishedRooms
                 updates.updateContext(RoomRoutingContext(epoch, run, found.key.toString()), now)
                 builder = RoomGeometryBuilder(world, found)
@@ -245,6 +251,11 @@ object StarredClearRouting : SkyMyceModule() {
             nextPositionSample = now + 250
             val start = RoomWorldGeometry.playerCell(world, detected, snapshot, position)
             if (start == null) {
+                // The graph remains valid during an ordinary jump; sample again on landing.
+                if (!player.onGround()) {
+                    startLines = emptyList()
+                    return@measure
+                }
                 clearRoom()
                 nextRecognition = now + 2000
                 status = "No safe room connection; recognition deferred"
@@ -253,7 +264,10 @@ object StarredClearRouting : SkyMyceModule() {
             val beforeObservation = updates.revision
             updates.observe(start, point, now, Settings.automaticRecalculation)
             if (updates.revision != beforeObservation && updates.reason == RoomReplanReason.TELEPORTED) hidePath()
-            if (targets!!.remaining().isEmpty() && position.distanceToSqr(RoomWorldGeometry.feet(detected, snapshot.healer)) < 2.25) {
+            refreshRouteStart(world, detected, position)
+            val healerFeet = RoomWorldGeometry.feet(detected, snapshot.healer)
+            if (targets!!.remaining().isEmpty() && position.distanceToSqr(healerFeet) < 2.25 &&
+                RoomWorldGeometry.validConnector(world, position, healerFeet)) {
                 complete = true
                 finishedRooms.add(detected.key)
                 hidePath()
@@ -297,10 +311,19 @@ object StarredClearRouting : SkyMyceModule() {
                 workPending = false
                 if (updates.revision != request.revision) return@execute
                 val world = MC.instance.level
-                val actual = MC.instance.player?.position()
+                val player = MC.instance.player
+                val actual = player?.position()
                 if (world == null || world !== level || actual == null) { clearRoom(); return@execute }
-                val start = result?.path?.firstOrNull()?.let { RoomWorldGeometry.feet(detected, it) }
-                if (start != null && !RoomWorldGeometry.validConnector(world, actual, start)) {
+                val cursor = result?.liveStart(0, detected.template.targets,
+                    { RoomWorldGeometry.validConnector(world, actual, RoomWorldGeometry.feet(detected, it)) },
+                    { RoomWorldGeometry.feet(detected, it).distanceToSqr(actual) })
+                if (result != null && cursor == null) {
+                    if (!player.onGround()) {
+                        updates.invalidate(RoomReplanReason.MOVED, System.nanoTime() / 1_000_000)
+                        startLines = emptyList()
+                        status = "Waiting for a safe landing connection"
+                        return@execute
+                    }
                     invalidate(RoomReplanReason.TELEPORTED)
                     status = "Player moved before route publication; recalculating"
                     return@execute
@@ -310,11 +333,12 @@ object StarredClearRouting : SkyMyceModule() {
                 lastReason = request.reason.name
                 lastMillis = elapsed
                 lines = prepared
-                startLines = if (start == null) emptyList() else RoomWorldGeometry.connectorWaypoints(actual, start).orEmpty()
-                    .zipWithNext { a, b -> PathLine(a.add(0.0, 0.1, 0.0), b.add(0.0, 0.1, 0.0), result.targetOrder.isEmpty()) }
+                routeCursor = cursor ?: -1
+                lineStart = 0
+                refreshRouteStart(world, detected, actual)
                 rebuildMarkers()
                 status = if (result == null) "${detected.template.id}: remaining targets or healer unreachable"
-                    else "${detected.template.id}: ${result.targetOrder.size} targets, ${result.cost} walk steps"
+                    else "${detected.template.id}: ${result.targetOrder.size} targets, ${result.cost} movement blocks"
                 if (debug) SkyMyce.logger.info("Dungeon route: {}; origin={}, rotation={}, targets={}, healer={}, nodes={}, order={}, reason={}, plannerMs={}",
                     status, detected.transform.origin, detected.transform.quarterTurns, detected.template.targets.mapValues { targets!!.state(it.key) },
                     detected.template.healer, graph.cells.size, result?.targetOrder, lastReason, elapsed)
@@ -331,6 +355,34 @@ object StarredClearRouting : SkyMyceModule() {
     private fun hidePath() {
         lines = emptyList()
         startLines = emptyList()
+        routeCursor = -1
+        lineStart = 0
+    }
+
+    /** Update only the leading connector; cached pathfinding and target order remain untouched. */
+    private fun refreshRouteStart(world: ClientLevel, detected: DetectedRoom, actual: Vec3) {
+        if (routeCursor < 0) return
+        val currentRoute = route ?: return
+        val cursor = currentRoute.liveStart(routeCursor, detected.template.targets,
+            { RoomWorldGeometry.validConnector(world, actual, RoomWorldGeometry.feet(detected, it)) },
+            { RoomWorldGeometry.feet(detected, it).distanceToSqr(actual) })
+        if (cursor == null) {
+            invalidate(RoomReplanReason.TELEPORTED)
+            return
+        }
+        routeCursor = cursor
+        lineStart = lines.indexOfFirst { it.pathIndex > cursor }.takeIf { it >= 0 } ?: lines.size
+        val start = RoomWorldGeometry.feet(detected, currentRoute.path[cursor])
+        val leading = RoomWorldGeometry.connectorWaypoints(actual, start).orEmpty().zipWithNext { a, b ->
+            PathLine(a.add(0.0, 0.1, 0.0), b.add(0.0, 0.1, 0.0), currentRoute.targetOrder.isEmpty())
+        }
+        val firstLine = lines.getOrNull(lineStart)
+        val raisedStart = start.add(0.0, 0.1, 0.0)
+        // A compressed straight segment may begin before the consumed route cursor.
+        startLines = if (firstLine != null && firstLine.from != raisedStart) {
+            lineStart++
+            leading + PathLine(raisedStart, firstLine.to, firstLine.healer, firstLine.pathIndex)
+        } else leading
     }
 
     @Subscription(NameChangedEvent::class, ComponentAttachEvent::class, EntityInfoLineAttachEvent::class,
@@ -408,14 +460,15 @@ object StarredClearRouting : SkyMyceModule() {
 
     @Subscription
     fun onBlockChange(event: BlockChangeEvent) {
-        if (!active || room == null) return
+        if ((!active || room == null) && !RoomTemplateRecorder.isRecording) return
         val pos = event.pos.immutable()
         val observedEpoch = epoch
         // Block packets may publish on the network thread. Invalidate only after dispatch to the client.
         MC.instance.execute {
+            RoomTemplateRecorder.blockChanged(pos)
             if (observedEpoch != epoch || !active) return@execute
             val detected = room ?: return@execute
-            if (worldBounds(detected).inflate(2.0).contains(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())) {
+            if (RoomWorldGeometry.geometryBounds(detected).contains(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())) {
                 if (detected.template.landmarks.any { detected.transform.toWorld(it.cell) == GridCell(pos.x, pos.y, pos.z) }) clearRoom()
                 else rebuildGeometry()
             }
@@ -423,9 +476,10 @@ object StarredClearRouting : SkyMyceModule() {
     }
 
     private fun chunkChanged(world: ClientLevel, x: Int, z: Int, unloaded: Boolean) {
+        RoomTemplateRecorder.chunkChanged(world, x, z)
         if (!active || world !== level) return
         val detected = room ?: return
-        val box = worldBounds(detected).inflate(2.0)
+        val box = RoomWorldGeometry.geometryBounds(detected)
         if ((x + 1) * 16 <= box.minX || x * 16 > box.maxX || (z + 1) * 16 <= box.minZ || z * 16 > box.maxZ) return
         if (unloaded) { observeDeaths(); targets?.unloaded(); mobs.clear(); spawnPoints.clear(); rebuildMarkers() }
         rebuildGeometry()
@@ -453,8 +507,12 @@ object StarredClearRouting : SkyMyceModule() {
     }
 
     private fun drawPath(detected: DetectedRoom, result: RoomRoute, actual: Vec3): List<PathLine> {
-        val lastTarget = result.targetOrder.lastOrNull()?.let { detected.template.targets.getValue(it) }
-        val healerFrom = if (lastTarget == null) 0 else result.path.indexOfLast { it == lastTarget }
+        var healerFrom = 0
+        for (id in result.targetOrder) {
+            val index = result.path.subList(healerFrom, result.path.size).indexOf(detected.template.targets.getValue(id))
+            if (index < 0) return emptyList()
+            healerFrom += index
+        }
         val output = ArrayList<PathLine>()
         var from = actual
         for ((index, cell) in result.path.withIndex()) {
@@ -464,13 +522,13 @@ object StarredClearRouting : SkyMyceModule() {
                 val a = points[i - 1].add(0.0, 0.1, 0.0)
                 val b = points[i].add(0.0, 0.1, 0.0)
                 if (a.distanceToSqr(b) < 0.000001) continue
-                val healer = index > healerFrom || lastTarget == null
+                val healer = index > healerFrom || result.targetOrder.isEmpty()
                 val prior = output.lastOrNull()
                 if (prior != null && prior.healer == healer && prior.to == a &&
                     prior.to.subtract(prior.from).cross(b.subtract(a)).lengthSqr() < 0.000001 &&
                     prior.to.subtract(prior.from).dot(b.subtract(a)) > 0) {
-                    output[output.lastIndex] = PathLine(prior.from, b, healer)
-                } else output.add(PathLine(a, b, healer))
+                    output[output.lastIndex] = PathLine(prior.from, b, healer, index)
+                } else output.add(PathLine(a, b, healer, index))
             }
             from = to
         }
@@ -502,8 +560,8 @@ object StarredClearRouting : SkyMyceModule() {
             if (Settings.showRoute) {
                 var count = 0
                 var index = 0
-                while (index < startLines.size + lines.size) {
-                    val line = if (index < startLines.size) startLines[index] else lines[index - startLines.size]
+                while (index < startLines.size + lines.size - lineStart) {
+                    val line = if (index < startLines.size) startLines[index] else lines[lineStart + index - startLines.size]
                     index++
                     if (line.healer && !Settings.showHealer) continue
                     if (line.from.distanceToSqr(event.cameraPosition) > 128 * 128 && line.to.distanceToSqr(event.cameraPosition) > 128 * 128) continue

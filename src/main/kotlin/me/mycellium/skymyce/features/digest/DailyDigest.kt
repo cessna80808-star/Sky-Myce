@@ -207,7 +207,7 @@ object DailyDigest : SkyMyceModule() {
         }
         synchronizeContext()
         rebuildView()
-        MC.instance.setScreen(DailyDigestScreen())
+        me.mycellium.skymyce.ui.navigateMenu(DailyDigestScreen())
     }
 
     fun screenOpened() {

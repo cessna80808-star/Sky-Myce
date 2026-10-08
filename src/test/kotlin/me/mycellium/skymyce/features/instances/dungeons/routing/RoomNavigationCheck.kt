@@ -43,7 +43,9 @@ private fun maze(vararg rows: String): Pair<Fixture, GridCell> {
 
 private fun verifyPath(fixture: Fixture, start: GridCell, remaining: Set<String>, route: RoomRoute) {
     check(route.path.first() == start && route.path.last() == fixture.healer)
-    check(route.cost == route.path.size - 1)
+    check(route.cost == route.path.zipWithNext().sumOf { (from, to) ->
+        abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
+    })
     check(route.targetOrder.toSet() == remaining && route.targetOrder.size == remaining.size)
     check(route.path.all { it in fixture.cells })
     check(route.path.zipWithNext().all { (from, to) -> to in fixture.adjacency[from].orEmpty() })
@@ -58,17 +60,19 @@ private fun verifyPath(fixture: Fixture, start: GridCell, remaining: Set<String>
 private fun minimumCost(fixture: Fixture, start: GridCell, remaining: Set<String>): Int? {
     val distances = HashMap<Pair<GridCell, GridCell>, Int?>()
     fun distance(from: GridCell, to: GridCell): Int? = distances.getOrPut(from to to) {
-        val queue = ArrayDeque<Pair<GridCell, Int>>()
-        val visited = HashSet<GridCell>()
-        queue.add(from to 0)
-        visited.add(from)
-        var found: Int? = null
+        val queue = ArrayDeque<GridCell>()
+        val costs = hashMapOf(from to 0)
+        queue.add(from)
         while (queue.isNotEmpty()) {
-            val (cell, cost) = queue.removeFirst()
-            if (cell == to) { found = cost; break }
-            for (next in fixture.adjacency[cell].orEmpty()) if (visited.add(next)) queue.add(next to cost + 1)
+            val cell = queue.removeFirst()
+            for (next in fixture.adjacency[cell].orEmpty()) {
+                val candidate = costs.getValue(cell) + abs(cell.x - next.x) + abs(cell.y - next.y) + abs(cell.z - next.z)
+                if (candidate >= (costs[next] ?: Int.MAX_VALUE)) continue
+                costs[next] = candidate
+                queue.add(next)
+            }
         }
-        found
+        costs[to]
     }
     fun visit(from: GridCell, left: Set<String>): Int? {
         if (left.isEmpty()) return distance(from, fixture.healer)
@@ -152,10 +156,45 @@ private fun checkElevationsAndDirection() {
     val adjacency = cells.withIndex().associate { (index, cell) -> cell to listOfNotNull(cells.getOrNull(index - 1), cells.getOrNull(index + 1)) }
     val elevation = fixture(cells, adjacency, mapOf("upper" to cells[2]), cells.last())
     val route = requireNotNull(elevation.navigation.plan(cells.first(), elevation.targets.keys))
-    check(route.path == cells && route.cost == 3)
+    check(route.path == cells && route.cost == 5)
     verifyPath(elevation, cells.first(), elevation.targets.keys, route)
 
-    // Forward target searches are necessary: reversed terminal BFS gives incorrect reachability.
+    // Four uphill/downhill edges cost eight blocks; the six-edge level corridor is cheaper.
+    val slope = listOf(GridCell(0, 0, 0), GridCell(1, 1, 0), GridCell(2, 2, 0), GridCell(3, 1, 0), GridCell(4, 0, 0))
+    val level = listOf(slope.first()) + (0..4).map { GridCell(it, 0, 1) } + slope.last()
+    val paths = listOf(slope, level)
+    val walkable = paths.flatten().distinct()
+    val edges = walkable.associateWith { cell ->
+        paths.flatMap { it.zipWithNext() }.flatMap { (from, to) ->
+            when (cell) { from -> listOf(to); to -> listOf(from); else -> emptyList() }
+        }.distinct()
+    }
+    val practical = fixture(walkable, edges, mapOf("A" to slope.last()), slope.first())
+    val levelRoute = requireNotNull(practical.navigation.plan(slope.first(), practical.targets.keys))
+    check(levelRoute.cost == 12 && levelRoute.path.all { it.y == 0 })
+    verifyPath(practical, slope.first(), practical.targets.keys, levelRoute)
+    for (position in walkable) for (remaining in listOf(emptySet(), setOf("A"))) {
+        val result = requireNotNull(practical.navigation.plan(position, remaining))
+        check(result.cost == minimumCost(practical, position, remaining))
+        verifyPath(practical, position, remaining, result)
+    }
+    val multiple = fixture(walkable, edges, mapOf("A" to slope.last(), "B" to slope[2], "C" to level[3]), slope.first())
+    val ids = multiple.targets.keys.toList()
+    for (mask in 0 until (1 shl ids.size)) for (position in walkable) {
+        val remaining = ids.filterIndexed { index, _ -> mask and (1 shl index) != 0 }.toSet()
+        val result = requireNotNull(multiple.navigation.plan(position, remaining))
+        check(result.cost == minimumCost(multiple, position, remaining))
+        verifyPath(multiple, position, remaining, result)
+    }
+
+    val ladderCells = (0..3).map { GridCell(0, it, 0) }
+    val ladder = fixture(ladderCells, ladderCells.withIndex().associate { (index, cell) ->
+        cell to listOfNotNull(ladderCells.getOrNull(index + 1))
+    }, emptyMap(), ladderCells.last())
+    check(ladder.navigation.plan(ladderCells.first(), emptySet())?.cost == 3)
+    check(ladder.navigation.plan(ladderCells.last(), emptySet())?.cost == 0)
+
+    // Forward target searches are necessary: reversed terminal searches give incorrect reachability.
     val forward = (0..4).map { GridCell(it, 0, 0) }
     val oneWay = fixture(forward, forward.withIndex().associate { (index, cell) -> cell to listOfNotNull(forward.getOrNull(index + 1)) },
         mapOf("A" to forward[2], "B" to forward[1]), forward.last())
@@ -180,6 +219,40 @@ private fun checkStability() {
     check(room.navigation.plan(room.cells[2], room.targets.keys, minimumImprovement = -1) == null)
 }
 
+private fun checkLiveStart() {
+    val room = line(24, mapOf("A" to 10, "B" to 18), 23)
+    val route = requireNotNull(room.navigation.plan(room.cells.first(), room.targets.keys))
+    fun squared(cell: GridCell, x: Double) = (cell.x - x) * (cell.x - x)
+    check(route.liveStart(0, room.targets, { true }) { squared(it, 5.0) } == 5)
+    check(route.liveStart(0, room.targets, { true }) { squared(it, 9.0) } == 8) // Forward window is bounded.
+    check(route.liveStart(8, room.targets, { true }) { squared(it, 18.0) } == 10) // Never skip A to reach B.
+    check(route.liveStart(8, room.targets, { true }) { squared(it, 5.0) } == 5)
+    check(route.liveStart(8, room.targets, { true }) { squared(it, 0.0) } == 4) // Backward window is bounded.
+    check(route.liveStart(Int.MAX_VALUE, room.targets, { true }) { squared(it, 23.0) } == 10)
+    check(route.liveStart(Int.MIN_VALUE, room.targets, { true }) { squared(it, 0.0) } == 0)
+    check(route.liveStart(4, room.targets, { false }) { squared(it, 4.0) } == null)
+    check(route.liveStart(4, emptyMap(), { true }) { 0.0 } == null)
+    check(route.copy(path = emptyList()).liveStart(0, room.targets, { true }) { 0.0 } == null)
+    check(route.copy(path = room.cells.take(5)).liveStart(0, room.targets, { true }) { 0.0 } == null)
+    check(route.liveStart(4, room.targets, { true }) { Double.NaN } == null)
+    check(route.liveStart(4, room.targets, { true }) { Double.POSITIVE_INFINITY } == null)
+    check(route.liveStart(4, room.targets, { true }) { -1.0 } == null)
+    check(route.liveStart(4, room.targets, { true }) { 1.0 } == 4) // Equal distances retain current progress.
+
+    val healerOnly = requireNotNull(room.navigation.plan(room.cells.first(), emptySet()))
+    check(healerOnly.liveStart(15, room.targets, { true }) { squared(it, 23.0) } == 23)
+    check(healerOnly.liveStart(23, emptyMap(), { true }) { squared(it, 20.0) } == 20)
+
+    val (wall, start) = maze("S#A", ".#.", "...", "H..")
+    val detour = requireNotNull(wall.navigation.plan(start, wall.targets.keys))
+    val rejected = mutableSetOf<GridCell>()
+    val selected = detour.liveStart(0, wall.targets, { cell ->
+        if (cell.x == 2) { rejected.add(cell); false } else true
+    }) { cell -> if (cell.x == 2) 0.0 else 1.0 + cell.z }
+    check(rejected.isNotEmpty() && selected == 0) // Nearby nodes behind the wall require a safe connector.
+    check(detour.liveStart(0, wall.targets, { false }) { 0.0 } == null)
+}
+
 private fun checkValidationAndSnapshots() {
     val start = GridCell(0, 0, 0)
     val target = GridCell(3, 0, 0)
@@ -189,6 +262,9 @@ private fun checkValidationAndSnapshots() {
     check(disconnected.navigation.plan(start, emptySet()) == null)
     check(disconnected.navigation.plan(target, setOf("missing")) == null)
     check(disconnected.navigation.plan(GridCell(2, 0, 0), emptySet()) == null)
+    val blockedTarget = fixture(listOf(start, target), emptyMap(), mapOf("A" to target), start)
+    check(blockedTarget.navigation.plan(start, setOf("A")) == null)
+    check(blockedTarget.navigation.plan(start, emptySet())?.cost == 0) // A completed inaccessible target no longer blocks the healer.
     check(RoomNavigation.create(listOf(start), emptyMap(), mapOf("starred.alpha" to start), start)
         ?.plan(start, setOf("starred.alpha"))?.targetOrder == listOf("starred.alpha"))
     check(RoomNavigation.create(emptyList(), emptyMap(), emptyMap(), start) == null)
@@ -232,8 +308,9 @@ fun checkRoomNavigation() {
     checkOptimalRoutes()
     checkElevationsAndDirection()
     checkStability()
+    checkLiveStart()
     checkValidationAndSnapshots()
-    println("Room navigation checks passed: supplied safe geometry, four rotations, wall detours, exact total-route optimization, healer, elevations, directed paths, bounded inputs and stable replanning")
+    println("Room navigation checks passed: supplied safe geometry, four rotations, wall detours, exact total-route optimization, healer, weighted elevations, directed paths, bounded inputs and stable replanning")
 }
 
 fun main() = checkRoomNavigation()

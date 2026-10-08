@@ -35,7 +35,7 @@ function fakeBridge({ onMessage, onResult = () => {}, receipts = memoryReceipts(
       assert.equal(options.maxPayload, 32768); assert.equal(options.followRedirects, false); return socket;
     } });
   bridge.connect(); socket.emit('open');
-  socket.emit('message', Buffer.from(JSON.stringify({ type: 'bridge_ready', protocol: 3, room: GLOBAL_ROOM })), false);
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'bridge_ready', protocol: 3, room: GLOBAL_ROOM, globalChat: true })), false);
   return { bridge, socket, sent, receive: packet => socket.emit('message', Buffer.from(JSON.stringify(packet)), false) };
 }
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
@@ -186,6 +186,41 @@ test('global bridge ACKs successful sends and cached retries but never claims fa
   assert.equal(restarted.sent.length, 1);
   const failed = fakeBridge({ onMessage: async () => { throw new Error('Offline'); } });
   t.after(() => failed.bridge.close()); failed.receive(minecraft()); await settle(); assert.equal(failed.sent.length, 0);
+});
+
+test('global bridge requires advertised capability and results from its own scope', t => {
+  const results = [];
+  const f = fakeBridge({ onResult: (...args) => results.push(args) });
+  t.after(() => f.bridge.close());
+  f.bridge.ready = false;
+  f.receive({ type: 'bridge_ready', protocol: 3, room: GLOBAL_ROOM });
+  assert.equal(f.bridge.ready, false);
+  assert.equal(f.bridge.send(globalDiscordPacket(message(), guild, channel)), false);
+  f.receive({ type: 'bridge_ready', protocol: 3, room: GLOBAL_ROOM, globalChat: true });
+  assert.equal(f.bridge.ready, true);
+  f.receive({ type: 'irc_result', id: message().id });
+  f.receive({ type: 'irc_result', scope: 'friends', id: message().id });
+  assert.equal(results.length, 0);
+  f.receive({ type: 'irc_result', scope: 'global', id: message().id });
+  assert.deepEqual(results, [[message().id, null]]);
+});
+
+test('queued Discord delivery respects the backend deadline and shutdown before posting', async t => {
+  let now = 1000, calls = 0;
+  const f = fakeBridge({ now: () => now, onMessage: async () => { calls++; return { id: discordId }; } });
+  t.after(() => f.bridge.close());
+  f.receive({ ...minecraft(), expiresAt: 1500 });
+  now = 1500;
+  await settle();
+  assert.equal(calls, 0); assert.equal(f.sent.length, 0); assert.equal(f.bridge.inFlight.size, 0);
+  for (const expiry of [null, '2000', 1000, 121001]) f.receive({ ...minecraft(), expiresAt: expiry });
+  f.receive(minecraft('b'.repeat(32), now - 120000));
+  await settle(); assert.equal(calls, 0);
+  f.receive({ ...minecraft('c'.repeat(32)), expiresAt: 2000 });
+  await settle(); assert.equal(calls, 1); assert.equal(f.sent.length, 1);
+  f.receive({ ...minecraft('d'.repeat(32)), expiresAt: 2000 });
+  f.bridge.close();
+  await settle(); assert.equal(calls, 1); assert.equal(f.sent.length, 1);
 });
 
 test('a restored native receipt ACKs the same outbox ID after a lost connection without sending another Discord message', async t => {

@@ -70,6 +70,9 @@ fun checkStartup() {
     check(startupError(AuthorizationDenied("device_reset_required")) == deviceHelp)
     check("seven-day cooldown" in deviceHelp)
     check("Do not reset your HWID" in startupError(HardwareIdentityUnavailable()))
+    val identityConflict = startupError(IOException(token, InstallationIdentityConflict()))
+    check("Both have been preserved" in identityConflict && "do not reset your HWID" in identityConflict && token !in identityConflict)
+    check("InstallationIdentityConflict" in startupFailureDiagnostic(InstallationIdentityConflict()))
     for (code in listOf("HWID_MISMATCH", "device_reset_required", "device_reset_cooldown", "device_transfer_cooldown", "device_owned", "device_revoked",
         "minecraft_account_owned", "minecraft_proof_invalid", "version_denied", "loader_update_required", "launch_authorization_required", "platform_changed", "authorization_revoked")) {
         check(!startupActivationAllowed(code)) // Another code must never bypass an account/device restriction.
@@ -84,7 +87,8 @@ fun checkStartup() {
         check(token !in startupError(failure))
     }
     // Catch accidentally adding Minecraft render/game dependencies to the pre-game path.
-    for (name in listOf("StartupLoader", "StartupAccount", "StartupWindow", "LoaderApi", "MinecraftProofDataKt", "Installation", "LaunchSession", "LaunchSessionKt", "AuthorizationState", "SignedFiles")) {
+    for (name in listOf("StartupLoader", "StartupAccount", "StartupWindow", "LoaderApi", "MinecraftProofDataKt", "Installation", "InstallationKt",
+        "InstallationDirectoryKt", "LaunchSession", "LaunchSessionKt", "AuthorizationState", "SignedFiles")) {
         val resource = "/me/mycellium/skymyce/loader/$name.class"
         val bytes = requireNotNull(StartupAccount::class.java.getResourceAsStream(resource)).use { it.readBytes() }
         check("net/minecraft/" !in String(bytes, Charsets.ISO_8859_1)) { "$name depends on Minecraft initialization" }

@@ -60,10 +60,11 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             val perRow = if (panelWidth < 420) 2 else 4
             if (!more || height >= 340) TrackerPage.entries.chunked(perRow).forEach { tabs -> child(row().apply { tabs.forEach { tab ->
                 child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) {
+                    if (filter.page == tab) return@button
                     val direction = if (tab.ordinal < filter.page.ordinal) -1 else 1
                     change(filter.copy(page = tab)); rebuildMenu(direction)
                 }
-                    .apply { if (filter.page == tab) message = message.copy().withColor(MenuTheme.ACCENT) }
+                    .apply { navigation = true; selected = { filter.page == tab } }
                     .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
             } }) }
             child(row().apply {
@@ -146,6 +147,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun change(next: TrackerFilter) { preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis(); AcquisitionRepository.remember(filter) }
     override fun tick() {
         super.tick()
+        if (menuClosing) return
         if (!::results.isInitialized) return
         val context = AcquisitionRepository.currentContext()
         if (!preferencesEdited && filter != AcquisitionRepository.preferences) {
@@ -162,13 +164,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 val computed = runCatching { trackerView(archive, legacy, query, context) }
                 MC.instance.execute {
                     busy = false
-                    if (!closed && token == generation) computed.fold({ view = it; renderView() }, { status.text(Component.literal("Some saved records could not be displayed").withColor(MenuTheme.RED)) })
+                    if (!closed && !menuClosing && token == generation) computed.fold({ view = it; renderView(animate = false) }, { status.text(Component.literal("Some saved records could not be displayed").withColor(MenuTheme.RED)) })
                 }
             }
         }
     }
-    private fun renderView(direction: Int = 1) {
-        contentChanged(direction)
+    private fun renderView(direction: Int = 1, animate: Boolean = true) {
+        if (animate) contentChanged(direction)
         val filters = listOfNotNull(filter.floor, filter.mode?.let { if (it == "M") "Master" else "Normal" }, filter.chest,
             filter.from.takeIf(String::isNotEmpty)?.let { "From $it" }, filter.until.takeIf(String::isNotEmpty)?.let { "To $it" },
             filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
@@ -286,5 +288,5 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
-    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
+    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply { themed(); sizing(Sizing.fixed(width), Sizing.fixed(20)) }
 }

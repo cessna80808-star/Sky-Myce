@@ -18,10 +18,11 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
         name = TranslatableValue.literal("GUI Graphics Quality")
         description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls raster detail, shadows and ambient effects while keeping essential interaction feedback.")
     }
-    var animationMode by enum(GuiMotion.FULL) {
+    var animationMode by enum(GuiMotion.MEDIUM) {
         name = TranslatableValue.literal("GUI Animations")
-        description = TranslatableValue.literal("Full motion, reduced motion or immediate visual state changes. Controls remain usable in every mode.")
+        description = TranslatableValue.literal("Light is fast and precise, Medium is fluid, and Heavy adds physical depth. Reduced and Off simplify motion for accessibility.")
     }
+    var menuIntroPlayed by boolean(false) { condition = { false } }
 
     fun migrateDigestTheme() {
         if (!migratedDigestTheme) {

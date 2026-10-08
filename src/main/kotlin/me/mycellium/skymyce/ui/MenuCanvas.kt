@@ -13,6 +13,7 @@ import java.awt.geom.Arc2D
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
 
 /** The menu renderer. No Minecraft fonts, sprites, widgets or render pipelines are used here. */
 class MenuCanvas {
@@ -40,6 +41,11 @@ class MenuCanvas {
     private var previous = emptyList<Paint>()
     private var previousScale = Double.NaN
     private var image: BufferedImage? = null
+    private var transitionOld: BufferedImage? = null
+    private var transitionNew: BufferedImage? = null
+    private var transitionBlend: BufferedImage? = null
+    private var transitionRevision = 0L
+    private val transitionGradients = HashSet<Paint>()
     private val gradients = object : LinkedHashMap<Paint, Pair<Rectangle, BufferedImage>>(4, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Paint, Pair<Rectangle, BufferedImage>>?) = size > 4
     }
@@ -49,7 +55,7 @@ class MenuCanvas {
     var dirtyRegion: Rectangle? = null
         private set
 
-    fun begin() { pending.clear(); transform = Transform(); clip = null; opacity = 1.0; group = null }
+    fun begin() { pending.clear(); transitionGradients.clear(); transform = Transform(); clip = null; opacity = 1.0; group = null }
     private fun add(kind: Int, x: Double, y: Double, width: Double = 0.0, height: Double = 0.0,
                     extra: Double = 0.0, inner: Double = 0.0, color: Int = 0, topRight: Int = 0,
                     bottomRight: Int = 0, bottomLeft: Int = 0, runs: List<Run> = emptyList(), picture: BufferedImage? = null) {
@@ -80,9 +86,10 @@ class MenuCanvas {
         add(5, x, y, width, height, picture = image)
     }
 
-    fun snapshot(group: String): Snapshot? {
+    fun snapshot(group: String? = null): Snapshot? {
         val prefix = "$group/"
-        val commands = previous.filter { it.group == group || it.group?.startsWith(prefix) == true }
+        val commands = previous.filter { if (group == null) it.group != "tooltip" && it.group != "toast"
+            else it.group == group || it.group?.startsWith(prefix) == true }
         if (commands.isEmpty()) return null
         val source = image ?: return null
         val scale = previousScale
@@ -93,8 +100,11 @@ class MenuCanvas {
         val region = area?.takeUnless { it.isEmpty } ?: return null
         val captured = BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB)
         val graphics = captured.createGraphics()
-        graphics.composite = AlphaComposite.Src
-        graphics.drawImage(source, -region.x, -region.y, null)
+        graphics.translate(-region.x, -region.y)
+        prepare(graphics, scale)
+        // Capture this layer's paint, not the composited screen beneath/above its bounds.
+        // Baking the backdrop into every page makes rapid transitions progressively darker.
+        commands.forEach { paint(graphics, it, scale) }
         graphics.dispose()
         val values = listOf(region.x / scale, region.y / scale, region.width / scale, region.height / scale)
         // Flatten interrupted transitions once, so repeated A→B→C never grows a history of commands.
@@ -107,7 +117,61 @@ class MenuCanvas {
     fun replay(snapshot: Snapshot, alpha: Double = 1.0, x: Double = 0.0, y: Double = 0.0, boundary: Clip? = null) =
         snapshot.replay(this, alpha * opacity, x, y, boundary)
 
-    fun close() { pending.clear(); previous = emptyList(); gradients.clear(); image = null; dirtyRegion = null }
+    /** Blend isolated premultiplied layers once, so translucent panels retain their opacity during a swap. */
+    fun transition(snapshot: Snapshot, progress: Double, boundary: Clip, outgoingX: Double = 0.0, drawIncoming: () -> Unit) {
+        val amount = progress.coerceIn(0.0, 1.0)
+        if (amount >= 1.0 || !previousScale.isFinite() || boundary.width <= 0 || boundary.height <= 0) { drawIncoming(); return }
+        val first = pending.size
+        drawIncoming()
+        val incoming = pending.subList(first, pending.size).toList()
+        incoming.filter { it.kind == 2 }.forEach { transitionGradients += gradientKey(it) }
+        pending.subList(first, pending.size).clear()
+        // The capture already contains its displayed parent opacity; apply it exactly once.
+        snapshot.replay(this, 1.0, outgoingX, 0.0, boundary)
+        val outgoing = pending.subList(first, pending.size).toList()
+        pending.subList(first, pending.size).clear()
+        val scale = previousScale
+        val left = kotlin.math.floor(boundary.x * scale).toInt()
+        val top = kotlin.math.floor(boundary.y * scale).toInt()
+        val w = (kotlin.math.ceil((boundary.x + boundary.width) * scale).toInt() - left).coerceAtLeast(1)
+        val h = (kotlin.math.ceil((boundary.y + boundary.height) * scale).toInt() - top).coerceAtLeast(1)
+        if (transitionBlend?.width != w || transitionBlend?.height != h) {
+            transitionOld = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB_PRE)
+            transitionNew = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB_PRE)
+            transitionBlend = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB_PRE)
+        }
+        fun rasterize(target: BufferedImage, commands: List<Paint>) {
+            val graphics = target.createGraphics()
+            try {
+                graphics.composite = AlphaComposite.Clear; graphics.fillRect(0, 0, w, h)
+                graphics.composite = AlphaComposite.SrcOver
+                graphics.translate(-left, -top); prepare(graphics, scale)
+                graphics.clip(Rectangle2D.Double(boundary.x.toDouble(), boundary.y.toDouble(), boundary.width.toDouble(), boundary.height.toDouble()))
+                commands.forEach { paint(graphics, it, scale) }
+            } finally { graphics.dispose() }
+        }
+        rasterize(transitionOld!!, outgoing); rasterize(transitionNew!!, incoming)
+        val oldPixels = (transitionOld!!.raster.dataBuffer as DataBufferInt).data
+        val newPixels = (transitionNew!!.raster.dataBuffer as DataBufferInt).data
+        val blended = (transitionBlend!!.raster.dataBuffer as DataBufferInt).data
+        val weight = (amount * 256).toInt(); val inverse = 256 - weight
+        for (index in blended.indices) {
+            val a = oldPixels[index]; val b = newPixels[index]
+            val rb = (((a and 0x00FF00FF) * inverse + (b and 0x00FF00FF) * weight) ushr 8) and 0x00FF00FF
+            val ag = (((a ushr 8 and 0x00FF00FF) * inverse + (b ushr 8 and 0x00FF00FF) * weight) ushr 8) and 0x00FF00FF
+            blended[index] = rb or (ag shl 8)
+        }
+        // This reusable raster changes in place; its command revision must invalidate the damage cache.
+        pending += Paint(5, left / scale, top / scale, w / scale, h / scale, extra = (++transitionRevision).toDouble(),
+            transform = Transform(), clip = boundary, picture = transitionBlend, group = group)
+    }
+
+    fun close() {
+        pending.clear(); previous = emptyList(); gradients.clear(); transitionGradients.clear(); image = null; dirtyRegion = null
+        releaseTransition()
+    }
+
+    fun releaseTransition() { transitionOld = null; transitionNew = null; transitionBlend = null }
 
     /** Cold developer diagnostics; no map allocation occurs during ordinary paint. */
     fun cacheSizes(): Map<String, Long> = mapOf(
@@ -115,6 +179,7 @@ class MenuCanvas {
         "gradients" to gradients.size.toLong(), "glyphs" to glyphs.size.toLong(),
         "fonts" to fonts.size.toLong(), "lineMetrics" to lines.size.toLong(),
         "rasterBytes" to ((image?.width ?: 0).toLong() * (image?.height ?: 0) * 4),
+        "transitionBytes" to ((transitionBlend?.width ?: 0).toLong() * (transitionBlend?.height ?: 0) * 12),
         "gradientBytes" to gradients.values.sumOf { it.second.width.toLong() * it.second.height * 4 })
 
     /** Hover/tooltips only repaint their old and new bounds, including the underlying menu layers. */
@@ -134,23 +199,30 @@ class MenuCanvas {
         val g = image!!.createGraphics()
         g.clip = dirtyRegion
         g.composite = AlphaComposite.Clear; g.fillRect(0, 0, w, h); g.composite = AlphaComposite.SrcOver
+        prepare(g, scale)
+        pending.forEach { paint(g, it, scale) }
+        g.dispose()
+        gradients.keys.retainAll(pending.filter { it.kind == 2 }.map { gradientKey(it) }.toSet() + transitionGradients)
+        previous = pending.toList(); previousScale = scale; revision++
+        return image!!
+    }
+
+    private fun prepare(g: Graphics2D, scale: Double) {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
         g.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
         g.scale(scale, scale)
-        pending.forEach { command ->
-            val paint = g.create() as Graphics2D
+    }
+
+    private fun paint(g: Graphics2D, command: Paint, scale: Double) {
+        val paint = g.create() as Graphics2D
+        try {
             command.clip?.let { paint.clip(Rectangle2D.Double(it.x.toDouble(), it.y.toDouble(), it.width.toDouble(), it.height.toDouble())) }
             val t = command.transform
             paint.transform(AffineTransform(t.a, t.b, t.c, t.d, t.x, t.y))
             if (command.opacity < 1.0) paint.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, command.opacity.toFloat())
             draw(paint, command, scale)
-            paint.dispose()
-        }
-        g.dispose()
-        gradients.keys.retainAll(pending.filter { it.kind == 2 }.map { gradientKey(it) }.toSet())
-        previous = pending.toList(); previousScale = scale; revision++
-        return image!!
+        } finally { paint.dispose() }
     }
 
     private fun damage(width: Int, height: Int, scale: Double): Rectangle? {
@@ -307,6 +379,8 @@ class MenuCanvas {
     }
 
     private fun drawGradient(g: Graphics2D, p: Paint) {
+        // Adjacent strips must share a hard boundary, including at fractional raster scales.
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF)
         val v = p
         val clip = g.clipBounds
         val first = kotlin.math.floor((clip?.minY ?: v[1]) - v[1] - 1).toInt().coerceAtLeast(0)
@@ -378,8 +452,13 @@ class MenuCanvas {
             return width
         }
         private fun mix(a: Int, b: Int, f: Double): Int {
+            if (a == b) return a
             var result = 0
-            for (shift in listOf(0, 8, 16, 24)) result = result or ((((a ushr shift and 255) * (1 - f) + (b ushr shift and 255) * f).toInt()) shl shift)
+            for (shift in listOf(0, 8, 16, 24)) {
+                val start = a ushr shift and 255
+                val end = b ushr shift and 255
+                result = result or (kotlin.math.round(start + (end - start) * f).toInt().coerceIn(0, 255) shl shift)
+            }
             return result
         }
     }

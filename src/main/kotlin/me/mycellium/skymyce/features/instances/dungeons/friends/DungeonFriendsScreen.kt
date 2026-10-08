@@ -82,6 +82,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
 
     override fun tick() {
         super.tick()
+        if (menuClosing) return
         if (!::results.isInitialized) return
         if (seenPartyRevision != DungeonFriends.partyRevision) {
             seenPartyRevision = DungeonFriends.partyRevision
@@ -94,7 +95,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
         )
         if (state != renderedState) {
             renderedState = state
-            updateResults()
+            updateResults(animate = false)
         }
         actions.forEach { (button, tooltip) ->
             val reason = DungeonFriends.actionUnavailable
@@ -220,7 +221,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             gap(6)
             val field = MenuTextBox(Sizing.expand()).apply {
                 setMaxLength(16); text(search); setHint(Component.literal("Search friends..."))
-                onChanged().subscribe { search = it; updateResults() }
+                onChanged().subscribe { search = it; updateResults(animate = false) }
             }
             child(field)
             child(button("Clear", 42) { field.text("") }.tooltip(Component.literal("Clear the friend search")))
@@ -284,9 +285,9 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
         tooltip(Component.literal("Sort by ${value.label}; click again to reverse"))
     }
 
-    private fun updateResults() {
+    private fun updateResults(animate: Boolean = true) {
         if (!::results.isInitialized) return
-        contentChanged()
+        if (animate) contentChanged()
         floorButton.message = Component.literal("§b${floor.name} v")
         val wanted = wantedClasses()
         classButton.message = Component.literal("Missing (${wanted.size})")

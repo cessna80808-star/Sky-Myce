@@ -621,7 +621,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (!session.accountId || !session.uuid || !session.installationId || session.generation === undefined) {
         ws.close(4005, "Authorization required"); return false;
       }
-      if (!session.leaseExpiresAt || session.leaseExpiresAt <= Date.now()) {
+      if (!Number.isSafeInteger(session.leaseExpiresAt) || session.leaseExpiresAt! <= Date.now()) {
         ws.close(4006, "Authorization renewal required"); return false;
       }
       if (!session.buildId || !session.loaderVersion) {
@@ -636,6 +636,10 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error === "license_revoked" ? "license_revoked" : "not_authorized" }));
           ws.close(4005, "Sky-Myce authorization denied. Contact the owners.");
         }
+        return false;
+      }
+      if (session.leaseExpiresAt! <= Date.now()) {
+        if (ws.readyState === WebSocket.OPEN) ws.close(4006, "Authorization renewal required");
         return false;
       }
       return ws.readyState === WebSocket.OPEN;

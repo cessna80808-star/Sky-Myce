@@ -10,6 +10,20 @@ export async function checkGlobalChat(script, proof) {
     if (remove) await this.ctx.storage.deleteAlarm();
     return await this.ctx.storage.getAlarm();
   }\n  ${anchor}`);
+  // Delay exactly one authority reply to exercise expiration during an awaited RPC.
+  const authorityAnchor = 'checkSession(input) {';
+  assert.equal(script.split(authorityAnchor).length, 2);
+  script = script.replace(authorityAnchor, `async testOnlyDelayedCheckSession(input) {
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_global_auth_delay (uuid TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
+    const delay = this.ctx.storage.sql.exec("SELECT until_ms FROM test_global_auth_delay WHERE uuid=?", input.uuid).toArray()[0];
+    if (delay) {
+      this.ctx.storage.sql.exec("DELETE FROM test_global_auth_delay WHERE uuid=?", input.uuid);
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, delay.until_ms - Date.now())));
+    }
+    return this.checkSession(input);
+  }\n  ${authorityAnchor}`);
+  script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkSession(',
+    'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSession(');
   const signing = generateKeyPairSync('ed25519'), secret = 'global-chat-test-only-bridge-secret-32bytes';
   const channelId = '100000000000000001';
   const publicKey = key => key.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
@@ -131,6 +145,7 @@ export async function checkGlobalChat(script, proof) {
       if (hasBridge) {
         const delivery = await bot.next(); assert.equal(delivery.id, packets[0].id); assert.equal(delivery.from, people.get(client === bob ? 'Bob' : 'Alice').name);
         assert.equal(delivery.source, 'minecraft'); assert.equal(delivery.room, 'global-chat');
+        assert.ok(Number.isSafeInteger(delivery.expiresAt) && delivery.expiresAt > delivery.timestamp && delivery.expiresAt <= delivery.timestamp + 120000);
         return { packet: packets[recipients.indexOf(client)], packets, delivery, requestId };
       }
       return { packet: packets[recipients.indexOf(client)], packets, requestId };
@@ -214,6 +229,19 @@ export async function checkGlobalChat(script, proof) {
     await discord('Reply with unavailable preview', { discordId: '888888888888888888', reply: { message_id: receiptId, from: 'Alice' } });
     assert.equal((await coordinator.globalChatMinecraft({ ...sender(alicePerson), discordId: bobPerson.discordId }, { id: id(), text: 'forged binding-only identity' })).error, 'not_authorized');
     assert.equal((await coordinator.globalChatMinecraft({ ...sender(alicePerson), leaseExpiresAt: Date.now() - 1 }, { id: id(), text: 'expired internal sender' })).error, 'not_authorized');
+    for (const leaseExpiresAt of [NaN, Infinity, Date.now() + 300000.5]) {
+      assert.equal((await coordinator.globalChatMinecraft({ ...sender(alicePerson), leaseExpiresAt }, { id: id(), text: 'invalid internal expiration' })).error, 'not_authorized');
+    }
+    const senderDeadline = Date.now() + 500;
+    await authority.exec('INSERT INTO test_global_auth_delay VALUES(?,?)', alicePerson.uuid, senderDeadline + 100);
+    assert.equal((await coordinator.globalChatMinecraft({ ...sender(alicePerson), leaseExpiresAt: senderDeadline }, { id: id(), text: 'expires during sender authorization' })).error, 'not_authorized');
+    await ping(bot); await ping(alice); await ping(bob);
+    const messageDeadline = Date.now() + 500;
+    await authority.exec('INSERT INTO test_global_auth_delay VALUES(?,?)', alicePerson.uuid, messageDeadline + 100);
+    await (await mf.getDurableObjectNamespace('RELAY_ROOMS')).getByName('friends').globalChatDeliver({
+      id: id(), source: 'discord', from: 'Discord user', text: 'outbox expires during recipient authorization', timestamp: Date.now(),
+      expiresAt: messageDeadline, discordId: '777777777777777777', mentions: [alicePerson.discordId] });
+    await ping(alice); // An expired message cannot display or produce a mention notification.
     await clearQuota();
     const closing = closeEvent(bot.ws); bot.ws.close(); await closing;
     const revokedPending = await minecraft(alice, 'Queued before revocation', [alice, bob, otherAlice], false);
@@ -228,11 +256,12 @@ export async function checkGlobalChat(script, proof) {
     assert.equal((await coordinator.globalChatMinecraft(sender(alicePerson), { id: id(), text: 'revoked after route' })).error, 'not_authorized');
     await clearQuota();
     const expiryClose = closeEvent(bob.ws);
-    const shortBob = await connect('Bob', 'testing', { claims: { exp: Date.now() + 1000 } });
+    const recipientDeadline = Date.now() + 1000;
+    const shortBob = await connect('Bob', 'testing', { claims: { exp: recipientDeadline } });
     assert.equal((await expiryClose).code, 4001); await subscribe(shortBob);
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await authority.exec('INSERT INTO test_global_auth_delay VALUES(?,?)', bobPerson.uuid, recipientDeadline + 100);
     const shortClosed = closeEvent(shortBob.ws);
-    await discord('Expired clients cannot receive global chat', { discordId: '999999999999999999' }, []);
+    await discord('Clients expiring during authorization cannot receive global chat', { discordId: '999999999999999999' }, []);
     assert.equal((await shortClosed).code, 4006);
     // Durable cleanup removes expired body rows and stops exhausted retry records.
     const pending = await coordinator.globalChatMinecraft(sender(bobPerson), { id: id(), text: 'bounded retry fixture' }); assert.equal(pending.ok, true);

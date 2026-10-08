@@ -33,12 +33,14 @@ fun checkSettings() {
     check(rows.map { it.path }.containsAll(listOf("devMode", "gatherData", "openConfigKey")))
     check(rows.isNotEmpty() && rows.map { it.path }.distinct().size == rows.size)
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
-    check(rows.map { settingsTab(it.path) }.toSet() == SettingsTab.entries.toSet())
-    SettingsTab.entries.forEach { tab ->
-        val groups = settingGroups(rows, tab)
-        check(groups.values.flatten().map { it.path }.toSet() == rows.filter { settingsTab(it.path) == tab }.map { it.path }.toSet())
+    val catalog = me.mycellium.skymyce.ui.MenuCatalog(rows)
+    val allScopedPaths = catalog.features.flatMap { feature -> settingGroups(rows, feature.id).values.flatten().map { it.path } }
+    check(allScopedPaths.sorted() == rows.map { it.path }.sorted()) { "Every persisted setting must have exactly one canonical feature/global owner" }
+    catalog.features.forEach { feature ->
+        val groups = settingGroups(rows, feature.id)
+        check(groups.values.flatten().map { it.path }.toSet() == feature.settings.map { it.path }.toSet())
         groups.forEach { (name, settings) ->
-            check(settingGroups(rows, tab, name.uppercase())[name] == settings) { "Searching a feature must retain all its controls" }
+            check(settingGroups(rows, feature.id, name.uppercase())[name] == settings) { "Searching a feature must retain all its controls" }
         }
     }
     check(settingGroups(rows, SettingsTab.GENERAL, "no feature has this name").isEmpty())
@@ -79,7 +81,7 @@ fun checkSettings() {
         check(cards.zipWithNext().all { (a, b) -> a.x() + a.width() + gap == b.x() }) { "Settings module columns overlap" }
     }
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
-    check(settingsTab("General/Daily Digest/automatic") == SettingsTab.GENERAL)
+    check(settingsTab("General/Daily Digest/automatic") == SettingsTab.SOCIAL)
     check(settingsTab("General/Daily Digest/shareRng") == SettingsTab.SOCIAL)
     check(settingsTab("Party Finder/matchPb") == SettingsTab.PARTY)
     check(settingsTab("Dungeons/Dungeon Friends/enabled") == SettingsTab.PARTY)
@@ -92,6 +94,26 @@ fun checkSettings() {
     check(settingsTab("Dungeons/Dungeon Tracker/dungeonTracker") == SettingsTab.COMBAT)
     check(settingsTab("Theme & Appearance/opacity") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
+    check(settingGroups(rows, SettingsTab.GENERAL).values.flatten().map { it.path }.toSet() == setOf("gatherData", "devMode"))
+    check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
+    check(settingGroups(rows, "settings-performance").values.flatten().single().path == "Theme & Appearance/graphicsQuality")
+    check(settingGroups(rows, "party-finder").values.flatten().all {
+        it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
+    })
+    val decimal = rows.single { it.path == "Dungeons/negativeProfitThreshold" }.entry
+    check(settingNumber(decimal, "100.5") == 100.5)
+    listOf("NaN", "Infinity", "-1", "", "1000000000001").forEach { check(settingNumber(decimal, it) == null) }
+    val integer = rows.single { it.path == "Dungeons/valuableItemThreshold" }.entry
+    check(settingNumber(integer, "10") == 10 && settingNumber(integer, "10.5") == null)
+    val focusRow = settingsRow()
+    fun focusableControl() = object : io.wispforest.owo.ui.container.FlowLayout(io.wispforest.owo.ui.core.Sizing.fixed(20),
+        io.wispforest.owo.ui.core.Sizing.fixed(20), io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
+        override fun canFocus(source: io.wispforest.owo.ui.core.UIComponent.FocusSource) = true
+    }
+    val control = focusableControl()
+    val pin = focusableControl()
+    focusRow.child(control); focusRow.child(pin)
+    check(settingsFocusTarget(focusRow) === control) { "Search must focus the actual control before its Pin shortcut" }
     val devMode = rows.single { it.path == "devMode" }
     check(devMode.title == "Dev Mode" && settingsTab(devMode.path) == SettingsTab.GENERAL)
     val previousDevMode = Config.devMode
@@ -105,6 +127,15 @@ fun checkSettings() {
     check(HudTheme.ACCENT == 0x123456 && HudTheme.HUD_ACCENT == 0x123456)
     check(me.mycellium.skymyce.ui.MenuTheme.ACCENT == 0x123456) { "Custom menus lost the user's accent override" }
     ThemeConfig.primary = primary
+    val previousPreset = ThemeConfig.preset
+    val priorDocument = currentThemeEditorDocument()
+    try {
+        val nextPreset = ThemePreset.entries.first { it != previousPreset }
+        ThemeConfig.preset = nextPreset
+        val reopenedDocument = currentThemeEditorDocument()
+        check(reopenedDocument.preset == nextPreset && priorDocument.preset == previousPreset)
+        check(reopenedDocument.overrides == priorDocument.overrides) { "Refreshing a preset must retain existing palette overrides" }
+    } finally { ThemeConfig.preset = previousPreset }
     check(HudTheme.alpha(0x123456, 0) == 0x123456 && HudTheme.alpha(0x123456, 100) == 0xFF123456.toInt())
     check(HudTheme.blend(0, 0xFFFFFF, 100) == 0xFFFFFF)
     val report = digestShareText(DigestEntry("id", "§aHandle\n/command", activity = "dungeons", community = true))
@@ -125,6 +156,7 @@ fun checkSettings() {
 }
 
 private fun checkMenuTextureAndRuns() {
+    checkMenuGraphicsChanges()
     val colors = intArrayOf(0, 0xFF123456.toInt(), 0x8020A0E0.toInt(), 0x01336699)
     val images = listOf(java.awt.image.BufferedImage.TYPE_INT_ARGB, java.awt.image.BufferedImage.TYPE_INT_ARGB_PRE,
         java.awt.image.BufferedImage.TYPE_4BYTE_ABGR).flatMap { type ->
@@ -154,6 +186,56 @@ private fun checkMenuTextureAndRuns() {
         MenuCanvas.Run(" \uD83D\uDE00\u272A", 0x80AABBCC.toInt(), bold = true, italic = true, underline = true),
         MenuCanvas.Run(" tail", 0x80123456.toInt()))) { "Text capture split Unicode, lost styles/alpha, or failed to merge adjacent styles" }
     check(me.mycellium.skymyce.ui.menuTextRuns(net.minecraft.util.FormattedCharSequence.EMPTY, -1).isEmpty())
+}
+
+private fun checkMenuGraphicsChanges() {
+    class SubmittedTexture : AutoCloseable {
+        var closes = 0
+        override fun close() { closes++ }
+        fun renderExtractedFrame() { check(closes == 0) { "Graphics change disposed a texture still referenced by the extracted frame" } }
+    }
+    val fences = ArrayList<Runnable>()
+    val resources = me.mycellium.skymyce.ui.MenuTextureRetirement(fences::add)
+    val canvas = MenuCanvas()
+    var submitted: SubmittedTexture? = null
+    val retired = ArrayList<SubmittedTexture>()
+    // Repeated quality changes and window resizes must repaint and keep already-extracted frames valid.
+    for (size in listOf(160 to 90, 211 to 127, 160 to 90)) {
+        for (quality in me.mycellium.skymyce.ui.GuiQuality.entries.reversed()) {
+            canvas.begin()
+            canvas.gradient(0.0, 0.0, size.first.toDouble(), size.second.toDouble(), -1, 0x80AC7BF1.toInt(), 0, -1)
+            canvas.text(listOf(MenuCanvas.Run("Graphics: $quality ✓", -1)), 7.25, 9.5)
+            val image = canvas.finish(size.first, size.second, quality.rasterScale)
+            check(image.width == (size.first * quality.rasterScale).toInt() && image.height == (size.second * quality.rasterScale).toInt())
+            check(canvas.dirtyRegion == java.awt.Rectangle(0, 0, image.width, image.height)) { "Quality/size change did not replace all pixels" }
+            val upload = IntArray(image.width * image.height)
+            me.mycellium.skymyce.ui.menuTexturePixels(image, upload)
+            check(upload.contentEquals(image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+                .map(net.minecraft.util.ARGB::toABGR).toIntArray())) { "Quality change corrupted the uploaded canvas" }
+            submitted?.let { previous ->
+                retired += previous
+                resources.retire(previous); resources.retire(previous)
+                previous.renderExtractedFrame()
+            }
+            submitted = SubmittedTexture()
+        }
+        check(fences.isEmpty()) { "Retirement was fenced before the extracted frame could render" }
+        resources.afterTick()
+        retired.forEach(SubmittedTexture::renderExtractedFrame)
+        submitted!!.renderExtractedFrame()
+        fences.toList().forEach(Runnable::run); fences.clear()
+        check(retired.all { it.closes == 1 }) { "Retired textures leaked or closed twice" }
+        retired.clear()
+        submitted!!.renderExtractedFrame()
+    }
+    resources.retire(submitted!!); resources.afterTick()
+    val closingDuringExtraction = SubmittedTexture()
+    resources.retire(closingDuringExtraction)
+    resources.close(); resources.close()
+    fences.forEach(Runnable::run)
+    check(submitted!!.closes == 1 && closingDuringExtraction.closes == 1) { "Shutdown leaked pending resources or a fence closed them twice" }
+    canvas.close()
+    println("Menu graphics checks passed: every quality, resize/upload parity, deferred texture lifetime and shutdown cleanup")
 }
 
 private fun checkMenuTextMetrics() {
@@ -193,8 +275,14 @@ internal fun checkMenuDropdownInput() {
         val root = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
             io.wispforest.owo.ui.core.Sizing.fixed(viewport.width), io.wispforest.owo.ui.core.Sizing.fixed(viewport.height))
         root.inflate(io.wispforest.owo.ui.core.Size.of(viewport.width, viewport.height)); root.mount(null, 0, 0)
-        val popup = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
-            io.wispforest.owo.ui.core.Sizing.fixed(maxOf(116, popupWidth)), io.wispforest.owo.ui.core.Sizing.content())
+        // DropdownComponent initializes Fabric; use its native parent lifecycle and the shared focus policy.
+        var closing = false
+        val popup = object : io.wispforest.owo.ui.container.FlowLayout(
+            io.wispforest.owo.ui.core.Sizing.fixed(maxOf(116, popupWidth)), io.wispforest.owo.ui.core.Sizing.content(),
+            io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
+            private val exitFocus = io.wispforest.owo.ui.util.FocusHandler(this)
+            override fun focusHandler() = me.mycellium.skymyce.ui.menuDropdownFocus(super.focusHandler(), closing, exitFocus)
+        }
         val entries = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
             io.wispforest.owo.ui.core.Sizing.fill(), io.wispforest.owo.ui.core.Sizing.content()).apply {
             padding(io.wispforest.owo.ui.core.Insets.of(5))
@@ -216,8 +304,23 @@ internal fun checkMenuDropdownInput() {
             "Mounted dropdown selection was dismissed before dispatch at Minecraft GUI scale $scale"
         }
         val outside = click(1.0, 1.0)
+        closing = true
         check(me.mycellium.skymyce.ui.dismissMenuDropdownOutside(popup, outside))
         check(popup.parent() == null && popup !in root.children() && selected == 1)
+        val exitFocus = checkNotNull(popup.focusHandler()) { "Detached closing popup lost the focus handler required by owo drawChildren" }
+        check(exitFocus !== root.focusHandler() && exitFocus.focused() == null)
+        check(entries.focusHandler() === exitFocus && row.focusHandler() === exitFocus)
+        checkNotNull(entries.focusHandler()).lastFocusSource()
+        val replacementRoot = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
+            io.wispforest.owo.ui.core.Sizing.fixed(viewport.width), io.wispforest.owo.ui.core.Sizing.fixed(viewport.height))
+        replacementRoot.inflate(io.wispforest.owo.ui.core.Size.of(viewport.width, viewport.height)); replacementRoot.mount(null, 0, 0)
+        me.mycellium.skymyce.ui.mountMenuDropdown(replacementRoot, popup, 10, 10)
+        check(popup.focusHandler() === replacementRoot.focusHandler() && row.focusHandler() === replacementRoot.focusHandler()) {
+            "Remounted popup retained the detached exit's focus context"
+        }
+        closing = false
+        replacementRoot.removeChild(popup)
+        check(popup.focusHandler() == null) { "Detached open popup unexpectedly acquired an exit focus context" }
     }
     val white = 0xFFFFFFFF.toInt()
     fun paint(clipped: Boolean): java.awt.image.BufferedImage = MenuCanvas().run {

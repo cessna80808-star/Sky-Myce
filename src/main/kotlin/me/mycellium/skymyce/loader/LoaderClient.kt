@@ -288,7 +288,7 @@ object LoaderClient {
                     return@execute
                 }
                 when (cause) {
-                    is HardwareIdentityUnavailable -> {
+                    is HardwareIdentityUnavailable, is InstallationIdentityConflict -> {
                         authorization.deny(); nextAttempt = Long.MAX_VALUE
                         status = startupError(cause)
                     }

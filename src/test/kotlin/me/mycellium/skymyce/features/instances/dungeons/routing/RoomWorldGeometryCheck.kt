@@ -24,12 +24,12 @@ private class GeometryFixture(
     fun route(from: RoomPoint, to: RoomPoint): Boolean = validRoomConnector(from, to,
         loaded = { _, _ -> loaded },
         clearSegment = { a, b -> worldReads++; clear(a, b) },
-        supported = { point, depth ->
+        supported = { point, depth, radius ->
             worldReads++
             solids.any { box ->
                 box.max.y <= point.y && box.max.y > point.y - depth &&
-                    box.min.x < point.x + 0.3 && box.max.x > point.x - 0.3 &&
-                    box.min.z < point.z + 0.3 && box.max.z > point.z - 0.3
+                    box.min.x < point.x + radius && box.max.x > point.x - radius &&
+                    box.min.z < point.z + radius && box.max.z > point.z - radius
             }
         },
         climbable = { point -> worldReads++; ladder(point) })
@@ -42,10 +42,14 @@ fun checkRoomWorldGeometry() {
     val open = GeometryFixture(listOf(floor))
     check(open.route(start, start) && open.route(start, end) && open.route(end, start))
     check(roomConnectorWaypoints(start, end) == listOf(start, end))
+    val actualPlayer = RoomPoint(0.22, 0.0, 0.78)
+    check(open.route(actualPlayer, end))
+    check(requireNotNull(roomConnectorWaypoints(actualPlayer, end)).first() == actualPlayer)
 
     val wall = GeometryFixture(listOf(floor, solid(0.95, 0.0, 0.0, 1.05, 2.0, 1.0)))
     check(wall.clear(start, start) && wall.clear(end, end))
     check(!wall.route(start, end) && !wall.route(end, start)) // Empty endpoints cannot prove an edge.
+    check(!wall.route(actualPlayer, end)) // Player-to-node snapping obeys the same wall sweep.
     val fence = GeometryFixture(listOf(floor, solid(0.9375, 0.0, 0.25, 1.0625, 1.5, 0.75)))
     check(fence.clear(start, start) && fence.clear(end, end) && !fence.route(start, end))
     val ceiling = GeometryFixture(listOf(floor, solid(-4.0, 1.7, -4.0, 4.0, 2.0, 4.0)))
@@ -59,9 +63,24 @@ fun checkRoomWorldGeometry() {
     ))
     check(gap.route(start, start) && gap.route(end, end))
     check(!gap.route(start, end)) // A hole between supported endpoints still invalidates walking.
+    val betweenSamples = GeometryFixture(listOf(
+        solid(0.0, -1.0, 0.0, 0.53, 0.0, 1.0),
+        solid(1.27, -1.0, 0.0, 2.0, 0.0, 1.0),
+    ))
+    check(betweenSamples.route(start, start) && betweenSamples.route(end, end))
+    check(!betweenSamples.route(start, end) && !betweenSamples.route(end, start))
     check(!GeometryFixture(emptyList()).route(start, start))
     check(GeometryFixture(listOf(solid(-4.0, -1.0, -4.0, 4.0, -0.5, 4.0))).route(start, start))
     check(!GeometryFixture(listOf(solid(-4.0, -1.0, -4.0, 4.0, -0.61, 4.0))).route(start, start))
+
+    val slabFeet = RoomPoint(0.5, 0.5, 0.5)
+    val slabNode = RoomPoint(0.5, 1.0, 0.5)
+    val slab = GeometryFixture(listOf(solid(-4.0, -1.0, -4.0, 4.0, 0.5, 4.0)))
+    check(slab.route(slabFeet, slabNode) && slab.route(slabNode, slabFeet))
+    check(roomConnectorWaypoints(slabFeet, slabNode) == listOf(slabFeet, slabNode))
+    val slabWall = GeometryFixture(listOf(solid(-4.0, -1.0, -4.0, 4.0, 0.5, 4.0),
+        solid(0.4, 1.5, 0.4, 0.6, 1.6, 0.6)))
+    check(!slabWall.route(slabFeet, slabNode))
 
     val upper = RoomPoint(1.5, 1.0, 0.5)
     val step = solid(1.0, 0.0, 0.0, 2.0, 1.0, 1.0)
@@ -82,7 +101,7 @@ fun checkRoomWorldGeometry() {
     val ladder = GeometryFixture(emptyList(), ladder = { it.x == 0.5 && it.z == 0.5 && it.y in 0.0..1.0 })
     check(ladder.route(start, ladderTop) && ladder.route(ladderTop, start))
     check(roomConnectorWaypoints(start, ladderTop) == listOf(start, ladderTop))
-    check(!open.route(start, ladderTop)) // Same-column rises require a ladder, not a guessed jump.
+    check(!open.route(start, ladderTop)) // Full-block same-column rises need a ladder, not a guessed jump.
     val brokenLadder = GeometryFixture(emptyList(), ladder = { it.y == 0.0 || it.y == 1.0 })
     check(!brokenLadder.route(start, ladderTop))
 
@@ -93,9 +112,46 @@ fun checkRoomWorldGeometry() {
     check(!invalid.route(start, RoomPoint(0.5, 2.0, 0.5)))
     check(!invalid.route(RoomPoint(30_000_000.0, 0.0, 0.5), start) && invalid.worldReads == 0)
     check(!validRoomConnector(start, end, { _, _ -> true }, { _, _ -> error("Unavailable shape") },
-        { _, _ -> true }, { false }))
+        { _, _, _ -> true }, { false }))
 
-    println("Room world geometry checks passed: wall/fence sweeps, headroom, supports, stairs, ladders, unloaded geometry and render elbows")
+    val template = RoomTemplate("synthetic-only", setOf("F1"),
+        RoomBounds(GridCell(0, 0, 0), GridCell(2, 1, 2)), emptyList(),
+        setOf(GridCell(0, 0, 0)), emptyMap(), emptyMap(), GridCell(0, 0, 0), emptyMap())
+    for (turn in 0..3) {
+        val transform = RoomTransform(GridCell(-160, 64, 224), turn)
+        fun rotate(point: RoomPoint) = transform.toWorld(RoomPoint(point.x - 0.5, point.y, point.z - 0.5))
+            .let { RoomPoint(it.x + 0.5, it.y, it.z + 0.5) }
+        fun rotate(box: SolidBox): SolidBox {
+            val a = rotate(box.min)
+            val b = rotate(box.max)
+            return solid(minOf(a.x, b.x), minOf(a.y, b.y), minOf(a.z, b.z),
+                maxOf(a.x, b.x), maxOf(a.y, b.y), maxOf(a.z, b.z))
+        }
+        val rotatedStart = rotate(start)
+        val rotatedEnd = rotate(end)
+        check(GeometryFixture(listOf(rotate(floor))).route(rotate(actualPlayer), rotatedEnd))
+        check(!GeometryFixture(listOf(rotate(floor), rotate(solid(0.95, 0.0, 0.0, 1.05, 2.0, 1.0))))
+            .route(rotatedStart, rotatedEnd))
+        check(GeometryFixture(listOf(rotate(floor), rotate(step))).route(rotatedStart, rotate(upper)))
+        val bounds = RoomWorldGeometry.geometryBounds(DetectedRoom(template, transform))
+        for (cell in listOf(template.bounds.min, template.bounds.max)) {
+            val world = transform.toWorld(cell)
+            // Changes to support, side collision shapes and the block above jump headroom all invalidate.
+            check(bounds.contains(world.x - 1.0, world.y - 2.0, world.z - 1.0))
+            check(bounds.contains(world.x + 1.0, world.y + 3.0, world.z + 1.0))
+        }
+    }
+
+    val center = GridCell(0, 0, 0)
+    val candidates = (-1..1).flatMap { x -> (-1..1).flatMap { y -> (-1..1).map { z -> GridCell(x, y, z) } } }.toSet()
+    val connections = roomCaptureEdges(candidates).toList()
+    val next = connections.filter { it.first == center }.map { it.second }.toSet()
+    check(next.size == 14 && GridCell(0, 1, 0) in next && GridCell(1, 1, 0) in next)
+    check(center !in next && GridCell(1, 0, 1) !in next && GridCell(1, 1, 1) !in next)
+    check(connections.all { (from, to) -> to to from in connections })
+    check(roomCaptureEdges(setOf(center, GridCell(2, 0, 0))).none()) // No connector across missing candidate cells.
+
+    println("Room world geometry checks passed: wall/fence sweeps, headroom, continuous support, stairs, ladders, unloaded geometry, player starts and rotations")
 }
 
 fun main() = checkRoomWorldGeometry()

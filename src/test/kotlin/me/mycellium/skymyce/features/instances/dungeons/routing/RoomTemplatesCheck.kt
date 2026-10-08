@@ -40,8 +40,26 @@ fun main() {
     val catalog = syntheticCatalog().parseCatalog()
     val room = catalog.rooms.single()
     check(room.id == "synthetic-room" && room.walkable.size == 30 && room.targets.size == 2)
+    check(room.bounds.containsPlayer(room.bounds.min, false) && room.bounds.containsPlayer(room.bounds.max, false))
+    for (height in 2..3) {
+        val jumping = GridCell(3, height, 2)
+        check(room.bounds.containsPlayer(jumping, true) && !room.bounds.containsPlayer(jumping, false))
+        check(!room.bounds.contains(jumping))
+    }
+    check(!room.bounds.containsPlayer(GridCell(3, 4, 2), true))
+    check(!room.bounds.containsPlayer(GridCell(3, -1, 2), true))
+    for (outside in listOf(GridCell(-1, 0, 2), GridCell(6, 2, 2), GridCell(3, 0, -1), GridCell(3, 2, 5))) {
+        check(!room.bounds.containsPlayer(outside, true) && !room.bounds.containsPlayer(outside, false))
+    }
     check(room.adjacency.getValue(GridCell(1, 0, 1)).size == 4)
     check(room.healer == GridCell(5, 0, 4))
+    check(room.targetCounts == mapOf("a" to null, "b" to null))
+    val counted = syntheticCatalog().apply {
+        room().getAsJsonArray("targets")[0].asJsonObject.addProperty("count", 2)
+    }.parseCatalog().rooms.single()
+    check(counted.targetCounts == mapOf("a" to 2, "b" to null))
+    check(runCatching { (counted.targetCounts as MutableMap<String, Int?>).clear() }
+        .exceptionOrNull() is UnsupportedOperationException)
     check(runCatching { (room.walkable as MutableSet<GridCell>).clear() }.exceptionOrNull() is UnsupportedOperationException)
     check(runCatching { (room.adjacency.getValue(GridCell(1, 0, 1)) as MutableSet<GridCell>).clear() }
         .exceptionOrNull() is UnsupportedOperationException)
@@ -148,6 +166,12 @@ fun main() {
     reject { it.room().getAsJsonArray("walkable")[0].asJsonArray[0] = com.google.gson.JsonPrimitive(2_147_483_648L) }
     reject { it.room().getAsJsonArray("targets").add(it.room().getAsJsonArray("targets")[0].deepCopy()) }
     reject { it.room().getAsJsonArray("targets")[0].asJsonObject.add("cell", jsonCell(0, 1, 0)) }
+    for (count in listOf(0, -1, 129)) {
+        reject { it.room().getAsJsonArray("targets")[0].asJsonObject.addProperty("count", count) }
+    }
+    reject { it.room().getAsJsonArray("targets")[0].asJsonObject.addProperty("count", "2") }
+    reject { it.room().getAsJsonArray("targets")[0].asJsonObject.addProperty("count", 1.5) }
+    reject { it.room().getAsJsonArray("targets")[0].asJsonObject.add("count", com.google.gson.JsonNull.INSTANCE) }
     reject { it.room().add("healer", jsonCell(0, 1, 0)) }
     reject { it.room().remove("edges") }
     reject { it.room().getAsJsonArray("edges").add(JsonArray().apply { add(jsonCell(0, 0, 0)); add(jsonCell(1, 0, 1)) }) }
@@ -186,7 +210,7 @@ fun main() {
         raw.replaceFirst("\"schema\":1", "\"schema\":1e0"),
     )) check(runCatching { RoomTemplateCatalog.parse(invalid.toByteArray()) }.exceptionOrNull() is IllegalArgumentException)
 
-    val states = RoomTargetStates(listOf("a", "b"))
+    val states = RoomTargetStates(mapOf("a" to 2, "b" to 1))
     check(states.state("a") == RoomTargetState.UNKNOWN && states.remaining() == setOf("a", "b"))
     check(states.observe("a", 1) && states.state("a") == RoomTargetState.ACTIVE)
     check(states.targetFor(1) == "a" && states.targetFor(999) == null)
@@ -204,7 +228,7 @@ fun main() {
     check(states.targetFor(3) == "b" && states.targetFor(2) == "a")
     check(states.state("a") == RoomTargetState.CLEARED)
     check(states.observe("a", 4) && states.state("a") == RoomTargetState.ACTIVE)
-    check(states.removed(4, true) && states.state("a") == RoomTargetState.CLEARED)
+    check(states.removed(4, true) && states.state("a") == RoomTargetState.UNKNOWN) // More members than authored cannot prove a clear.
     check(!states.removed(999, true) && !states.observe("missing", 5))
     states.reset()
     check(states.targetFor(1) == null && states.targetFor(2) == null && states.targetFor(3) == null)
@@ -215,5 +239,88 @@ fun main() {
     states.reset()
     check(states.observe("a", 1))
     check(!states.observe("b", 1) && states.state("b") == RoomTargetState.UNKNOWN)
-    println("Room template parsing, rotated recognition and target lifecycle checks passed")
+    val delayed = RoomTargetStates(mapOf("group" to 2))
+    check(delayed.observe("group", 10) && delayed.removed(10, true))
+    check(delayed.state("group") == RoomTargetState.UNKNOWN && delayed.remaining() == setOf("group"))
+    check(delayed.observe("group", 11) && delayed.removed(11, true))
+    check(delayed.state("group") == RoomTargetState.CLEARED && delayed.remaining().isEmpty())
+    check(!delayed.unloaded() && delayed.state("group") == RoomTargetState.CLEARED)
+    val unknownCount = RoomTargetStates(listOf("group"))
+    check(unknownCount.observe("group", 10) && unknownCount.removed(10, true))
+    check(unknownCount.state("group") == RoomTargetState.UNKNOWN && unknownCount.remaining() == setOf("group"))
+    for (invalid in listOf(0, -1, 129)) check(runCatching { RoomTargetStates(mapOf("group" to invalid)) }.isFailure)
+    check(runCatching { RoomTargetStates(listOf("group", "group")) }.isFailure)
+
+    fun draft(rotation: Int = 0): RoomTemplateDraft {
+        val transform = RoomTransform(GridCell(-128, 64, -96), rotation)
+        return RoomTemplateDraft("recorded-room", setOf("F1"), catalog.grid, transform).apply {
+            corner(transform.toWorld(room.bounds.min))
+            corner(transform.toWorld(room.bounds.max))
+            for (landmark in room.landmarks) this.landmark(transform.toWorld(landmark.cell), landmark.block)
+            for ((id, cell) in room.targets) target(id, transform.toWorld(cell), if (id == "a") 2 else 1)
+            healer(transform.toWorld(room.healer))
+        }
+    }
+    for (rotation in 0..3) {
+        val recorded = draft(rotation)
+        val candidate = recorded.candidateTemplate()
+        check(candidate.transform.quarterTurns == rotation && candidate.template.walkable.size == 60)
+        check(candidate.template.landmarks == room.landmarks && candidate.template.targets == room.targets)
+        check(candidate.template.targetCounts == mapOf("a" to 2, "b" to 1))
+        check(candidate.template.adjacency.isEmpty()) // Capture discovers connections only between accepted cells.
+        check(runCatching { (candidate.template.targets as MutableMap<String, GridCell>).clear() }
+            .exceptionOrNull() is UnsupportedOperationException)
+        check(runCatching { recorded.export(null) }.isFailure) // Unchecked candidate geometry is never exportable.
+        val cells = room.walkable.toMutableSet()
+        val adjacency = room.adjacency.mapValues { it.value.toMutableSet() }
+        recorded.geometry(cells, adjacency)
+        cells.clear()
+        adjacency.values.forEach { it.clear() }
+        val exported = recorded.export(null).parseCatalog()
+        val template = exported.rooms.single()
+        check(template.walkable == room.walkable && template.adjacency == room.adjacency)
+        check(template.healer == room.healer && template.targetCounts == mapOf("a" to 2, "b" to 1))
+        val merged = recorded.export(catalog).parseCatalog()
+        check(merged.rooms.size == 2 && merged.rooms.first().id == room.id)
+        check(merged.rooms.first().targetCounts == room.targetCounts && merged.rooms.first().adjacency == room.adjacency)
+        check(runCatching { recorded.export(merged) }.isFailure)
+        val differentGrid = syntheticCatalog().apply {
+            getAsJsonObject("grid").addProperty("offsetX", -127)
+        }.parseCatalog()
+        check(runCatching { recorded.export(differentGrid) }.isFailure)
+    }
+    val recorded = draft()
+    check(runCatching { recorded.corner(originalTransform.toWorld(room.bounds.min)) }.isFailure)
+    check(runCatching { recorded.landmark(originalTransform.toWorld(room.landmarks.first().cell), "minecraft:stone") }.isFailure)
+    check(runCatching { recorded.target("a", originalTransform.toWorld(room.targets.getValue("a")), 2) }.isFailure)
+    check(runCatching { recorded.target("c", originalTransform.toWorld(GridCell(6, 0, 0)), 1) }.isFailure)
+    check(runCatching { recorded.target("c", originalTransform.toWorld(GridCell(0, 0, 0)), 0) }.isFailure)
+    check(runCatching { recorded.geometry(setOf(GridCell(6, 0, 0)), emptyMap()) }.isFailure)
+    check(runCatching { recorded.geometry(room.walkable, mapOf(GridCell(0, 0, 0) to setOf(GridCell(1, 0, 1)))) }.isFailure)
+    recorded.geometry(room.walkable - room.healer, room.adjacency.mapValues { it.value - room.healer }.filterKeys { it != room.healer })
+    check(runCatching { recorded.export(null) }.isFailure) // A blocked healer is not silently moved to a neighboring node.
+    recorded.geometry(room.walkable - room.targets.getValue("a"),
+        room.adjacency.mapValues { it.value - room.targets.getValue("a") }.filterKeys { it != room.targets.getValue("a") })
+    check(runCatching { recorded.export(null) }.isFailure) // A blocked target is not silently omitted.
+    val oneWay = draft()
+    val a = GridCell(0, 0, 0)
+    val b = GridCell(1, 0, 0)
+    oneWay.geometry(room.walkable, mapOf(a to setOf(b)))
+    check(oneWay.export(null).parseCatalog().rooms.single().adjacency.getValue(b) == setOf(a))
+    val countedCatalog = syntheticCatalog().apply {
+        room().getAsJsonArray("targets")[0].asJsonObject.addProperty("count", 128)
+    }.parseCatalog()
+    check(oneWay.export(countedCatalog).parseCatalog().rooms.first().targetCounts == mapOf("a" to 128, "b" to null))
+    val tooLarge = RoomTemplateDraft("large", setOf("F1"), catalog.grid, originalTransform)
+    tooLarge.corner(originalTransform.toWorld(GridCell(0, 0, 0)))
+    check(runCatching { tooLarge.corner(originalTransform.toWorld(GridCell(63, 31, 63))) }.isFailure)
+    check(tooLarge.bounds == null)
+    tooLarge.corner(originalTransform.toWorld(GridCell(5, 1, 4)))
+    check(tooLarge.bounds == room.bounds)
+    check(runCatching { tooLarge.candidateTemplate() }.isFailure)
+    check(runCatching { RoomTemplateDraft("Invalid ID", setOf("F1"), catalog.grid, originalTransform) }.isFailure)
+    check(runCatching { RoomTemplateDraft("invalid-floor", setOf("F8"), catalog.grid, originalTransform) }.isFailure)
+    check(runCatching { RoomTemplateDraft("off-grid", setOf("F1"), catalog.grid,
+        RoomTransform(GridCell(-127, 64, -96), 0)) }.isFailure)
+    println("Room template parsing, capture/export, rotated recognition and target lifecycle checks passed")
 }

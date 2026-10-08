@@ -30,6 +30,11 @@ export function reconnectDelay(attempt, random = Math.random) {
   const base = Math.min(60000, 1000 * 2 ** Math.min(attempt, 6));
   return Math.min(60000, base + Math.floor(random() * 1000));
 }
+function globalDeliveryLive(packet, now) {
+  if (!Number.isSafeInteger(packet.timestamp) || now - packet.timestamp >= 120000 || packet.timestamp - now > 30000) return false;
+  return packet.expiresAt === undefined || Number.isSafeInteger(packet.expiresAt) &&
+    packet.expiresAt > packet.timestamp && packet.expiresAt <= packet.timestamp + 120000 && packet.expiresAt > now;
+}
 export class RelayBridge {
   constructor({ url, room, secret, onMessage, onResult = () => {}, policy = limits(), globalRate,
       channelId, receipts, now = Date.now, socketFactory = (url, options) => new WebSocket(url, options) }) {
@@ -66,22 +71,25 @@ export class RelayBridge {
       if (text === 'pong') { this.alive = true; if (this.ready && this.now() - this.openedAt >= 30000) this.attempt = 0; return; }
       let packet;
       try { packet = JSON.parse(text); } catch { return; }
-      if (packet?.type === 'bridge_ready' && packet.protocol === 3 && packet.room === this.room) {
+      if (packet?.type === 'bridge_ready' && packet.protocol === 3 && packet.room === this.room &&
+          (this.room !== GLOBAL_ROOM || packet.globalChat === true)) {
         this.ready = true; clearTimeout(this.handshake);
         console.info(JSON.stringify({ event: 'relay_connected', room: this.room })); return;
       }
       if (!this.ready) return;
       if (packet?.type === 'irc_result' && /^\d{17,20}$/.test(packet.id ?? '')) {
+        if (this.room === GLOBAL_ROOM && packet.scope !== 'global') return;
         if (this.room === GLOBAL_ROOM && packet.part === 'embeds') return;
         try { this.onResult(packet.id, typeof packet.error === 'string' ? packet.error : null); } catch { /* Caller owns UI failures. */ }
         return;
       }
       const content = minecraftContent(packet, this.room, this.policy.inboundLength);
       if (this.room === GLOBAL_ROOM) {
-        if (!content || !Number.isSafeInteger(packet.timestamp) || this.now() - packet.timestamp > 120000 || packet.timestamp - this.now() > 30000 ||
+        if (!content || !globalDeliveryLive(packet, this.now()) ||
             this.inFlight.has(packet.id) || this.inFlight.size >= 128) return;
         this.inFlight.add(packet.id);
         Promise.resolve().then(async () => {
+          if (this.stopped || !globalDeliveryLive(packet, this.now())) return;
           const known = this.receipts.get(packet.id);
           if (known) { this.acknowledge(packet.id, known); return; }
           const message = await this.onMessage(content);

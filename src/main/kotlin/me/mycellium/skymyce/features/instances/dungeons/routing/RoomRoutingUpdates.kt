@@ -28,7 +28,7 @@ class RoomRoutingUpdates {
     private var position: RoomPoint? = null
     private var observed: RoomPoint? = null
     private var planned: RoomPoint? = null
-    private var plannedComplete = false
+    private var plannedHasPath = false
     private var inFlight: RoomReplanRequest? = null
     private var stableRetries = 0
     private var lastNow = Long.MIN_VALUE
@@ -59,7 +59,7 @@ class RoomRoutingUpdates {
         position = null
         observed = null
         planned = null
-        plannedComplete = false
+        plannedHasPath = false
         inFlight = null
         stableRetries = 0
     }
@@ -83,7 +83,7 @@ class RoomRoutingUpdates {
         }
         val anchor = planned ?: return
         val moved = automaticMovement && distanceSquared(anchor, position) >= MOVEMENT_BLOCKS * MOVEMENT_BLOCKS
-        if (!moved && pending == RoomReplanReason.MOVED && plannedComplete) {
+        if (!moved && pending == RoomReplanReason.MOVED && plannedHasPath) {
             // Coalesce small threshold oscillations without planning after the player returns.
             pending = null
             dueAt = Long.MAX_VALUE
@@ -104,7 +104,7 @@ class RoomRoutingUpdates {
         pending = null
         dueAt = Long.MAX_VALUE
         planned = request.position
-        plannedComplete = false
+        plannedHasPath = false
         inFlight = request
         return request
     }
@@ -114,7 +114,7 @@ class RoomRoutingUpdates {
         val now = time(nowMillis)
         if (inFlight !== request || request.revision != revision || request.context != context) return false
         inFlight = null
-        plannedComplete = true
+        plannedHasPath = foundPath
         if (!foundPath && stableRetries < MAX_STABLE_RETRIES) {
             stableRetries++
             pending = RoomReplanReason.RETRY

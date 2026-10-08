@@ -264,7 +264,7 @@ val loaderJar by tasks.registering(Jar::class) {
     archiveFileName = "Sky-Myce-Loader.jar"
     from(sourceSets.main.get().output) {
         include("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class")
-        include("me/mycellium/skymyce/ui/MotionValue*.class", "me/mycellium/skymyce/ui/MotionEasing*.class",
+        include("me/mycellium/skymyce/ui/MotionValue*.class", "me/mycellium/skymyce/ui/MotionProfile*.class", "me/mycellium/skymyce/ui/MotionEasing*.class",
             "me/mycellium/skymyce/ui/GuiMotion*.class", "me/mycellium/skymyce/ui/GuiQuality*.class", "me/mycellium/skymyce/ui/MotionPose*.class",
             "me/mycellium/skymyce/ui/MenuMotionKt*.class")
     }
@@ -336,6 +336,36 @@ val loaderCheck by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.loader.LoaderCheckKt"
 }
+
+// Deliberately opt-in: native probes must use an explicit isolated directory and never the real installation.
+val hardwareIdentityCheckJar by tasks.registering(Jar::class) {
+    group = "verification"
+    description = "Build a portable Java 25 native hardware identity diagnostic with no Minecraft dependencies"
+    dependsOn(tasks.testClasses)
+    archiveFileName = "Sky-Myce-Hardware-Identity-Check.jar"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(sourceSets.main.get().output) {
+        include("me/mycellium/skymyce/loader/Installation*.class", "me/mycellium/skymyce/loader/LaunchSession*.class",
+            "me/mycellium/skymyce/loader/HardwareIdentityUnavailable.class", "me/mycellium/skymyce/loader/SignedFiles.class")
+    }
+    from(sourceSets.test.get().output) { include("me/mycellium/skymyce/loader/HardwareIdentityCheck*.class") }
+    from({ configurations.runtimeClasspath.get().filter { it.name.startsWith("kotlin-stdlib") || it.name.startsWith("gson-") }.map { zipTree(it) } }) {
+        exclude("META-INF/**")
+    }
+    manifest { attributes["Main-Class"] = "me.mycellium.skymyce.loader.HardwareIdentityCheck" }
+}
+val hardwareIdentityCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Check live hardware and saved identity in fresh JVMs; requires -PhardwareIdentityCheckDirectory=<isolated absolute path>"
+    dependsOn(hardwareIdentityCheckJar)
+    classpath = files(hardwareIdentityCheckJar.flatMap { it.archiveFile })
+    mainClass = "me.mycellium.skymyce.loader.HardwareIdentityCheck"
+    doFirst {
+        val directory = providers.gradleProperty("hardwareIdentityCheckDirectory").orNull
+        check(!directory.isNullOrBlank()) { "Set -PhardwareIdentityCheckDirectory to an isolated absolute test directory" }
+        setArgs(listOf("--directory", directory))
+    }
+}
 val menuMotionCheck by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Checks GUI motion timing, interruption, accessibility and input transforms"
@@ -351,6 +381,29 @@ val runtimeProfilerCheck by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.dev.RuntimeProfilerCheckKt"
+}
+val menuNavigationCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks living card navigation geometry, input transforms and rendered previews"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.MenuNavigationCheckKt"
+    workingDir = layout.buildDirectory.dir("menu-navigation-check").get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+val menuCatalogCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks canonical feature ownership, config compatibility and search deep links"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.MenuCatalogCheckKt"
+}
+val menuShortcutsCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks bounded shortcut identities, ordering and atomic persistence"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.MenuShortcutsCheckKt"
 }
 val featureWorkCheck by tasks.registering(JavaExec::class) {
     group = "verification"
@@ -390,7 +443,7 @@ val globalChatCheck by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.GlobalChatCheckKt"
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 
