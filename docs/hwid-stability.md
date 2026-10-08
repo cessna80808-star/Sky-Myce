@@ -110,4 +110,7 @@ checks. For an actual reboot test choose a persistent private directory; many
 Linux systems clear `/tmp` at boot. Windows native probes require normal host
 CIM/DPAPI access; the restricted tool sandbox can make them unavailable, which
 correctly fails without replacing the test identity. No production record or
-server binding was modified, and these builds have not been published.
+server binding was modified during these checks. The fixes were published in
+signed loader 1.0.14 on October 8, 2026; see the
+[release record](backend-deployment.md). Loader updates are opt-in, so enable
+**Automatic loader updates** or install the current loader to receive them.

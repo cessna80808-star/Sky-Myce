@@ -1,3 +1,46 @@
+# Mod 2.4.14 / loader 1.0.14 — deployed October 8, 2026
+
+The latest mod and loader are published with signed manifests in the existing
+private `sky-myce-private-artifacts` R2 bucket. Production account Worker
+`sky-myce-backend` (`--env backend`) selects both releases on version
+`5630f7ff-d2ef-410b-9706-e9c29a26218d`, deployed at 07:41:13 UTC.
+This release includes the menu, routing, chat, motion and dropdown fixes, plus
+the loader hardware-identity normalization and persistent-home verification.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.14 | `releases/Sky-Myce-2.4.14.jar` | `releases/manifest-2.4.14.json` | `e5a5ee5b89a725a9953afb66fecf9862842af1b246eb003e457e20a6077e2863` |
+| Loader 1.0.14 | `loaders/Sky-Myce-Loader-1.0.14.jar` | `loaders/manifest-1.0.14.json` | `66ee5c0c3e0892b3f11e423bc3520b1cf74afa6a0dcb208389100ab6af6c19b5` |
+
+Minecraft 26.1.2, minimum loader 1.0.11 and the `production-20260927` signing
+trust root are unchanged. Old release objects are retained. The new manifests
+expire on **October 15, 2026, at 07:39:02 UTC** (09:39:02 Stockholm); re-sign
+the matching artifacts before then. No renewal automation was installed.
+
+Java 25 `check build`, relay type generation/typecheck and the production
+backend packaging dry run passed. The full relay and User Bot suites passed
+before this version-only release preparation. All four private R2 readbacks
+exactly match the local release files. Live `/loader/release` and
+`/loader/bootstrap-release` return the expected versions with valid Ed25519
+signatures, matching artifact hashes and `Cache-Control: no-store`.
+Health returns 200; anonymous artifact, manifest, bootstrap-renewal and Discord
+loader requests remain denied, and both unsigned interaction routes return 401.
+Post-deployment settings differ only in the four release selections; runtime
+settings, all other variables, secret names/types, storage namespace IDs and
+other bindings are preserved. Schedules remain empty.
+
+Evidence is stored outside the repository under
+`C:\Users\krister\.codex\visualizations\2026\10\07\01a114f9-ddd3-7bf1-8cef-6ccbf3d11de7`
+as `release-2.4.14-before.json`, `release-2.4.14-r2-verified.json`,
+`release-2.4.14-after.json` and `release-2.4.14-live-verified.json`.
+No account/device reset, real Discord message or live Minecraft launch was
+performed. The separate Discord Gateway service was not deployed.
+
+Existing supported loaders discover the mod release; applying it requires a
+Minecraft restart. Loader updates default to off: enable **Automatic loader
+updates** and relaunch, or install the current loader, to receive the loader's
+HWID fixes. Loader installation completes after Minecraft stops.
+
 # Admin interaction forwarding repair — deployed October 2, 2026
 
 The legacy `skyblock-relay` Admin interaction endpoint previously forwarded slash
