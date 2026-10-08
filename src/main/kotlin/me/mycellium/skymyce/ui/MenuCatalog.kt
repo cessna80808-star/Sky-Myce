@@ -77,7 +77,7 @@ class MenuCatalog(rows: List<SettingRow>) {
     companion object {
         val definitions = listOf(
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
-            MenuFeature("starred-routes", "Starred Clear Routing", "Measured starred targets and safe routes to the healer door", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "healer", "starred"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
+            MenuFeature("starred-routes", "Starred Clear Routing", "Wall-aware starred mob routes and the Blood/Wither exit", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),

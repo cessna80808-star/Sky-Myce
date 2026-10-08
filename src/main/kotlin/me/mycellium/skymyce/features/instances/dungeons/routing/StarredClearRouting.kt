@@ -18,6 +18,8 @@ import net.minecraft.gizmos.GizmoStyle
 import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.entity.player.Player
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
@@ -37,6 +39,8 @@ import tech.thatgravyboat.skyblockapi.api.events.render.RenderWorldEvent
 import tech.thatgravyboat.skyblockapi.helpers.getStrippedAttachedLines
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.nio.file.Files
+import java.util.UUID
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -74,6 +78,23 @@ object StarredClearRouting : SkyMyceModule() {
     private var lastReason = ""
     private var lastMillis = 0.0
     private var complete = false
+    private var liveRoom: LiveDungeonRoom? = null
+    private var liveBuilder: RoomLiveGeometry? = null
+    private var liveGeometry: RoomLiveGeometrySnapshot? = null
+    private var liveExit: GridCell? = null
+    private var nextLiveContext = 0L
+    private var nextLiveScan = 0L
+    private var liveGeometryDue = Long.MAX_VALUE
+    private var liveTargetsDirty = false
+    private var liveGeometryRevision = 0L
+    private var liveProbeOrder = emptyList<LiveTarget>()
+    private var liveProbeOrderDirty = true
+    private val liveExitProbe = RoomApproachProbe()
+    private var liveExitHint: DungeonExit? = null
+    private val liveTargets = LinkedHashMap<UUID, LiveTarget>()
+
+    private data class LiveTarget(val id: String, var entityId: Int, var position: Vec3,
+        var state: RoomTargetState, val approach: RoomApproachProbe = RoomApproachProbe())
 
     private data class PathLine(val from: Vec3, val to: Vec3, val healer: Boolean, val pathIndex: Int = 0)
     private data class Marker(val box: AABB, val pos: BlockPos, val label: String, val state: RoomTargetState, val next: Boolean)
@@ -100,7 +121,7 @@ object StarredClearRouting : SkyMyceModule() {
     private fun summary(): String {
         val base = "Sky-Hawk routing: $catalogStatus. $status"
         val detected = room ?: return base
-        if (!Config.devMode || !Settings.debug) return base
+        if (!Config.devMode || !Settings.debug || liveRoom != null) return base
         return "$base; origin=${detected.transform.origin}, rotation=${detected.transform.quarterTurns}, " +
             "targets=${detected.template.targets.mapValues { targets!!.state(it.key) }}, healer=${detected.template.healer}, " +
             "graph=${builder?.status ?: if (navigation != null) "READY" else "UNAVAILABLE"}, " +
@@ -126,8 +147,8 @@ object StarredClearRouting : SkyMyceModule() {
                 if (revision == catalogRevision) {
                     catalog = parsed.getOrNull()
                     catalogStatus = when {
-                        parsed.isFailure -> "Invalid room catalog; see docs/dungeon-routing.md"
-                        catalog == null -> "No room catalog; add config/skymyce/dungeon-routing-rooms.json"
+                        parsed.isFailure -> "Invalid custom room catalog; using automatic discovery"
+                        catalog == null -> "Automatic discovery (no custom room templates)"
                         else -> "${catalog!!.rooms.size} room templates loaded"
                     }
                     if (parsed.isFailure) SkyMyce.logger.warn("Dungeon room catalog rejected: {}", parsed.exceptionOrNull()?.message)
@@ -144,6 +165,7 @@ object StarredClearRouting : SkyMyceModule() {
 
     private fun resetRun() {
         run++
+        RoomDungeonContext.reset()
         RoomTemplateRecorder.cancel()
         clearRoom()
         progress.clear()
@@ -175,6 +197,20 @@ object StarredClearRouting : SkyMyceModule() {
         markers = emptyList()
         healerMarker = null
         complete = false
+        liveRoom = null
+        liveBuilder = null
+        liveGeometry = null
+        liveExit = null
+        liveTargets.clear()
+        liveTargetsDirty = false
+        liveGeometryRevision++
+        liveProbeOrder = emptyList()
+        liveProbeOrderDirty = true
+        liveExitProbe.invalidate()
+        liveExitHint = null
+        liveGeometryDue = Long.MAX_VALUE
+        nextLiveContext = 0L
+        nextLiveScan = 0L
         nextRecognition = 0L
         nextPositionSample = 0L
     }
@@ -195,42 +231,35 @@ object StarredClearRouting : SkyMyceModule() {
             return
         }
         active = true
-        val data = catalog ?: return
-        if (data.rooms.isEmpty()) return
         RuntimeProfiler.measure(RuntimeProfiler.Area.DUNGEON_ROUTE) {
             val now = System.nanoTime() / 1_000_000
             val position = player.position()
             val point = RoomPoint(position.x, position.y, position.z)
+            val data = catalog
+            if (liveRoom != null && data != null && data.rooms.isNotEmpty() && now >= nextRecognition) {
+                nextRecognition = now + 2000
+                recognize(data, world, point)?.let { found -> clearRoom(); enterAuthored(world, found, now) }
+            }
+            if (liveRoom != null || data == null || data.rooms.isEmpty()) {
+                tickLive(world, player.position(), now)
+                return@measure
+            }
             val current = room
             if (current != null && !current.template.bounds.containsPlayer(current.transform.toLocal(
                     GridCell(floor(position.x).toInt(), floor(position.y).toInt(), floor(position.z).toInt())), !player.onGround())) clearRoom()
             if (room == null) {
                 if (now < nextRecognition) return@measure
                 nextRecognition = now + 2000
-                val found = data.recognize(DungeonAPI.dungeonFloor!!.name, point) { cell ->
-                    if (!world.hasChunk(Math.floorDiv(cell.x, 16), Math.floorDiv(cell.z, 16))) null
-                    else BuiltInRegistries.BLOCK.getKey(world.getBlockState(BlockPos(cell.x, cell.y, cell.z)).block).toString()
-                }
-                if (found == null) { status = "Room unknown, ambiguous or unloaded"; return@measure }
-                room = found
-                if (progress.size >= 128 && found.key !in progress) {
-                    val oldest = progress.keys.first()
-                    progress.remove(oldest)
-                    finishedRooms.remove(oldest)
-                }
-                targets = progress.getOrPut(found.key) { RoomTargetStates(found.template.targetCounts) }
-                complete = found.key in finishedRooms
-                updates.updateContext(RoomRoutingContext(epoch, run, found.key.toString()), now)
-                builder = RoomGeometryBuilder(world, found)
-                rebuildMarkers()
-                status = "${found.template.id}: validating geometry"
+                val found = recognize(data, world, point)
+                if (found == null) { tickLive(world, position, now); return@measure }
+                enterAuthored(world, found, now)
             }
             val detected = room ?: return@measure
             val build = builder
             if (build != null && build.step()) {
                 builder = null
                 geometry = build.result
-                if (geometry == null) status = "${detected.template.id}: incomplete geometry"
+                if (geometry == null) status = "${detected.template.id}: ${build.failure ?: "incomplete geometry"}"
                 else scanRoom(world, detected)
             }
             if (now >= nextObservation) {
@@ -271,7 +300,7 @@ object StarredClearRouting : SkyMyceModule() {
                 complete = true
                 finishedRooms.add(detected.key)
                 hidePath()
-                status = "${detected.template.id}: targets cleared and healer reached"
+                status = "${detected.template.id}: targets cleared and exit reached"
                 return@measure
             }
             if (complete) return@measure
@@ -279,18 +308,259 @@ object StarredClearRouting : SkyMyceModule() {
         }
     }
 
+    private fun recognize(data: RoomTemplateCatalog, world: ClientLevel, point: RoomPoint): DetectedRoom? =
+        data.recognize(DungeonAPI.dungeonFloor!!.name, point) { cell ->
+            if (!world.hasChunk(Math.floorDiv(cell.x, 16), Math.floorDiv(cell.z, 16))) null
+            else BuiltInRegistries.BLOCK.getKey(world.getBlockState(BlockPos(cell.x, cell.y, cell.z)).block).toString()
+        }
+
+    private fun enterAuthored(world: ClientLevel, found: DetectedRoom, now: Long) {
+        room = found
+        if (progress.size >= 128 && found.key !in progress) {
+            val oldest = progress.keys.first()
+            progress.remove(oldest)
+            finishedRooms.remove(oldest)
+        }
+        targets = progress.getOrPut(found.key) { RoomTargetStates(found.template.targetCounts) }
+        complete = found.key in finishedRooms
+        updates.updateContext(RoomRoutingContext(epoch, run, found.key.toString()), now)
+        builder = RoomGeometryBuilder(world, found)
+        rebuildMarkers()
+        status = "${found.template.id}: validating geometry"
+    }
+
+    private fun tickLive(world: ClientLevel, position: Vec3, now: Long) {
+        if (now >= nextLiveContext) {
+            nextLiveContext = now + 250
+            val observed = RoomDungeonContext.current(world, position)
+            if (observed?.key != liveRoom?.key) {
+                clearRoom()
+                liveRoom = observed
+                nextLiveContext = now + 250
+                liveGeometryDue = now
+            } else if (observed != liveRoom) {
+                liveRoom = observed
+                liveTargetsDirty = true
+            }
+        }
+        val context = liveRoom ?: run {
+            status = "Automatic routing: waiting for verified dungeon room map data"
+            return
+        }
+        if (context.cleared) for (target in liveTargets.values) if (target.state != RoomTargetState.CLEARED) {
+            target.state = RoomTargetState.CLEARED
+            liveTargetsDirty = true
+            liveProbeOrderDirty = true
+        }
+        if (!context.containsXZ(floor(position.x).toInt(), floor(position.z).toInt())) {
+            clearRoom()
+            status = "Automatic routing: updating room map position"
+            return
+        }
+        if (room == null) {
+            val seed = GridCell(floor(position.x).toInt(), ceil(position.y - 0.00001).toInt(), floor(position.z).toInt())
+            room = liveDetected(context, setOf(seed), mapOf(seed to emptySet()), emptyMap(), seed)
+            updates.updateContext(RoomRoutingContext(epoch, run, context.key), now)
+            rebuildMarkers()
+        }
+        if (now >= nextLiveScan) {
+            nextLiveScan = now + 1000
+            scanRoom(world, room!!)
+            for (target in liveTargets.values) {
+                val entity = (world.getEntity(target.entityId) as? LivingEntity)?.takeIf { target.id == "mob-${it.uuid}" }
+                if (context.cleared || entity?.isDeadOrDying == true || entity?.removalReason == Entity.RemovalReason.KILLED) {
+                    if (target.state != RoomTargetState.CLEARED) {
+                        target.state = RoomTargetState.CLEARED; liveTargetsDirty = true; liveProbeOrderDirty = true
+                    }
+                } else if (entity == null || entity.isRemoved) {
+                    if (target.state == RoomTargetState.ACTIVE) {
+                        target.state = RoomTargetState.UNKNOWN; liveTargetsDirty = true; liveProbeOrderDirty = true
+                    }
+                } else if (contains(room!!, entity.position())) {
+                    if (target.position.distanceToSqr(entity.position()) >= 4.0) {
+                        target.position = entity.position()
+                        target.approach.invalidate()
+                        liveTargetsDirty = true
+                        liveProbeOrderDirty = true
+                    }
+                } else if (target.state == RoomTargetState.ACTIVE) {
+                    target.state = RoomTargetState.UNKNOWN
+                    liveTargetsDirty = true
+                    liveProbeOrderDirty = true
+                }
+            }
+            if (liveBuilder != null) status = "${context.name}: scanning loaded room geometry; ${liveTargets.size} observed starred mobs"
+        }
+        if (now >= liveGeometryDue) {
+            liveGeometryDue = Long.MAX_VALUE
+            val seed = safeLiveSeed(world, context, position)
+            if (seed == null) {
+                liveGeometryDue = now + 500
+                status = "${context.name}: waiting for a supported starting position"
+            } else {
+                val minY = maxOf(world.minY, seed.y - 16)
+                val maxY = minOf(world.maxY - 2, seed.y + 24)
+                liveBuilder = RoomLiveGeometry(seed,
+                    { context.containsXZ(it.x, it.z) && it.y in minY..maxY },
+                    { RoomWorldGeometry.validCell(world, liveFeet(it)) },
+                    { from, to -> RoomWorldGeometry.validConnector(world, liveFeet(from), liveFeet(to)) })
+                status = "${context.name}: scanning loaded room geometry; ${liveTargets.size} observed starred mobs"
+            }
+        }
+        val scan = liveBuilder
+        if (scan != null && scan.step()) {
+            liveBuilder = null
+            liveGeometry = scan.result
+            liveGeometryRevision++
+            liveProbeOrderDirty = true
+            liveTargetsDirty = true
+            status = if (scan.result == null) "${context.name}: ${scan.failure ?: "geometry unavailable"}"
+                else "${context.name}: room geometry ready"
+        }
+        if (liveTargetsDirty) {
+            liveTargetsDirty = false
+            val snapshot = liveGeometry
+            if (snapshot != null) updateLiveSnapshot(world, context, snapshot, position, now)
+            rebuildMarkers()
+        }
+        val detected = room ?: return
+        val snapshot = geometry ?: return
+        if (navigation == null) {
+            if (!workPending) buildNavigation(snapshot, detected)
+            return
+        }
+        if (now < nextPositionSample) return
+        nextPositionSample = now + 250
+        val start = RoomWorldGeometry.playerCell(world, detected, snapshot, position)
+        if (start == null) {
+            startLines = emptyList()
+            if (MC.instance.player?.onGround() == true && liveBuilder == null && liveGeometryDue == Long.MAX_VALUE) {
+                dirtyLiveGeometry(now)
+                status = "${context.name}: scanning new reachable room geometry"
+            }
+            return
+        }
+        val beforeObservation = updates.revision
+        updates.observe(start, RoomPoint(position.x, position.y, position.z), now, Settings.automaticRecalculation)
+        if (beforeObservation != updates.revision && updates.reason == RoomReplanReason.TELEPORTED) hidePath()
+        refreshRouteStart(world, detected, position)
+        val exit = liveExit
+        if (context.cleared && exit != null && position.distanceToSqr(liveFeet(exit)) < 2.25 &&
+            RoomWorldGeometry.validConnector(world, position, liveFeet(exit))) {
+            complete = true
+            hidePath()
+            status = "${context.name}: room cleared; ${context.exit?.kind ?: "dungeon"} exit reached"
+            return
+        }
+        complete = false
+        if (!workPending && updates.due(now)) updates.take(now)?.let { plan(it, detected) }
+    }
+
+    private fun liveFeet(cell: GridCell) = Vec3(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)
+
+    private fun safeLiveSeed(world: ClientLevel, context: LiveDungeonRoom, position: Vec3): GridCell? {
+        val x = floor(position.x).toInt()
+        val y = ceil(position.y - 0.00001).toInt()
+        val z = floor(position.z).toInt()
+        return (x - 1..x + 1).flatMap { wx -> (y - 1..y + 1).flatMap { wy ->
+            (z - 1..z + 1).map { wz -> GridCell(wx, wy, wz) }
+        } }.filter { context.containsXZ(it.x, it.z) && liveFeet(it).distanceToSqr(position) <= 4.0 }
+            .sortedBy { liveFeet(it).distanceToSqr(position) }
+            .firstOrNull { RoomWorldGeometry.validConnector(world, position, liveFeet(it)) }
+    }
+
+    private fun liveDetected(context: LiveDungeonRoom, cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>,
+        selected: Map<String, GridCell>, endpoint: GridCell): DetectedRoom {
+        val bounds = RoomBounds(GridCell(context.minX, maxOf(level!!.minY, cells.minOf { it.y } - 16), context.minZ),
+            GridCell(context.maxX, minOf(level!!.maxY - 2, cells.maxOf { it.y } + 24), context.maxZ))
+        val template = RoomTemplate("live-${context.key}", setOf(DungeonAPI.dungeonFloor!!.name), bounds,
+            emptyList(), cells, adjacency, selected, endpoint, selected.mapValues { 1 })
+        return DetectedRoom(template, RoomTransform(GridCell(0, 0, 0), 0))
+    }
+
+    private fun updateLiveSnapshot(world: ClientLevel, context: LiveDungeonRoom, snapshot: RoomLiveGeometrySnapshot,
+        position: Vec3, now: Long) {
+        val deadline = System.nanoTime() + 2_000_000
+        var checks = 0
+        if (liveProbeOrderDirty) {
+            liveProbeOrder = liveTargets.values.filter { it.state != RoomTargetState.CLEARED }
+                .sortedWith(compareBy<LiveTarget>({ it.state != RoomTargetState.ACTIVE }, { it.position.distanceToSqr(position) }))
+            liveProbeOrderDirty = false
+        }
+        if (liveExitHint != context.exit) { liveExitHint = context.exit; liveExitProbe.invalidate() }
+        val previousExit = liveExit
+        val exit = context.exit
+        if (exit != null) {
+            checks += liveExitProbe.step(liveGeometryRevision, {
+                nearbyCells(exit.approach.x, exit.approach.y, exit.approach.z, 2, 6).filter {
+                    val dx = it.x - exit.approach.x
+                    val dz = it.z - exit.approach.z
+                    it in snapshot.cells && dx * dx + dz * dz <= 4 &&
+                        (it.x - exit.door.x) * (exit.approach.x - exit.door.x) +
+                        (it.z - exit.door.z) * (exit.approach.z - exit.door.z) > 0
+                }.sortedBy { liveFeet(it).distanceToSqr(liveFeet(exit.approach)) }.take(16).toList()
+            }, 64, deadline, { candidate ->
+                RoomWorldGeometry.validConnector(world,
+                    liveFeet(GridCell(exit.approach.x, candidate.y, exit.approach.z)), liveFeet(candidate))
+            })
+            liveExit = liveExitProbe.result(liveGeometryRevision)
+        } else liveExit = null
+        var pending = exit != null && !liveExitProbe.complete(liveGeometryRevision)
+        val selected = LinkedHashMap<String, GridCell>()
+        for (target in liveProbeOrder) {
+            if (selected.size == RoomNavigation.MAX_TARGETS) break
+            if (target.state == RoomTargetState.CLEARED) continue
+            checks += target.approach.step(liveGeometryRevision, {
+                val cell = BlockPos.containing(target.position)
+                nearbyCells(cell.x, cell.y, cell.z, 2, 1).filter { it in snapshot.cells }
+                    .map { it to liveFeet(it).distanceToSqr(target.position) }.filter { it.second <= 9.0 }
+                    .sortedBy { it.second }.take(16).map { it.first }.toList()
+            }, 64 - checks, deadline, { RoomWorldGeometry.validConnector(world, target.position, liveFeet(it)) })
+            target.approach.result(liveGeometryRevision)?.let { selected[target.id] = it }
+            if (!target.approach.complete(liveGeometryRevision)) { pending = true; break }
+        }
+        liveTargetsDirty = pending
+        val endpoint = liveExit ?: snapshot.cells.first()
+        val previous = geometry
+        if (previous?.targets == selected && previous.healer == endpoint && previousExit == liveExit) return
+        room = liveDetected(context, snapshot.cells, snapshot.adjacency, selected, endpoint)
+        geometry = RoomGeometry(snapshot, selected, endpoint)
+        targets = RoomTargetStates(selected.mapValues { 1 }).apply {
+            for (target in liveProbeOrder) if (target.id in selected) observe(target.id, target.entityId)
+        }
+        navigation = null
+        invalidate(RoomReplanReason.TARGETS_CHANGED, now)
+    }
+
+    private fun nearbyCells(x: Int, y: Int, z: Int, horizontal: Int, vertical: Int): Sequence<GridCell> = sequence {
+        for (wx in x - horizontal..x + horizontal) for (wy in y - vertical..y + vertical)
+            for (wz in z - horizontal..z + horizontal) yield(GridCell(wx, wy, wz))
+    }
+
+    private fun dirtyLiveGeometry(now: Long = System.nanoTime() / 1_000_000) {
+        invalidate(RoomReplanReason.GEOMETRY_CHANGED, now)
+        navigation = null
+        geometry = null
+        liveGeometry = null
+        liveBuilder = null
+        liveExit = null
+        if (liveGeometryDue == Long.MAX_VALUE) liveGeometryDue = now + 250
+    }
+
     private fun buildNavigation(snapshot: RoomGeometry, detected: DetectedRoom) {
         val revision = epoch
+        val endpoint = if (liveRoom != null) liveExit else snapshot.healer
         workPending = true
         Scheduling.schedule(0.milliseconds) {
             val graph = runCatching {
-                RoomNavigation.create(snapshot.cells, snapshot.adjacency, snapshot.targets.filterValues { it in snapshot.cells }, snapshot.healer)
+                RoomNavigation.create(snapshot.cells, snapshot.adjacency, snapshot.targets.filterValues { it in snapshot.cells },
+                    endpoint)
             }.getOrNull()
             MC.instance.execute {
                 workPending = false
                 if (revision == epoch && room?.key == detected.key && geometry === snapshot) {
                     navigation = graph
-                    if (graph == null) { geometry = null; status = "${detected.template.id}: blocked target or healer endpoint" }
+                    if (graph == null) { geometry = null; status = "${detected.template.id}: blocked target or exit endpoint" }
                 }
             }
         }
@@ -301,11 +571,13 @@ object StarredClearRouting : SkyMyceModule() {
         val remaining = targets!!.remaining()
         val previous = route?.targetOrder
         val debug = Config.devMode && Settings.debug
+        val hasExit = liveRoom == null || liveExit != null
         workPending = true
         Scheduling.schedule(0.milliseconds) {
             val begin = if (debug) System.nanoTime() else 0L
             val result = runCatching { graph.plan(request.start, remaining, previous) }.getOrNull()
-            val prepared = if (result == null) emptyList() else drawPath(detected, result, RoomWorldGeometry.feet(detected, result.path.first()))
+            val prepared = if (result == null) emptyList() else drawPath(detected, result,
+                RoomWorldGeometry.feet(detected, result.path.first()), hasExit)
             val elapsed = if (debug) (System.nanoTime() - begin) / 1_000_000.0 else 0.0
             MC.instance.execute {
                 workPending = false
@@ -337,7 +609,16 @@ object StarredClearRouting : SkyMyceModule() {
                 lineStart = 0
                 refreshRouteStart(world, detected, actual)
                 rebuildMarkers()
-                status = if (result == null) "${detected.template.id}: remaining targets or healer unreachable"
+                val live = liveRoom
+                status = if (live != null) {
+                    val total = liveTargets.values.count { it.state != RoomTargetState.CLEARED }
+                    val unknown = liveTargets.values.count { it.state == RoomTargetState.UNKNOWN }
+                    val ending = if (liveExit == null) "exit not yet verified or reachable" else "${live.exit?.kind ?: "dungeon"} exit"
+                    if (result == null) "${live.name}: observed targets unreachable; $ending"
+                    else "${live.name}: routing ${result.targetOrder.size} of $total observed targets" +
+                        (if (unknown > 0) "; $unknown unavailable" else "") +
+                        (if (live.cleared) "; map confirms room clear" else "; room clear not confirmed") + "; $ending"
+                } else if (result == null) "${detected.template.id}: remaining targets or endpoint unreachable"
                     else "${detected.template.id}: ${result.targetOrder.size} targets, ${result.cost} movement blocks"
                 if (debug) SkyMyce.logger.info("Dungeon route: {}; origin={}, rotation={}, targets={}, healer={}, nodes={}, order={}, reason={}, plannerMs={}",
                     status, detected.transform.origin, detected.transform.quarterTurns, detected.template.targets.mapValues { targets!!.state(it.key) },
@@ -374,7 +655,8 @@ object StarredClearRouting : SkyMyceModule() {
         lineStart = lines.indexOfFirst { it.pathIndex > cursor }.takeIf { it >= 0 } ?: lines.size
         val start = RoomWorldGeometry.feet(detected, currentRoute.path[cursor])
         val leading = RoomWorldGeometry.connectorWaypoints(actual, start).orEmpty().zipWithNext { a, b ->
-            PathLine(a.add(0.0, 0.1, 0.0), b.add(0.0, 0.1, 0.0), currentRoute.targetOrder.isEmpty())
+            PathLine(a.add(0.0, 0.1, 0.0), b.add(0.0, 0.1, 0.0),
+                currentRoute.targetOrder.isEmpty() && (liveRoom == null || liveExit != null))
         }
         val firstLine = lines.getOrNull(lineStart)
         val raisedStart = start.add(0.0, 0.1, 0.0)
@@ -399,22 +681,46 @@ object StarredClearRouting : SkyMyceModule() {
         val entity = event.entity as? LivingEntity ?: return
         val detected = room ?: return
         if (contains(detected, entity.position()) && spawnPoints.size < 2048) spawnPoints.putIfAbsent(entity.id, entity.position())
-        entity.getStrippedAttachedLines().firstOrNull { '✯' in it }?.let { observeStar(entity, it) }
+        starredName(entity)?.let { observeStar(entity, it) }
     }
 
     private fun scanRoom(world: ClientLevel, detected: DetectedRoom) {
         val bounds = worldBounds(detected)
         // One bounded room scan on entry; names arriving later are handled by attachment events.
         for (entity in world.getEntities(null, bounds).take(2048)) {
-            if (entity !is LivingEntity) continue
+            if (entity !is LivingEntity || entity is ArmorStand || entity is Player) continue
             if (spawnPoints.size < 2048) spawnPoints.putIfAbsent(entity.id, entity.position())
-            entity.getStrippedAttachedLines().firstOrNull { '✯' in it }?.let { observeStar(entity, it) }
+            starredName(entity)?.let { observeStar(entity, it) }
         }
+    }
+
+    private fun starredName(entity: LivingEntity): String? {
+        if (entity is ArmorStand || entity is Player) return null
+        return entity.customName?.string?.takeIf { '✯' in it }
+            ?: entity.getStrippedAttachedLines().firstOrNull { '✯' in it }
     }
 
     private fun observeStar(entity: LivingEntity, name: String) {
         val detected = room ?: return
-        if ('✯' !in name || entity.isDeadOrDying || !contains(detected, entity.position())) return
+        if ('✯' !in name || entity is ArmorStand || entity is Player || entity.isDeadOrDying || !contains(detected, entity.position())) return
+        if (liveRoom != null) {
+            val old = liveTargets[entity.uuid]
+            if (old == null) {
+                if (liveTargets.size >= 1536) return
+                liveTargets[entity.uuid] = LiveTarget("mob-${entity.uuid}", entity.id, entity.position(),
+                    if (liveRoom!!.cleared) RoomTargetState.CLEARED else RoomTargetState.ACTIVE)
+                liveTargetsDirty = true
+                liveProbeOrderDirty = true
+            } else if (old.state != RoomTargetState.CLEARED && (old.state == RoomTargetState.UNKNOWN || old.entityId != entity.id)) {
+                old.entityId = entity.id
+                old.state = if (liveRoom!!.cleared) RoomTargetState.CLEARED else RoomTargetState.ACTIVE
+                old.position = entity.position()
+                old.approach.invalidate()
+                liveTargetsDirty = true
+                liveProbeOrderDirty = true
+            }
+            return
+        }
         if (entity.id in mobs) return
         val known = targets!!.targetFor(entity.id)
         val targetId = known ?: run {
@@ -439,6 +745,17 @@ object StarredClearRouting : SkyMyceModule() {
     fun onEntityRemoved(event: EntityRemovedEvent) {
         if (!active) return
         spawnPoints.remove(event.entity.id)
+        if (liveRoom != null) {
+            val target = liveTargets[event.entity.uuid] ?: return
+            val killed = (event.entity as? LivingEntity)?.isDeadOrDying == true || event.entity.removalReason == Entity.RemovalReason.KILLED
+            if (target.state != RoomTargetState.CLEARED) {
+                target.state = if (killed) RoomTargetState.CLEARED else RoomTargetState.UNKNOWN
+                liveTargetsDirty = true
+                liveProbeOrderDirty = true
+                invalidate(RoomReplanReason.TARGETS_CHANGED)
+            }
+            return
+        }
         val entity = mobs.remove(event.entity.id) ?: return
         val killed = entity.isDeadOrDying || event.entity.removalReason == Entity.RemovalReason.KILLED
         if (targets?.removed(entity.id, killed) == true) { invalidate(RoomReplanReason.TARGETS_CHANGED); rebuildMarkers() }
@@ -469,7 +786,8 @@ object StarredClearRouting : SkyMyceModule() {
             if (observedEpoch != epoch || !active) return@execute
             val detected = room ?: return@execute
             if (RoomWorldGeometry.geometryBounds(detected).contains(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())) {
-                if (detected.template.landmarks.any { detected.transform.toWorld(it.cell) == GridCell(pos.x, pos.y, pos.z) }) clearRoom()
+                if (liveRoom != null) dirtyLiveGeometry()
+                else if (detected.template.landmarks.any { detected.transform.toWorld(it.cell) == GridCell(pos.x, pos.y, pos.z) }) clearRoom()
                 else rebuildGeometry()
             }
         }
@@ -481,6 +799,17 @@ object StarredClearRouting : SkyMyceModule() {
         val detected = room ?: return
         val box = RoomWorldGeometry.geometryBounds(detected)
         if ((x + 1) * 16 <= box.minX || x * 16 > box.maxX || (z + 1) * 16 <= box.minZ || z * 16 > box.maxZ) return
+        if (liveRoom != null) {
+            if (unloaded) for (target in liveTargets.values) if (target.state == RoomTargetState.ACTIVE &&
+                Math.floorDiv(floor(target.position.x).toInt(), 16) == x && Math.floorDiv(floor(target.position.z).toInt(), 16) == z) {
+                target.state = RoomTargetState.UNKNOWN
+                liveTargetsDirty = true
+                liveProbeOrderDirty = true
+            }
+            dirtyLiveGeometry()
+            rebuildMarkers()
+            return
+        }
         if (unloaded) { observeDeaths(); targets?.unloaded(); mobs.clear(); spawnPoints.clear(); rebuildMarkers() }
         rebuildGeometry()
     }
@@ -496,8 +825,12 @@ object StarredClearRouting : SkyMyceModule() {
         builder = RoomGeometryBuilder(world, detected)
     }
 
-    private fun contains(detected: DetectedRoom, point: Vec3) = detected.template.bounds.contains(
-        detected.transform.toLocal(GridCell(floor(point.x).toInt(), floor(point.y).toInt(), floor(point.z).toInt())))
+    private fun contains(detected: DetectedRoom, point: Vec3): Boolean {
+        val cell = GridCell(floor(point.x).toInt(), floor(point.y).toInt(), floor(point.z).toInt())
+        val live = liveRoom
+        return if (live != null) live.containsXZ(cell.x, cell.z) && cell.y in detected.template.bounds.min.y..detected.template.bounds.max.y
+            else detected.template.bounds.contains(detected.transform.toLocal(cell))
+    }
 
     private fun worldBounds(detected: DetectedRoom): AABB {
         val a = detected.transform.toWorld(detected.template.bounds.min)
@@ -506,7 +839,7 @@ object StarredClearRouting : SkyMyceModule() {
             maxOf(a.x, b.x) + 1.0, maxOf(a.y, b.y) + 1.0, maxOf(a.z, b.z) + 1.0)
     }
 
-    private fun drawPath(detected: DetectedRoom, result: RoomRoute, actual: Vec3): List<PathLine> {
+    private fun drawPath(detected: DetectedRoom, result: RoomRoute, actual: Vec3, hasExit: Boolean): List<PathLine> {
         var healerFrom = 0
         for (id in result.targetOrder) {
             val index = result.path.subList(healerFrom, result.path.size).indexOf(detected.template.targets.getValue(id))
@@ -522,7 +855,7 @@ object StarredClearRouting : SkyMyceModule() {
                 val a = points[i - 1].add(0.0, 0.1, 0.0)
                 val b = points[i].add(0.0, 0.1, 0.0)
                 if (a.distanceToSqr(b) < 0.000001) continue
-                val healer = index > healerFrom || result.targetOrder.isEmpty()
+                val healer = (index > healerFrom || result.targetOrder.isEmpty()) && hasExit
                 val prior = output.lastOrNull()
                 if (prior != null && prior.healer == healer && prior.to == a &&
                     prior.to.subtract(prior.from).cross(b.subtract(a)).lengthSqr() < 0.000001 &&
@@ -538,6 +871,21 @@ object StarredClearRouting : SkyMyceModule() {
     private fun rebuildMarkers() {
         val detected = room ?: return
         val order = route?.targetOrder.orEmpty()
+        if (liveRoom != null) {
+            markers = liveTargets.values.map { target ->
+                val feet = target.position
+                val number = order.indexOf(target.id).takeIf { it >= 0 }?.plus(1)
+                val label = "${number?.let { "$it. " }.orEmpty()}Starred (${target.state.name.lowercase()})"
+                Marker(AABB(feet.x - 0.35, feet.y, feet.z - 0.35, feet.x + 0.35, feet.y + 1.0, feet.z + 0.35),
+                    BlockPos.containing(feet), label, target.state, number == 1)
+            }
+            healerMarker = liveExit?.let { endpoint ->
+                val feet = liveFeet(endpoint)
+                Marker(AABB(feet.x - 0.5, feet.y, feet.z - 0.5, feet.x + 0.5, feet.y + 1.5, feet.z + 0.5),
+                    BlockPos.containing(feet), liveRoom!!.exit?.kind ?: "Dungeon exit", RoomTargetState.UNKNOWN, false)
+            }
+            return
+        }
         markers = detected.template.targets.map { (id, cell) ->
             val feet = RoomWorldGeometry.feet(detected, cell)
             val state = targets!!.state(id)
@@ -547,7 +895,7 @@ object StarredClearRouting : SkyMyceModule() {
         }
         val feet = RoomWorldGeometry.feet(detected, detected.template.healer)
         healerMarker = Marker(AABB(feet.x - 0.5, feet.y, feet.z - 0.5, feet.x + 0.5, feet.y + 1.5, feet.z + 0.5),
-            BlockPos.containing(feet), "Healer", RoomTargetState.UNKNOWN, false)
+            BlockPos.containing(feet), "Blood / Wither exit", RoomTargetState.UNKNOWN, false)
     }
 
     @Subscription
@@ -585,5 +933,36 @@ object StarredClearRouting : SkyMyceModule() {
                 Gizmos.billboardTextOverBlock(it.label, it.pos, 2, healer, 0.8f)
             }
         }
+    }
+}
+
+/** Cached native approach probes resume after their shared tick budget instead of retrying rejected prefixes. */
+internal class RoomApproachProbe {
+    private var revision = Long.MIN_VALUE
+    private var candidates = emptyList<GridCell>()
+    private var cursor = 0
+    private var found: GridCell? = null
+
+    fun invalidate() { revision = Long.MIN_VALUE }
+    fun result(revision: Long): GridCell? = if (this.revision == revision) found else null
+    fun complete(revision: Long) = this.revision == revision && (found != null || cursor == candidates.size)
+
+    fun step(revision: Long, candidates: () -> List<GridCell>, maxChecks: Int, deadlineNanos: Long,
+        canConnect: (GridCell) -> Boolean, clock: () -> Long = System::nanoTime): Int {
+        val limit = maxChecks.coerceIn(0, 64)
+        if (this.revision != revision) {
+            if (limit == 0 || clock() >= deadlineNanos) return 0
+            this.revision = revision
+            this.candidates = candidates()
+            cursor = 0
+            found = null
+        }
+        var checks = 0
+        while (found == null && cursor < this.candidates.size && checks < limit && clock() < deadlineNanos) {
+            val cell = this.candidates[cursor++]
+            checks++
+            if (canConnect(cell)) found = cell
+        }
+        return checks
     }
 }

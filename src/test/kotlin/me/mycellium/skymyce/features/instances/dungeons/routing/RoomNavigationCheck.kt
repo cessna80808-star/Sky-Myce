@@ -41,8 +41,9 @@ private fun maze(vararg rows: String): Pair<Fixture, GridCell> {
     return fixture(cells, adjacency, targets, labels.getValue('H')) to labels.getValue('S')
 }
 
-private fun verifyPath(fixture: Fixture, start: GridCell, remaining: Set<String>, route: RoomRoute) {
-    check(route.path.first() == start && route.path.last() == fixture.healer)
+private fun verifyPath(fixture: Fixture, start: GridCell, remaining: Set<String>, route: RoomRoute, endpoint: GridCell? = fixture.healer) {
+    check(route.path.first() == start)
+    check(route.path.last() == (endpoint ?: route.targetOrder.lastOrNull()?.let(fixture.targets::getValue) ?: start))
     check(route.cost == route.path.zipWithNext().sumOf { (from, to) ->
         abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
     })
@@ -57,7 +58,7 @@ private fun verifyPath(fixture: Fixture, start: GridCell, remaining: Set<String>
 }
 
 /** Independent exhaustive-order oracle; tests include the final healer distance. */
-private fun minimumCost(fixture: Fixture, start: GridCell, remaining: Set<String>): Int? {
+private fun minimumCost(fixture: Fixture, start: GridCell, remaining: Set<String>, endpoint: GridCell? = fixture.healer): Int? {
     val distances = HashMap<Pair<GridCell, GridCell>, Int?>()
     fun distance(from: GridCell, to: GridCell): Int? = distances.getOrPut(from to to) {
         val queue = ArrayDeque<GridCell>()
@@ -75,7 +76,7 @@ private fun minimumCost(fixture: Fixture, start: GridCell, remaining: Set<String
         costs[to]
     }
     fun visit(from: GridCell, left: Set<String>): Int? {
-        if (left.isEmpty()) return distance(from, fixture.healer)
+        if (left.isEmpty()) return if (endpoint == null) 0 else distance(from, endpoint)
         var best: Int? = null
         for (id in left) {
             val next = fixture.targets.getValue(id)
@@ -219,6 +220,31 @@ private fun checkStability() {
     check(room.navigation.plan(room.cells[2], room.targets.keys, minimumImprovement = -1) == null)
 }
 
+private fun checkOptionalEndpoint() {
+    val room = line(5, mapOf("A" to 1, "B" to 4), 0)
+    val open = requireNotNull(RoomNavigation.create(room.cells, room.adjacency, room.targets))
+    check(open.healer == null)
+    for (start in room.cells) for (remaining in listOf(emptySet(), setOf("A"), setOf("B"), room.targets.keys)) {
+        val route = requireNotNull(open.plan(start, remaining))
+        check(route.cost == minimumCost(room, start, remaining, null))
+        verifyPath(room, start, remaining, route, null)
+    }
+    check(open.plan(room.cells[2], room.targets.keys, minimumImprovement = 0)?.targetOrder == listOf("A", "B"))
+    check(room.navigation.plan(room.cells[2], room.targets.keys, minimumImprovement = 0)?.targetOrder == listOf("B", "A"))
+    val (wall, start) = maze("S#A", ".#.", "...", "H..")
+    val aroundWall = requireNotNull(RoomNavigation.create(wall.cells, wall.adjacency, wall.targets, null))
+    val route = requireNotNull(aroundWall.plan(start, wall.targets.keys))
+    check(route.cost == 6)
+    verifyPath(wall, start, wall.targets.keys, route, null)
+    val directed = listOf(GridCell(0, 0, 0), GridCell(1, 0, 0), GridCell(2, 0, 0))
+    val oneWay = requireNotNull(RoomNavigation.create(directed,
+        mapOf(directed[0] to listOf(directed[1]), directed[1] to listOf(directed[2])),
+        mapOf("A" to directed[1], "B" to directed[2])))
+    check(oneWay.plan(directed.first(), setOf("A", "B"))?.targetOrder == listOf("A", "B"))
+    check(oneWay.plan(directed.last(), setOf("A")) == null)
+    check(oneWay.plan(directed.last(), emptySet())?.path == listOf(directed.last()))
+}
+
 private fun checkLiveStart() {
     val room = line(24, mapOf("A" to 10, "B" to 18), 23)
     val route = requireNotNull(room.navigation.plan(room.cells.first(), room.targets.keys))
@@ -308,6 +334,7 @@ fun checkRoomNavigation() {
     checkOptimalRoutes()
     checkElevationsAndDirection()
     checkStability()
+    checkOptionalEndpoint()
     checkLiveStart()
     checkValidationAndSnapshots()
     println("Room navigation checks passed: supplied safe geometry, four rotations, wall detours, exact total-route optimization, healer, weighted elevations, directed paths, bounded inputs and stable replanning")

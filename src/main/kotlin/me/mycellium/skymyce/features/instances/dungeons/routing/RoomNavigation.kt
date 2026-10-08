@@ -47,7 +47,7 @@ class RoomTransform(val origin: GridCell, val quarterTurns: Int) {
     }
 }
 
-/** Cost counts horizontal and vertical movement blocks, including the final healer segment. */
+/** Cost counts horizontal and vertical movement blocks, including an optional final endpoint. */
 @ConsistentCopyVisibility
 data class RoomRoute internal constructor(val targetOrder: List<String>, val path: List<GridCell>, val cost: Int)
 
@@ -84,15 +84,15 @@ fun RoomRoute.liveStart(
 class RoomNavigation private constructor(
     val cells: List<GridCell>,
     val targets: Map<String, GridCell>,
-    val healer: GridCell,
+    val healer: GridCell?,
     private val indices: Map<GridCell, Int>,
     private val adjacent: Array<IntArray>
 ) {
     private class Search(val distances: IntArray, val parents: IntArray)
     private data class SearchNode(val node: Int, val distance: Int)
     private val targetNodes = targets.mapValues { indices.getValue(it.value) }
-    private val healerNode = indices.getValue(healer)
-    private val fixedSearches = (targetNodes.values + healerNode).distinct().associateWith(::search)
+    private val healerNode = healer?.let(indices::getValue)
+    private val fixedSearches = (targetNodes.values + listOfNotNull(healerNode)).distinct().associateWith(::search)
 
     companion object {
         const val MAX_NODES = 16_384
@@ -107,11 +107,12 @@ class RoomNavigation private constructor(
             cells: Collection<GridCell>,
             adjacency: Map<GridCell, Collection<GridCell>>,
             targets: Map<String, GridCell>,
-            healer: GridCell
+            healer: GridCell? = null
         ): RoomNavigation? {
             if (cells.isEmpty() || cells.size > MAX_NODES || targets.size > MAX_TARGETS || adjacency.size > cells.size) return null
             val nodes = cells.toSet()
-            if (nodes.size != cells.size || healer !in nodes || targets.any { !targetId.matches(it.key) || it.value !in nodes }) return null
+            if (nodes.size != cells.size || healer != null && healer !in nodes ||
+                targets.any { !targetId.matches(it.key) || it.value !in nodes }) return null
             if (adjacency.any { (from, next) ->
                 from !in nodes || next.size > MAX_NEIGHBORS || next.toSet().size != next.size ||
                     next.any { it !in nodes || !localConnection(from, it) }
@@ -148,7 +149,8 @@ class RoomNavigation private constructor(
         val startNode = indices[start] ?: return null
         val fromStart = search(startNode)
         val ids = remaining.sorted()
-        if (fromStart.distances[healerNode] < 0 || ids.any { fromStart.distances[targetNodes.getValue(it)] < 0 }) return null
+        if (healerNode != null && fromStart.distances[healerNode] < 0 ||
+            ids.any { fromStart.distances[targetNodes.getValue(it)] < 0 }) return null
         val optimal = optimalOrder(ids, fromStart) ?: return null
         val previous = previousOrder?.takeIf { it.size <= MAX_TARGETS && it.toSet().size == it.size && it.all(targets::containsKey) }
             ?.filter(remaining::contains)?.takeIf { it.size == ids.size }
@@ -156,12 +158,12 @@ class RoomNavigation private constructor(
         val optimalCost = routeCost(optimal, fromStart) ?: return null
         val retainPrevious = previous != null && previousCost != null && previousCost - optimalCost <= minimumImprovement
         val order = if (retainPrevious) previous!! else optimal
-        val path = ArrayList<GridCell>()
+        val path = arrayListOf(cells[startNode])
         var source = startNode
         var searched = fromStart
-        for (destination in order.map { targetNodes.getValue(it) } + healerNode) {
+        for (destination in order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)) {
             val segment = pathTo(source, destination, searched) ?: return null
-            path.addAll(if (path.isEmpty()) segment else segment.drop(1))
+            path.addAll(segment.drop(1))
             source = destination
             searched = fixedSearches.getValue(destination)
         }
@@ -196,7 +198,7 @@ class RoomNavigation private constructor(
         var best = INFINITE
         var last = -1
         for (candidate in 0 until count) {
-            val finalDistance = fixedSearches.getValue(nodes[candidate]).distances[healerNode]
+            val finalDistance = healerNode?.let { fixedSearches.getValue(nodes[candidate]).distances[it] } ?: 0
             val cost = costs[full * count + candidate]
             if (finalDistance >= 0 && cost != INFINITE && cost + finalDistance < best) {
                 best = cost + finalDistance
@@ -219,7 +221,7 @@ class RoomNavigation private constructor(
     private fun routeCost(order: List<String>, fromStart: Search): Int? {
         var searched = fromStart
         var cost = 0
-        for (destination in order.map { targetNodes.getValue(it) } + healerNode) {
+        for (destination in order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)) {
             val distance = searched.distances[destination]
             if (distance < 0) return null
             cost += distance

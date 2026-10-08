@@ -165,11 +165,46 @@ private fun checkRetriesAndClock() {
     check(!saturated.due(Long.MAX_VALUE - 1) && saturated.due(Long.MAX_VALUE))
 }
 
+private fun checkApproachProbeBudgets() {
+    // A room full of inaccessible candidates must finish over bounded ticks without repeating work.
+    val blocked = List(10) { RoomApproachProbe() }
+    val candidates = (0 until 20).map { GridCell(it, 0, 0) }
+    var nativeChecks = 0
+    repeat(5) {
+        var tickChecks = 0
+        for (probe in blocked) tickChecks += probe.step(1, { candidates }, 64 - tickChecks, Long.MAX_VALUE,
+            { nativeChecks++; false }, { 0 })
+        check(tickChecks <= 64)
+    }
+    check(nativeChecks == 200 && blocked.all { it.complete(1) && it.result(1) == null })
+    for (probe in blocked) check(probe.step(1, { error("Negative cache rebuilt") }, 64, Long.MAX_VALUE,
+        { error("Rejected candidate was probed again") }, { 0 }) == 0)
+
+    val resumed = RoomApproachProbe()
+    var clock = 0L
+    var layoutsRead = 0
+    val layout = { layoutsRead++; (0 until 70).map { GridCell(it, 0, 0) } }
+    check(resumed.step(2, layout, 64, 3, { clock++; it.x == 5 }, { clock }) == 3)
+    check(!resumed.complete(2) && resumed.result(2) == null)
+    check(resumed.step(2, layout, 64, Long.MAX_VALUE, { it.x == 5 }, { clock }) == 3)
+    check(resumed.result(2) == GridCell(5, 0, 0) && layoutsRead == 1)
+
+    // A position/geometry change invalidates both success and failure caches.
+    resumed.invalidate()
+    check(resumed.result(2) == null && !resumed.complete(2))
+    check(resumed.step(2, layout, Int.MAX_VALUE, Long.MAX_VALUE, { false }, { 0 }) == 64)
+    check(resumed.step(2, layout, 64, Long.MAX_VALUE, { it.x == 69 }, { 0 }) == 6)
+    check(resumed.result(2) == GridCell(69, 0, 0) && layoutsRead == 2)
+    check(resumed.step(3, { listOf(GridCell(99, 0, 0)) }, 64, Long.MAX_VALUE, { true }, { 0 }) == 1)
+    check(resumed.result(2) == null && resumed.result(3) == GridCell(99, 0, 0))
+}
+
 fun checkRoomRoutingUpdates() {
     checkMovement()
     checkTeleportAndImmediateChanges()
     checkLifecycle()
     checkRetriesAndClock()
+    checkApproachProbeBudgets()
 }
 
 fun main() {

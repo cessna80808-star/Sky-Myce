@@ -11,7 +11,7 @@ The audit covers the registered feature modules, existing menu screens, the full
 | Category / subgroup | Feature ID | Existing functionality and canonical destination |
 | --- | --- | --- |
 | Dungeons / Parties | `party-finder` | Online dungeon friends, LFG availability, invites, class/PB filters and friend preferences. The old dungeon friend and Party Finder settings share this home. |
-| Dungeons / Routes | `starred-routes` | Starred target routing, healer route display and recording diagnostics; feature settings. |
+| Dungeons / Routes | `starred-routes` | Starred target routing, Blood/Wither exit display and recording diagnostics; feature settings. |
 | Dungeons / Runs | `dungeon-tracker` | Run totals, recorded acquisitions, loot/history filters and tracker settings; Dungeon Tracker. |
 | Dungeons / Rewards | `dungeon-chests` | Estimated chest profit, valuable-item thresholds, reroll and negative-profit protection; feature settings. |
 | Dungeons / Information | `dungeon-chat` | Dungeon message filtering; feature settings. |

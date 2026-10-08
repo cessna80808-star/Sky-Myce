@@ -101,16 +101,23 @@ private fun interpolate(from: RoomPoint, to: RoomPoint, amount: Double) = RoomPo
 enum class RoomGeometryStatus { BUILDING, READY, INCOMPLETE }
 
 /** An immutable room-local snapshot; only the incremental builder reads the client world. */
-class RoomGeometry internal constructor(
+class RoomGeometry private constructor(
     cells: Set<GridCell>,
     adjacency: Map<GridCell, Set<GridCell>>,
     targets: Map<String, GridCell>,
     val healer: GridCell,
+    copyGeometry: Boolean,
 ) {
-    val cells: Set<GridCell> = Collections.unmodifiableSet(LinkedHashSet(cells))
-    val adjacency: Map<GridCell, Set<GridCell>> = Collections.unmodifiableMap(adjacency.mapValues {
+    internal constructor(cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>, targets: Map<String, GridCell>, healer: GridCell) :
+        this(cells, adjacency, targets, healer, true)
+
+    internal constructor(snapshot: RoomLiveGeometrySnapshot, targets: Map<String, GridCell>, healer: GridCell) :
+        this(snapshot.cells, snapshot.adjacency, targets, healer, false)
+
+    val cells: Set<GridCell> = if (copyGeometry) Collections.unmodifiableSet(LinkedHashSet(cells)) else cells
+    val adjacency: Map<GridCell, Set<GridCell>> = if (copyGeometry) Collections.unmodifiableMap(adjacency.mapValues {
         Collections.unmodifiableSet(LinkedHashSet(it.value))
-    })
+    }) else adjacency
     val targets: Map<String, GridCell> = Collections.unmodifiableMap(LinkedHashMap(targets))
 }
 

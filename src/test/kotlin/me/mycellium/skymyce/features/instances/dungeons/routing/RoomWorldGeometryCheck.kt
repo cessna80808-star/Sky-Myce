@@ -35,7 +35,77 @@ private class GeometryFixture(
         climbable = { point -> worldReads++; ladder(point) })
 }
 
+private fun checkLiveFlood() {
+    val maze = listOf("S#A", ".#.", "...")
+    val seed = GridCell(0, 0, 0)
+    val allowed = maze.flatMapIndexed { z, row -> row.mapIndexedNotNull { x, cell ->
+        GridCell(x, 0, z).takeIf { cell != '#' }
+    } }.toSet()
+    val reads = hashMapOf<GridCell, Int>()
+    var edgeReads = 0
+    val builder = RoomLiveGeometry(seed,
+        { it.x in 0..2 && it.y == 0 && it.z in 0..2 },
+        { cell -> reads[cell] = (reads[cell] ?: 0) + 1; cell in allowed },
+        { from, to -> edgeReads++; from in allowed && to in allowed })
+    var ticks = 0
+    do {
+        val beforeCells = reads.values.sum()
+        val beforeEdges = edgeReads
+        val finished = builder.step(maxCells = 2, maxEdges = 3, maxNanos = Long.MAX_VALUE)
+        check(reads.values.sum() - beforeCells <= 2 && edgeReads - beforeEdges <= 3)
+        if (!finished) check(builder.result == null && builder.status == RoomGeometryStatus.BUILDING)
+        check(++ticks < 100)
+    } while (!finished)
+    val snapshot = requireNotNull(builder.result)
+    check(builder.status == RoomGeometryStatus.READY && snapshot.cells == allowed)
+    check(reads.values.all { it == 1 })
+    val graph = requireNotNull(RoomNavigation.create(snapshot.cells, snapshot.adjacency,
+        mapOf("star" to GridCell(2, 0, 0))))
+    check(graph.plan(seed, setOf("star"))?.cost == 6)
+    check(runCatching { (snapshot.cells as MutableSet).clear() }.isFailure)
+    check(runCatching { (snapshot.adjacency as MutableMap).clear() }.isFailure)
+    check(runCatching { (snapshot.adjacency.getValue(seed) as MutableSet).clear() }.isFailure)
+    check(builder.step() && builder.result === snapshot)
+
+    val targetInput = linkedMapOf("star" to GridCell(2, 0, 0))
+    val shared = RoomGeometry(snapshot, targetInput, seed)
+    check(shared.cells === snapshot.cells && shared.adjacency === snapshot.adjacency)
+    targetInput.clear()
+    check(shared.targets == mapOf("star" to GridCell(2, 0, 0)))
+    check(runCatching { (shared.targets as MutableMap).clear() }.isFailure)
+    val mutableCells = linkedSetOf(seed, GridCell(1, 0, 0))
+    val mutableConnections = linkedSetOf(GridCell(1, 0, 0))
+    val mutableAdjacency = linkedMapOf(seed to mutableConnections)
+    val authored = RoomGeometry(mutableCells, mutableAdjacency, shared.targets, seed)
+    mutableCells.clear(); mutableConnections.clear(); mutableAdjacency.clear()
+    check(authored.cells == setOf(seed, GridCell(1, 0, 0)) && authored.adjacency[seed] == setOf(GridCell(1, 0, 0)))
+
+    var slowReads = 0
+    val timed = RoomLiveGeometry(seed, { true }, { slowReads++; Thread.sleep(5); true }, { _, _ -> true })
+    check(!timed.step(maxNanos = 1_000_000) && slowReads == 1 && timed.result == null)
+
+    val end = GridCell(1, 0, 0)
+    val disconnected = RoomLiveGeometry(seed, { it == seed || it == end }, { true }, { _, _ -> false })
+    while (!disconnected.step(maxNanos = Long.MAX_VALUE)) { }
+    check(disconnected.result?.cells == setOf(seed)) // Safe endpoints do not invent a connection through a wall.
+    val oneWay = RoomLiveGeometry(seed, { it == seed || it == end }, { true }, { from, _ -> from == seed })
+    while (!oneWay.step(maxNanos = Long.MAX_VALUE)) { }
+    check(oneWay.result?.adjacency?.get(seed) == setOf(end) && oneWay.result?.adjacency?.get(end).isNullOrEmpty())
+    val unloaded = RoomLiveGeometry(seed, { it == seed || it == end }, { it == seed }, { _, _ -> true })
+    while (!unloaded.step(maxNanos = Long.MAX_VALUE)) { }
+    check(unloaded.result?.cells == setOf(seed))
+    val noStart = RoomLiveGeometry(seed, { true }, { false }, { _, _ -> true })
+    check(noStart.step() && noStart.status == RoomGeometryStatus.INCOMPLETE && noStart.result == null)
+    val unavailable = RoomLiveGeometry(seed, { true }, { error("Unavailable world") }, { _, _ -> true })
+    check(unavailable.step() && unavailable.failure != null && unavailable.result == null)
+    val capped = RoomLiveGeometry(seed, { it.y == 0 && it.z == 0 && it.x in 0..RoomNavigation.MAX_NODES },
+        { true }, { _, _ -> true })
+    while (!capped.step(maxNanos = Long.MAX_VALUE)) { }
+    check(capped.status == RoomGeometryStatus.INCOMPLETE && capped.failure?.contains("16384") == true && capped.result == null)
+}
+
 fun checkRoomWorldGeometry() {
+    checkLiveFlood()
     val floor = solid(-4.0, -1.0, -4.0, 4.0, 0.0, 4.0)
     val start = RoomPoint(0.5, 0.0, 0.5)
     val end = RoomPoint(1.5, 0.0, 0.5)

@@ -37,6 +37,7 @@ private fun reject(change: (JsonObject) -> Unit) {
 }
 
 fun main() {
+    dungeonRoomContextChecks()
     val catalog = syntheticCatalog().parseCatalog()
     val room = catalog.rooms.single()
     check(room.id == "synthetic-room" && room.walkable.size == 30 && room.targets.size == 2)
@@ -323,4 +324,153 @@ fun main() {
     check(runCatching { RoomTemplateDraft("off-grid", setOf("F1"), catalog.grid,
         RoomTransform(GridCell(-127, 64, -96), 0)) }.isFailure)
     println("Room template parsing, capture/export, rotated recognition and target lifecycle checks passed")
+}
+
+private fun dungeonRoomContextChecks() {
+    val layout = DungeonMapLayout(5, 5, 16, -200, -200)
+    fun blank() = ByteArray(16384)
+    fun tile(colours: ByteArray, x: Int, z: Int, colour: Int = 63) {
+        for (dx in 0 until layout.roomSize) for (dz in 0 until layout.roomSize)
+            colours[(5 + x * layout.stride + dx) + (5 + z * layout.stride + dz) * 128] = colour.toByte()
+    }
+    fun door(colours: ByteArray, x: Int, z: Int, dx: Int, dz: Int, colour: Int, wide: Boolean = false) {
+        val a = RoomSegment(5 + x * layout.stride, 5 + z * layout.stride)
+        val leftX = a.x + if (dx > 0) layout.roomSize else if (dx < 0) -4 else 0
+        val topZ = a.z + if (dz > 0) layout.roomSize else if (dz < 0) -4 else 0
+        val offsets = if (wide) 0 until layout.roomSize else layout.roomSize / 2 - 1..layout.roomSize / 2 + 1
+        for (gap in 0..3) for (offset in offsets) {
+            val px = leftX + if (dx != 0) gap else offset
+            val pz = topZ + if (dz != 0) gap else offset
+            colours[px + pz * 128] = colour.toByte()
+        }
+    }
+    check(dungeonGridSegment(-184.5, -184.5) == RoomSegment(-200, -200))
+    check(dungeonGridSegment(-200.51, -200.51) == RoomSegment(-232, -232))
+    check(dungeonGridSegment(7.5, 7.5) == RoomSegment(-8, -8))
+    check(dungeonGridSegment(23.5, 23.5) == RoomSegment(24, 24))
+
+    val shape = blank()
+    tile(shape, 1, 1); tile(shape, 2, 1); tile(shape, 1, 2); tile(shape, 2, 2)
+    door(shape, 1, 1, 1, 0, 63, true); door(shape, 1, 1, 0, 1, 63, true)
+    door(shape, 2, 1, 0, 1, 63) // A normal door must not merge the fourth tile into the L room.
+    val room = requireNotNull(dungeonMapRoom(shape, layout, RoomSegment(-168, -168)))
+    check(room.segments == setOf(RoomSegment(-168, -168), RoomSegment(-136, -168), RoomSegment(-168, -136)))
+    check(room.containsXZ(-137, -137)) // Shared interior corridor.
+    check(!room.containsXZ(-135, -135)) // The separate room in the missing quadrant.
+    check(!room.cleared)
+    shape[(25 + 8) + (25 + 8) * 128] = 34
+    check(requireNotNull(dungeonMapRoom(shape, layout, RoomSegment(-168, -168))).cleared)
+
+    for ((dx, dz) in listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)) {
+        val colours = blank()
+        tile(colours, 2, 2); tile(colours, 2 + dx, 2 + dz, 18)
+        door(colours, 2, 2, dx, dz, 18)
+        val exit = requireNotNull(dungeonMapExit(colours, layout, setOf(RoomSegment(-136, -136))))
+        check(exit.kind == "Blood door")
+        check(exit.door == GridCell(-121 + dx * 16, 69, -121 + dz * 16))
+        check(exit.approach == GridCell(exit.door.x - dx * 3, 69, exit.door.z - dz * 3))
+        check(dungeonMapExit(colours, layout, setOf(RoomSegment(-136 + dx * 32, -136 + dz * 32))) == null)
+    }
+    val topology = blank()
+    for ((x, z) in listOf(2 to 1, 1 to 1, 1 to 0, 2 to 0, 3 to 0)) tile(topology, x, z)
+    tile(topology, 3, 1, 18)
+    door(topology, 2, 1, -1, 0, 119)
+    door(topology, 1, 1, 0, -1, 63)
+    door(topology, 1, 0, 1, 0, 63)
+    door(topology, 2, 0, 1, 0, 63)
+    door(topology, 3, 0, 0, 1, 18)
+    // Blood is immediately east but separated by a wall; the verified map route begins west.
+    check(requireNotNull(dungeonMapExit(topology, layout, setOf(RoomSegment(-136, -168)))).door == GridCell(-137, 69, -153))
+
+    val unknown = blank()
+    tile(unknown, 1, 1); tile(unknown, 2, 1, 85); door(unknown, 1, 1, 1, 0, 119)
+    check(requireNotNull(dungeonMapExit(unknown, layout, setOf(RoomSegment(-168, -168)))).kind == "Wither door")
+    tile(unknown, 1, 2, 85); door(unknown, 1, 1, 0, 1, 119)
+    check(dungeonMapExit(unknown, layout, setOf(RoomSegment(-168, -168))) == null)
+    check(dungeonMapRoom(unknown, layout, RoomSegment(-136, -168)) == null)
+    check(dungeonMapRoom(ByteArray(10), layout, RoomSegment(-168, -168)) == null)
+
+    val gateBlocks = mutableMapOf<GridCell, Int>()
+    val gateRoom = setOf(RoomSegment(-168, -168))
+    fun gate(x: Int, z: Int, dx: Int, dz: Int, colour: Int) {
+        for (dy in 0..3) for (across in -1..1) gateBlocks[GridCell(x + dz * across, 69 + dy, z + dx * across)] = colour
+    }
+    gate(-137, -153, 1, 0, 119)
+    check(requireNotNull(dungeonClosedExit(gateRoom) { gateBlocks[it] }).approach == GridCell(-140, 69, -153))
+    gateBlocks.remove(GridCell(-137, 72, -154))
+    check(dungeonClosedExit(gateRoom) { gateBlocks[it] } == null) // Incomplete or unloaded gate.
+    gate(-137, -153, 1, 0, 119); gate(-153, -137, 0, 1, 18)
+    check(dungeonClosedExit(gateRoom) { gateBlocks[it] } == null) // Unproven direction between two closed gates.
+
+    val calibrated = blank()
+    tile(calibrated, 0, 0, 30); tile(calibrated, 2, 1)
+    calibrated[13 + 13 * 128] = 34 // Entrance checkmarks do not invalidate its border.
+    check(dungeonNativeMapLayout(calibrated, 53, 33, -120.5, -152.5) == layout)
+    check(dungeonNativeMapLayout(calibrated, 127, 127, -120.5, -152.5) == null)
+    tile(calibrated, 1, 0, 30)
+    check(dungeonNativeMapLayout(calibrated, 53, 33, -120.5, -152.5) == null)
+
+    // Combined regression: an empty catalog must still produce a collision-safe automatic clear route.
+    for (gateColour in listOf(18, 119)) {
+        val colours = blank()
+        tile(colours, 0, 0, 30); tile(colours, 2, 1)
+        tile(colours, 3, 1, if (gateColour == 18) 18 else 63)
+        door(colours, 2, 1, 1, 0, gateColour)
+        if (gateColour == 119) { tile(colours, 4, 1, 18); door(colours, 3, 1, 1, 0, 18) }
+        val start = GridCell(-134, 69, -153)
+        fun feet(cell: GridCell) = RoomPoint(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)
+        val emptyCatalog = syntheticCatalog().apply { add("rooms", JsonArray()) }.parseCatalog()
+        check(emptyCatalog.recognize("F7", feet(start)) { error("An empty catalog should read no room landmarks") } == null)
+        val nativeLayout = requireNotNull(dungeonNativeMapLayout(colours, 46, 33, feet(start).x, feet(start).z))
+        val detected = requireNotNull(dungeonMapRoom(colours, nativeLayout, dungeonGridSegment(feet(start).x, feet(start).z)))
+        val exit = requireNotNull(detected.exit)
+        check(!detected.cleared && exit.kind == if (gateColour == 18) "Blood door" else "Wither door")
+        check(exit.approach == GridCell(-108, 69, -153))
+        // Independent physical solids: a tall dividing wall with a southern opening, and a closed gate.
+        val solids = listOf(GridCell(-128, 69, -168) to GridCell(-127, 73, -144),
+            GridCell(-106, 69, -154) to GridCell(-103, 73, -151))
+        fun clear(a: RoomPoint, b: RoomPoint) = solids.none { (min, max) ->
+            minOf(a.x, b.x) - 0.3 < max.x && maxOf(a.x, b.x) + 0.3 > min.x &&
+                minOf(a.y, b.y) < max.y && maxOf(a.y, b.y) + 1.8 > min.y &&
+                minOf(a.z, b.z) - 0.3 < max.z && maxOf(a.z, b.z) + 0.3 > min.z
+        }
+        fun move(a: GridCell, b: GridCell) = validRoomConnector(feet(a), feet(b),
+            loaded = { _, _ -> true }, clearSegment = ::clear,
+            supported = { point, _, radius -> point.y == 69.0 && point.x - radius >= -136 && point.x + radius <= -104 &&
+                point.z - radius >= -168 && point.z + radius <= -136 }, climbable = { false })
+        var cellReads = 0
+        var edgeReads = 0
+        val flood = RoomLiveGeometry(start, { detected.containsXZ(it.x, it.z) && it.y in 68..72 },
+            { cellReads++; move(it, it) }, { a, b -> edgeReads++; move(a, b) })
+        var ticks = 0
+        do {
+            val previousCells = cellReads
+            val previousEdges = edgeReads
+            val finished = flood.step(maxCells = 32, maxEdges = 64, maxNanos = Long.MAX_VALUE)
+            check(cellReads - previousCells <= 32 && edgeReads - previousEdges <= 64)
+            if (!finished) check(flood.result == null)
+            check(++ticks < 1000)
+        } while (!finished)
+        val geometry = requireNotNull(flood.result)
+        check(flood.status == RoomGeometryStatus.READY && exit.approach in geometry.cells && exit.door !in geometry.cells)
+        val observed = mapOf("behind-wall" to GridCell(-126, 69, -153), "southern" to GridCell(-133, 69, -141))
+        val states = RoomTargetStates(observed.mapValues { 1 }).apply { observe("behind-wall", 101); observe("southern", 202) }
+        val navigation = requireNotNull(RoomNavigation.create(geometry.cells, geometry.adjacency, observed, exit.approach))
+        val initial = requireNotNull(navigation.plan(start, states.remaining()))
+        check(initial.path.first() == start && initial.path.last() == exit.approach)
+        check(initial.targetOrder == listOf("southern", "behind-wall") && initial.cost == 50)
+        check(initial.path.any { it.z >= -144 } && initial.path.all { move(it, it) })
+        check(initial.path.zipWithNext().all { (a, b) -> move(a, b) })
+        check(!move(exit.door, exit.door) && !clear(feet(exit.approach), feet(exit.door)))
+        states.removed(101, true)
+        states.removed(202, false)
+        check(navigation.plan(start, states.remaining(), initial.targetOrder)?.targetOrder == listOf("southern"))
+        colours[53 + 33 * 128] = 34
+        val cleared = requireNotNull(dungeonMapRoom(colours, nativeLayout, dungeonGridSegment(feet(start).x, feet(start).z)))
+        check(cleared.key == detected.key && cleared.cleared && cleared.exit == exit)
+        states.removed(202, cleared.cleared)
+        val toExit = requireNotNull(navigation.plan(start, states.remaining(), initial.targetOrder))
+        check(toExit.targetOrder.isEmpty() && toExit.path.last() == exit.approach && toExit.cost == 44)
+        check(toExit.path.any { it.z >= -144 } && toExit.path.zipWithNext().all { (a, b) -> move(a, b) })
+    }
 }

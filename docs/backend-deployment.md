@@ -1,3 +1,39 @@
+# Mod 2.4.15 routing repair — deployed October 8, 2026
+
+Production `sky-myce-backend` (`--env backend`) now selects mod 2.4.15 on
+Worker version `d18da871-f552-449c-b7c5-4f9545135d29`, deployed at 09:46:49 UTC.
+The existing published loader 1.0.14 remains selected. Supported loaders
+discover the new mod on the next Minecraft launch.
+
+The previous routing feature required a room catalog that was not shipped.
+The repair adds automatic dungeon-map room detection, observed starred mobs,
+incremental native collision geometry and a safe Blood/Wither-door approach.
+Target probes share a bounded client-tick budget and reuse immutable geometry.
+Whole-room completion requires the server's map checkmark; unobserved spawn
+totals are not claimed. Optional measured room catalogs remain supported.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.15 | `releases/Sky-Myce-2.4.15.jar` | `releases/manifest-2.4.15.json` | `84128054b1b65bc2981ef837354d05e855f9b81578eaf0510f2804e54ff3960f` |
+
+The mod manifest expires **October 15, 2026, at 09:45:19 UTC**. The retained
+loader manifest still expires at 07:39:02 UTC that day. Minecraft 26.1.2,
+minimum loader 1.0.11 and the existing signing trust root are preserved.
+
+Java 25 `check build`, relay type generation/typecheck and the backend packaging
+dry run passed. Routing checks include no-catalog discovery, map topology,
+joined-room geometry, wall detours, closed Blood/Wither gates, observed target
+states and resumable probe budgets. Private R2 readbacks match both release
+files exactly. Live manifests have valid signatures and matching artifact
+hashes; health and anonymous access-denial checks passed.
+
+Post-deployment settings differ only in `SKY_MYCE_VERSION` and
+`ARTIFACT_MANIFEST_KEY`, plus the deployment message. Secret names/types,
+storage namespace IDs, runtime settings and other bindings are preserved;
+schedules remain empty. Old artifacts are retained. Evidence under the same
+external directory below uses the `release-2.4.15-*` filenames. No live
+Minecraft dungeon run was performed, so gameplay still needs verification.
+
 # Mod 2.4.14 / loader 1.0.14 — deployed October 8, 2026
 
 The latest mod and loader are published with signed manifests in the existing
