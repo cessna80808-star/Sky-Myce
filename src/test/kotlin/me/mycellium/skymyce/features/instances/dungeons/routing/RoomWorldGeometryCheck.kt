@@ -40,7 +40,24 @@ private class GeometryFixture(
     }.map { it.max.y }, { route(it, it) }, ladder(RoomPoint(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)))
 }
 
+private fun checkPublishedEdges() {
+    val cells = (0..2).map { GridCell(it, 0, 0) }.toSet()
+    val scan = RoomLiveGeometry(GridCell(0, 0, 0), cells::contains, cells::contains, { _, _ -> true })
+    check(!scan.step(maxEdges = 1, maxNanos = Long.MAX_VALUE))
+    val before = requireNotNull(scan.snapshot())
+    val revision = scan.revision
+    fun back(snapshot: RoomLiveGeometrySnapshot) = requireNotNull(RoomNavigation.create(snapshot.cells,
+        snapshot.adjacency, emptyMap(), GridCell(0, 0, 0))).plan(GridCell(1, 0, 0), emptySet())
+    check(before.cells.size == 2 && back(before) == null)
+    check(!scan.step(maxEdges = 1, maxNanos = Long.MAX_VALUE))
+    val after = requireNotNull(scan.snapshot())
+    // New checked edges must publish even when no new standing cell has been discovered.
+    check(after.cells == before.cells && scan.revision > revision && back(after) != null)
+    check(back(before) == null)
+}
+
 private fun checkSurfaceHeightsAndProgress() {
+    checkPublishedEdges()
     val shapes = GeometryFixture(listOf(
         solid(0.0, -1.0, 0.0, 5.0, 0.0, 1.0),
         solid(1.0, 0.0, 0.0, 2.0, 0.0625, 1.0), // Carpet.

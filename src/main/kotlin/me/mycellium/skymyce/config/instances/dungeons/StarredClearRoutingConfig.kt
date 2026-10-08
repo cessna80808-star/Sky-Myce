@@ -6,13 +6,13 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 object StarredClearRoutingConfig : CategoryKt("Starred Clear Routing") {
     val enabled by boolean(true) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Find a wall-aware route through starred mobs to the Blood/Wither exit. Works automatically; /sm route status shows targets, room and scan progress.")
+        description = TranslatableValue.literal("Route through starred mobs to a closed Wither door, including an adjoining Fairy room. Hidden when Blood is open. /sm route status shows scan progress.")
     }
     val showTargets by boolean(true) { name = TranslatableValue.literal("Show Targets") }
     val showRoute by boolean(true) { name = TranslatableValue.literal("Show Route") }
     val showNumbers by boolean(true) { name = TranslatableValue.literal("Show Target Numbers") }
     val showCleared by boolean(false) { name = TranslatableValue.literal("Show Cleared Targets") }
-    val showHealer by boolean(true) { name = TranslatableValue.literal("Show Blood/Wither Exit") }
+    val showHealer by boolean(true) { name = TranslatableValue.literal("Show Wither Exit") }
     val automaticRecalculation by boolean(true) {
         name = TranslatableValue.literal("Recalculate As You Move")
         description = TranslatableValue.literal("Reorder after meaningful movement; room, target, geometry and teleport changes always update.")

@@ -1,3 +1,40 @@
+# Mod 2.4.17 Fairy routing and live updates — deployed October 8, 2026
+
+Production `sky-myce-backend` (`--env backend`) selects mod 2.4.17 on Worker
+version `cf4b44ea-f622-475c-afe6-d262bfb52b09`, deployed at 11:30:11 UTC.
+Supported loaders discover the release on the next Minecraft launch.
+
+Automatic routing now selects closed Wither gates rather than ordinary doors
+along the Blood route. An adjoining Fairy room's open passage extends the
+checked graph to its Wither gate, and crossing into Fairy retains that graph.
+Rooms without an established Wither destination and all routing after Blood
+opens are hidden. Paths and filled markers float 1.2 blocks above their checked
+feet positions; beacon beams are removed.
+
+Movement requests replan after 100 ms, player connections refresh each client
+tick, and graph workers can start planning immediately. Valid remaining paths
+survive ordinary walking/jumping while replacements are calculated. Changed
+edges publish even when the standing-cell count is unchanged. The initial scan
+can advance between ticks with a half-millisecond render scheduling budget;
+individual native collision callbacks can exceed that budget.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.17 | `releases/Sky-Myce-2.4.17.jar` | `releases/manifest-2.4.17.json` | `f35445aeccfd93f6870300c31655a59f7087a4d72959da9b8103e7bc02a0dd86` |
+
+The mod manifest expires **October 15, 2026, at 11:28:23 UTC**. Loader 1.0.14,
+Minecraft 26.1.2, minimum loader 1.0.11 and the signing trust root are retained.
+
+Java 25 `check build`, `npm test`, `npm run check` and the backend packaging
+dry run passed. Regressions cover Fairy traversal and stable context, closed
+gate selection, Blood-open suppression, 100 ms movement deadlines, bounded
+retries and new edges without new nodes. Private R2 readbacks match both checked
+files exactly. Live mod/loader signatures, hashes, health and anonymous access
+checks passed. Only the two mod release pointers changed; runtime settings,
+other bindings, secret names/types and empty schedules are preserved.
+External evidence uses `release-2.4.17-*` filenames. Live dungeon timing and
+appearance still need gameplay verification.
+
 # Mod 2.4.16 routing response and surface fixes — deployed October 8, 2026
 
 Production `sky-myce-backend` (`--env backend`) selects mod 2.4.16 on Worker

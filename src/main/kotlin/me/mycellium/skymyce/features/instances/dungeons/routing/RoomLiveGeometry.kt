@@ -40,6 +40,8 @@ class RoomLiveGeometry(
     private var neighbor = 0
     private var started = false
     val nodeCount get() = accepted.size
+    var revision = 0L
+        private set
 
     fun observesBlock(block: GridCell): Boolean = nearbyRoomGeometry(standing.keys, block)
 
@@ -81,6 +83,7 @@ class RoomLiveGeometry(
                 standing[seed] = true
                 feet[seed] = resolveFeet(seed)
                 accepted.add(seed)
+                revision++
                 distances[seed] = 0.0
                 enqueue(seed, 0.0)
                 cellReads++
@@ -120,7 +123,7 @@ class RoomLiveGeometry(
                         accepted.add(to)
                         feet[to] = resolveFeet(to)
                     }
-                    connections.add(to)
+                    if (connections.add(to)) revision++
                     val a = feet.getValue(from)
                     val b = feet.getValue(to)
                     val distance = distances.getValue(from) + hypot(b.x - a.x, b.z - a.z) + abs(b.y - a.y)

@@ -17,20 +17,27 @@ import kotlin.math.abs
 import kotlin.math.floor
 
 data class RoomSegment(val x: Int, val z: Int)
-data class DungeonExit(val door: GridCell, val approach: GridCell, val kind: String)
+data class DungeonExit(val door: GridCell, val approach: GridCell, val kind: String,
+    val via: Set<RoomSegment> = emptySet())
 data class LiveDungeonRoom(
     val key: String,
     val name: String,
     val segments: Set<RoomSegment>,
     val cleared: Boolean,
     val exit: DungeonExit?,
+    val fairy: Boolean = false,
 ) {
-    val minX get() = segments.minOf { it.x }
-    val minZ get() = segments.minOf { it.z }
-    val maxX get() = segments.maxOf { it.x } + 31
-    val maxZ get() = segments.maxOf { it.z } + 31
+    val routingSegments = segments + exit?.via.orEmpty()
+    val minX get() = routingSegments.minOf { it.x }
+    val minZ get() = routingSegments.minOf { it.z }
+    val maxX get() = routingSegments.maxOf { it.x } + 31
+    val maxZ get() = routingSegments.maxOf { it.z } + 31
     fun containsXZ(x: Int, z: Int) = segments.any { x in it.x..it.x + 31 && z in it.z..it.z + 31 }
+    fun containsRouteXZ(x: Int, z: Int) = routingSegments.any { x in it.x..it.x + 31 && z in it.z..it.z + 31 }
 }
+
+internal fun dungeonRouteVisible(bloodOpened: Boolean, room: LiveDungeonRoom?) =
+    !bloodOpened && room?.exit?.kind == "Wither door"
 
 internal data class DungeonMapLayout(
     val entranceX: Int, val entranceZ: Int, val roomSize: Int,
@@ -79,10 +86,10 @@ internal fun dungeonMapRoom(colours: ByteArray, layout: DungeonMapLayout, curren
     val segments = tiles.mapTo(linkedSetOf(), layout::world)
     val checked = tiles.any { colours.mapColour(it.x + layout.roomSize / 2, it.z + layout.roomSize / 2) in setOf(30, 34) }
     val name = when (colour) { 18 -> "Blood room"; 30 -> "Entrance"; 62 -> "Trap room"; 66 -> "Puzzle room"; 74 -> "Miniboss room"; 82 -> "Fairy room"; else -> "Dungeon room" }
-    return LiveDungeonRoom(roomKey(segments), name, segments, checked && colour != 30, dungeonMapExit(colours, layout, segments))
+    return LiveDungeonRoom(roomKey(segments), name, segments, checked && colour != 30, dungeonMapExit(colours, layout, segments), colour == 82)
 }
 
-/** Select a boundary along connected map passages to Blood; never infer it from Euclidean distance. */
+/** Select a closed Wither gate, continuing through an adjoining Fairy room's open passage. */
 internal fun dungeonMapExit(colours: ByteArray, layout: DungeonMapLayout, segments: Set<RoomSegment>): DungeonExit? {
     if (colours.size != 16384 || layout.roomSize !in 6..24 || segments.isEmpty()) return null
     val tiles = linkedSetOf<RoomSegment>()
@@ -108,33 +115,37 @@ internal fun dungeonMapExit(colours: ByteArray, layout: DungeonMapLayout, segmen
     }
     val currentTiles = segments.mapTo(hashSetOf(), layout::map)
     if (currentTiles.any { colours.mapColour(it.x, it.z) == 18 }) return null
-    data class Candidate(val tile: RoomSegment, val direction: RoomSegment, val colour: Int, val distance: Int?)
-    val exits = currentTiles.flatMap { tile -> MAP_DIRECTIONS.mapNotNull { direction ->
+    val fairyTiles = currentTiles.flatMap { tile -> MAP_DIRECTIONS.mapNotNull { direction ->
+        neighbour(tile, direction).takeIf { it !in currentTiles && colours.mapColour(it.x, it.z) == 82 &&
+            doorColour(tile, direction) in setOf(30, 63) }
+    } }.toSet()
+    val routingTiles = currentTiles + fairyTiles
+    data class Candidate(val tile: RoomSegment, val direction: RoomSegment, val distance: Int?)
+    val exits = routingTiles.flatMap { tile -> MAP_DIRECTIONS.mapNotNull { direction ->
         val next = neighbour(tile, direction)
-        if (next in currentTiles || !connected(tile, direction)) null
-        else Candidate(tile, direction, doorColour(tile, direction), distance[next])
+        if (next in routingTiles || doorColour(tile, direction) != 119) null
+        else Candidate(tile, direction, distance[next])
     } }
-    val selected = if (distance.isNotEmpty()) exits.filter { it.distance != null }.minByOrNull { it.distance!! }
-        else exits.filter { it.colour == 18 || it.colour == 119 }.singleOrNull()
+    val selected = exits.filter { it.distance != null }.minByOrNull { it.distance!! } ?: exits.singleOrNull()
     selected ?: return null
     val segment = layout.world(selected.tile)
     val door = GridCell(segment.x + 15 + selected.direction.x * 16, 69, segment.z + 15 + selected.direction.z * 16)
     val approach = GridCell(door.x - selected.direction.x * 3, door.y, door.z - selected.direction.z * 3)
-    val kind = when (selected.colour) { 18 -> "Blood door"; 119 -> "Wither door"; else -> "Blood route exit" }
-    return DungeonExit(door, approach, kind)
+    return DungeonExit(door, approach, "Wither door",
+        if (selected.tile in fairyTiles) setOf(segment) else emptySet())
 }
 
-/** Without map direction, only a unique actual closed Blood/Wither gate is an established destination. */
+/** Without map direction, only a unique actual closed Wither gate is an established destination. */
 internal fun dungeonClosedExit(segments: Set<RoomSegment>, read: (GridCell) -> Int?): DungeonExit? {
     val exits = mutableListOf<DungeonExit>()
     for (segment in segments) for (direction in MAP_DIRECTIONS) {
         if (RoomSegment(segment.x + direction.x * 32, segment.z + direction.z * 32) in segments) continue
         val door = GridCell(segment.x + 15 + direction.x * 16, 69, segment.z + 15 + direction.z * 16)
-        val colour = read(door)?.takeIf { it == 18 || it == 119 } ?: continue
+        val colour = read(door)?.takeIf { it == 119 } ?: continue
         // Hypixel gates occupy three blocks across and four high at the room-grid boundary.
         if ((0..3).any { dy -> (-1..1).any { across -> read(GridCell(door.x + direction.z * across, door.y + dy, door.z + direction.x * across)) != colour } }) continue
         exits.add(DungeonExit(door, GridCell(door.x - direction.x * 3, door.y, door.z - direction.z * 3),
-            if (colour == 18) "Blood door" else "Wither door"))
+            "Wither door"))
     }
     return exits.singleOrNull()
 }
@@ -157,12 +168,13 @@ object RoomDungeonContext {
 
     fun reset() { lastWorld = null; mapId = null; nativeLayout = null }
 
-    fun current(world: ClientLevel, position: Vec3): LiveDungeonRoom? {
+    fun current(world: ClientLevel, position: Vec3, previous: LiveDungeonRoom? = null): LiveDungeonRoom? {
         if (lastWorld !== world) { lastWorld = world; mapId = null; nativeLayout = null }
         val player = MC.instance.player ?: return null
         player.inventory.nonEquipmentItems[8].get(DataComponents.MAP_ID)?.let { mapId = it }
         // Hypixel's dungeon map fallback ID is also used by Skyblocker's public DungeonMap helper.
         val map = MapItem.getSavedData(mapId ?: MapId(1024), world)
+        var bridgeLayout: DungeonMapLayout? = null
         val fromBridge = bridge?.let { api -> runCatching {
             val current = api.current.invoke(null) ?: return@runCatching null
             val segments = (api.segments.invoke(current) as? Set<*>)?.mapNotNull { (it as? Vector2ic)?.let { point -> RoomSegment(point.x(), point.y()) } }?.toSet()
@@ -173,6 +185,7 @@ object RoomDungeonContext {
             val size = api.mapSize.invoke(null) as? Int
             val layout = if (entrance != null && physical != null && size != null && size in 6..24)
                 DungeonMapLayout(entrance.x(), entrance.y(), size, physical.x(), physical.y()) else null
+            bridgeLayout = layout
             val exit = if (map != null && layout != null) dungeonMapExit(map.colors, layout, segments) else dungeonClosedExit(segments) { cell ->
                 if (!world.hasChunk(Math.floorDiv(cell.x, 16), Math.floorDiv(cell.z, 16))) null
                 else when (world.getBlockState(BlockPos(cell.x, cell.y, cell.z)).block) {
@@ -183,18 +196,31 @@ object RoomDungeonContext {
             }
             val state = (api.cleared.get(current) as? Enum<*>)?.name
             LiveDungeonRoom(roomKey(segments), api.name.invoke(current) as? String ?: "Dungeon room", segments,
-                state == "GREEN_CHECKED" || state == "WHITE_CHECKED", exit)
+                state == "GREEN_CHECKED" || state == "WHITE_CHECKED", exit,
+                map != null && layout != null && segments.any { layout.map(it).let { tile -> map.colors.mapColour(tile.x, tile.z) == 82 } })
         }.getOrNull() }
-        if (fromBridge != null) return fromBridge
-        map ?: return null
-        val layout = nativeLayout ?: nativeMapLayout(map, position)?.also { nativeLayout = it } ?: return null
-        return dungeonMapRoom(map.colors, layout, dungeonGridSegment(position.x, position.z))
+        val layout = bridgeLayout?.also { nativeLayout = it } ?: nativeLayout ?: map?.let { nativeMapLayout(it, position) }
+            ?.also { nativeLayout = it }
+        val observed = fromBridge ?: if (map != null && layout != null)
+            dungeonMapRoom(map.colors, layout, dungeonGridSegment(position.x, position.z)) else null
+        return if (map != null && layout != null && observed != null)
+            dungeonContinueFairyRoute(map.colors, layout, observed, previous) else observed
     }
 
     private fun nativeMapLayout(map: MapItemSavedData, position: Vec3): DungeonMapLayout? {
         val marker = map.decorations.filter { it.type().value() == MapDecorationTypes.FRAME.value() }.singleOrNull() ?: return null
         return dungeonNativeMapLayout(map.colors, (marker.x().toInt() shr 1) + 64, (marker.y().toInt() shr 1) + 64, position.x, position.z)
     }
+}
+
+/** Keep the checked room graph while crossing into Fairy; still refresh its server clear state and gate. */
+internal fun dungeonContinueFairyRoute(colours: ByteArray, layout: DungeonMapLayout,
+    observed: LiveDungeonRoom, previous: LiveDungeonRoom?): LiveDungeonRoom {
+    previous ?: return observed
+    if (!observed.fairy || previous.exit?.door != observed.exit?.door ||
+        previous.exit?.via.orEmpty().intersect(observed.segments).isEmpty()) return observed
+    val source = dungeonMapRoom(colours, layout, previous.segments.first()) ?: return observed
+    return if (source.exit?.door == observed.exit?.door) source.copy(name = previous.name) else observed
 }
 
 internal fun dungeonNativeMapLayout(colours: ByteArray, markerX: Int, markerZ: Int, playerX: Double, playerZ: Double): DungeonMapLayout? {

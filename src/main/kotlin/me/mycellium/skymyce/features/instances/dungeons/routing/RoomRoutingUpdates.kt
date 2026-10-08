@@ -20,6 +20,7 @@ class RoomRoutingUpdates {
     var revision: Long = 0
         private set
     val reason: RoomReplanReason? get() = pending
+    val observedPosition: RoomPoint? get() = observed
 
     private var context: RoomRoutingContext? = null
     private var pending: RoomReplanReason? = null
@@ -36,8 +37,8 @@ class RoomRoutingUpdates {
     companion object {
         const val MOVEMENT_BLOCKS = 2.0
         const val TELEPORT_BLOCKS = 8.0
-        const val MOVEMENT_DEBOUNCE_MILLIS = 500L
-        const val STABLE_RETRY_MILLIS = 5_000L
+        const val MOVEMENT_DEBOUNCE_MILLIS = 100L
+        const val STABLE_RETRY_MILLIS = 500L
         const val MAX_STABLE_RETRIES = 1
     }
 
