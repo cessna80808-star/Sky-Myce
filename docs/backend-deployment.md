@@ -1,3 +1,34 @@
+# Mod 2.4.18 mob detection and Fairy/Blood routing — deployed October 8, 2026
+
+Production `sky-myce-backend` (`--env backend`) selects mod 2.4.18 on Worker
+version `5334c19b-d325-4b32-8b03-5a24b34ae160`, deployed at 12:06:42 UTC.
+Supported loaders discover the release on the next Minecraft launch.
+
+Starred health labels resolve to actual mob entities using the NoammAddons
+StarMobESP ID offsets and spatial fallback, verified against installed 1.2.9.
+Player-shaped miniboss profiles are included, and unresolved labels are retried
+without waiting for nametag attachment. Fairy passage colors are recognized;
+loaded gate blocks override stale map colors when its entrance opens. Final
+Blood gates are eligible endpoints, and Blood-open suppression is retained.
+
+| Release | Private artifact | Signed manifest | SHA-256 |
+| --- | --- | --- | --- |
+| Mod 2.4.18 | `releases/Sky-Myce-2.4.18.jar` | `releases/manifest-2.4.18.json` | `e5b5ae1702dccfeea874f3de22c6b1d9fdb98b49b1ba4cad90e583c0b476ae71` |
+
+The mod manifest expires **October 15, 2026, at 12:04:51 UTC**. Loader 1.0.14,
+Minecraft 26.1.2, minimum loader 1.0.11 and the signing trust root are retained.
+
+Java 25 `check build`, `npm test`, `npm run check` and the backend packaging
+dry run passed. Regressions cover mob ID/spatial association, miniboss/player
+classification, metadata-before-body retry, pink Fairy passages, a collision
+detour around its tree, stale gate colors and final Blood gates in all four
+directions. Private R2 readbacks match the checked build and signed manifest
+exactly. Live mod/loader signatures, hashes, health and anonymous access checks
+passed. The deployment is at 100%; only the two mod release pointers changed.
+Runtime settings, other bindings, secret names/types and empty schedules are
+preserved. External evidence uses `release-2.4.18-*` filenames. Live dungeon
+timing, miniboss detection and Fairy traversal still need gameplay verification.
+
 # Mod 2.4.17 Fairy routing and live updates — deployed October 8, 2026
 
 Production `sky-myce-backend` (`--env backend`) selects mod 2.4.17 on Worker

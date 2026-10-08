@@ -266,7 +266,7 @@ object StarredClearRouting : SkyMyceModule() {
             if (!dungeonRouteVisible(DungeonAPI.bloodOpened, observedRoom)) {
                 if (room != null) clearRoom()
                 active = false
-                status = "No closed Wither door in this room or adjoining Fairy room"
+                status = "No closed Blood / Wither door in this room or adjoining Fairy room"
                 return@measure
             }
             val data = catalog
@@ -489,7 +489,7 @@ object StarredClearRouting : SkyMyceModule() {
             complete = true
             if (context == null) finishedRooms.add(detected.key)
             hidePath()
-            status = "${context?.name ?: detected.template.id}: targets cleared and Wither exit reached"
+            status = "${context?.name ?: detected.template.id}: targets cleared and dungeon exit reached"
             return
         }
         complete = false
@@ -738,8 +738,11 @@ object StarredClearRouting : SkyMyceModule() {
         priority = Subscription.LOWEST, receiveCancelled = true)
     fun onName(event: EntityInfoLineEvent) {
         if (!active || room == null || !isEnabled() || !Settings.enabled) return
-        val entity = event.attachedTo as? LivingEntity ?: return
-        observeStar(entity, event.literalComponent)
+        val label = event.infoLineEntity as? ArmorStand
+        if (label != null) observeNamed(label, event.literalComponent)
+        else (event.attachedTo ?: event.infoLineEntity).let { entity ->
+            if (entity is LivingEntity && '✯' in event.literalComponent && eligibleStarMob(entity)) observeStar(entity)
+        }
     }
 
     @Subscription
@@ -747,29 +750,46 @@ object StarredClearRouting : SkyMyceModule() {
         if (!active || !isEnabled() || !Settings.enabled) return
         val entity = event.entity as? LivingEntity ?: return
         val detected = room ?: return
-        if (contains(detected, entity.position()) && spawnPoints.size < 2048) spawnPoints.putIfAbsent(entity.id, entity.position())
-        starredName(entity)?.let { observeStar(entity, it) }
+        if (eligibleStarMob(entity) && contains(detected, entity.position()) && spawnPoints.size < 2048)
+            spawnPoints.putIfAbsent(entity.id, entity.position())
+        observeEntity(entity)
     }
 
     private fun scanRoom(world: ClientLevel, detected: DetectedRoom) {
         val bounds = worldBounds(detected)
-        // One bounded room scan on entry; names arriving later are handled by attachment events.
+        // Bounded fallback also retries labels that arrived before their body or player profile.
         for (entity in world.getEntities(null, bounds).take(2048)) {
-            if (entity !is LivingEntity || entity is ArmorStand || entity is Player) continue
-            if (spawnPoints.size < 2048) spawnPoints.putIfAbsent(entity.id, entity.position())
-            starredName(entity)?.let { observeStar(entity, it) }
+            if (entity !is LivingEntity) continue
+            if (eligibleStarMob(entity) && spawnPoints.size < 2048) spawnPoints.putIfAbsent(entity.id, entity.position())
+            observeEntity(entity)
         }
     }
 
-    private fun starredName(entity: LivingEntity): String? {
-        if (entity is ArmorStand || entity is Player) return null
-        return entity.customName?.string?.takeIf { '✯' in it }
-            ?: entity.getStrippedAttachedLines().firstOrNull { '✯' in it }
+    private fun mobProfile(entity: Player) = MC.connection?.getPlayerInfo(entity.uuid)?.profile?.name
+
+    private fun eligibleStarMob(entity: Entity) = entity is LivingEntity && entity !is ArmorStand &&
+        (entity !is Player || dungeonStarPlayer(entity.uuid.version(), entity === MC.instance.player, entity.isInvisible, mobProfile(entity)))
+
+    private fun observeEntity(entity: LivingEntity) {
+        if (entity is ArmorStand) {
+            entity.customName?.string?.let { observeNamed(entity, it) }
+        } else if (eligibleStarMob(entity) && (entity is Player && dungeonMinibossProfile(mobProfile(entity)) ||
+                entity.customName?.string?.contains('✯') == true || entity.getStrippedAttachedLines().any { '✯' in it })) {
+            observeStar(entity)
+        }
     }
 
-    private fun observeStar(entity: LivingEntity, name: String) {
+    private fun observeNamed(label: ArmorStand, name: String) {
+        val world = level ?: return
+        val mob = dungeonStarMob(label.id, name, world::getEntity, ::eligibleStarMob) {
+            world.getEntities(label, label.boundingBox.move(0.0, -1.0, 0.0))
+        } as? LivingEntity ?: return
+        observeStar(mob)
+    }
+
+    private fun observeStar(entity: LivingEntity) {
         val detected = room ?: return
-        if ('✯' !in name || entity is ArmorStand || entity is Player || entity.isDeadOrDying || !contains(detected, entity.position())) return
+        if (!eligibleStarMob(entity) || entity.isDeadOrDying || !contains(detected, entity.position())) return
         if (liveRoom != null) {
             val old = liveTargets[entity.uuid]
             if (old == null) {
