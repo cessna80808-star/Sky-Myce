@@ -337,7 +337,6 @@ object DungeonFriendRelay {
                                         SkyMyce.logger.info("[Dungeon relay] Connected (shared wealth={})", sharedWealthAvailable)
                                         onDigestReady?.invoke()
                                         me.mycellium.skymyce.features.social.CosmeticsClient.ready()
-                                        RelayMessages.ircReady()
                                         RelayMessages.globalReady()
                                     }
                                     "irc_message" -> {
@@ -345,13 +344,13 @@ object DungeonFriendRelay {
                                         if (json.get("scope")?.asString == "global") {
                                             check(globalChatAvailable)
                                             RelayMessages.receiveGlobal(json, user.profileId.toString())
-                                        } else { check(ircAvailable); RelayMessages.receiveIrc(json) }
+                                        }
                                     }
                                     "irc_result" -> {
                                         check(connected)
                                         if (json.get("scope")?.asString == "global") {
                                             globalRequests.remove(json.get("id")?.asString)?.second?.complete(json)
-                                        } else if (json.has("error")) RelayMessages.ircError()
+                                        }
                                     }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
@@ -460,12 +459,6 @@ object DungeonFriendRelay {
 
     fun send(name: String, text: String, received: () -> Unit = {}, failed: () -> Unit = {}): Boolean {
         return sendDelivery("message", name, text, received) { failed() }
-    }
-
-    fun ircPacket(type: String, fields: Map<String, Any>): Boolean {
-        if (!connected || !ircAvailable || !LoaderClient.onlineAllowed || type !in setOf("irc_send", "irc_subscribe")) return false
-        packet(fields + mapOf("type" to type, "id" to UUID.randomUUID().toString().replace("-", "")))
-        return true
     }
 
     fun globalPacket(type: String, fields: Map<String, Any>, result: (String?) -> Unit): Boolean {

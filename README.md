@@ -1,4 +1,6 @@
-# Sky-Hawk
+# Sky-Myce
+
+Sky-Myce now uses a signed Fabric loader, Discord-linked accounts, installation-bound licenses, and a live Discord IRC bridge. See the [operator and security guide](docs/secure-system.md), [loader lifecycle](docs/LOADER.md), and [Discord bot setup](discord-bots/README.md). The protected mod requires the loader; first activation installs the verified payload for the next Minecraft launch.
 
 Sky-Hawk is a modern Fabric mod for Hypixel SkyBlock built to streamline the grind, reduce wasted clicks, and keep important information in view while you play. It is a fork of the SkyMyce ecosystem, tuned toward clean quality-of-life improvements, dungeon utility, and better social coordination.
 
@@ -6,7 +8,11 @@ Open the in-game config with `/skymyce` or `/sm`.
 
 New to the mod? Follow the [player manual](MANUAL.md) for a step-by-step walkthrough of every feature.
 
-Settings now use five searchable categories with expandable advanced options and shared accent/opacity controls. See the [settings and Party Finder matcher guide](docs/settings-party-finder.md).
+The menu has six destinations: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. Search finds controls across them; Quick Settings, Favorites and Recent retain useful shortcuts. See the [menu and measured performance changes](docs/menu-optimization-2026-10.md) and [settings and Party Finder matcher guide](docs/settings-party-finder.md).
+
+**2.4.28** restores visible historical dungeon totals and direct access to saved loot, XP and reports, fixes Master Mode run completion and dungeon profile continuity, and observes direct inventory reward packets. New measurements remain separate from preserved history. It retains 2.4.27's menu, performance and chat changes. `/sm irc` selects global chat, `/sm irc <message>` sends once, and `/sm chat` returns to normal chat. `/sm pc` fails closed until the backend can verify current party membership; see [party chat availability](docs/party-chat.md) and [tracker cutover](docs/dungeon-tracker-cutover.md).
+
+The persistent User Bot Gateway runs on Cloudflare. A real Minecraft ↔ Discord test passed, including reply context and mention presentation. The [implementation and deployment report](docs/implementation-overhaul-2026-10.md) records exact production versions, measured improvements, checks and remaining live-test limits.
 
 The integrated **2.4.2** upgrade adds a paged auction index and item browser (`/sm ah`), a four-view dungeon dashboard (`/sm dungeon`), permanent personal RNG collections, inherited global/widget themes, server-owned visual cosmetics, and acknowledged relay private messages. Read the [auction/tracker/theme guide](docs/auction-tracker-themes.md), [cosmetics and messaging setup](docs/cosmetics-messaging.md), and [validation checklist](docs/upgrade-validation.md). Existing saves and command roots remain compatible; cosmetics require an operator-configured relay/Discord application.
 

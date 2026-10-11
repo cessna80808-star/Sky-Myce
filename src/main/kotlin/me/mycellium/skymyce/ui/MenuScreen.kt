@@ -33,7 +33,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open val home = false
     internal open val canonicalFeatureId get() = page?.featureId
     protected open val menuCategory: MenuCategory? get() = canonicalFeatureId?.let { id -> MenuCatalog.definitions.firstOrNull { it.id == id }?.category } ?: MenuCategory.SETTINGS
-    protected val menuLayout get() = MenuLayout.fit(width, height).let {
+    protected open val menuLayout get() = MenuLayout.fit(width, height).let {
         if (modal) it.copy(width = minOf(it.width, 560), height = minOf(it.height, 280), sidebar = 0) else it
     }
     protected val menuWidth get() = menuLayout.contentWidth
@@ -229,10 +229,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
         }) else frame.child(body)
         if (!modal) {
-            val side = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
-                if (home) -1 else menuCategory?.ordinal ?: -1, navigationSelection,
-                { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
-                { navigateMenu(MenuDirectoryScreen(parent = this)) })
+            val side = buildNavigation()
             sidebar = side
             // Paint navigation last: the original card surfaces pass over the incoming content.
             frame.child(MenuLayer(Sizing.fixed(menuLayout.sidebar), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.VERTICAL,
@@ -243,6 +240,14 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         root.child(frame)
         try { buildContent(body) } finally { constructing = false }
     }
+    protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
+        { if (home) -1 else menuCategory?.ordinal ?: -1 }, navigationSelection,
+        { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
+        { navigateMenu(MenuDirectoryScreen(parent = this)) },
+        { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK, parent = this)) },
+        { if (introductionClaimed) ThemeConfig.animationMode else GuiMotion.OFF },
+        { !introductionClaimed || opening.sample() >= .85 })
+
     protected abstract fun buildContent(root: FlowLayout)
 
     final override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
@@ -319,7 +324,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private fun drawAmbient(g: MenuGraphics, component: UIComponent) {
         val quality = ThemeConfig.graphicsQuality
         if (!quality.ambient || !ThemeConfig.animationMode.profile.ambient || closing) return
-        val step = System.nanoTime() / quality.ambientIntervalNanos
+        val changing = opening.running || pageOpening.running || navigationProgress.running
+        val step = menuAmbientStep(ambientStep, System.nanoTime(), quality.ambientIntervalNanos, changing)
         if (ambientStep != step) {
             ambientStep = step
             ambientColor = MenuTheme.alpha(MenuTheme.SECONDARY, (12 + 6 * kotlin.math.sin(step * .08)).toInt())
@@ -363,11 +369,16 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     private fun pointer(x: Double, y: Double): Pair<Double, Double> {
         val sx = paintedShell.inverseX(viewport.x(x)); val sy = paintedShell.inverseY(viewport.y(y))
+        val body = content
+        val bx = paintedContent.inverseX(sx); val by = paintedContent.inverseY(sy)
+        val cardPoint = body?.let { menuCardPointer(it, bx, by) }
         dropdown?.pointer(sx, sy)?.let { return it }
         (sidebar as? MenuNavigation)?.pointer(sx, sy)?.let { return it }
-        val body = content ?: return sx to sy
-        val bx = paintedContent.inverseX(sx); val by = paintedContent.inverseY(sy)
-        if (body.isInBoundingBox(bx, by)) return menuCardPointer(body, bx, by) ?: (bx to by)
+        sidebar?.takeIf { it !is MenuNavigation && it.isInBoundingBox(sx, sy) }?.let {
+            return menuCardPointer(it, sx, sy) ?: (sx to sy)
+        }
+        if (body == null) return sx to sy
+        if (body.isInBoundingBox(bx, by)) return cardPoint ?: (bx to by)
         // The strip vacated by moving content is paint-only; it must not activate retained controls.
         return if (body.isInBoundingBox(sx, sy)) -1.0 to -1.0 else sx to sy
     }
@@ -405,6 +416,10 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
                 closeMenuDropdown()
         }
         val mapped = pointer(event)
+        val handler = uiAdapter?.rootComponent?.focusHandler()
+        val focused = handler?.focused()
+        if (focused is MenuTextBox && !focused.isInBoundingBox(mapped.x(), mapped.y()))
+            handler.focus(null, UIComponent.FocusSource.MOUSE_CLICK)
         return super.mouseClicked(mapped, doubled)
     }
     override fun keyPressed(event: KeyEvent): Boolean {

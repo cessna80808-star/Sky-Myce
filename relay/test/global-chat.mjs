@@ -9,11 +9,54 @@ export async function checkGlobalChat(script, proof) {
   script = script.replace(anchor, `async testOnlyGlobalAlarm(remove = false) {
     if (remove) await this.ctx.storage.deleteAlarm();
     return await this.ctx.storage.getAlarm();
+  }
+  testOnlyGlobalSession(uuid) {
+    return this.ctx.getWebSockets().find(ws => ws.readyState === WebSocket.OPEN && ws.deserializeAttachment().uuid === uuid)?.deserializeAttachment();
+  }
+  testOnlyGlobalWatches(uuid, ids) {
+    const session = this.testOnlyGlobalSession(uuid);
+    return ids.map(id => watchesCosmetic(session?.cosmeticWatching, id));
+  }
+  testOnlyGlobalPadding(uuid, enabled = true) {
+    const ws = this.ctx.getWebSockets().find(ws => ws.readyState === WebSocket.OPEN && ws.deserializeAttachment().uuid === uuid);
+    const session = ws.deserializeAttachment();
+    delete session.testOnlyPadding;
+    if (!enabled) { ws.serializeAttachment(session); return; }
+    let low = 0, high = 4096;
+    while (low < high) {
+      const size = Math.ceil((low + high) / 2);
+      try { ws.serializeAttachment({ ...session, testOnlyPadding: "x".repeat(size) }); low = size; }
+      catch (error) { if (!String(error).includes("attachment")) throw error; high = size - 1; }
+    }
+    ws.serializeAttachment({ ...session, testOnlyPadding: "x".repeat(low) });
+    return low;
   }\n  ${anchor}`);
+  const roomFetchAnchor = 'async fetch(request) {';
+  assert.equal(script.split(roomFetchAnchor).length, 2);
+  script = script.replace(roomFetchAnchor, `${roomFetchAnchor}
+    if (new URL(request.url).pathname === "/test-only-global-chat") {
+      const { method, args } = await request.json();
+      if (method === "deliver") { await this.globalChatDeliver(args[0]); return Response.json(null); }
+      const result = method === "session" ? this.testOnlyGlobalSession(args[0]) :
+        method === "watches" ? this.testOnlyGlobalWatches(args[0], args[1]) : this.testOnlyGlobalPadding(args[0], args[1]);
+      return Response.json(result ?? null);
+    }`);
   // Delay exactly one authority reply to exercise expiration during an awaited RPC.
   const authorityAnchor = 'checkSession(input) {';
   assert.equal(script.split(authorityAnchor).length, 2);
-  script = script.replace(authorityAnchor, `async testOnlyDelayedCheckSession(input) {
+  script = script.replace(authorityAnchor, `async testOnlyGlobalRpcGate(method, subject) {
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_global_rpc_gate (method TEXT NOT NULL, subject TEXT NOT NULL, entered INTEGER NOT NULL, released INTEGER NOT NULL, PRIMARY KEY(method,subject))");
+    const gate = this.ctx.storage.sql.exec("SELECT entered FROM test_global_rpc_gate WHERE method=? AND subject=?", method, subject).toArray()[0];
+    if (!gate || gate.entered) return;
+    this.ctx.storage.sql.exec("UPDATE test_global_rpc_gate SET entered=1 WHERE method=? AND subject=?", method, subject);
+    const deadline = Date.now() + 4000;
+    while (!this.ctx.storage.sql.exec("SELECT released FROM test_global_rpc_gate WHERE method=? AND subject=?", method, subject).toArray()[0]?.released) {
+      if (Date.now() >= deadline) throw new Error("Test authority gate was not released");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  async testOnlyDelayedCheckSession(input) {
+    await this.testOnlyGlobalRpcGate("session", input.uuid);
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_global_auth_delay (uuid TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
     const delay = this.ctx.storage.sql.exec("SELECT until_ms FROM test_global_auth_delay WHERE uuid=?", input.uuid).toArray()[0];
     if (delay) {
@@ -24,6 +67,14 @@ export async function checkGlobalChat(script, proof) {
   }\n  ${authorityAnchor}`);
   script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkSession(',
     'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSession(');
+  const ircAuthorityAnchor = 'canUseIrc(discordId) {';
+  assert.equal(script.split(ircAuthorityAnchor).length, 2);
+  script = script.replace(ircAuthorityAnchor, `async testOnlyDelayedCanUseIrc(discordId) {
+    await this.testOnlyGlobalRpcGate("irc", discordId);
+    return this.canUseIrc(discordId);
+  }\n  ${ircAuthorityAnchor}`);
+  script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").canUseIrc(',
+    'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCanUseIrc(');
   const signing = generateKeyPairSync('ed25519'), secret = 'global-chat-test-only-bridge-secret-32bytes';
   const channelId = '100000000000000001';
   const publicKey = key => key.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
@@ -77,6 +128,7 @@ export async function checkGlobalChat(script, proof) {
       installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${token}`), person.key.privateKey).toString('base64'), ...changes.packet }));
     if (closed) { assert.equal((await closed).code, 4005); return; }
     const ready = await next(); assert.equal(ready.type, 'ready'); assert.equal(ready.globalChat, true);
+    assert.equal(ready.partyChat, false); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
   }
   const bridgeHeaders = () => {
@@ -132,10 +184,23 @@ export async function checkGlobalChat(script, proof) {
     await connect('Alice', 'friends', { denied: true, packet: { lease: undefined, installationSignature: undefined } });
     assert.equal((await mf.dispatchFetch('http://localhost/websocket?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 403);
     assert.equal((await mf.dispatchFetch('http://localhost/discord/bridge?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 401);
-    const alice = await connect('Alice'), bob = await connect('Bob', 'testing'), otherAlice = await connect('Alice', 'testing');
+    const alice = await connect('Alice', 'friends', { packet: { cosmetics: true } }), bob = await connect('Bob', 'testing'), otherAlice = await connect('Alice', 'testing');
     await subscribe(alice); await subscribe(bob); await subscribe(otherAlice);
     const headers = bridgeHeaders(); let bot = await bridge(headers);
     assert.equal((await mf.dispatchFetch('http://localhost/discord/bridge?room=global-chat', { headers })).status, 401);
+    const partyId = id();
+    alice.ws.send(JSON.stringify({ type: 'irc_subscribe', scope: 'party', id: partyId, enabled: true,
+      partyId: 'global-chat', members: [alicePerson.uuid, bobPerson.uuid] }));
+    assert.deepEqual(await alice.next(), { type: 'irc_result', scope: 'party', id: partyId, error: 'party_membership_unverified' });
+    alice.ws.send(JSON.stringify({ type: 'irc_send', scope: 'party', id: partyId, text: 'party stays out of global', room: 'global-chat' }));
+    assert.equal((await alice.next()).error, 'party_membership_unverified');
+    bot.ws.send(JSON.stringify({ type: 'discord_message', scope: 'party', source: 'discord', room: 'global-chat', channelId,
+      id: String(discordSequence++), discordId: alicePerson.discordId, from: 'Alice', text: 'party stays out of Discord' }));
+    const denied = await bot.next(); assert.equal(denied.scope, 'party'); assert.equal(denied.error, 'party_membership_unverified');
+    await ping(alice); await ping(bob); await ping(otherAlice); await ping(bot);
+    for (const table of ['global_chat_seen', 'global_chat_limits', 'global_chat_messages', 'global_chat_outbox']) {
+      assert.equal((await globalSql.exec(`SELECT COUNT(*) AS count FROM ${table}`))[0].count, 0);
+    }
     async function minecraft(client, text, recipients = [alice, bob, otherAlice], hasBridge = true) {
       const requestId = id(); client.ws.send(JSON.stringify({ type: 'irc_send', scope: 'global', id: requestId, text, from: 'Spoofed', discordId: '999999999999999999' }));
       const packets = [];
@@ -159,6 +224,121 @@ export async function checkGlobalChat(script, proof) {
       const result = await bot.next(); assert.equal(result.type, 'irc_result'); assert.equal(result.error, undefined);
       assert.ok(packets.every(packet => packet.id === packets[0].id)); return { requestId, packets };
     }
+    // Direct inspection RPCs retain exported methods and prevent eviction in Miniflare's
+    // Node proxy. A fixture-only HTTP response copies these values and releases the event.
+    const friendsStub = (await mf.getDurableObjectNamespace('RELAY_ROOMS')).getByName('friends');
+    const inspect = async (method, args) => (await friendsStub.fetch('http://fixture/test-only-global-chat', {
+      method: 'POST', body: JSON.stringify({ method, args }),
+    })).json();
+    const friends = { testOnlyGlobalSession: uuid => inspect('session', [uuid]),
+      testOnlyGlobalWatches: (uuid, ids) => inspect('watches', [uuid, ids]),
+      testOnlyGlobalPadding: (uuid, enabled = true) => inspect('padding', [uuid, enabled]),
+      globalChatDeliver: message => inspect('deliver', [message]) };
+    const bobFriends = await connect('Bob');
+    const session = () => friends.testOnlyGlobalSession(alicePerson.uuid);
+    const identityFields = ['bridge', 'room', 'accountId', 'discordId', 'uuid', 'name', 'installationId', 'generation',
+      'leaseExpiresAt', 'buildId', 'loaderVersion', 'connectionId'];
+    const identity = value => Object.fromEntries(identityFields.map(field => [field, value[field]]));
+    async function gate(method, subject) {
+      await authority.exec('CREATE TABLE IF NOT EXISTS test_global_rpc_gate (method TEXT NOT NULL, subject TEXT NOT NULL, entered INTEGER NOT NULL, released INTEGER NOT NULL, PRIMARY KEY(method,subject))');
+      await authority.exec('INSERT OR REPLACE INTO test_global_rpc_gate VALUES(?,?,0,0)', method, subject);
+      return {
+        async entered() {
+          const deadline = Date.now() + 2000;
+          while (!(await authority.exec('SELECT entered FROM test_global_rpc_gate WHERE method=? AND subject=?', method, subject))[0]?.entered) {
+            assert.ok(Date.now() < deadline, 'The older request must be suspended inside the authority RPC');
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        },
+        release: () => authority.exec('UPDATE test_global_rpc_gate SET released=1 WHERE method=? AND subject=?', method, subject),
+      };
+    }
+    async function request(packet, expectedType) {
+      alice.ws.send(JSON.stringify(packet));
+      const result = await alice.next(); assert.equal(result.id, packet.id); assert.equal(result.type, expectedType); return result;
+    }
+    // An earlier feature request holds an old attachment while a newer IRC opt-in and
+    // another request of that feature finish. Neither subscriptions nor feature state may be lost.
+    for (const feature of ['cosmetics', 'digest', 'ordinary']) {
+      await subscribe(alice, false);
+      const original = await session(), held = await gate('session', alicePerson.uuid), firstId = id(), secondId = id();
+      const packet = (requestId, newer) => feature === 'cosmetics' ? { type: 'cosmetics_get', id: requestId, uuids: [newer ? bobPerson.uuid : alicePerson.uuid] } :
+        feature === 'digest' ? { type: 'rng_subscribe', id: requestId, enabled: true } : { type: 'message', id: requestId, to: 'Carol', text: newer ? 'newer request' : 'older request' };
+      const responseType = feature === 'cosmetics' ? 'cosmetics_result' : feature === 'digest' ? 'rng_result' : 'error';
+      alice.ws.send(JSON.stringify(packet(firstId, false))); await held.entered();
+      await subscribe(alice);
+      assert.equal((await request(packet(secondId, true), responseType)).error, undefined);
+      const inboxId = id();
+      bobFriends.ws.send(JSON.stringify({ type: 'message', id: inboxId, to: 'Alice', text: 'Concurrent incoming receipt' }));
+      assert.equal((await alice.next()).id, inboxId);
+      const newer = await session(); await held.release();
+      const olderResult = await alice.next(); assert.equal(olderResult.id, firstId); assert.equal(olderResult.type, responseType);
+      const current = await session();
+      assert.equal(current.globalChatSubscribed, true, `${feature} completion must retain the newer global subscription`);
+      assert.deepEqual(identity(current), identity(original), 'Feature writes preserve all authenticated bindings');
+      assert.ok(current.inbox.some(receipt => receipt.id === inboxId), 'An incoming receipt survives an older feature authorization');
+      if (feature === 'cosmetics') {
+        assert.deepEqual(await friends.testOnlyGlobalWatches(alicePerson.uuid, [alicePerson.uuid, bobPerson.uuid]), [true, true]);
+        assert.ok(Math.abs(current.cosmeticCredits - (Math.min(8, newer.cosmeticCredits + (current.cosmeticUpdated - newer.cosmeticUpdated) / 1000) - 1)) < 0.000001, 'Both cosmetic requests consume credits');
+      } else if (feature === 'digest') {
+        assert.equal(current.rngSubscribed, true);
+        assert.ok(Math.abs(current.digestCredits - (Math.min(6, newer.digestCredits + (current.digestUpdated - newer.digestUpdated) / 5000) - 1)) < 0.000001, 'Both digest requests consume credits');
+      } else {
+        assert.ok(current.seen.includes(firstId) && current.seen.includes(secondId), 'Both ordinary IDs remain deduplicated');
+        assert.ok(Math.abs(current.credits - (Math.min(12, newer.credits + (current.updated - newer.updated) / 2500) - 1)) < 0.000001, 'Both ordinary requests consume credits');
+      }
+      alice.ws.send(JSON.stringify({ type: 'ack', id: inboxId, to: 'Bob' })); assert.equal((await bobFriends.next()).id, inboxId);
+      await clearQuota(); await discord(`Subscription survives concurrent ${feature} requests`);
+    }
+    // Completion order must not invert subscription intent, even when packet IDs are reused.
+    for (const scope of ['global', undefined]) for (const method of ['session', 'irc']) {
+      await request({ type: 'irc_subscribe', ...(scope ? { scope } : {}), id: id(), enabled: false }, 'irc_result');
+      const held = await gate(method, method === 'session' ? alicePerson.uuid : alicePerson.discordId), reusedId = id();
+      alice.ws.send(JSON.stringify({ type: 'irc_subscribe', ...(scope ? { scope } : {}), id: reusedId, enabled: true })); await held.entered();
+      await request({ type: 'irc_subscribe', ...(scope ? { scope } : {}), id: reusedId, enabled: false }, 'irc_result');
+      await held.release(); const superseded = await alice.next(); assert.equal(superseded.id, reusedId); assert.equal(superseded.error, 'subscription_superseded');
+      assert.equal((await session())[scope ? 'globalChatSubscribed' : 'ircSubscribed'], false, 'A delayed opt-in cannot resurrect a newer opt-out');
+      if (scope) { await clearQuota(); await discord(`Opt-out remains final after delayed ${method} authorization`, {}, [bob, otherAlice]); await ping(alice); }
+    }
+    // The two independently authorized IRC scopes must not erase each other or feature writes.
+    for (const delayedScope of ['global', undefined]) {
+      await subscribe(alice, false);
+      await request({ type: 'irc_subscribe', id: id(), enabled: false }, 'irc_result');
+      const held = await gate('irc', alicePerson.discordId), delayedId = id();
+      alice.ws.send(JSON.stringify({ type: 'irc_subscribe', ...(delayedScope ? { scope: delayedScope } : {}), id: delayedId, enabled: true }));
+      await held.entered();
+      const otherScope = delayedScope ? {} : { scope: 'global' };
+      assert.equal((await request({ type: 'irc_subscribe', ...otherScope, id: id(), enabled: true }, 'irc_result')).error, undefined);
+      await request({ type: 'rng_subscribe', id: id(), enabled: false }, 'rng_result');
+      const newer = await session(); await held.release();
+      const result = await alice.next(); assert.equal(result.id, delayedId); assert.equal(result.error, undefined);
+      const current = await session();
+      assert.equal(current.globalChatSubscribed, true); assert.equal(current.ircSubscribed, true);
+      for (const field of ['digestCredits', 'digestUpdated', 'rngSubscribed', 'cosmeticWatching', 'cosmeticCredits', 'seen', 'inbox']) assert.deepEqual(current[field], newer[field]);
+      assert.deepEqual(identity(current), identity(newer));
+    }
+    // Opting out while a recipient's authorization is pending prevents even that in-flight delivery.
+    const recipientGate = await gate('session', alicePerson.uuid);
+    const delivering = friends.globalChatDeliver({ id: id(), source: 'discord', from: 'Discord user', text: 'Opt-out during recipient authorization',
+      timestamp: Date.now(), expiresAt: Date.now() + 10000, discordId: '777777777777777777', mentions: [alicePerson.discordId] });
+    await recipientGate.entered(); await subscribe(alice, false); await recipientGate.release(); await delivering; await ping(alice);
+    await subscribe(alice);
+    // In-flight tokens must not consume the attachment capacity needed by receipts/grants.
+    const padding = await friends.testOnlyGlobalPadding(alicePerson.uuid);
+    assert.ok(padding > 0);
+    const fullAttachment = await session(), fullGate = await gate('irc', alicePerson.discordId), fullId = id();
+    alice.ws.send(JSON.stringify({ type: 'irc_subscribe', scope: 'global', id: fullId, enabled: true })); await fullGate.entered();
+    await subscribe(alice, false); await fullGate.release();
+    assert.equal((await alice.next()).error, 'subscription_superseded');
+    const fullDisabled = await session(); assert.equal(fullDisabled.globalChatSubscribed, false);
+    assert.deepEqual(identity(fullDisabled), identity(fullAttachment)); assert.equal(fullDisabled.testOnlyPadding.length, padding);
+    await subscribe(alice);
+    await request({ type: 'irc_subscribe', id: id(), enabled: false }, 'irc_result');
+    await request({ type: 'irc_subscribe', id: id(), enabled: true }, 'irc_result');
+    await friends.testOnlyGlobalPadding(alicePerson.uuid, false);
+    await mf.unsafeEvictDurableObject('global-chat-check', 'RelayRoom', { name: 'friends', webSockets: 'hibernate' });
+    await clearQuota(); await discord('Persisted opt-in survives hibernation without transient ordering state');
+    await subscribe(alice, false); await subscribe(alice);
     const first = await minecraft(alice, 'Politics and profanity are normal conversation; anyone running F7?');
     assert.equal(first.delivery.discordId, alicePerson.discordId); assert.equal(first.delivery.uuid, alicePerson.uuid);
     const originalDiscordId = await ack(bot, first.delivery);
@@ -275,6 +455,6 @@ export async function checkGlobalChat(script, proof) {
     await bot.next();
     assert.equal((await globalSql.exec('SELECT * FROM global_chat_outbox WHERE id=?', next.id)).length, 0);
     assert.ok((await globalSql.exec('SELECT COUNT(*) AS count FROM global_chat_messages'))[0].count <= 256);
-    console.log('Global chat checks passed: existing strict sockets, cross-room broadcast, trusted identities, unlinked Discord authors, replies, mentions, Unicode limits, opt-in, spam, hibernation, durable retry/ACK, revocation and expiry.');
+    console.log('Global chat checks passed: strict sockets, cross-room broadcast, identities, replies, mentions, Unicode, overlapping feature/auth/subscription updates, attachment capacity, opt-out, spam, hibernation, durable retry/ACK, revocation and expiry.');
   } finally { for (const ws of sockets) try { ws.close(); } catch {} await mf.dispose(); }
 }

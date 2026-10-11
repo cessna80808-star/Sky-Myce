@@ -1,5 +1,7 @@
 # Sky-Myce accounts, loader, licenses and IRC
 
+Production update (2026-10-10): mod **2.4.27** is deployed and installed through the authenticated loader. The persistent User Bot Gateway runs on Cloudflare and a real Minecraft ↔ Discord reply/mention presentation test passed. Party chat fails closed until current membership can be verified by the backend. See the [current implementation and deployment evidence](implementation-overhaul-2026-10.md); the September status below is retained as history.
+
 Deployment update (2026-09-27): the [User Bot setup guide](../discord-user-bot/README.md), [implementation report](discord-implementation-report.md), [backend deployment record](backend-deployment.md), and [cosmetics migration report](cosmetics-migration.md) supersede historical deployment status below. The real account backend and private R2 loader/signed release are deployed as `sky-myce-backend` using explicit Wrangler environment `backend`; the legacy Backend Bot remains separate. Cosmetics migrated to the frontend with saved data verified and confirmed by the user. `/authorise` DM delivery was also confirmed. Complete Minecraft activation/rendering checks remain pending; Gateway hosting was explicitly deferred. The architecture below remains the specification.
 
 The original implementation was prepared for isolated staging. Subsequent user-authorized deployment actions are recorded separately above. Build/test results alone do not establish an end-to-end live Discord/game flow.

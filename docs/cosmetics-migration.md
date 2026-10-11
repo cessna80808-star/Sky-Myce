@@ -1,5 +1,7 @@
 # Cosmetics frontend migration — September 27, 2026
 
+October 10 update: the IRC hosting deferral recorded below has ended. The persistent global User Bot Gateway now runs on Cloudflare, with a real Minecraft ↔ Discord round trip verified. See the [current implementation report](implementation-overhaul-2026-10.md). This does not alter the cosmetics migration or its ownership checks.
+
 Cosmetics now belong to **MouseBot Frontend**. Use its `/cosmetics` command in `#bot-commands`. The normal account, license and Minecraft identity checks still apply. A migrated appearance does not activate an account or grant a license.
 
 ## Fixes

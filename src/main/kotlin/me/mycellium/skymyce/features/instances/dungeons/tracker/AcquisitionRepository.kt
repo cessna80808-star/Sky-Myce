@@ -9,7 +9,12 @@ import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
+import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
+import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
+import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
@@ -28,6 +33,7 @@ object AcquisitionRepository : SkyMyceModule() {
     private var writable = true
     private val pending = mutableListOf<(AcquisitionArchive) -> AcquisitionArchive>()
     private var preferencesEdited = false
+    private var verifiedContext: AcquisitionContext? = null
     private lateinit var writer: StateWriter<AcquisitionArchive>
     private lateinit var preferenceWriter: StateWriter<TrackerFilter>
 
@@ -46,25 +52,33 @@ object AcquisitionRepository : SkyMyceModule() {
             storageError = storageError || file.damaged
             val original = saved
             var migrationError = false
+            var cutover = false
             if (!storageError) {
                 val legacyFile = AtomicJsonFile(SkyMyce.configPath.resolve("dungeon_tracker.json"), 16 * 1024 * 1024)
                 val digestPath = SkyMyce.configPath.resolve("daily_digest.json")
                 val digestStore = DigestStateStore(digestPath)
-                val tracker = if ("tracker-v1" !in saved.imports) legacyFile.read() else null
+                val tracker = if ("tracker-v1" !in saved.imports || saved.cutoverAt == null) legacyFile.read() else null
                 val digest = if ("digest-v1" !in saved.imports && Files.exists(digestPath)) digestStore.load().takeUnless { digestStore.recovered } else null
                 runCatching {
+                    require(!legacyFile.damaged) { "Historical dungeon totals are unreadable" }
                     if (tracker != null) legacyFile.preserveOriginal("before-acquisitions")
                     if (digest != null) AtomicJsonFile(digestPath).preserveOriginal("before-acquisitions")
                     saved = importLegacyAcquisitions(saved, tracker, digest)
+                    if (saved.version == 1 || saved.cutoverAt == null) {
+                        saved = cutoverAcquisitions(saved, tracker, System.currentTimeMillis())
+                        cutover = true
+                    }
                     parseAcquisitionArchive(Gson().toJsonTree(saved))
-                    if (saved != original) { file.preserveOriginal("before-migration"); file.write(Gson().toJsonTree(saved)) }
+                    if (saved != original) { file.preserveOriginal(if (cutover) "before-v2-cutover" else "before-migration"); file.write(Gson().toJsonTree(saved)) }
                 }.onFailure { saved = original; migrationError = true }
             }
             val restoredView = runCatching { parseTrackerPreferences(viewFile.read()) }.getOrElse { viewFile.preserveOriginal(); TrackerFilter() }
+                .let { if (cutover && !migrationError) it.copy(legacyTotals = false) else it }
             MC.instance.execute {
-                state = saved; writable = !storageError; loaded = true
+                state = saved; writable = !storageError && !migrationError; loaded = true
                 if (!preferencesEdited) preferences = restoredView else preferenceWriter.submit(preferences)
-                status = when { storageError -> "Archive unreadable • original preserved; recording paused"; migrationError -> "Legacy import needs attention • original saves preserved"; else -> "Saved on this computer • usable offline" }
+                if (cutover && !migrationError) preferenceWriter.submit(preferences)
+                status = when { storageError -> "Archive unreadable • original preserved; recording paused"; migrationError -> "Legacy cutover needs attention • recording paused; originals preserved"; else -> "Confirmed tracking • historical profit preserved separately" }
                 val queued = pending.toList(); pending.clear(); queued.forEach { update(it) }; revision++
             }
         }
@@ -72,10 +86,15 @@ object AcquisitionRepository : SkyMyceModule() {
     }
 
     fun currentContext(): AcquisitionContext? {
-        if (!LocationAPI.isOnSkyBlock || !ProfileAPI.isLoaded || MC.instance.player == null) return null
+        if (!LocationAPI.isOnSkyBlock || MC.instance.player == null) return null
         val name = ProfileAPI.profileName?.takeIf { it.isNotBlank() } ?: return null
-        return AcquisitionContext(MC.instance.user.profileId.toString(), ProfileAPI.profileId?.toString(), name, if (LocationAPI.onAlpha) "alpha" else "main")
+        val observed = AcquisitionContext(MC.instance.user.profileId.toString(), ProfileAPI.profileId?.toString(), name, if (LocationAPI.onAlpha) "alpha" else "main")
+        // Dungeon transfers clear isLoaded even though their tab list omits the profile widget.
+        return trackingContext(verifiedContext, observed, ProfileAPI.isLoaded, SkyBlockIsland.THE_CATACOMBS.inIsland())
+            .also { if (ProfileAPI.isLoaded) verifiedContext = it }
     }
+    @Subscription(TickEvent::class) fun refreshContext() { if (ProfileAPI.isLoaded) currentContext() }
+    @Subscription(ProfileChangeEvent::class, ServerDisconnectEvent::class) fun clearContext() { verifiedContext = null }
     private fun update(change: (AcquisitionArchive) -> AcquisitionArchive) {
         if (!loaded) { if (pending.size < 1000) pending += change; return }
         if (!writable) return
@@ -102,7 +121,7 @@ internal fun parseTrackerPreferences(json: com.google.gson.JsonElement?): Tracke
     if (json == null) return TrackerFilter()
     val filter = Gson().fromJson(json, TrackerFilter::class.java)
     require(filter.page in TrackerPage.entries && filter.sort in LootOrder.entries && filter.scope in TrackerScope.entries)
-    require(filter.query.length <= 100 && filter.floor?.matches(Regex("[FM][1-7]|ENTRANCE")) != false && filter.mode in listOf(null, "F", "M"))
+    require(filter.query.length <= 100 && filter.floor?.matches(Regex("[FM][1-7]|E|ENTRANCE")) != false && filter.mode in listOf(null, "F", "M"))
     if (filter.from.isNotEmpty()) java.time.LocalDate.parse(filter.from)
     if (filter.until.isNotEmpty()) java.time.LocalDate.parse(filter.until)
     require(filter.chest?.length?.let { it <= 16 } != false && filter.session?.length?.let { it <= 40 } != false && filter.activity?.length?.let { it <= 30 } != false)

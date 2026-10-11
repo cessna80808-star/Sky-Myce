@@ -67,17 +67,18 @@ class MenuCatalog(rows: List<SettingRow>) {
                 quickSettingEligible = !row.path.endsWith("/hypixelApiKey"), featureTitle = feature.title)
         }
     } + extraSettings.filter { it.settingPath !in byPath } }
+    private val searchIndex by lazy { MenuSearchIndex(entries) }
 
     fun findFeature(id: String) = byId[id]
     fun featureForPath(path: String) = byPath[path] ?: extraSettings.firstOrNull { it.settingPath == path }?.let { byId[it.featureId] }
     fun setting(path: String) = byPath[path]?.settings?.firstOrNull { it.path == path }
     fun settingEntry(path: String) = entries.firstOrNull { it.settingPath == path }
-    fun search(query: String) = searchMenuEntries(entries, query)
+    fun search(query: String) = searchIndex.search(query)
 
     companion object {
         val definitions = listOf(
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
-            MenuFeature("starred-routes", "Starred Clear Routing", "Wall-aware starred mob routes and the Blood/Wither exit", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
+            MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
@@ -93,10 +94,10 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
             MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
             MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.UTILS, "Progress", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
-            MenuFeature("global-chat", "Global SkyMyce Chat", "Opt into global client/Discord chat and mention notifications", MenuCategory.UTILS, "Social", listOf("irc", "discord", "messages", "social", "global", "ping"), tool = "global-chat", enabledPath = "General/Global SkyMyce Chat/enabled"),
+            MenuFeature("global-chat", "Global IRC", "Use /sm irc to select global client/Discord chat, or /sm irc <message> for one message", MenuCategory.UTILS, "Social", listOf("irc", "discord", "messages", "social", "global", "ping", "global skymyce chat", "chat sky"), tool = "global-chat", enabledPath = "General/Global SkyMyce Chat/enabled"),
             MenuFeature("party-commands", "Party Commands", "Choose party commands, cooldowns and the optional stats API fallback", MenuCategory.UTILS, "Social", listOf("party", "pb", "downtime", "commands", "api")),
             MenuFeature("player-utilities", "Player Utilities", "Cached friend activity, locations and profile information", MenuCategory.UTILS, "Social", listOf("friends", "player", "profiles", "online", "social"), tool = "player-utilities"),
-            MenuFeature("mining", "Crystal Hollows Helpers", "Lobby information and configurable nucleus warp timing", MenuCategory.UTILS, "Mining", listOf("mining", "crystal", "nucleus", "powder", "lobby", "hud")),
+            MenuFeature("mining", "Crystal Hollows Helpers", "Lobby information and configurable nucleus warp timing", MenuCategory.UTILS, "Mining", listOf("mining", "fortune", "crystal", "nucleus", "powder", "lobby", "hud")),
             MenuFeature("auto-refill", "Auto Refill", "Choose which consumable items are refilled when empty", MenuCategory.UTILS, "Inventory", listOf("refill", "items", "consumables", "inventory")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
             MenuFeature("settings-general", "General", "Client data collection and developer preferences", MenuCategory.SETTINGS, "General", listOf("client", "preferences", "developer", "data")),
@@ -106,6 +107,12 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls", listOf("keybind", "keyboard", "input", "controls")),
         )
 
+        val routingSettingGroups = linkedMapOf(
+            "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+            "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
+            "Appearance" to listOf("thickness", "opacity", "lineHeight"),
+            "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
+        )
         // These existing editors own controls outside the generic visible Resourceful rows.
         val themeColorTitles = linkedMapOf("primary" to "Primary accent", "secondary" to "Secondary accent",
             "panel" to "Panel background", "card" to "Card background", "text" to "Primary text",
@@ -175,13 +182,42 @@ class MenuCatalog(rows: List<SettingRow>) {
 fun menuSettingLocation(path: String) = MenuCatalog.settingLocation(path)
 
 /** Small metadata aliases supplement real titles/descriptions; all query words must match. */
-fun searchMenuEntries(entries: List<MenuSearchEntry>, query: String): List<MenuSearchEntry> {
-    val tokens = Regex("[a-z0-9]+").findAll(query.lowercase(Locale.ROOT)).map { it.value }.toList()
-    return entries.filter { entry ->
-        val text = (listOf(entry.title, entry.description, entry.category.title, entry.subcategory) + entry.aliases)
-            .joinToString(" ").lowercase(Locale.ROOT)
-        val words = Regex("[a-z0-9]+").findAll(text).map { it.value }.toList()
-        tokens.all { token -> if (token.length <= 2) token in words else words.any { it.contains(token) } }
-    }.sortedWith(compareBy<MenuSearchEntry> { it.category.ordinal }.thenBy { it.subcategory }
+fun searchMenuEntries(entries: List<MenuSearchEntry>, query: String) = MenuSearchIndex(entries).search(query)
+
+/** The inventory is immutable; normalize and sort it once instead of rebuilding every setting on each keystroke. */
+internal class MenuSearchIndex(entries: List<MenuSearchEntry>) {
+    private val ordered = entries.sortedWith(compareBy<MenuSearchEntry> { it.category.ordinal }.thenBy { it.subcategory }
         .thenBy { it.settingPath != null }.thenBy { it.title.lowercase(Locale.ROOT) }.thenBy { it.id })
+    private val words = ordered.map { entry ->
+        wordPattern.findAll((listOf(entry.title, entry.description, entry.category.title, entry.subcategory) + entry.aliases)
+            .joinToString(" ").lowercase(Locale.ROOT)).map { it.value }.toSet()
+    }
+
+    fun search(query: String): List<MenuSearchEntry> {
+        val tokens = wordPattern.findAll(query.lowercase(Locale.ROOT)).map { it.value }.toList()
+        if (tokens.isEmpty()) return ordered
+        return ordered.filterIndexed { index, _ -> tokens.all { token -> words[index].any { menuSearchWordMatches(it, token) } } }
+    }
+
+    companion object { private val wordPattern = Regex("[a-z0-9]+") }
+}
+
+/** Prefixes work from the first keystroke; longer words tolerate one insertion, deletion or substitution. */
+internal fun menuSearchWordMatches(word: String, token: String): Boolean {
+    if (token.length <= 2) return word.startsWith(token)
+    if (word.contains(token)) return true
+    if (token.length < 4 || kotlin.math.abs(word.length - token.length) > 1) return false
+    var left = 0
+    var right = 0
+    var edits = 0
+    while (left < word.length && right < token.length) {
+        if (word[left] == token[right]) { left++; right++; continue }
+        if (++edits > 1) return false
+        when {
+            word.length > token.length -> left++
+            word.length < token.length -> right++
+            else -> { left++; right++ }
+        }
+    }
+    return edits + (word.length - left) + (token.length - right) <= 1
 }

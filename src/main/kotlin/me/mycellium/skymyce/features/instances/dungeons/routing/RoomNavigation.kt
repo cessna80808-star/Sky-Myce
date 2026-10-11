@@ -92,16 +92,18 @@ class RoomNavigation private constructor(
     private val standingFeet: Map<GridCell, RoomPoint>,
 ) {
     val costScale = if (standingFeet.isEmpty()) 1 else 100
-    private class Search(val distances: IntArray, val parents: IntArray)
-    private data class SearchNode(val node: Int, val distance: Int)
+    private class Search(val distances: IntArray, val parents: IntArray, val arrivals: IntArray)
+    private data class SearchNode(val state: Int, val distance: Int, val turns: Int)
     private val targetNodes = targets.mapValues { indices.getValue(it.value) }
     private val healerNode = healer?.let(indices::getValue)
-    private val fixedSearches = (targetNodes.values + listOfNotNull(healerNode)).distinct().associateWith(::search)
+    private val fixedSearches by lazy { targetNodes.values.distinct().associateWith(::search) }
 
     companion object {
         const val MAX_NODES = 16_384
         const val MAX_TARGETS = 12
-        private const val MAX_NEIGHBORS = 26
+        private const val MAX_NEIGHBORS = 34
+        private const val HEADINGS = 27
+        private const val NO_HEADING = 13
         private const val INFINITE = Int.MAX_VALUE / 4
         private val targetId = Regex("[A-Za-z0-9_.-]{1,64}")
         private val cellOrder = compareBy<GridCell>({ it.x }, { it.y }, { it.z })
@@ -139,7 +141,8 @@ class RoomNavigation private constructor(
             val dx = abs(from.x.toLong() - to.x)
             val dz = abs(from.z.toLong() - to.z)
             val vertical = abs(from.y.toLong() - to.y)
-            return dx <= 1L && dz <= 1L && dx + dz > 0L && vertical <= 1L || dx + dz == 0L && vertical == 1L
+            return dx <= 1L && dz <= 1L && dx + dz > 0L && vertical <= 1L || dx + dz == 0L && vertical == 1L ||
+                vertical == 0L && (dx == 0L || dz == 0L) && dx + dz in 2L..3L
         }
 
         private fun <T> immutable(values: Collection<T>): List<T> = Collections.unmodifiableList(ArrayList(values))
@@ -173,11 +176,12 @@ class RoomNavigation private constructor(
         val path = arrayListOf(cells[startNode])
         var source = startNode
         var searched = fromStart
-        for (destination in order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)) {
+        val destinations = order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)
+        for ((index, destination) in destinations.withIndex()) {
             val segment = pathTo(source, destination, searched) ?: return null
             path.addAll(segment.drop(1))
             source = destination
-            searched = fixedSearches.getValue(destination)
+            if (index < destinations.lastIndex) searched = fixedSearches.getValue(destination)
         }
         return RoomRoute(immutable(order), immutable(path), if (retainPrevious) previousCost!! else optimalCost)
     }
@@ -233,24 +237,32 @@ class RoomNavigation private constructor(
     private fun routeCost(order: List<String>, fromStart: Search): Int? {
         var searched = fromStart
         var cost = 0
-        for (destination in order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)) {
+        val destinations = order.map { targetNodes.getValue(it) } + listOfNotNull(healerNode)
+        for ((index, destination) in destinations.withIndex()) {
             val distance = searched.distances[destination]
             if (distance < 0) return null
             cost += distance
-            searched = fixedSearches.getValue(destination)
+            if (index < destinations.lastIndex) searched = fixedSearches.getValue(destination)
         }
         return cost
     }
 
     private fun search(start: Int): Search {
         val distances = IntArray(cells.size) { -1 }
-        val parents = IntArray(cells.size) { -1 }
-        val queue = PriorityQueue(compareBy<SearchNode>({ it.distance }, { it.node }))
+        // Equal-distance arrivals need separate headings: a later corridor can favor either one.
+        val parents = IntArray(cells.size * HEADINGS) { -1 }
+        val turns = IntArray(parents.size) { INFINITE }
+        val arrivals = IntArray(cells.size) { -1 }
+        val queue = PriorityQueue(compareBy<SearchNode>({ it.distance }, { it.turns }, { it.state }))
+        val initial = start * HEADINGS + NO_HEADING
         distances[start] = 0
-        queue.add(SearchNode(start, 0))
+        turns[initial] = 0
+        arrivals[start] = initial
+        queue.add(SearchNode(initial, 0, 0))
         while (queue.isNotEmpty()) {
-            val (current, distance) = queue.remove()
-            if (distance != distances[current]) continue
+            val (state, distance, changes) = queue.remove()
+            val current = state / HEADINGS
+            if (distance != distances[current] || changes != turns[state]) continue
             for (next in adjacent[current]) {
                 // A step/jump has horizontal and vertical segments; do not favor stairs by edge count.
                 val from = cells[current]
@@ -261,21 +273,34 @@ class RoomNavigation private constructor(
                     ((hypot(b.x - a.x, b.z - a.z) + abs(b.y - a.y)) * costScale).roundToInt().coerceAtLeast(1)
                 } else abs(from.x - to.x) + abs(from.y - to.y) + abs(from.z - to.z)
                 val candidate = distance + cost
-                if (distances[next] >= 0 && candidate >= distances[next]) continue
+                if (distances[next] >= 0 && candidate > distances[next]) continue
+                val heading = (to.x.compareTo(from.x) + 1) * 9 + (to.y.compareTo(from.y) + 1) * 3 + to.z.compareTo(from.z) + 1
+                val arrival = next * HEADINGS + heading
+                val candidateTurns = changes + if (state % HEADINGS == NO_HEADING || state % HEADINGS == heading) 0 else 1
+                if (candidate < distances[next] || distances[next] < 0) {
+                    java.util.Arrays.fill(turns, next * HEADINGS, (next + 1) * HEADINGS, INFINITE)
+                    arrivals[next] = -1
+                }
+                if (candidateTurns >= turns[arrival]) continue
                 distances[next] = candidate
-                parents[next] = current
-                queue.add(SearchNode(next, candidate))
+                turns[arrival] = candidateTurns
+                parents[arrival] = state
+                val best = arrivals[next]
+                if (best < 0 || candidateTurns < turns[best] || candidateTurns == turns[best] && arrival < best) {
+                    arrivals[next] = arrival
+                }
+                queue.add(SearchNode(arrival, candidate, candidateTurns))
             }
         }
-        return Search(distances, parents)
+        return Search(distances, parents, arrivals)
     }
 
     private fun pathTo(start: Int, end: Int, search: Search): List<GridCell>? {
         if (search.distances[end] < 0) return null
         val path = ArrayList<GridCell>(minOf(cells.size, search.distances[end] / costScale + 1))
-        var current = end
-        while (current != start) {
-            path.add(cells[current])
+        var current = search.arrivals[end]
+        while (current / HEADINGS != start) {
+            path.add(cells[current / HEADINGS])
             current = search.parents[current]
         }
         path.add(cells[start])

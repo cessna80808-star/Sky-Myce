@@ -4,19 +4,40 @@ import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.multiplayer.ClientLevel
 import net.minecraft.core.BlockPos
 import net.minecraft.tags.BlockTags
+import net.minecraft.world.level.BlockCollisions
+import net.minecraft.world.level.CollisionGetter
+import net.minecraft.world.level.block.CarpetBlock
+import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.level.block.MossyCarpetBlock
+import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
+import net.minecraft.world.phys.shapes.CollisionContext
+import net.minecraft.world.phys.shapes.Shapes
+import net.minecraft.world.phys.shapes.VoxelShape
 import java.util.Collections
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.hypot
 
 private const val BODY_RADIUS = 0.3
 private const val BODY_HEIGHT = 1.8
 private const val SUPPORT_DEPTH = 0.6
 private const val JUMP_HEADROOM = 0.25
+private const val GAP_JUMP_HEIGHT = 1.25
 private const val GEOMETRY_EPSILON = 0.00001
+private const val CARPET_HEIGHT = 1.0 / 16.0
+private const val MAX_ROOM_SIGHT_BLOCKS = 128.0
 private val CAPTURE_DIRECTIONS = arrayOf(GridCell(-1, 0, 0), GridCell(1, 0, 0), GridCell(0, 0, -1), GridCell(0, 0, 1))
+
+/** Ignored decorations contribute neither an obstruction nor a supporting floor to routing. */
+internal fun roomRoutingCollisionShape(ignored: Boolean, nativeShape: () -> VoxelShape): VoxelShape =
+    if (ignored) Shapes.empty() else nativeShape()
+
+/** Height eligibility only; native clearance and support still have to validate the connector. */
+internal fun roomRouteLevelHeight(from: RoomPoint, to: RoomPoint): Boolean =
+    abs(to.y - from.y) <= CARPET_HEIGHT + GEOMETRY_EPSILON
 
 /** Explicit recording only; ordinary routing never invents template connections. */
 internal fun roomCaptureEdges(cells: Set<GridCell>): Sequence<Pair<GridCell, GridCell>> = cells.asSequence().flatMap { from ->
@@ -37,13 +58,37 @@ internal fun roomConnectorWaypoints(from: RoomPoint, to: RoomPoint): List<RoomPo
     val horizontal = (to.x - from.x) * (to.x - from.x) + (to.z - from.z) * (to.z - from.z)
     if (abs(from.x) >= 29_999_999 || abs(from.z) >= 29_999_999 || abs(from.y) > 4096 ||
         abs(to.x) >= 29_999_999 || abs(to.z) >= 29_999_999 || abs(to.y) > 4096 ||
-        abs(to.y - from.y) > 1.0 + GEOMETRY_EPSILON || horizontal > 4.0 + GEOMETRY_EPSILON
+        abs(to.y - from.y) > 1.0 + GEOMETRY_EPSILON ||
+        horizontal > 4.0 + GEOMETRY_EPSILON && !roomJumpSpan(from, to)
     ) return null
     if (from == to) return listOf(from)
     if (horizontal < GEOMETRY_EPSILON * GEOMETRY_EPSILON) return listOf(from, to)
     val upperY = maxOf(from.y, to.y) + if (to.y - from.y > SUPPORT_DEPTH) JUMP_HEADROOM else 0.0
     return listOf(from, RoomPoint(from.x, upperY, from.z), RoomPoint(to.x, upperY, to.z), to)
         .distinct()
+}
+
+private fun roomJumpSpan(from: RoomPoint, to: RoomPoint): Boolean {
+    val dx = abs(to.x - from.x)
+    val dz = abs(to.z - from.z)
+    return roomRouteLevelHeight(from, to) && (dx <= GEOMETRY_EPSILON || dz <= GEOMETRY_EPSILON) &&
+        maxOf(dx, dz) > GEOMETRY_EPSILON && maxOf(dx, dz) <= 3.0 + GEOMETRY_EPSILON
+}
+
+/** Short cardinal jumps keep real launch/landing support and require clearance over the full jump volume. */
+internal fun validRoomJumpConnector(
+    from: RoomPoint,
+    to: RoomPoint,
+    loaded: (RoomPoint, RoomPoint) -> Boolean,
+    clearSegment: (RoomPoint, RoomPoint) -> Boolean,
+    supported: (RoomPoint, Double, Double) -> Boolean,
+): Boolean {
+    if (roomConnectorWaypoints(from, from) == null || roomConnectorWaypoints(to, to) == null || !roomJumpSpan(from, to)) return false
+    return try {
+        loaded(from, to) && supported(from, SUPPORT_DEPTH, BODY_RADIUS) && supported(to, SUPPORT_DEPTH, BODY_RADIUS) &&
+            clearSegment(RoomPoint(from.x, minOf(from.y, to.y), from.z),
+                RoomPoint(to.x, maxOf(from.y, to.y) + GAP_JUMP_HEIGHT, to.z))
+    } catch (_: RuntimeException) { false }
 }
 
 /** Headless movement policy; callbacks provide the native world collision/support observations. */
@@ -85,10 +130,11 @@ internal fun validRoomConnector(
         // maximum distance to a sample guarantees support throughout each interval.
         val supportRadius = BODY_RADIUS - distance / (2 * samples)
         val depth = SUPPORT_DEPTH + upperY - minOf(from.y, to.y)
-        (0..samples).all {
+        val walking = (0..samples).all {
             val point = interpolate(raisedFrom, raisedTo, it.toDouble() / samples)
             climbable(point) || supported(point, depth, supportRadius)
         }
+        walking || validRoomJumpConnector(from, to, loaded, clearSegment, supported)
     } catch (_: RuntimeException) { false }
 }
 
@@ -97,6 +143,160 @@ private fun interpolate(from: RoomPoint, to: RoomPoint, amount: Double) = RoomPo
     from.y + (to.y - from.y) * amount,
     from.z + (to.z - from.z) * amount,
 )
+
+/** Teleport display guidance checks the body corridor and landing; intervening floor is unnecessary. */
+internal fun validRoomSightConnector(
+    from: RoomPoint,
+    to: RoomPoint,
+    loaded: (RoomPoint, RoomPoint) -> Boolean,
+    clearSegment: (RoomPoint, RoomPoint) -> Boolean,
+    canLand: (RoomPoint) -> Boolean,
+): Boolean {
+    if (listOf(from, to).any { !it.x.isFinite() || !it.y.isFinite() || !it.z.isFinite() ||
+            abs(it.x) >= 29_999_999 || abs(it.z) >= 29_999_999 || abs(it.y) > 4096 }) return false
+    val distance = kotlin.math.sqrt((to.x - from.x) * (to.x - from.x) +
+        (to.y - from.y) * (to.y - from.y) + (to.z - from.z) * (to.z - from.z))
+    if (distance > MAX_ROOM_SIGHT_BLOCKS) return false
+    return try {
+        if (!loaded(from, to) || !canLand(to)) return false
+        val pieces = ceil(distance / 2.0).toInt().coerceAtLeast(1)
+        var previous = from
+        for (index in 1..pieces) {
+            val next = interpolate(from, to, index.toDouble() / pieces)
+            if (!clearSegment(previous, next)) return false
+            previous = next
+        }
+        true
+    } catch (_: RuntimeException) { false }
+}
+
+/** Longer level connectors reuse the short swept-body/support policy over every interval. */
+internal fun validRoomRouteConnector(from: RoomPoint, to: RoomPoint, canConnect: (RoomPoint, RoomPoint) -> Boolean): Boolean {
+    if (roomConnectorWaypoints(from, from) == null || roomConnectorWaypoints(to, to) == null) return false
+    val distance = hypot(to.x - from.x, to.z - from.z)
+    if (distance > RoomNavigation.MAX_NODES) return false
+    val pieces = ceil(distance / 2.0).toInt().coerceAtLeast(1)
+    return try {
+        if (abs(to.y - from.y) > GEOMETRY_EPSILON) {
+            if (!roomRouteLevelHeight(from, to)) return canConnect(from, to)
+            // Actual feet can be one carpet above the floor-normalized graph; check the alignment first.
+            val height = maxOf(from.y, to.y)
+            val alignedFrom = RoomPoint(from.x, height, from.z)
+            val alignedTo = RoomPoint(to.x, height, to.z)
+            return canConnect(from, alignedFrom) && canConnect(alignedTo, to) &&
+                validRoomRouteConnector(alignedFrom, alignedTo, canConnect)
+        }
+        // Subdividing a checked short jump would place an unsupported endpoint in the gap.
+        if (pieces > 1 && roomJumpSpan(from, to) && canConnect(from, to)) return true
+        var previous = from
+        for (index in 1..pieces) {
+            val next = interpolate(from, to, index.toDouble() / pieces)
+            if (!canConnect(previous, next)) return false
+            previous = next
+        }
+        true
+    } catch (_: RuntimeException) { false }
+}
+
+/** Retain jump/stair elbows; the caller splits paths at mandatory targets and door crossings. */
+internal fun simplifyRoomPath(points: List<RoomPoint>, canConnect: (RoomPoint, RoomPoint) -> Boolean): List<RoomPoint> {
+    val unique = points.filterIndexed { index, point -> index == 0 || point != points[index - 1] }
+    if (unique.size < 3) return unique
+    if (unique.all { abs(it.y - unique.first().y) <= GEOMETRY_EPSILON } && canConnect(unique.first(), unique.last())) {
+        return listOf(unique.first(), unique.last())
+    }
+    val result = arrayListOf(unique.first())
+    var anchor = 0
+    while (anchor < unique.lastIndex) {
+        var end = anchor + 1
+        if (abs(unique[anchor].y - unique[end].y) <= GEOMETRY_EPSILON) {
+            // shortcut: inspect at most 64 waypoints per span; extend only if longer local corridors need it.
+            while (end < minOf(unique.lastIndex, anchor + 64) && abs(unique[end].y - unique[end + 1].y) <= GEOMETRY_EPSILON) end++
+        }
+        var next = end
+        while (next > anchor + 1 && !canConnect(unique[anchor], unique[next])) next--
+        result.add(unique[next])
+        anchor = next
+    }
+    return result
+}
+
+/** Fixed display chunks bound resmoothing while preserving every required target/door boundary. */
+internal fun roomDisplayStops(stops: List<Int>, start: Int, end: Int): List<Int> = buildList {
+    var from = start
+    for (to in (stops + end).distinct().filter { it in start..end }.sorted()) {
+        while (to - from > 64) { from += 64; add(from) }
+        add(to)
+        from = to
+    }
+}
+
+/** Display only: source edges remain the movement route; targets and doors delimit separate calls. */
+internal fun smoothRoomDisplayPath(points: List<RoomPoint>, canConnect: (RoomPoint, RoomPoint) -> Boolean): List<RoomPoint> {
+    fun safe(from: RoomPoint, to: RoomPoint) = try { canConnect(from, to) } catch (_: RuntimeException) { false }
+    val clean = simplifyRoomPath(points, ::safe)
+    if (clean.size < 3) return clean
+    val ramps = arrayListOf(clean.first())
+    val stairDeviation = minOf(ROOM_ROUTE_HEIGHT, BODY_HEIGHT - ROOM_ROUTE_HEIGHT)
+    var anchor = 0
+    while (anchor < clean.lastIndex) {
+        var best = anchor + 1
+        val start = clean[anchor]
+        val dx = clean[best].x - start.x
+        val dz = clean[best].z - start.z
+        var trend = 0
+        for (end in anchor + 1..minOf(clean.lastIndex, anchor + 64)) {
+            val previous = clean[end - 1]
+            val next = clean[end]
+            val stepX = next.x - previous.x
+            val stepZ = next.z - previous.z
+            val stepY = next.y - previous.y
+            if (hypot(dx, dz) < GEOMETRY_EPSILON || abs(dx * stepZ - dz * stepX) > GEOMETRY_EPSILON ||
+                dx * stepX + dz * stepZ <= 0 || abs(stepY) > 1.0 + GEOMETRY_EPSILON || !safe(previous, next)) break
+            val direction = if (abs(stepY) <= GEOMETRY_EPSILON) 0 else if (stepY > 0) 1 else -1
+            if (trend != 0 && direction != 0 && direction != trend) break
+            if (direction != 0) trend = direction
+            if (trend == 0) continue
+            val distance = hypot(next.x - start.x, next.z - start.z)
+            // Keep the elevated display ramp inside the original collision-checked player-height corridor.
+            if ((anchor + 1 until end).all { index ->
+                val point = clean[index]
+                val amount = hypot(point.x - start.x, point.z - start.z) / distance
+                abs(point.y - interpolate(start, next, amount).y) <= stairDeviation + GEOMETRY_EPSILON
+            }) best = end
+        }
+        ramps.add(clean[best])
+        anchor = best
+    }
+    val result = arrayListOf(ramps.first())
+    var rounded = 0
+    for (index in 1 until ramps.lastIndex) {
+        val before = ramps[index - 1]
+        val corner = ramps[index]
+        val after = ramps[index + 1]
+        val incoming = hypot(corner.x - before.x, corner.z - before.z)
+        val outgoing = hypot(after.x - corner.x, after.z - corner.z)
+        if (rounded >= 32 || abs(before.y - corner.y) > GEOMETRY_EPSILON || abs(after.y - corner.y) > GEOMETRY_EPSILON ||
+            incoming < GEOMETRY_EPSILON || outgoing < GEOMETRY_EPSILON ||
+            abs((corner.x - before.x) * (after.z - corner.z) - (corner.z - before.z) * (after.x - corner.x)) <= GEOMETRY_EPSILON) {
+            result.add(corner)
+            continue
+        }
+        val radius = minOf(0.45, incoming / 3, outgoing / 3)
+        val entry = interpolate(corner, before, radius / incoming)
+        val exit = interpolate(corner, after, radius / outgoing)
+        val curve = (0..4).map { sample ->
+            val amount = sample / 4.0
+            interpolate(interpolate(entry, corner, amount), interpolate(corner, exit, amount), amount)
+        }
+        if ((listOf(result.last()) + curve + after).zipWithNext().all { (a, b) -> safe(a, b) }) {
+            result.addAll(curve)
+            rounded++
+        } else result.add(corner)
+    }
+    result.add(ramps.last())
+    return result
+}
 
 internal fun roomStandingPoint(cell: GridCell, heights: Sequence<Double>, canStand: (RoomPoint) -> Boolean,
     climbable: Boolean = false): RoomPoint? {
@@ -198,6 +398,24 @@ class RoomGeometryBuilder(private val level: ClientLevel, private val room: Dete
 }
 
 object RoomWorldGeometry {
+    internal fun ignoredRoutingBlock(state: BlockState): Boolean =
+        state.block is CarpetBlock || state.block is MossyCarpetBlock || state.`is`(Blocks.IRON_BARS)
+
+    internal fun routingCollisionShape(level: ClientLevel, pos: BlockPos, state: BlockState): VoxelShape =
+        roomRoutingCollisionShape(ignoredRoutingBlock(state)) { state.getCollisionShape(level, pos) }
+
+    private fun routingContext(native: CollisionContext) = object : CollisionContext by native {
+        override fun getCollisionShape(state: BlockState, level: CollisionGetter, pos: BlockPos): VoxelShape =
+            roomRoutingCollisionShape(ignoredRoutingBlock(state)) { native.getCollisionShape(state, level, pos) }
+    }
+
+    private val blockContext by lazy { routingContext(CollisionContext.empty()) }
+    private val bodyContext by lazy { routingContext(CollisionContext.emptyWithFluidCollisions()) }
+
+    private fun collisions(level: ClientLevel, bounds: AABB, fluids: Boolean = false): Iterable<VoxelShape> = Iterable {
+        BlockCollisions(level, if (fluids) bodyContext else blockContext, bounds, false) { _, shape -> shape }
+    }
+
     fun feet(room: DetectedRoom, cell: GridCell, geometry: RoomGeometry? = null): Vec3 = geometry?.standingFeet?.get(cell)?.let {
         Vec3(it.x, it.y, it.z)
     } ?: room.transform.toWorld(cell).let {
@@ -218,8 +436,9 @@ object RoomWorldGeometry {
         )
     }
 
-    /** Snap only through a collision-safe, supported connector, never across a nearby wall. */
-    fun playerCell(level: ClientLevel, room: DetectedRoom, geometry: RoomGeometry, actualPlayer: Vec3): GridCell? {
+    /** Checked nearby floors can also provide an airborne sight join when explicitly requested. */
+    fun playerCell(level: ClientLevel, room: DetectedRoom, geometry: RoomGeometry, actualPlayer: Vec3,
+        allowSight: Boolean = false): GridCell? {
         if (!MC.instance.isSameThread || !finitePosition(actualPlayer)) return null
         return try {
             val x = floor(actualPlayer.x).toInt()
@@ -233,7 +452,10 @@ object RoomWorldGeometry {
                 if (distance <= 4.0) candidates.add(cell to distance)
             }
             candidates.sortBy { it.second }
-            candidates.firstOrNull { validConnector(level, actualPlayer, feet(room, it.first, geometry)) }?.first
+            candidates.firstOrNull {
+                val target = feet(room, it.first, geometry)
+                validConnector(level, actualPlayer, target) || allowSight && clearSightLine(level, actualPlayer, target)
+            }?.first
         } catch (_: RuntimeException) { null }
     }
 
@@ -251,6 +473,39 @@ object RoomWorldGeometry {
             { point -> climbable(level, point.vector()) })
     }
 
+    /** Loaded player-clear level routes require floor support or a bounded safe gap jump. */
+    fun validRouteConnector(level: ClientLevel, from: Vec3, to: Vec3): Boolean {
+        if (!MC.instance.isSameThread || !finitePosition(from) || !finitePosition(to)) return false
+        return validRoomRouteConnector(from.roomPoint(), to.roomPoint()) { a, b -> validConnector(level, a.vector(), b.vector()) }
+    }
+
+    /** Display guidance may cross a pit; it never adds walking graph edges or sends player input. */
+    fun clearSightLine(level: ClientLevel, from: Vec3, to: Vec3): Boolean {
+        if (!MC.instance.isSameThread || !finitePosition(from) || !finitePosition(to)) return false
+        return validRoomSightConnector(from.roomPoint(), to.roomPoint(),
+            { a, b -> loadedEnvelope(level, a.vector(), b.vector()) },
+            { a, b -> clearSegment(level, a.vector(), b.vector()) },
+            { point -> validCell(level, point.vector()) })
+    }
+
+    /** Build/cache cleaned paths on the client thread; mandatory crossings are separate input spans. */
+    fun simplifyPath(level: ClientLevel, points: List<Vec3>): List<Vec3> {
+        if (points.any { !finitePosition(it) }) return emptyList()
+        if (!MC.instance.isSameThread) return points
+        return simplifyRoomPath(points.map { it.roomPoint() }) { a, b ->
+            validRouteConnector(level, a.vector(), b.vector())
+        }.map { it.vector() }
+    }
+
+    /** Raw validated standing nodes only; cache the returned display line separately from movement geometry. */
+    fun smoothDisplayPath(level: ClientLevel, standingPath: List<Vec3>): List<Vec3> {
+        if (standingPath.any { !finitePosition(it) }) return emptyList()
+        if (!MC.instance.isSameThread) return standingPath
+        return smoothRoomDisplayPath(standingPath.map { it.roomPoint() }) { a, b ->
+            validRouteConnector(level, a.vector(), b.vector())
+        }.map { it.vector() }
+    }
+
     /** For previously validated graph edges; cache these when publishing a route, not per frame. */
     fun connectorWaypoints(from: Vec3, to: Vec3): List<Vec3>? {
         if (!finitePosition(from) || !finitePosition(to)) return null
@@ -259,13 +514,13 @@ object RoomWorldGeometry {
 
     internal fun validCell(level: ClientLevel, feet: Vec3): Boolean = validConnector(level, feet, feet)
 
-    /** A grid Y identifies (Y-1, Y]; the collision surface supplies the actual carpet/slab/stair height. */
+    /** A grid Y identifies (Y-1, Y]; ignored decorations are absent, while slab/stair surfaces retain their height. */
     internal fun standingPoint(level: ClientLevel, cell: GridCell): RoomPoint? {
         val center = Vec3(cell.x + 0.5, cell.y.toDouble(), cell.z + 0.5)
         if (!MC.instance.isSameThread || !loadedEnvelope(level, center, center)) return null
         val probe = AABB(center.x - BODY_RADIUS, center.y - 1.0, center.z - BODY_RADIUS,
             center.x + BODY_RADIUS, center.y + GEOMETRY_EPSILON, center.z + BODY_RADIUS)
-        val heights = level.getBlockCollisions(null, probe).flatMap { it.toAabbs() }.asSequence()
+        val heights = collisions(level, probe).flatMap { it.toAabbs() }.asSequence()
             .filter { it.minX < probe.maxX && it.maxX > probe.minX && it.minZ < probe.maxZ && it.maxZ > probe.minZ }
             .map { it.maxY }
         return roomStandingPoint(cell, heights, { validCell(level, it.vector()) }, climbable(level, center))
@@ -284,12 +539,12 @@ object RoomWorldGeometry {
 
     private fun clearSegment(level: ClientLevel, from: Vec3, to: Vec3): Boolean =
         minOf(from.y, to.y) >= level.minY && maxOf(from.y, to.y) + BODY_HEIGHT <= level.maxY &&
-            level.noBlockCollision(null, body(from).minmax(body(to)), true)
+            !collisions(level, body(from).minmax(body(to)), fluids = true).iterator().hasNext()
 
     private fun supported(level: ClientLevel, feet: Vec3, depth: Double, radius: Double): Boolean {
         val probe = AABB(feet.x - radius, feet.y - depth, feet.z - radius,
             feet.x + radius, feet.y - GEOMETRY_EPSILON, feet.z + radius)
-        return !level.noBlockCollision(null, probe)
+        return collisions(level, probe).iterator().hasNext()
     }
 
     private fun climbable(level: ClientLevel, feet: Vec3): Boolean =

@@ -6,6 +6,52 @@ data class RoomRoutingContext(val worldEpoch: Long, val runEpoch: Long, val room
 
 enum class RoomReplanReason { CONTEXT_CHANGED, TARGETS_CHANGED, GEOMETRY_CHANGED, MOVED, TELEPORTED, RETRY }
 
+/** Cache the known Blood doorway for the run, even when routing stops after opening it. */
+internal class BloodDoorReminder {
+    private var door: GridCell? = null
+    private var blood = emptySet<RoomSegment>()
+
+    fun clear() { door = null; blood = emptySet() }
+
+    fun observe(exit: DungeonExit?) {
+        val gate = exit?.doors?.lastOrNull { it.kind == "Blood door" }
+        if (gate != null) {
+            door = gate.door
+            blood = gate.to.ifEmpty { setOf(dungeonGridSegment(gate.departure.x + .5, gate.departure.z + .5)) }
+        } else if (exit?.kind == "Blood door") {
+            val dx = exit.door.x.compareTo(exit.approach.x)
+            val dz = exit.door.z.compareTo(exit.approach.z)
+            if ((dx == 0) == (dz == 0)) return
+            door = exit.door
+            blood = setOf(dungeonGridSegment(exit.door.x + dx * 3 + .5, exit.door.z + dz * 3 + .5))
+        }
+    }
+
+    fun highlight(mage: Boolean, position: RoomPoint): GridCell? = door.takeIf {
+        mage && position.x.isFinite() && position.z.isFinite() && blood.none { room ->
+            position.x >= room.x - .5 && position.x < room.x + 31.5 &&
+                position.z >= room.z - .5 && position.z < room.z + 31.5
+        }
+    }
+}
+
+/** Keep checked guidance after obstacle removal only while its floor and every movement edge remain valid. */
+internal fun checkedRoomPathSurvivesChange(points: List<RoomPoint>, canConnect: (RoomPoint, RoomPoint) -> Boolean): Boolean {
+    if (points.isEmpty() || points.size > 65) return false
+    return try {
+        canConnect(points.last(), points.last()) && points.zipWithNext().all { (a, b) -> canConnect(a, b) }
+    } catch (_: RuntimeException) { false }
+}
+
+/** An unfinished approach probe cannot discard a previously routed target that still needs a stop. */
+internal fun roomApproachesPending(previous: Set<String>, selected: Set<String>, required: Set<String>, pending: Boolean) =
+    pending && previous.any { it in required && it !in selected }
+
+/** Partial geometry must not replace a required stop with an empty or exit-only guide. */
+internal fun roomLocalGuideRelevant(route: RoomRoute?, required: Set<String>, exit: GridCell?) =
+    if (required.isEmpty()) exit != null && route?.path?.lastOrNull() == exit
+    else route?.targetOrder?.firstOrNull()?.let(required::contains) == true
+
 @ConsistentCopyVisibility
 data class RoomReplanRequest internal constructor(
     val revision: Long,
@@ -71,7 +117,7 @@ class RoomRoutingUpdates {
         request(reason, if (reason == RoomReplanReason.MOVED) after(now, MOVEMENT_DEBOUNCE_MILLIS) else now)
     }
 
-    fun observe(start: GridCell, position: RoomPoint, nowMillis: Long, automaticMovement: Boolean = true) {
+    fun observe(start: GridCell, position: RoomPoint, nowMillis: Long, automaticMovement: Boolean = true, followingPath: Boolean = false) {
         val now = time(nowMillis)
         if (context == null) return
         val previous = observed
@@ -83,7 +129,7 @@ class RoomRoutingUpdates {
             return
         }
         val anchor = planned ?: return
-        val moved = automaticMovement && distanceSquared(anchor, position) >= MOVEMENT_BLOCKS * MOVEMENT_BLOCKS
+        val moved = automaticMovement && !followingPath && distanceSquared(anchor, position) >= MOVEMENT_BLOCKS * MOVEMENT_BLOCKS
         if (!moved && pending == RoomReplanReason.MOVED && plannedHasPath) {
             // Coalesce small threshold oscillations without planning after the player returns.
             pending = null

@@ -2,13 +2,57 @@ package me.mycellium.skymyce.ui
 
 import com.teamresourceful.resourcefulconfig.api.types.ResourcefulConfig
 import me.mycellium.skymyce.config.Config
+import me.mycellium.skymyce.config.settingGroups
+import me.mycellium.skymyce.config.settingNumber
 import me.mycellium.skymyce.config.settingRows
+import java.lang.management.ManagementFactory
+import java.util.Locale
+
+@Volatile private var menuSearchSink = emptyList<MenuSearchEntry>()
+
+private fun measureMenuSearch(catalog: MenuCatalog) {
+    val queries = listOf("f", "fortune", "party", "animations", "blood", "economy friends")
+    val bean = ManagementFactory.getThreadMXBean() as? com.sun.management.ThreadMXBean
+    bean?.takeIf { it.isThreadAllocatedMemorySupported }?.isThreadAllocatedMemoryEnabled = true
+    repeat(60) { queries.forEach { menuSearchSink = catalog.search(it) } }
+    val id = Thread.currentThread().threadId()
+    val bytes = bean?.getThreadAllocatedBytes(id) ?: 0L
+    val start = System.nanoTime()
+    repeat(100) { queries.forEach { menuSearchSink = catalog.search(it) } }
+    val nanos = System.nanoTime() - start
+    val allocated = (bean?.getThreadAllocatedBytes(id) ?: bytes) - bytes
+    println("Menu catalog search: ${catalog.search("").size} entries, 600 warmed queries: ${nanos / 600 / 1000.0}us/query ${allocated / 600}B/query")
+}
 
 /** Check the real config inventory so moved UI controls cannot silently vanish or duplicate. */
 fun main() {
     val build = Config.javaClass.methods.first { it.name.startsWith("build") && it.parameterCount == 1 }
     val rows = settingRows(build.invoke(Config, null) as ResourcefulConfig)
     val catalog = MenuCatalog(rows)
+    measureMenuSearch(catalog)
+    val indexedEntries = catalog.search("")
+    check(catalog.search("") === indexedEntries) { "Blank search rebuilt the sorted inventory" }
+    fun originalSearch(query: String): List<MenuSearchEntry> {
+        val tokens = Regex("[a-z0-9]+").findAll(query.lowercase(Locale.ROOT)).map { it.value }.toList()
+        return indexedEntries.filter { entry ->
+            val text = (listOf(entry.title, entry.description, entry.category.title, entry.subcategory) + entry.aliases)
+                .joinToString(" ").lowercase(Locale.ROOT)
+            val words = Regex("[a-z0-9]+").findAll(text).map { it.value }.toList()
+            tokens.all { token -> words.any { menuSearchWordMatches(it, token) } }
+        }.sortedWith(compareBy<MenuSearchEntry> { it.category.ordinal }.thenBy { it.subcategory }
+            .thenBy { it.settingPath != null }.thenBy { it.title.lowercase(Locale.ROOT) }.thenBy { it.id })
+    }
+    for (query in listOf("", "f", "fortune", "party", "dungeom", "animations", "blood", "economy friends", "AH", "reduced motion", "!!", "missing xyz")) {
+        check(catalog.search(query) == originalSearch(query)) { "Cached search changed matching/order for '$query'" }
+    }
+    val sourceEntries = indexedEntries.toMutableList()
+    val isolatedIndex = MenuSearchIndex(sourceEntries)
+    sourceEntries.clear()
+    check(isolatedIndex.search("blood") == catalog.search("blood")) { "Search index retained a mutable caller inventory" }
+    check(MenuSearchIndex(emptyList()).search("anything").isEmpty())
+    val irc = checkNotNull(catalog.findFeature("global-chat"))
+    check(irc.title == "Global IRC" && "/sm irc" in irc.description && "/sm irc <message>" in irc.description)
+    check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
     check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)
     MenuPage.entries.forEach { check(catalog.findFeature(it.featureId) != null) }
@@ -40,6 +84,12 @@ fun main() {
     check(catalog.featureForPath("Theme & Appearance/graphicsQuality")!!.id == "settings-performance")
     check(catalog.featureForPath("Theme & Appearance/animationMode")!!.id == "settings-appearance")
     check(catalog.featureForPath("openConfigKey")!!.id == "settings-controls")
+    check(catalog.search("fortune").any { it.featureId == "mining" && it.settingPath != null })
+    check(catalog.search("f").isNotEmpty())
+    check(catalog.search("dungeom").any { it.category == MenuCategory.DUNGEONS })
+    check(menuSearchWordMatches("fortune", "fortne"))
+    check(menuSearchWordMatches("fortune", "fortunne"))
+    check(!menuSearchWordMatches("fortune", "fxrtxne"))
     val friends = catalog.search("friends")
     check(friends.map { it.category }.toSet().containsAll(listOf(MenuCategory.DUNGEONS, MenuCategory.ECONOMY, MenuCategory.UTILS)))
     check(friends.map { it.category.ordinal } == friends.map { it.category.ordinal }.sorted())
@@ -50,7 +100,52 @@ fun main() {
     check(catalog.search("keybind").any { it.settingPath == "openConfigKey" })
     check(catalog.search("reduced motion").any { it.settingPath == "Theme & Appearance/animationMode" })
     val opacity = catalog.search("opacity").first { it.settingPath == "Dungeons/Starred Clear Routing/opacity" }
-    check(opacity.breadcrumb == "Dungeons → Routes → Starred Clear Routing → Path Opacity")
+    check(opacity.breadcrumb == "Dungeons → Routes → Dungeon Routing → Line opacity")
+    val routing = checkNotNull(catalog.findFeature("starred-routes"))
+    check(routing.title == "Dungeon Routing" && routing.enabledPath == "Dungeons/Starred Clear Routing/enabled")
+    val routingGroups = settingGroups(rows, routing.id)
+    val expectedRoutingGroups = linkedMapOf(
+        "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+        "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
+        "Appearance" to listOf("thickness", "opacity", "lineHeight"),
+        "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
+    )
+    check(routingGroups.keys.toList() == expectedRoutingGroups.keys.toList())
+    check(routingGroups.mapValues { (_, settings) -> settings.map { it.element.id() } } == expectedRoutingGroups)
+    check(routingGroups.values.flatten().map { it.path }.sorted() == routing.settings.map { it.path }.sorted()) {
+        "Grouping dungeon routing must retain every saved control exactly once"
+    }
+    check(settingGroups(rows, routing.id, "Developer diagnostics").keys.toList() == listOf("Advanced"))
+    check(catalog.search("starred clear routing").any { it.featureId == routing.id && it.settingPath == null })
+    check(catalog.search("straight blood").any { it.settingPath == "Dungeons/Starred Clear Routing/routeThroughMobs" })
+    val routeMode = checkNotNull(catalog.setting("Dungeons/Starred Clear Routing/routeThroughMobs"))
+    check(routeMode.title == "Route through starred mobs" && routeMode.entry.boolean)
+    val minibossMode = checkNotNull(catalog.setting("Dungeons/Starred Clear Routing/routeThroughStarredMinibosses"))
+    check(minibossMode.title == "Route through starred minibosses" && minibossMode.entry.boolean)
+    check(catalog.search("starred minibosses").any { it.settingPath == minibossMode.path })
+    val booleanDefaults = mapOf("enabled" to true, "routeThroughMobs" to true, "routeThroughStarredMinibosses" to true, "showTargets" to true,
+        "showRoute" to true, "showNumbers" to true, "showCleared" to false, "showHealer" to true,
+        "automaticRecalculation" to true, "debug" to false)
+    booleanDefaults.forEach { (key, expected) -> check(catalog.setting("Dungeons/Starred Clear Routing/$key")!!.entry.boolean == expected) }
+    check(catalog.setting("Dungeons/Starred Clear Routing/thickness")!!.entry.int == 2)
+    check(catalog.setting("Dungeons/Starred Clear Routing/opacity")!!.entry.int == 85)
+    val lineHeight = checkNotNull(catalog.setting("Dungeons/Starred Clear Routing/lineHeight"))
+    check(lineHeight.title == "Line height" && lineHeight.entry.double == 1.2)
+    val heightRange = checkNotNull(lineHeight.entry.options().getOption(com.teamresourceful.resourcefulconfig.api.types.options.Option.RANGE))
+    check(heightRange.min == 0.0 && heightRange.max == 4.0)
+    check(lineHeight.entry.options().hasOption(com.teamresourceful.resourcefulconfig.api.types.options.Option.SLIDER))
+    check(settingNumber(lineHeight.entry, "0") == 0.0 && settingNumber(lineHeight.entry, "4") == 4.0)
+    check(settingNumber(lineHeight.entry, "-0.1") == null && settingNumber(lineHeight.entry, "4.1") == null)
+    check(catalog.search("line height").any { it.settingPath == lineHeight.path })
+    val mobMarkers = routingGroups.getValue("Mob markers")
+    val markerValues = mobMarkers.map { it.entry.boolean }
+    try {
+        check(routeMode.entry.setBoolean(false) && !routeMode.entry.boolean)
+        check(minibossMode.entry.boolean) { "Regular mob routing must leave the independent starred miniboss toggle enabled" }
+        check(minibossMode.entry.setBoolean(false) && !minibossMode.entry.boolean)
+        check(mobMarkers.map { it.entry.boolean } == markerValues) { "Routing selections must keep independent mob-marker settings" }
+    } finally { routeMode.entry.setBoolean(true); minibossMode.entry.setBoolean(true) }
+    check(catalog.setting("Dungeons/Starred Clear Routing/showNumbers")!!.title == "Show mob labels")
     check(catalog.search("no matching feature 985713").isEmpty())
     check(catalog.search("AH").map { it.id } == catalog.search("ah").map { it.id })
     check(catalog.search("").map { it.id }.distinct().size == rows.size + catalog.features.size + MenuCatalog.extraSettings.size)

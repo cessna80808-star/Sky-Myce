@@ -11,7 +11,12 @@ import me.mycellium.skymyce.config.notifySettingsChanged
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
-internal enum class MenuDirectoryView(val title: String) { SEARCH("Search"), QUICK("Quick Settings"), FAVORITES("Favorites"), RECENT("Recent") }
+internal enum class MenuDirectoryView(val title: String, val description: String) {
+    SEARCH("Search", "Find a feature or setting by name. Results show its category and open the original control."),
+    QUICK("Quick Settings", "Your pinned controls. Pin from search; use Full settings to open their original page."),
+    FAVORITES("Favorites", "Features and settings you saved with the star button."),
+    RECENT("Recent", "Return directly to features you recently opened."),
+}
 
 /** Category browsing and shortcuts are views over the same inventory, not separate destinations. */
 internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
@@ -39,14 +44,14 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     override fun buildContent(root: FlowLayout) {
         root.padding(Insets.of(14)); root.gap(9)
         root.child(row().apply {
-            child(label(category?.title ?: "Find your tools", MenuTheme.TEXT, 16f).horizontalSizing(Sizing.expand()))
+            child(label(category?.title ?: view.title, MenuTheme.TEXT, 16f).horizontalSizing(Sizing.expand()))
             child(button("Back", 48) { onClose() })
         })
-        root.child(label(category?.description ?: "Search features and settings, or open your saved shortcuts.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+        root.child(label(category?.description ?: view.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         if (category == null) {
             if (menuWidth < 350) root.child(button(view.title, minOf(150, menuWidth - 28)) { anchor ->
                 openMenuDropdown(anchor) { dropdown -> MenuDirectoryView.entries.forEach { tab -> dropdown.button(Component.literal(tab.title)) {
-                    view = tab; query = ""; limit = 50; focusSearch = tab == MenuDirectoryView.SEARCH; rebuildMenu()
+                    if (view != tab) { view = tab; query = ""; limit = 50; focusSearch = tab == MenuDirectoryView.SEARCH; rebuildMenu() }
                 } } }
             }) else MenuDirectoryView.entries.chunked(if (menuWidth < 390) 2 else 4).forEach { tabs -> root.child(row().apply {
                 tabs.forEach { tab -> child(button(tab.title, if (tab == MenuDirectoryView.QUICK) 100 else 70) {
@@ -106,6 +111,13 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         }
     }
     private fun showSearch() {
+        if (category == null && query.isBlank()) {
+            results.child(label("Type to search every category, or choose a category from the icon rail.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+            results.child(actions(listOf("Dungeon routes", "Chest profit", "Animations").map { example ->
+                button(example, 110) { search.text(example); focusSearch = true }
+            }))
+            return
+        }
         val entries = catalog.search(query).filter { entry ->
             (category == null || entry.category == category) && (query.isNotBlank() || entry.settingPath == null) &&
                 (category == null || catalog.findFeature(entry.featureId)?.let(::matchesFilter) == true)
@@ -148,7 +160,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         child(label(feature.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         val controls = mutableListOf(button(if (feature.tool == null) "Configure" else "Open", 76) { openMenuFeature(feature.id) })
         if (feature.settings.isNotEmpty() && feature.tool in listOf("party-finder", "dungeon-tracker", "daily-digest"))
-            controls += button("Settings", 70) { openMenuFeature(feature.id, configure = true) }
+            controls += button("Configure", 76) { openMenuFeature(feature.id, configure = true) }
         child(actions(controls))
         child(row().apply {
             featureEnabled(feature)?.let { child(label(if (it) "Enabled" else "Disabled", if (it) MenuTheme.ACCENT else MenuTheme.MUTED)) }
@@ -172,7 +184,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                 })
                 child(label("${owner.breadcrumb} → ${setting.title}", MenuTheme.ACCENT, 9f).horizontalSizing(Sizing.fill()))
                 child(actions(listOf(
-                    button("Original", 68) { openMenuSetting(path) },
+                    button("Full settings", 90) { openMenuSetting(path) },
                     button("↑", 24) { MenuShortcuts.move(path, -1); populate() }.apply { active(index > 0); tooltip(Component.literal("Move up")) },
                     button("↓", 24) { MenuShortcuts.move(path, 1); populate() }.apply { active(index < MenuShortcuts.pins.lastIndex); tooltip(Component.literal("Move down")) },
                     button("Remove", 60) { MenuShortcuts.togglePin(path); populate() })))
@@ -216,7 +228,9 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
             search.focusHandler()?.focus(search, UIComponent.FocusSource.KEYBOARD_CYCLE); focusSearch = false
         }
         if (observedRevision != MenuShortcuts.revision) populate()
-        if (view == MenuDirectoryView.QUICK && category == null && quickValues != MenuShortcuts.pins.map { catalog.setting(it)?.entry?.get() }) populate()
+        if (view == MenuDirectoryView.QUICK && category == null && menuQuickValuesChanged(MenuShortcuts.pins, quickValues) {
+            catalog.setting(it)?.entry?.get()
+        }) populate()
     }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content())
     private fun actions(controls: List<ButtonComponent>, available: Int = menuWidth - 52) = column().apply {
@@ -231,6 +245,13 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private fun card(key: String) = MenuRevealCard("directory/$key", Sizing.fill(), Sizing.content()).apply { surface(MenuTheme.panel(true)); padding(Insets.of(10)); gap(5) }
     private fun label(text: String, color: Int = MenuTheme.TEXT, size: Float = 10f) = MenuLabel(Component.literal(text)).apply { color(Color.ofRgb(color)); fontSize = size }
     private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply { sizing(Sizing.fixed(width), Sizing.fixed(22)) }
+}
+
+/** Read at most eight pinned values without constructing a replacement list every idle tick. */
+internal inline fun menuQuickValuesChanged(paths: List<String>, values: List<Any?>, value: (String) -> Any?): Boolean {
+    if (paths.size != values.size) return true
+    for (index in paths.indices) if (value(paths[index]) != values[index]) return true
+    return false
 }
 
 /** Wrap actions before mounting so the same controls remain reachable in narrow viewports. */

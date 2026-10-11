@@ -4,9 +4,9 @@ import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 
 object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
-    val enabled by boolean(false) {
+    var enabled by boolean(false) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Opt into the global SkyMyce and Discord channel in any world. Use /sm global <message> or /chat sky; normal chat stays unchanged.")
+        description = TranslatableValue.literal("Receive global Sky-Myce and Discord chat in any world. /sm irc selects this mode; /sm irc <message> sends once. /sm chat returns to normal chat. An explicit IRC command enables this preference.")
     }
     val mentionSounds by boolean(true) {
         name = TranslatableValue.literal("Mention Sound")

@@ -4,6 +4,8 @@ Implemented against `a58b34d00541d0670e43ee7faa5422437e8967e3` on 2026-10-02. Ta
 
 This report distinguishes measured local work from source-audited behavior. Authenticated Hypixel gameplay, startup timing, low-end hardware, process-wide CPU/RAM/FPS and 30-minute/1/2/4-hour sessions were unavailable. Those acceptance checks remain unverified; headless fixtures cannot establish them. No deployed service or account authority was changed for testing.
 
+The [2026-10-10 menu follow-up](menu-optimization-2026-10.md) records a separate pre-edit baseline and comparable measurements for cached search, stable navigation geometry, idle ambient state and the shared Settings rail. The historical measurements below retain their original conditions.
+
 ## A. Feature inventory
 
 The pre-edit inventories trace sources, native events, tick/render callbacks, jobs, timers, networking, cache ownership, persistence, resources and context gates:

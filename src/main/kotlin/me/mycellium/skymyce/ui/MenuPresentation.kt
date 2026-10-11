@@ -22,6 +22,7 @@ internal class MenuRevealCard(private val key: String, horizontal: Sizing, verti
     private val hover = MotionValue(0.0)
     private var painted = MotionPose(alpha = 0.0)
     private var paintedClip: MenuRect? = null
+    private var logicalHover = false
     override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         val g = graphics as MenuGraphics
         val clip = g.canvasClip
@@ -34,7 +35,7 @@ internal class MenuRevealCard(private val key: String, horizontal: Sizing, verti
         val mode = ThemeConfig.animationMode; val profile = mode.profile
         val reveal = menuReveals.progress(key, visible, mode)
         if (!visible) return
-        hover.animateTo(if (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) ||
+        hover.animateTo(if (logicalHover ||
             menuComponentAttached(this, focusHandler()?.focused())) 1.0 else 0.0, 120, profile.hoverEasing, mode)
         val lift = hover.sample().coerceIn(0.0, 1.04)
         painted = MotionPose(alpha = reveal, y = (1 - reveal) * profile.revealOffset - lift * profile.cardLift,
@@ -44,6 +45,7 @@ internal class MenuRevealCard(private val key: String, horizontal: Sizing, verti
         }
     }
     fun pointer(x: Double, y: Double): Pair<Double, Double>? {
+        logicalHover = painted.alpha >= .01 && paintedClip?.contains(x, y) != false && isInBoundingBox(x, y)
         if (painted.alpha < .01 || paintedClip?.contains(x, y) == false) return null
         val px = painted.inverseX(x); val py = painted.inverseY(y)
         return if (isInBoundingBox(px, py)) px to py else null
@@ -54,17 +56,19 @@ internal class MenuRevealCard(private val key: String, horizontal: Sizing, verti
 /** Resolve the visible surface first; its old layout strip must not activate hidden controls. */
 internal fun menuCardPointer(root: UIComponent, x: Double, y: Double): Pair<Double, Double>? {
     var vacated = false
-    fun visit(component: UIComponent): Pair<Double, Double>? {
+    var hit: Pair<Double, Double>? = null
+    fun visit(component: UIComponent) {
         if (component is MenuRevealCard) {
-            component.pointer(x, y)?.let { return it }
+            val point = component.pointer(x, y)
+            if (hit == null) hit = point
             if (component.vacated(x, y)) vacated = true
         }
         if (component is ParentUIComponent) for (index in component.children().indices.reversed()) {
-            visit(component.children()[index])?.let { return it }
+            visit(component.children()[index])
         }
-        return null
     }
-    return visit(root) ?: if (vacated) -1.0 to -1.0 else null
+    visit(root)
+    return hit ?: if (vacated) -1.0 to -1.0 else null
 }
 
 /** Removed descendants can remain in owo's focus handler; never dispatch input to that old tree. */

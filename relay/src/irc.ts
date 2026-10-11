@@ -30,10 +30,25 @@ export type IrcSession = {
   bridge?: boolean; room?: string; ircSubscribed?: boolean; globalChatSubscribed?: boolean; accountId?: string; discordId?: string;
   uuid?: string; name?: string; installationId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
 };
+type SubscriptionIntent = { field: "ircSubscribed" | "globalChatSubscribed"; token: symbol };
+const identityFields = ["bridge", "room", "accountId", "discordId", "uuid", "name", "installationId", "generation",
+  "leaseExpiresAt", "buildId", "loaderVersion", "connectionId"] as const;
+
+/** External authorization may yield to other feature messages. Keep their current attachment fields. */
+export function currentIrcSession<T extends IrcSession>(ws: WebSocket, checked: T): T | undefined {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  const current = ws.deserializeAttachment() as T;
+  if (!current || identityFields.some(field => current[field] !== checked[field])) return;
+  if (checked.accountId && (!Number.isSafeInteger(current.leaseExpiresAt) || current.leaseExpiresAt! <= Date.now())) {
+    ws.close(4006, "Authorization renewal required"); return;
+  }
+  return current;
+}
 const encoder = new TextEncoder();
 const snowflake = /^\d{17,20}$/;
 const packetId = /^[a-f0-9]{32}$/;
 export const GLOBAL_CHAT_ROOM = "global-chat";
+export const PARTY_CHAT_UNAVAILABLE = "party_membership_unverified";
 export const globalChatChannel = (env: IrcConfig): string | undefined => {
   const channel = env.GLOBAL_CHAT_CHANNEL_ID ?? env.DISCORD_IRC_CHANNEL_ID;
   return channel && snowflake.test(channel) ? channel : undefined;
@@ -78,6 +93,8 @@ export async function verifyBridge(request: Request, env: IrcConfig, room: strin
 
 /** Room IRC remains live-only. Global chat persists a bounded two-minute delivery outbox. */
 export class RoomIrc {
+  // Awaited handlers keep this instance active; restarts cancel them. Persist subscriptions, not in-flight ordering.
+  private readonly subscriptionIntents = new WeakMap<WebSocket, Partial<Record<SubscriptionIntent["field"], symbol>>>();
   constructor(private ctx: DurableObjectState, private env: IrcConfig,
       private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>) {
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS irc_nonces (nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
@@ -126,18 +143,48 @@ export class RoomIrc {
       return null;
     });
   }
-  async message(ws: WebSocket, session: IrcSession, data: Record<string, unknown>): Promise<void> {
+  /** Record ordering before the caller's authorization RPC, without granting any subscription. */
+  reserveSubscription(ws: WebSocket, session: IrcSession, data: Record<string, unknown>): SubscriptionIntent | undefined {
+    if (session.bridge || !session.accountId || data.type !== "irc_subscribe" || typeof data.enabled !== "boolean" ||
+        typeof data.id !== "string" || !packetId.test(data.id) || data.scope !== undefined && data.scope !== "global") return;
+    const intent: SubscriptionIntent = { field: data.scope === "global" ? "globalChatSubscribed" : "ircSubscribed", token: Symbol() };
+    const pending = this.subscriptionIntents.get(ws) ?? {};
+    pending[intent.field] = intent.token;
+    this.subscriptionIntents.set(ws, pending);
+    return intent;
+  }
+
+  private async subscribe(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent: SubscriptionIntent | undefined,
+      field: "ircSubscribed" | "globalChatSubscribed", result: (error?: string) => void): Promise<void> {
+    if (typeof data.enabled !== "boolean") { result("invalid_subscription"); return; }
+    if (data.enabled && (!session.discordId || !(await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(session.discordId)).ok)) { result("not_authorized"); return; }
+    const current = currentIrcSession(ws, session);
+    if (!current) return;
+    const pending = this.subscriptionIntents.get(ws);
+    if (!intent || pending?.[intent.field] !== intent.token) { result("subscription_superseded"); return; }
+    current[field] = data.enabled;
+    delete pending[intent.field];
+    ws.serializeAttachment(current); result();
+  }
+
+  async message(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent?: SubscriptionIntent): Promise<void> {
+    // Client-observed Hypixel rosters have no backend-verifiable membership proof.
+    if (data.scope !== undefined && data.scope !== "global") {
+      if (typeof data.id !== "string" || !(session.bridge ? snowflake : packetId).test(data.id)) {
+        ws.close(1008, "Invalid IRC packet"); return;
+      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id,
+        ...(data.scope === "party" ? { scope: "party", error: PARTY_CHAT_UNAVAILABLE } : { error: "invalid_scope" }) }));
+      return;
+    }
     if (data.scope === "global" || session.bridge && session.room === GLOBAL_CHAT_ROOM) {
-      await this.globalMessage(ws, session, data); return;
+      await this.globalMessage(ws, session, data, intent); return;
     }
     const result = (error?: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, ...(error ? { error } : {}) })); };
     if (typeof data.id !== "string" || !(session.bridge ? snowflake : packetId).test(data.id)) { ws.close(1008, "Invalid IRC packet"); return; }
     if (session.bridge && (data.room !== session.room || data.source !== "discord" || data.message_id !== data.id)) { result("invalid_route"); return; }
     if (!session.bridge && data.type === "irc_subscribe") {
-      if (typeof data.enabled !== "boolean") { result("invalid_subscription"); return; }
-      if (data.enabled && (!session.discordId || !(await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(session.discordId)).ok)) { result("not_authorized"); return; }
-      session.ircSubscribed = data.enabled;
-      ws.serializeAttachment(session); result(); return;
+      await this.subscribe(ws, session, data, intent, "ircSubscribed", result); return;
     }
     if (data.type !== (session.bridge ? "discord_message" : "irc_send") || !validIrcText(data.text)) { result("invalid_message"); return; }
     if (!session.bridge && !session.ircSubscribed) { result("not_subscribed"); return; }
@@ -158,6 +205,8 @@ export class RoomIrc {
       const recipient = peer.deserializeAttachment() as IrcSession;
       if (recipient.bridge ? session.bridge : !recipient.ircSubscribed) continue;
       if (!recipient.bridge && !await this.authorized(peer, recipient)) continue;
+      const current = currentIrcSession(peer, recipient);
+      if (!current || !current.bridge && !current.ircSubscribed) continue;
       try { peer.send(packet); } catch { /* Live relay only: reconnect restores subscriptions, never message history. */ }
     }
     result();
@@ -186,7 +235,7 @@ export class RoomIrc {
       discordId: sender.discordId!, uuid: sender.uuid, mentions: [], sender });
   }
 
-  private async globalMessage(ws: WebSocket, session: IrcSession, data: Record<string, unknown>): Promise<void> {
+  private async globalMessage(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent?: SubscriptionIntent): Promise<void> {
     const result = (error?: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", scope: "global", id: data.id,
       ...(data.part === "embeds" ? { part: "embeds" } : {}), ...(error ? { error } : {}) })); };
     if (!globalChatChannel(this.env)) { result("not_configured"); return; }
@@ -214,10 +263,7 @@ export class RoomIrc {
     }
     if (typeof data.id !== "string" || !packetId.test(data.id)) { ws.close(1008, "Invalid global chat packet"); return; }
     if (data.type === "irc_subscribe") {
-      if (typeof data.enabled !== "boolean") { result("invalid_subscription"); return; }
-      if (data.enabled && (!session.discordId || !(await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(session.discordId)).ok)) { result("not_authorized"); return; }
-      session.globalChatSubscribed = data.enabled;
-      ws.serializeAttachment(session); result(); return;
+      await this.subscribe(ws, session, data, intent, "globalChatSubscribed", result); return;
     }
     if (data.type !== "irc_send" || !validGlobalText(data.text, this.textLimit(false))) { result("invalid_message"); return; }
     if (!session.globalChatSubscribed) { result("not_subscribed"); return; }
@@ -282,8 +328,11 @@ export class RoomIrc {
     const normal = JSON.stringify({ ...base, mention: false }), mentioned = JSON.stringify({ ...base, mention: true });
     for (const peer of this.ctx.getWebSockets()) {
       if (peer.readyState !== WebSocket.OPEN) continue;
-      const recipient = peer.deserializeAttachment() as IrcSession;
+      let recipient = peer.deserializeAttachment() as IrcSession;
       if (recipient.bridge || !recipient.globalChatSubscribed || !await this.authorized(peer, recipient)) continue;
+      const current = currentIrcSession(peer, recipient);
+      if (!current || !current.globalChatSubscribed) continue;
+      recipient = current;
       if (message.expiresAt <= Date.now()) break;
       const peerDelivery = `peer:${message.id}:${recipient.connectionId}`;
       if (sql.exec("SELECT 1 FROM global_chat_delivered WHERE id=?", peerDelivery).toArray().length) continue;

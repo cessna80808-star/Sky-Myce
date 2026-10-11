@@ -34,7 +34,9 @@ object DungeonTrackerWidget : SkyMyceModule() {
     private val content by lazy { hudPanel(padding = 6) }
     private val previewContent by lazy { hudPanel(padding = 6) }
     private var seenRevision = -1L
+    private var seenHistoricalRevision = -1L
     private var seenFloor: tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor? = null
+    private var seenContext: AcquisitionContext? = null
     private var cachedLines = emptyList<String>()
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
@@ -44,50 +46,40 @@ object DungeonTrackerWidget : SkyMyceModule() {
                 SkyBlockIsland.inAnyIsland(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS),
                 DungeonAPI.started, DungeonAPI.completed)) return@Widget null
 
-        if (seenRevision != DungeonTracker.revision || seenFloor != DungeonTracker.currentFloor) {
-            seenRevision = DungeonTracker.revision; seenFloor = DungeonTracker.currentFloor
+        val context = AcquisitionRepository.currentContext()
+        if (seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != DungeonTracker.currentFloor || seenContext != context) {
+            seenRevision = AcquisitionRepository.revision; seenHistoricalRevision = DungeonTracker.revision; seenFloor = DungeonTracker.currentFloor; seenContext = context
             cachedLines = trackerLines()
         }
         content.updateTextLines(cachedLines)
     }
 
     private fun trackerLines(): List<String> {
-        val stats = DungeonTracker.profitData[DungeonTracker.currentFloor]
-        val title = DungeonTracker.currentFloor?.name ?: "?"
+        val view = DungeonTracker.confirmedView(DungeonTracker.currentFloor)
+        val stats = view.summary
+        val title = DungeonTracker.currentFloor?.name ?: "All floors"
 
         val lines = mutableListOf<String>()
 
         lines += "§b§l$title Dungeon Tracker"
-        when {
-            (DungeonTracker.currentFloor == null) -> {
-                lines += "§7Unknown floor!"
-                lines += "§8(Try queueing a party)"
-            }
-
-            (stats == null) -> {
-                lines += "§7No dungeon data yet."
-                lines += "§8(Try playing runs)"
-            }
-
-            else -> {
-                lines += "§8/skymyce dungeon"
-                lines += ""
-                val time = if (stats.timedRunCount > 0) stats.totalTimeMillis.milliseconds.inWholeSeconds.seconds.toString() else "Unknown"
-                val average = stats.averageRunMillis?.toLong()?.milliseconds?.inWholeSeconds?.seconds?.toString() ?: "Unknown"
-                lines += "§7Time: §e$time§7 (§e$average§7/run)"
-                if (stats.incompleteTime) lines += "§8Time known for ${stats.timedRunCount}/${stats.totalRuns} runs"
-                fun rate(value: Double) = stats.hourlyRate(value)?.let(NumberUtils::condense) ?: "—"
-                lines += "§7Runs: §a${stats.totalRuns}§7 (§a${rate(stats.totalRuns.toDouble())}§7/h)"
-                lines += "§7Chests: §a${stats.totalChestsOpened}§7 (§b${stats.totalRerolled} rerolls§7)"
-                lines += ""
-                lines += "§7Profit: ${TextUtils.parseProfit(stats.netProfit)}§7 (${rate(stats.netProfit)}§7/h)"
-
-                lines +=
-                    "§7Cata Exp: §b${NumberUtils.condense(stats.totalXp)} §7(§b${
-                        rate(stats.totalXp)
-                    }§7/h)"
-            }
-        }
+        lines += "§8/skymyce dungeon"
+        lines += ""
+        lines += view.lifetimeProfit?.let { "§7Lifetime profit (est.): ${TextUtils.parseProfit(it)}" }
+            ?: "§7Inherited profit (est.): ${TextUtils.parseProfit(view.inheritedProfit)} §8(new unknown)"
+        lines += "§7Historical: §a${view.historicalRuns} runs §7/ §a${view.historicalChests} chests"
+        lines += "§8Inherited: ${NumberUtils.condense(view.inheritedProfit)} • all local profiles"
+        lines += ""
+        lines += "§8Confirmed tracking • current profile"
+        val time = if (stats.timedRuns > 0) stats.time.milliseconds.inWholeSeconds.seconds.toString() else "Unknown"
+        val average = stats.average?.toLong()?.milliseconds?.inWholeSeconds?.seconds?.toString() ?: "Unknown"
+        lines += "§7Time: §e$time§7 (§e$average§7/run)"
+        if (stats.timedRuns < stats.runs) lines += "§8Time known for ${stats.timedRuns}/${stats.runs} runs"
+        fun rate(value: Double) = if (stats.completeTiming) NumberUtils.condense(value * 3600000 / stats.time) else "—"
+        lines += "§7New runs: §a${stats.runs}§7 (§a${rate(stats.runs.toDouble())}§7/h)"
+        lines += "§7Chests: §a${stats.chests}§7 (§b${stats.rerolls} rerolls§7)"
+        lines += ""
+        lines += "§7New profit (est.): ${stats.net?.let(TextUtils::parseProfit) ?: "§eUnknown"}"
+        lines += "§7Cata Exp: §b${NumberUtils.condense(stats.cataXp)} §7(§b${rate(stats.cataXp)}§7/h)"
 
         return lines
     }

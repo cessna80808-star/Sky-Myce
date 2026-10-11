@@ -14,18 +14,57 @@ data class AcquisitionContext(val account: String, val profileId: String? = null
     fun matches(other: AcquisitionContext?) = other != null && account == other.account && server == other.server &&
         if (profileId != null && other.profileId != null) profileId == other.profileId else profileName != null && profileName.equals(other.profileName, true)
 }
+
+internal fun trackingContext(verified: AcquisitionContext?, observed: AcquisitionContext?, profileLoaded: Boolean, inDungeon: Boolean): AcquisitionContext? = when {
+    observed == null -> null
+    profileLoaded -> observed
+    inDungeon && verified?.matches(observed) == true && verified.profileName.equals(observed.profileName, true) -> verified
+    else -> null
+}
 data class AcquisitionEvent(val id: String, val item: String, val occurredAt: Long, val activity: String,
     val context: AcquisitionContext? = null, val floor: String? = null, val chest: String? = null,
     val quantity: Int = 1, val value: Double? = null, val chestCost: Double? = null, val rerollCost: Double? = null,
     val run: String? = null, val origin: String = "confirmed", val player: String? = null)
 data class RunLoot(val item: String, val count: Int, val value: Double? = null)
-data class ChestReceipt(val id: String, val time: Long, val chest: String, val cost: Double, val loot: List<RunLoot>)
+data class ChestReceipt(val id: String, val time: Long, val chest: String, val cost: Double?, val loot: List<RunLoot>)
 data class DungeonRunRecord(val id: String, val session: String, val context: AcquisitionContext?, val floor: String,
     val startedAt: Long? = null, val completedAt: Long? = null, val duration: Long? = null,
     val cataXp: Double? = null, val classXp: Map<String, Double> = emptyMap(),
-    val chests: List<ChestReceipt> = emptyList(), val rerolls: Int = 0, val rerollCost: Double? = null)
-data class AcquisitionArchive(val version: Int = 1, val events: List<AcquisitionEvent> = emptyList(),
-    val runs: List<DungeonRunRecord> = emptyList(), val pins: Set<String> = emptySet(), val imports: Set<String> = emptySet())
+    val chests: List<ChestReceipt> = emptyList(), val rerolls: Int = 0, val rerollCost: Double? = null,
+    val trackingVersion: Int = 2)
+data class AcquisitionArchive(val version: Int = 2, val events: List<AcquisitionEvent> = emptyList(),
+    val runs: List<DungeonRunRecord> = emptyList(), val pins: Set<String> = emptySet(), val imports: Set<String> = emptySet(),
+    val cutoverAt: Long? = null, val legacyProfit: Map<String, Double> = emptyMap())
+
+/** Aggregate profit already contains pre-cutover receipts; those receipts must never be added again. */
+fun cutoverAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?, now: Long): AcquisitionArchive {
+    if (archive.version == 2 && archive.cutoverAt != null) return archive
+    require(now > 0)
+    val profit = if (tracker != null) {
+        require(tracker.isJsonObject && tracker.asJsonObject.size() <= 15)
+        tracker.asJsonObject.entrySet().associate { (floor, data) ->
+            require(floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && data.isJsonObject)
+            val chests = data.asJsonObject.getAsJsonObject("chests")
+            require(chests == null || chests.size() <= 6)
+            fun amount(value: JsonElement?): Double = value?.asDouble?.also { require(it.isFinite() && it in 0.0..1e16) } ?: 0.0
+            val total = chests?.entrySet()?.sumOf { (_, chest) ->
+                val content = chest.asJsonObject
+                val items = content.getAsJsonObject("trackedItems")
+                require(items == null || items.size() <= 10000)
+                val gross = items?.entrySet()?.sumOf { (_, item) -> amount(item.asJsonObject.get("value")) } ?: 0.0
+                gross - amount(content.get("chestCost")) - amount(content.get("rerollCost"))
+            } ?: 0.0
+            require(total.isFinite() && kotlin.math.abs(total) <= 1e16)
+            floor to total
+        }
+    } else archive.runs.groupBy { it.floor }.mapValues { (_, runs) ->
+        // No old aggregate exists: preserve only the profit that old receipts actually priced.
+        runs.sumOf { run -> run.chests.sumOf { chest -> chest.loot.sumOf { it.value ?: 0.0 } - (chest.cost ?: 0.0) } - (run.rerollCost ?: 0.0) }
+    }
+    return archive.copy(version = 2, cutoverAt = now, legacyProfit = profit,
+        runs = archive.runs.map { it.copy(trackingVersion = 1) },
+        events = archive.events.map { if (it.origin == "confirmed") it.copy(origin = "legacy-confirmed") else it })
+}
 
 /** IDs carry provenance. Repeated legacy timestamps have an occurrence index, never a time-only key. */
 internal fun acquisitionId(source: String): String = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
@@ -61,17 +100,18 @@ fun importLegacyAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?,
 fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     if (json == null) return AcquisitionArchive()
     val state = Gson().fromJson(json, AcquisitionArchive::class.java)
-    require(state.version == 1 && requireNotNull(state.events).size <= 100000 && requireNotNull(state.runs).size <= 100000)
+    require(state.version in 1..2 && requireNotNull(state.events).size <= 100000 && requireNotNull(state.runs).size <= 100000)
     require(requireNotNull(state.pins).size <= 2048 && requireNotNull(state.imports).size <= 16)
     fun text(value: String?, max: Int) { require(value == null || value.length <= max && value.none(Char::isISOControl)) }
     fun money(value: Double?) { require(value == null || value.isFinite() && value >= 0 && value <= 1e16) }
     fun context(value: AcquisitionContext?) { value?.let { require(it.account.matches(Regex("[a-f0-9-]{32,36}"))); text(it.profileId, 36); text(it.profileName, 64); require(it.server in setOf("main", "alpha")) } }
     state.events.forEach {
         require(it.id.matches(Regex("[a-f0-9]{32}")) && it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.occurredAt > 0 && it.quantity in 1..100000)
-        require(it.origin in setOf("confirmed", "legacy-tracker", "legacy-digest")); text(it.activity, 30); text(it.floor, 8); text(it.chest, 16); text(it.run, 40); text(it.player, 16)
+        require(it.origin in setOf("confirmed", "legacy-confirmed", "legacy-tracker", "legacy-digest")); text(it.activity, 30); text(it.floor, 8); text(it.chest, 16); text(it.run, 40); text(it.player, 16)
         money(it.value); money(it.chestCost); money(it.rerollCost); context(it.context)
     }
     state.runs.forEach { run ->
+        require(state.version == 1 || run.trackingVersion in 1..2)
         text(run.id, 40); text(run.session, 40); text(run.floor, 8); context(run.context)
         require(run.startedAt == null || run.startedAt > 0); require(run.completedAt == null || run.completedAt > 0)
         require(run.duration == null || run.duration in 0..86400000); money(run.cataXp); money(run.rerollCost)
@@ -84,7 +124,10 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
         }
     }
     state.pins.forEach { text(it, 220) }
-    return state.copy(events = state.events.distinctBy { it.id }, runs = state.runs.distinctBy { it.id })
+    val inherited = if (state.version == 1) emptyMap() else requireNotNull(state.legacyProfit)
+    require(inherited.size <= 15 && (state.cutoverAt == null || state.cutoverAt > 0))
+    inherited.forEach { (floor, profit) -> require(floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && profit.isFinite() && kotlin.math.abs(profit) <= 1e16) }
+    return state.copy(events = state.events.distinctBy { it.id }, runs = state.runs.distinctBy { it.id }.map { if (state.version == 1) it.copy(trackingVersion = 1) else it }, legacyProfit = inherited)
 }
 
 enum class TrackerPage(val title: String) { OVERVIEW("Overview"), LOOT("Loot"), TIMELINE("RNG Timeline"), MUSEUM("RNG Museum") }
@@ -93,7 +136,7 @@ enum class LootOrder { NAME, COUNT, VALUE, OBSERVED_RATE }
 data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor: String? = null, val mode: String? = null,
     val chest: String? = null, val query: String = "", val rareOnly: Boolean = false, val valuableOnly: Boolean = false,
     val from: String = "", val until: String = "", val session: String? = null, val activity: String? = null,
-    val scope: TrackerScope = TrackerScope.CURRENT_PROFILE, val legacyTotals: Boolean = true,
+    val scope: TrackerScope = TrackerScope.CURRENT_PROFILE, val legacyTotals: Boolean = false,
     val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false) {
     fun floorMatches(value: String?) = (floor == null || floor == value) && (mode == null || value?.startsWith(mode) == true)
     fun scopeMatches(value: AcquisitionContext?, current: AcquisitionContext?) = when (scope) {
@@ -109,12 +152,13 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     }
     val needsRecords get() = from.isNotEmpty() || until.isNotEmpty() || session != null
     fun runs(values: List<DungeonRunRecord>, current: AcquisitionContext?) = values.filter {
-        floorMatches(it.floor) && scopeMatches(it.context, current) && dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
+        it.trackingVersion == 2 && floorMatches(it.floor) && scopeMatches(it.context, current) && dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
     }
     fun events(values: List<AcquisitionEvent>, current: AcquisitionContext?, runs: List<DungeonRunRecord>): List<AcquisitionEvent> {
         val sessionRuns = if (session == null) emptySet() else runs.filter { it.session == session }.mapTo(hashSetOf()) { it.id }
         return values.filter {
-        floorMatches(it.floor) && scopeMatches(it.context, current) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
+        (it.origin == "confirmed" || legacyTotals) && floorMatches(it.floor) &&
+            (scopeMatches(it.context, current) || legacyTotals && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
             (activity == null || activity == it.activity) && (session == null || it.run in sessionRuns) &&
             (query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(query, true)) &&
             (!rareOnly || it.item in DigestRngParser.catalog) && (!valuableOnly || it.value?.let { value -> value >= 1_000_000 } == true)
@@ -145,7 +189,7 @@ fun mergeAcquisition(archive: AcquisitionArchive, event: AcquisitionEvent): Acqu
     if (index < 0) return archive.copy(events = archive.events + event)
     val old = archive.events[index]
     require(old.item == event.item && old.context == event.context && old.origin == event.origin) { "Conflicting acquisition receipt" }
-    val merged = old.copy(floor = old.floor ?: event.floor, chest = old.chest ?: event.chest,
+    val merged = old.copy(quantity = maxOf(old.quantity, event.quantity), floor = old.floor ?: event.floor, chest = old.chest ?: event.chest,
         value = old.value ?: event.value, chestCost = old.chestCost ?: event.chestCost,
         rerollCost = old.rerollCost ?: event.rerollCost, run = old.run ?: event.run, player = old.player ?: event.player)
     if (old == merged) return archive
@@ -153,4 +197,4 @@ fun mergeAcquisition(archive: AcquisitionArchive, event: AcquisitionEvent): Acqu
 }
 
 fun receivedChestItems(expected: Map<String, Int>, before: Map<String, Int>, after: Map<String, Int>): Set<String> =
-    expected.filter { (item, count) -> count > 0 && (after[item] ?: 0) - (before[item] ?: 0) >= count }.keys
+    expected.filter { (item, count) -> count in 1..100000 && (after[item] ?: 0).toLong() - (before[item] ?: 0) >= count }.keys

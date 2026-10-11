@@ -427,7 +427,7 @@ val dungeonRoutingCheck by tasks.registering {
     group = "verification"
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"
 }
-for (checkName in listOf("RoomNavigation", "RoomTemplates", "RoomWorldGeometry", "RoomRoutingUpdates")) {
+for (checkName in listOf("RoomNavigation", "RoomTemplates", "RoomWorldGeometry", "RoomRoutingUpdates", "DungeonRouteContinuation")) {
     val routingCheck = tasks.register<JavaExec>(checkName.replaceFirstChar { it.lowercase() } + "Check") {
         group = "verification"
         dependsOn(tasks.testClasses)

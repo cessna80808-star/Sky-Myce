@@ -10,5 +10,6 @@ data class DungeonChestRerollEvent(
     val floor: DungeonFloor,
     val chest: DungeonChest,
     val contents: Map<SkyBlockId, Int>,
-    val slots: List<Slot>
+    val slots: List<Slot>,
+    val observation: String = java.util.UUID.randomUUID().toString()
 ): CancellableSkyBlockEvent()

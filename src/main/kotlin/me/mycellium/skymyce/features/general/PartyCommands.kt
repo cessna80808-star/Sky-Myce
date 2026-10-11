@@ -133,23 +133,22 @@ object PartyCommands : SkyMyceModule() {
 
                 PartyCommandTypes.DUNGEONS -> {
                     val floor = DungeonFloor.getByName(args.firstOrNull() ?: return@let)
-                    val data = DungeonTracker.profitData[floor]
-                    if (floor != null && data != null) {
-                        fun rate(value: Double) = data.hourlyRate(value)?.let(NumberUtils::condense) ?: "Unknown"
+                    if (floor != null) {
+                        val view = DungeonTracker.confirmedView(floor)
+                        val data = view.summary
+                        fun rate(value: Double) = if (data.completeTiming) NumberUtils.condense(value * 3600000 / data.time) else "Unknown"
                         when (args.getOrNull(1)?.lowercase()) {
                             "xp" -> {
                                 when (args.getOrNull(2)?.lowercase()) {
-                                    "avg" -> sendModMessage("Cata XP/h: ${rate(data.totalXp)} | ${data.classXp.map { xp -> "${xp.key.displayName}/h: ${rate(xp.value)}" }.joinToString(" | ")}", ChatChannel.PARTY)
-                                    else -> sendModMessage("Total Cata XP: ${NumberUtils.condense(data.totalXp)} | ${data.classXp.map { xp -> "${xp.key.displayName}: ${NumberUtils.condense(xp.value)}" }.joinToString(" | ")}", ChatChannel.PARTY)
+                                    "avg" -> sendModMessage("New tracking • Cata XP/h: ${rate(data.cataXp)} | ${data.classXp.map { xp -> "${xp.key}/h: ${rate(xp.value)}" }.joinToString(" | ")}", ChatChannel.PARTY)
+                                    else -> sendModMessage("New tracking • Cata XP: ${NumberUtils.condense(data.cataXp)} | ${data.classXp.map { xp -> "${xp.key}: ${NumberUtils.condense(xp.value)}" }.joinToString(" | ")}", ChatChannel.PARTY)
                                 }
                             }
                             else -> {
-                                val time = if (data.timedRunCount > 0) data.totalTimeMillis.milliseconds.inWholeSeconds.seconds.toString() +
-                                    (if (data.incompleteTime) " (partial)" else "") else "Unknown"
-                                val runs = data.totalRuns
-                                val chests = data.totalChestsOpened
-                                val profit = NumberUtils.condense(data.netProfit)
-                                sendModMessage("Time: $time | Runs: $runs | Chests: $chests | Profit: $profit (${rate(data.netProfit)}/h)", ChatChannel.PARTY)
+                                val time = if (data.timedRuns > 0) data.time.milliseconds.inWholeSeconds.seconds.toString() +
+                                    (if (data.timedRuns < data.runs) " (partial)" else "") else "Unknown"
+                                fun estimate(value: Double?) = value?.let(NumberUtils::condense) ?: "Unknown"
+                                sendModMessage("New tracking • Time: $time | Runs: ${data.runs} | Chests: ${data.chests} | Profit est.: ${estimate(data.net)} | Lifetime est. (all local): ${estimate(view.lifetimeProfit)} (inherited ${estimate(view.inheritedProfit)})", ChatChannel.PARTY)
                             }
                         }
                     }

@@ -9,7 +9,7 @@ import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, 
 import { handleDrmRequest, type DrmConfig } from "./drm";
 import type { AccountsConfig } from "./accounts";
 import { handleLoaderDownload } from "./discord-download";
-import { RoomIrc, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage } from "./irc";
+import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, PARTY_CHAT_UNAVAILABLE, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage } from "./irc";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
 export { AccountStore } from "./accounts";
 
@@ -235,7 +235,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    const session = ws.deserializeAttachment() as Session;
+    let session = ws.deserializeAttachment() as Session;
     const maximum = session.bridge && session.room === GLOBAL_CHAT_ROOM ? 32768 : 8192;
     if (typeof raw !== "string" || encoder.encode(raw).length > maximum) { ws.close(1009, "Message too large"); return; }
     let data: Record<string, unknown>;
@@ -247,7 +247,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     if (session.bridge) {
       if (session.room !== GLOBAL_CHAT_ROOM && encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
       try { await this.irc.message(ws, session, data); }
-      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" ? { scope: "global" } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
     }
 
@@ -298,16 +298,23 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.challenge = "";
         ws.serializeAttachment(session);
         ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true,
-          irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
+          irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), partyChat: false, partyChatError: PARTY_CHAT_UNAVAILABLE,
+          account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
 
+    const subscription = data.type === "irc_subscribe" && encoder.encode(raw).length <= (data.scope === "global" ? 8192 : 2048)
+      ? this.irc.reserveSubscription(ws, session, data) : undefined;
     if (!await this.authorized(ws, session, true)) return;
+    const current = currentIrcSession(ws, session);
+    if (!current) return;
+    session = current;
+    if (!session.name) return;
     if (data.type === "irc_send" || data.type === "irc_subscribe") {
-      if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" ? { scope: "global" } : {}) })); return; }
-      try { await this.irc.message(ws, session, data); }
-      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" ? { scope: "global" } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
+      if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}) })); return; }
+      try { await this.irc.message(ws, session, data, subscription); }
+      catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
     }
 

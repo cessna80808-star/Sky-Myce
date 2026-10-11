@@ -4,6 +4,7 @@ import java.util.Collections
 import java.util.PriorityQueue
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.sign
 
 /** Owned by the completed builder; its backing collections are never mutated after publication. */
 class RoomLiveGeometrySnapshot internal constructor(cells: Set<GridCell>, adjacency: Map<GridCell, Set<GridCell>>,
@@ -65,7 +66,9 @@ class RoomLiveGeometry(
             GridCell(x, 0, z).takeIf { x != 0 || z != 0 }
         } }
             .flatMap { direction -> (-1..1).map { GridCell(direction.x, it, direction.z) } } +
-            listOf(GridCell(0, -1, 0), GridCell(0, 1, 0))
+            listOf(GridCell(0, -1, 0), GridCell(0, 1, 0)) +
+            (2..3).flatMap { distance -> listOf(GridCell(-distance, 0, 0), GridCell(distance, 0, 0),
+                GridCell(0, 0, -distance), GridCell(0, 0, distance)) }
     }
 
     /** Finished means READY or INCOMPLETE; a failed or capped flood never exposes a partial graph. */
@@ -108,6 +111,20 @@ class RoomLiveGeometry(
                 val to = GridCell(Math.addExact(from.x, offset.x), Math.addExact(from.y, offset.y), Math.addExact(from.z, offset.z))
                 worked = true
                 if (!contains(to)) { neighbor++; continue }
+                if (abs(offset.x) + abs(offset.z) > 1 && offset.y == 0 && (offset.x == 0 || offset.z == 0)) {
+                    var gap = true
+                    for (distance in 1 until maxOf(abs(offset.x), abs(offset.z))) {
+                        val between = GridCell(from.x + offset.x.sign * distance, from.y, from.z + offset.z.sign * distance)
+                        if (!contains(between)) { gap = false; break }
+                        val middleStanding = standing[between] ?: run {
+                            if (cellReads >= maxCells) return false
+                            cellReads++
+                            canStand(between).also { standing[between] = it }
+                        }
+                        if (middleStanding) { gap = false; break }
+                    }
+                    if (!gap) { neighbor++; continue }
+                }
                 val safe = standing[to] ?: run {
                     if (cellReads >= maxCells) return false
                     cellReads++

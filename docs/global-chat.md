@@ -1,8 +1,10 @@
 # Global SkyMyce chat
 
-Global chat extends the authenticated Minecraft relay and the existing User Bot. It does not create another Minecraft WebSocket, license service or Discord bot. Clients opt in under **General → Global SkyMyce Chat**, then use `/sm global <message>` to send. Selecting `/sm global` or `/chat sky` directs ordinary chat input to this channel; normal Hypixel chat remains available outside that explicit selection. Incoming global messages do not require selecting the channel. Turning the feature off hides messages and mention sounds without invalidating SkyMyce authorization.
+Global chat extends the authenticated Minecraft relay and the existing User Bot application. It does not create another Minecraft WebSocket, license service or Discord bot. Clients opt in under **Utils → Global SkyMyce Chat**; explicitly selecting `/sm irc` or sending `/sm irc <message>` also enables receiving. `/sm irc` directs ordinary chat input to global IRC, while the message form sends once without changing the selected mode. `/sm chat` returns to normal chat while receiving remains enabled. `/sm global` and `/chat sky` remain compatibility aliases. Incoming global messages do not require selecting the channel. Turning the feature off hides messages and mention sounds without invalidating SkyMyce authorization.
 
 Every opted-in authorized participant in one Worker deployment receives the same channel, including players in different relay rooms, worlds, lobbies, parties, dungeons and servers. Staging and production deployments remain separate. Existing private messages, account operations and room-local IRC remain compatible.
+
+Party chat is a separate scope and currently fails closed because the backend cannot verify Hypixel membership. It never enters this global channel or Discord; see [the party capability contract and unresolved authority dependency](party-chat.md).
 
 ## Transport and identity
 
@@ -10,7 +12,7 @@ The existing `irc_subscribe`, `irc_send`, `irc_message` and `irc_result` frames 
 
 Minecraft names, UUIDs and Discord linkage come from the current verified installation session. Clients cannot choose their sender identity. Discord messages arrive through the User Bot's existing signed bridge at `/discord/bridge?room=global-chat`. The bridge accepts only the configured channel. Discord authors follow that channel's ordinary server permissions; they do not need a Minecraft license to post in Discord.
 
-The client accepts global messages only from its current account, relay endpoint and exact authorization lease. The relay checks lease expiration both before and after awaiting the account authority; a lease expiring during that check cannot send or receive a message. Delivery deadlines are also checked after awaited authorization, including before queued Discord posting. The User Bot requires the global-chat capability in authenticated readiness and accepts delivery results only for the global scope.
+The client accepts global messages only from its current account, relay endpoint and exact authorization lease. The relay checks lease expiration both before and after awaiting the account authority; a lease expiring during that check cannot send or receive a message. Handlers refresh current socket attachments after authorization so overlapping cosmetics, Digest or other feature requests cannot overwrite subscriptions or current feature state. Independent per-scope request tokens let only the newest subscription intent commit, including a newer opt-out; these temporary tokens do not consume persisted attachment space. Fan-out rechecks current opt-in after recipient authorization. Delivery deadlines are also checked after awaited authorization, including before queued Discord posting. The User Bot requires the global-chat capability in authenticated readiness and accepts delivery results only for the global scope.
 
 Normal Minecraft frames contain display identity, message text, timestamp, source, an internal delivery ID, optional reply context and a recipient-specific `mention` flag. Other participants' raw Discord IDs, Minecraft UUIDs, license IDs, devices and session credentials are not included. Private bot/backend frames retain the identifiers needed for correlation. Messages render as literal chat components with the Sky-Hawk palette. Only safe HTTP(S) links become clickable; no attachments are downloaded.
 
@@ -40,7 +42,11 @@ Use the existing backend environment and User Bot application. Keep all bot toke
 | `IRC_ROOMS` (User Bot) | Set empty for global chat only. Legacy room bridges may use separate channels; a channel cannot serve both scopes. |
 | `SKY_MYCE_RELAY_URL` | Existing deployed HTTPS/WSS backend origin. |
 | `SKY_MYCE_RELAY_AUTH_SECRET` | Existing private bridge secret; matches Worker `DISCORD_BRIDGE_SECRET`. |
-| `GLOBAL_CHAT_RECEIPTS_PATH` | User Bot `.data/global-chat-receipts.json`; retain on a private persistent service volume. Contains short-lived bounded IDs only. |
+| `GLOBAL_CHAT_RECEIPTS_PATH` | Optional Node-hosted User Bot receipt file. The production Cloudflare Gateway uses bounded SQLite receipts instead. |
+| `GLOBAL_CHAT_ENABLED` (Cessna relay) | Production `true`; other deployments default disabled until explicitly activated. |
+| `USER_BOT_TOKEN` (Cessna relay secret) | Existing User Bot application's bot token, stored as a Worker secret. |
+| `DISCORD_BRIDGE_SECRET` (Cessna relay secret) | Same private bridge credential as the account backend; never shipped to clients. |
+| `GLOBAL_CHAT_CONTROL_SECRET` (Cessna relay secret) | Separate private credential for bounded start/stop/status operations. |
 | `GLOBAL_CHAT_BURST` | 6 messages per sender burst. |
 | `GLOBAL_CHAT_REFILL_SECONDS` | One sender credit every 2 seconds. |
 | `GLOBAL_CHAT_MIN_INTERVAL_MS` | 250 ms between accepted sender messages. |
@@ -52,18 +58,15 @@ Use the existing backend environment and User Bot application. Keep all bot toke
 | `GLOBAL_CHAT_MC_MAX_LENGTH` | 1,024 UTF-16 units; operators may lower this protocol ceiling. |
 | `GLOBAL_CHAT_DISCORD_MAX_LENGTH` | 4,096 UTF-16 units; operators may lower this protocol ceiling. |
 
-The checked-in backend configuration reuses its existing dedicated IRC channel. Staging operators supply their own channel through the staging configuration; do not copy production credentials or connect staging to the production channel. Run exactly one supervised User Bot service for a configured global channel. The Backend/Admin Bot continues to handle administration.
+The production account backend reuses its dedicated IRC channel. Its sole User Bot Gateway runs in one deterministic Durable Object on the existing `skyblock-relay` Worker, from `D:\Code\Cessna fork\relay`. The Backend/Admin Bot continues to handle administration through the preserved signed HTTP handler. Staging uses its own channel and credentials. Do not start a competing Node bridge against the production channel/backend. See [Gateway configuration, controls and recovery](<D:/Code/Cessna fork/relay/GLOBAL_CHAT_GATEWAY.md>).
+
+`GET /global-chat/health` reports redacted readiness, pending count and diagnostic categories. `POST /global-chat/control` requires the private control credential and supports only `start`, `stop` and `status`. The persisted running flag and alarms restore connections after eviction. A historical `lastError` may remain populated after both transports recover; it is not the current readiness state. Outbound Discord/backend WebSockets do not support server-side hibernation and contribute to active Durable Object usage. This is documented in [Cloudflare's WebSocket example](https://developers.cloudflare.com/durable-objects/examples/websocket-hibernation-server/) and [pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
 
 Enable the existing User Bot's **Message Content** intent and give it View Channel, Send Messages, Embed Links and Read Message History on the dedicated channel. Discord needs that intent for text, embeds and attachments, as described in its [Gateway documentation](https://docs.discord.com/developers/events/gateway#message-content-intent). Account interactions remain on their existing signed HTTP endpoint.
 
 ## Verification and rollout
 
-Mod 2.4.13 and loader 1.0.13 were published to private R2 on October 2, 2026.
-The backend handlers are deployed on Worker version
-`b1410753-f299-4902-ad2e-4e9601ee84c0`. The separate User Bot Gateway service
-still needs its runtime rollout; live Minecraft/Discord chat remains unverified.
-
-The local changes described here have not been deployed by this implementation task. Publish compatible client/Worker updates and restart the existing User Bot together through the normal release process before verifying live delivery.
+Mod **2.4.27** was published and selected on October 10, 2026, through production `--env backend`. Its signed release is running in the user's current authorized Prism session. The persistent Cloudflare User Bot Gateway is enabled and activated on `skyblock-relay`. Live receive failures exposed Gateway Resume ordering, Upgrade-timeout socket lifetime and concurrent backend attachment bugs, now fixed and covered by workerd regressions. The final real Minecraft → Discord → Minecraft test passed: the user's `hello248` reply reached the native client with correct reply context and rendered mention. Both transports passed 39 public-health samples over 96 seconds after the final backend fix. Sound audibility and long-term uptime remain unverified. Exact production versions, deployment IDs and retained earlier failures are in the [implementation report](implementation-overhaul-2026-10.md).
 
 ```powershell
 # Java 25, from the repository root
@@ -81,4 +84,4 @@ npm test
 
 Local tests use synthetic identities, local Worker storage and mocked Discord delivery. They cover global cross-room delivery, sender authority, opt-in, revocation/expiry (including expiry during authority RPCs), hibernation/restart, spam, duplicate deliveries, outage receipts, capability/scope binding, queued delivery deadlines, subscription recovery, replies, mentions, rich content and client validation. They send no real Discord messages. They do not establish a live rollout.
 
-Deployment and starting the Gateway service are separate operator actions. After rolling out the reviewed Worker and compatible client, configure and start the existing User Bot with the same dedicated channel. Verify two authorized Minecraft users in different locations, Discord replies/mentions/embeds, disabled chat and revoked access before treating live chat as verified. No new Discord application, OAuth credential, account enrollment or server permission rewrite is required.
+Deployment and activation remain separate operator actions. Production is already started; its public health endpoint does not expose the control credential. The local suite covers multiple synthetic authorized users, replies/mentions/embeds, disabled chat, expiry/revocation and restart behavior. A real two-account/cross-location run and the full Discord-rich-content matrix are separate from the single-account private-world smoke test. No new Discord application, OAuth credential, account enrollment or server permission rewrite was required.

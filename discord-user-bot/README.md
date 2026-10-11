@@ -2,7 +2,9 @@
 
 The independently runnable User Bot lives here. Node handles Discord Gateway messages; account commands use the existing Sky-Myce Worker's signed HTTP interaction endpoint. The Backend Bot remains in `D:\Code\Cessna fork\relay`. Architecture: [`docs/secure-system.md`](../docs/secure-system.md). Current deployment facts: [implementation report](../docs/discord-implementation-report.md).
 
-The account Worker and private R2 delivery are now deployed. The User application's signed HTTP endpoint is configured at `https://sky-myce-backend.skyblock-relay.workers.dev/discord/interactions`. The local Gateway configuration has its separate relay credential prepared, with `IRC_ROOMS=` still disabled; no persistent Gateway service is running. See [deployment verification and remaining live checks](../docs/backend-deployment.md).
+The account Worker and private R2 delivery are deployed. The User application's signed HTTP endpoint remains `https://sky-myce-backend.skyblock-relay.workers.dev/discord/interactions`. Since October 10, 2026, the persistent global-chat Gateway runs on Cloudflare's `skyblock-relay` Worker from `D:\Code\Cessna fork\relay`; this computer does not need a Node process running. `IRC_ROOMS=` remains empty. See [global chat](../docs/global-chat.md) and [deployment verification](../docs/backend-deployment.md).
+
+Production uses exactly one Gateway for the configured global channel. Do not start this Node bridge against that same channel/backend while the Cloudflare Gateway is running. The Node implementation below remains available for an explicitly separate test deployment or a deliberate hosting replacement.
 
 ## Prepare and run
 

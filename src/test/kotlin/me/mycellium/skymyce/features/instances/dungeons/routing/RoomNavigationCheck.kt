@@ -300,7 +300,7 @@ private fun checkValidationAndSnapshots() {
     check(RoomNavigation.create(listOf(start), emptyMap(), mapOf("" to start), start) == null)
     check(RoomNavigation.create(listOf(start), mapOf(healer to emptyList()), emptyMap(), start) == null)
     check(RoomNavigation.create(listOf(start), mapOf(start to listOf(healer)), emptyMap(), start) == null)
-    for (unsafe in listOf(GridCell(2, 0, 0), GridCell(2, 0, 1), GridCell(0, 2, 0), GridCell(1, 2, 0))) {
+    for (unsafe in listOf(GridCell(4, 0, 0), GridCell(2, 0, 1), GridCell(0, 2, 0), GridCell(1, 2, 0))) {
         check(RoomNavigation.create(listOf(start, unsafe), mapOf(start to listOf(unsafe)), emptyMap(), unsafe) == null)
     }
     check(RoomNavigation.create(listOf(start), mapOf(start to listOf(start)), emptyMap(), start) == null)
@@ -340,7 +340,56 @@ private fun checkSurfaceCostStability() {
     check(graph.plan(room.cells[4], room.targets.keys, minimumImprovement = 0)?.cost == 1000)
 }
 
+private fun checkDirectionalTies() {
+    fun cell(x: Int, z: Int) = GridCell(x, 0, z)
+    fun graph(paths: List<List<GridCell>>): RoomNavigation {
+        val cells = paths.flatten().distinct()
+        val edges = paths.flatMap { it.zipWithNext() }.groupBy({ it.first }, { it.second })
+        return requireNotNull(RoomNavigation.create(cells, edges.mapValues { it.value.distinct() },
+            emptyMap(), paths.first().last()))
+    }
+    fun turns(path: List<GridCell>): Int = path.zipWithNext { a, b -> GridCell(b.x - a.x, b.y - a.y, b.z - a.z) }
+        .zipWithNext().count { (a, b) -> a != b }
+
+    val zigzag = listOf(cell(0, 0), cell(0, 1), cell(1, 1), cell(1, 2), cell(2, 2), cell(2, 3), cell(3, 3))
+    val smooth = listOf(cell(0, 0), cell(1, 0), cell(2, 0), cell(3, 0), cell(3, 1), cell(3, 2), cell(3, 3))
+    val equal = graph(listOf(zigzag, smooth))
+    val preferred = requireNotNull(equal.plan(zigzag.first(), emptySet()))
+    check(preferred.cost == 6 && preferred.path == smooth && turns(preferred.path) == 1)
+    check(graph(listOf(smooth, zigzag))
+        .plan(zigzag.first(), emptySet()) == preferred)
+
+    // A tied arrival heading must survive until the suffix reveals which route needs fewer turns.
+    val across = listOf(cell(0, 0), cell(0, 1), cell(0, 2), cell(1, 2), cell(2, 2), cell(2, 3), cell(2, 4))
+    val upward = listOf(cell(0, 0), cell(1, 0), cell(2, 0), cell(2, 1), cell(2, 2), cell(2, 3), cell(2, 4))
+    val joined = requireNotNull(graph(listOf(across, upward)).plan(across.first(), emptySet()))
+    check(joined.cost == 6 && joined.path == upward && turns(joined.path) == 1)
+
+    val detour = listOf(cell(0, 0), cell(-1, 0), cell(-1, 1), cell(-1, 2), cell(-1, 3),
+        cell(0, 3), cell(1, 3), cell(2, 3), cell(3, 3))
+    val shorter = requireNotNull(graph(listOf(zigzag, detour)).plan(zigzag.first(), emptySet()))
+    check(shorter.cost == 6 && shorter.path == zigzag && turns(shorter.path) > turns(detour))
+}
+
+private fun checkStarredMobStops() {
+    val start = GridCell(0, 0, 0)
+    val middle = GridCell(1, 0, 0)
+    val door = GridCell(2, 0, 0)
+    val mob = GridCell(1, 0, 1)
+    val graph = requireNotNull(RoomNavigation.create(listOf(start, middle, door, mob),
+        mapOf(start to listOf(middle), middle to listOf(start, door, mob),
+            door to listOf(middle), mob to listOf(middle)), mapOf("starred" to mob), door))
+    val throughMobs = requireNotNull(graph.plan(start, setOf("starred")))
+    val bloodOnly = requireNotNull(graph.plan(start, emptySet(), throughMobs.targetOrder))
+    check(throughMobs.targetOrder == listOf("starred") && mob in throughMobs.path)
+    check(bloodOnly.targetOrder.isEmpty() && bloodOnly.path == listOf(start, middle, door))
+    check(bloodOnly.cost < throughMobs.cost)
+    check(graph.plan(start, setOf("starred"), bloodOnly.targetOrder) == throughMobs)
+}
+
 fun checkRoomNavigation() {
+    checkStarredMobStops()
+    checkDirectionalTies()
     checkSurfaceCostStability()
     checkRotations()
     checkOptimalRoutes()

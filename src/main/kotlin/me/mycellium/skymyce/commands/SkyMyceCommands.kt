@@ -32,6 +32,11 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 
+internal fun relayChannelCommand(name: String, select: () -> Unit, send: (String) -> Unit) =
+    literal(name).executes { select(); 1 }
+        .then(argument("message", StringArgumentType.greedyString()).executes {
+            send(StringArgumentType.getString(it, "message")); 1
+        })
 
 object SkyMyceCommands : SkyMyceModule() {
     private lateinit var settingsKey: KeyMapping
@@ -94,10 +99,10 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             })
             .then(messageCommand("msg", RelayMessages::send))
-            .then(literal("global").executes { RelayMessages.selectGlobal(); 1 }
-                .then(argument("message", StringArgumentType.greedyString()).executes {
-                    RelayMessages.sendGlobal(StringArgumentType.getString(it, "message")); 1
-                }))
+            .then(relayChannelCommand("irc", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
+            .then(relayChannelCommand("global", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
+            .then(relayChannelCommand("pc", RelayMessages::selectParty, RelayMessages::sendParty))
+            .then(literal("help").executes { RelayMessages.chatHelp(); 1 })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->
                     RelayMessages.recipients(builder.remaining).forEach(builder::suggest)

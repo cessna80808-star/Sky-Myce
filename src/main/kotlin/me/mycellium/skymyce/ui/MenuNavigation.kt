@@ -19,6 +19,9 @@ internal data class MenuRect(val x: Double, val y: Double, val width: Double, va
 }
 
 internal val menuSectionTitles = MenuCategory.entries.map { it.title }
+private val menuSectionPreviews = MenuCategory.entries.map { category ->
+    MenuCatalog.definitions.filter { it.category == category }.map { it.subcategory }.distinct().take(3).joinToString(" · ")
+}
 
 /** The same surfaces travel between these two arrangements; content never changes their geometry. */
 internal fun menuNavigationRect(layout: MenuLayout, index: Int, progress: Double): MenuRect {
@@ -32,10 +35,45 @@ internal fun menuNavigationRect(layout: MenuLayout, index: Int, progress: Double
     val w = ((layout.width - margin * 2 - gap * (columns - 1)) / columns).coerceAtLeast(1.0)
     val h = ((layout.height - top - minOf(56.0, layout.height * .2) - gap * (rows - 1)) / rows).coerceAtLeast(1.0)
     val card = MenuRect(margin + index % columns * (w + gap), top + index / columns * (h + gap), w, h)
-    val step = ((layout.height - 110.0) / count).coerceIn(1.0, 40.0)
+    val step = ((layout.height - 140.0) / count).coerceIn(1.0, 40.0)
     val mini = MenuRect(8.0.coerceAtMost(layout.sidebar / 5.0), 64 + index * step,
         (layout.sidebar - 16.0).coerceAtLeast(1.0), (step - 4).coerceAtLeast(1.0))
     return card.mix(mini, progress)
+}
+
+/** Only the navigation layout moves interaction bounds; hover, press and reveal are paint-only. */
+internal class MenuNavigationGeometry(layout: MenuLayout) {
+    private val home = Array(menuSectionTitles.size) { menuNavigationRect(layout, it, 0.0) }
+    private val mini = Array(menuSectionTitles.size) { menuNavigationRect(layout, it, 1.0) }
+    private var rects = home
+    private var progress = 0.0
+    private var originX = 0.0
+    private var originY = 0.0
+    var revision = 0L
+        private set
+
+    fun update(progress: Double, x: Double = 0.0, y: Double = 0.0) {
+        val p = progress.coerceIn(0.0, 1.0)
+        if (this.progress == p && originX == x && originY == y) return
+        this.progress = p; originX = x; originY = y
+        val local = when (p) { 0.0 -> home; 1.0 -> mini; else -> Array(home.size) { home[it].mix(mini[it], p) } }
+        rects = if (x == 0.0 && y == 0.0) local else Array(local.size) { local[it].copy(x = x + local[it].x, y = y + local[it].y) }
+        revision++
+    }
+    fun rect(index: Int) = rects[index]
+    fun home(index: Int) = home[index]
+    fun mini(index: Int) = mini[index]
+    fun indexAt(x: Double, y: Double): Int? {
+        for (index in rects.indices.reversed()) if (rects[index].contains(x, y)) return index
+        return null
+    }
+}
+
+internal fun menuNavigationPose(rect: MenuRect, compact: Double, hover: Double, press: Double, mode: GuiMotion): MotionPose {
+    val profile = mode.profile
+    return MotionPose(scale = 1 + profile.hoverScale * hover - profile.pressScale * press,
+        y = -profile.cardLift * hover * (1 - compact) + press * profile.cardLift * .3,
+        pivotX = rect.x + rect.width / 2, pivotY = rect.y + rect.height / 2)
 }
 
 /** Shared production paint is also rendered by the headless navigation checks. */
@@ -86,6 +124,8 @@ internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: 
         canvas.clip = oldClip?.let { intersectMenuClip(it, textClip) } ?: textClip
         canvas.text(listOf(MenuCanvas.Run(menuSectionTitles[index], MenuTheme.alpha(MenuTheme.TEXT), bold = true)), left, titleTop, if (roomy) 13.0 else 11.0)
         if (roomy && homeRect.height > 95) canvas.text(listOf(MenuCanvas.Run(MenuCategory.entries[index].description, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 22, 9.0)
+        if (roomy && homeRect.height > 140) canvas.text(listOf(MenuCanvas.Run(menuSectionPreviews[index], MenuTheme.alpha(MenuTheme.ACCENT))),
+            left, rect.y + rect.height - 26, 9.0)
         canvas.clip = oldClip; canvas.opacity = opacity
     }
 }
@@ -110,16 +150,19 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
         7 -> { line(1.0, 1.0, 15.0, 1.0); line(1.0, 1.0, 1.0, 15.0); line(1.0, 15.0, 15.0, 15.0); line(15.0, 15.0, 15.0, 1.0); line(6.0, 1.0, 6.0, 15.0); line(6.0, 7.0, 15.0, 7.0) }
         9 -> { ring(8.0, 8.0, 5.0); ring(8.0, 8.0, 1.5); line(8.0, 0.0, 8.0, 4.0); line(8.0, 12.0, 8.0, 16.0); line(0.0, 8.0, 4.0, 8.0); line(12.0, 8.0, 16.0, 8.0) }
         10 -> { ring(6.0, 6.0, 4.5); line(9.5, 9.5, 15.0, 15.0) }
+        11 -> { for (index in 0..2) { val row = 3.0 + index * 5; val knob = when (index) { 0 -> 5.0; 1 -> 11.0; else -> 7.0 }; line(1.0, row, 15.0, row); ring(knob, row, 2.0) } }
         else -> { ring(8.0, 8.0, 4.0); ring(8.0, 8.0, 1.8); for (i in 0..7) { val angle = i * Math.PI / 4; line(8 + kotlin.math.cos(angle) * 5, 8 + kotlin.math.sin(angle) * 5, 8 + kotlin.math.cos(angle) * 7, 8 + kotlin.math.sin(angle) * 7) } }
     }
 }
 
 internal class MenuNavigation(private val layout: MenuLayout, private val progress: () -> Double,
-                              private val activeSection: Int, private val indicator: MotionValue,
-                              private val action: (Int?) -> Unit, search: () -> Unit) :
+                              private val activeSection: () -> Int, private val indicator: MotionValue,
+                              private val action: (Int?) -> Unit, search: () -> Unit, quick: () -> Unit,
+                              private val revealMode: () -> GuiMotion, private val revealReady: () -> Boolean) :
     FlowLayout(Sizing.fixed(layout.sidebar), Sizing.fixed(layout.height), Algorithm.VERTICAL) {
     private val buttons = ArrayList<MenuButton>()
-    private val paintedRects = arrayOfNulls<MenuRect>(menuSectionTitles.size)
+    private val geometry = MenuNavigationGeometry(layout)
+    private var hasPainted = false
     var revealsSettled = false
         private set
     init {
@@ -134,7 +177,7 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
                 }
             }
         }.apply { sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24)); positioning(Positioning.absolute(8, 30)); navigation = true; tooltip(Component.literal("Home")) })
-        child(object : MenuButton(Component.literal("Search"), { search() }) {
+        val searchButton = object : MenuButton(Component.literal("Search"), { search() }) {
             override fun canFocus(source: UIComponent.FocusSource) = progress() > .95 && super.canFocus(source)
             override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
                 graphics.layer(alpha = progress()) {
@@ -142,46 +185,53 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
                     paintMenuIcon(graphics.canvas, 10, x + (width - 14) / 2.0, y + (height - 14) / 2.0, 14.0, MenuTheme.alpha(MenuTheme.TEXT))
                 }
             }
-        }.apply { sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24)); positioning(Positioning.absolute(8, (layout.height - 34).coerceAtLeast(0))); navigation = true; tooltip(Component.literal("Search, Quick Settings, favorites and recent features")) })
-        menuSectionTitles.forEachIndexed { index, title ->
-            val mini = menuNavigationRect(layout, index, 1.0)
-            child(object : MenuButton(Component.literal(title), { action(index) }) {
-                private fun rect() = menuNavigationRect(layout, index, progress()).let { it.copy(x = this@MenuNavigation.x() + it.x, y = this@MenuNavigation.y() + it.y) }
-                override fun interactionPose(hover: Double, press: Double): MotionPose {
-                    val r = rect(); val profile = ThemeConfig.animationMode.profile
-                    return MotionPose(scale = 1 + profile.hoverScale * hover - profile.pressScale * press,
-                        y = -profile.cardLift * hover * (1 - progress()) + press * profile.cardLift * .3,
-                        pivotX = r.x + r.width / 2, pivotY = r.y + r.height / 2)
+        }.apply { sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24)); positioning(Positioning.absolute(8, (layout.height - 34).coerceAtLeast(0))); navigation = true; tooltip(Component.literal("Search features and settings")) }
+        val quickButton = object : MenuButton(Component.literal("Quick Settings"), { quick() }) {
+            override fun canFocus(source: UIComponent.FocusSource) = progress() > .95 && super.canFocus(source)
+            override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
+                graphics.layer(alpha = progress()) {
+                    MenuTheme.box(graphics, x, y, width, height, MenuTheme.CARD, if (hover > 0 || isFocused) MenuTheme.ACCENT else MenuTheme.BORDER)
+                    paintMenuIcon(graphics.canvas, 11, x + (width - 14) / 2.0, y + (height - 14) / 2.0, 14.0, MenuTheme.alpha(MenuTheme.TEXT))
                 }
+            }
+        }.apply { sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24)); positioning(Positioning.absolute(8, (layout.height - 64).coerceAtLeast(0))); navigation = true; tooltip(Component.literal("Quick Settings · pinned controls")) }
+        menuSectionTitles.forEachIndexed { index, title ->
+            val mini = geometry.mini(index)
+            child(object : MenuButton(Component.literal(title), { action(index) }) {
+                private fun rect() = geometry.rect(index)
+                override fun interactionPose(hover: Double, press: Double) = menuNavigationPose(rect(), progress(), hover, press, ThemeConfig.animationMode)
                 override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
                     val r = rect()
-                    val reveal = menuReveals.progress("navigation/$index", true, ThemeConfig.animationMode,
-                        index * ThemeConfig.animationMode.profile.staggerMillis)
+                    val mode = revealMode()
+                    val reveal = menuReveals.progress("navigation/$index", revealReady(), mode,
+                        index * mode.profile.staggerMillis)
                     revealsSettled = revealsSettled && reveal >= 1.0
-                    paintedRects[index] = r.copy(y = r.y + (1 - reveal) * ThemeConfig.animationMode.profile.revealOffset)
-                        .transformed(paintedInteraction)
                     graphics.layer(alpha = reveal, y = (1 - reveal) * ThemeConfig.animationMode.profile.revealOffset) {
                         paintMenuNavigationTile(graphics.canvas, r, index, progress(), hover, chosen, isFocused,
-                            menuNavigationRect(layout, index, 0.0))
+                            geometry.home(index))
                     }
                 }
                 override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = progress() > .95 && super.shouldDrawTooltip(mouseX, mouseY)
             }.apply {
                 sizing(Sizing.fixed(mini.width.toInt()), Sizing.fixed(mini.height.toInt()))
-                positioning(Positioning.absolute(mini.x.toInt(), mini.y.toInt())); navigation = true; selected = { activeSection == index }
+                positioning(Positioning.absolute(mini.x.toInt(), mini.y.toInt())); navigation = true; selected = { activeSection() == index }
                 tooltip(Component.literal(title)); buttons += this
             })
         }
+        child(quickButton); child(searchButton)
     }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         val graphics = g as MenuGraphics; val p = progress()
+        geometry.update(p, x().toDouble(), y().toDouble())
+        hasPainted = true
         revealsSettled = true
         graphics.layer(alpha = p) {
             MenuTheme.rounded(g, x(), y(), layout.sidebar, height(), MenuTheme.SIDEBAR, 0)
             g.fill(x() + layout.sidebar - 1, y(), x() + layout.sidebar, y() + height(), MenuTheme.alpha(MenuTheme.BORDER))
             graphics.canvas.text(listOf(MenuCanvas.Run("SM", MenuTheme.alpha(MenuTheme.ACCENT), bold = true)), x() + 14.0, y() + 10.0, 10.0)
-            if (activeSection in menuSectionTitles.indices) {
-                val selected = menuNavigationRect(layout, activeSection, 1.0)
+            val section = activeSection()
+            if (section in menuSectionTitles.indices) {
+                val selected = geometry.mini(section)
                 val target = selected.y + selected.height / 2
                 if (indicator.target == 0.0) indicator.snap(target)
                 indicator.animateTo(target, 180, ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
@@ -191,16 +241,16 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
         }
         graphics.layer(alpha = (1 - p * 3).coerceIn(0.0, 1.0)) {
             graphics.canvas.text(listOf(MenuCanvas.Run("SKY-MYCE", MenuTheme.alpha(MenuTheme.TEXT), bold = true)), x() + 22.0, y() + 17.0, 18.0)
-            if (layout.height > 300) graphics.canvas.text(listOf(MenuCanvas.Run("Your tools. Your team. Your next adventure.", MenuTheme.alpha(MenuTheme.MUTED))), x() + 22.0, y() + 43.0, 10.0)
+            if (layout.height > 300) graphics.canvas.text(listOf(MenuCanvas.Run("Choose a category, or search any setting.", MenuTheme.alpha(MenuTheme.MUTED))), x() + 22.0, y() + 43.0, 10.0)
         }
         super.draw(g, mouseX, mouseY, partialTicks, delta)
     }
-    /** Translate painted card positions to the retained mini buttons for native focus/input dispatch. */
+    /** Hover, click and tooltip dispatch share the same logical card, independent of its feedback animation. */
     fun pointer(px: Double, py: Double): Pair<Double, Double>? {
-        for (index in buttons.indices.reversed()) {
+        if (!hasPainted) geometry.update(progress(), x().toDouble(), y().toDouble())
+        geometry.indexAt(px, py)?.let { index ->
             val button = buttons[index]
-            val r = paintedRects[index] ?: menuNavigationRect(layout, index, progress()).let { it.copy(x = x() + it.x, y = y() + it.y) }
-            if (r.contains(px, py)) return button.x + button.width / 2.0 to button.y + button.height / 2.0
+            return button.x + button.width / 2.0 to button.y + button.height / 2.0
         }
         if (progress() < .95 && px < x() + layout.sidebar && py in y().toDouble()..(y() + height()).toDouble()) return -1.0 to -1.0
         return null

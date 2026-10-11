@@ -80,6 +80,10 @@ enum class MotionEasing {
     }
 }
 
+/** Decorative detail follows a transition, then keeps its last pose without dirtying idle frames. */
+internal fun menuAmbientStep(previous: Long, now: Long, interval: Long, changing: Boolean): Long =
+    if (previous == Long.MIN_VALUE || changing) now / interval.coerceAtLeast(1) else previous
+
 /** Fade an existing timed row entirely inside its logical lifetime; presentation never extends expiry. */
 fun motionEnvelope(ageMillis: Double, lifetimeMillis: Double, mode: GuiMotion): Double {
     if (!ageMillis.isFinite() || !lifetimeMillis.isFinite() || lifetimeMillis <= 0.0) return 0.0

@@ -11,6 +11,24 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TestTimeSource
 
 fun checkDungeonTiming() {
+    listOf("I", "II", "III", "IV", "V", "VI", "VII").forEachIndexed { index, roman ->
+        check(dungeonCompletionFloor("   The Catacombs - Floor $roman") == DungeonFloor.getByName("F${index + 1}"))
+        check(dungeonCompletionFloor("   Master Mode Catacombs - Floor $roman   ") == DungeonFloor.getByName("M${index + 1}"))
+        check(dungeonCompletionFloor("Master Mode The Catacombs - Floor $roman") == DungeonFloor.getByName("M${index + 1}"))
+    }
+    check(dungeonCompletionFloor("The Catacombs - Entrance") == DungeonFloor.E)
+    listOf("Master Mode Catacombs - Entrance", "The Catacombs - Floor VIII", "The Catacombs - Floor IIII",
+        "Player: The Catacombs - Floor VII", "The Catacombs - Floor VII extra", "The Catacombs - Floor VII\n").forEach {
+        check(dungeonCompletionFloor(it) == null)
+    }
+
+    val recoveredContext = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val recovered = DungeonRunRecord("late-start", "session", recoveredContext, "M7")
+    val recoveredArchive = AcquisitionArchive(runs = listOf(recovered.copy(completedAt = 1_700_000_000_000)))
+    val recoveredSummary = trackerView(recoveredArchive, emptyList(), TrackerFilter(floor = "M7"), recoveredContext).summary
+    check(recovered.startedAt == null && recovered.duration == null)
+    check(recoveredSummary.runs == 1L && recoveredSummary.time == 0L && recoveredSummary.timedRuns == 0L && recoveredSummary.average == null)
+
     val clock = TestTimeSource()
     clock += 20720.days
     check(dungeonRunDuration(null) == null) // Missing start must never become time since 1970.
@@ -50,7 +68,7 @@ fun checkDungeonTiming() {
         val once = Files.readString(file.path)
         readDungeonTotals(file)
         check(Files.readString(file.path) == once && Files.readString(backup) == original)
-        check(trackerView(AcquisitionArchive(), legacyTrackerView(totals), TrackerFilter(floor = "M7"), null).summary.let {
+        check(trackerView(AcquisitionArchive(), legacyTrackerView(totals), TrackerFilter(floor = "M7", legacyTotals = true), null).summary.let {
             it.runs == 31L && it.time == 0L && it.timedRuns == 0L && it.average == null
         })
         repaired.recordRun(300000)
@@ -75,5 +93,5 @@ fun checkDungeonTiming() {
         Files.list(directory).use { paths -> paths.forEach(Files::delete) }
         Files.delete(directory)
     }
-    println("Dungeon timing checks passed: missing starts, monotonic duration, backed-up idempotent repair, preserved loot and honest partial rates")
+    println("Dungeon timing checks passed: normal/master result headers, missing starts, monotonic duration, backed-up idempotent repair, preserved loot and honest partial rates")
 }

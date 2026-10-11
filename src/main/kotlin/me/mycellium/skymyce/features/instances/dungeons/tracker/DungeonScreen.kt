@@ -77,6 +77,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 })
             })
             child(row().apply {
+                child(button(if (history) { if (filter.legacyTotals) "Hide historical reports" else "Show all saved reports" }
+                    else if (filter.legacyTotals && !filter.needsRecords) "Show new tracking" else "Show historical totals", minOf(180, bodyWidth)) {
+                    change(filter.copy(legacyTotals = !filter.legacyTotals, from = "", until = "", session = null,
+                        scope = if (history && !filter.legacyTotals) TrackerScope.ALL_LOCAL_PROFILES else filter.scope)); rebuild()
+                }.wrappedTooltip(Component.literal("Your previous runs, loot and XP remain saved. Historical totals are separate from newly confirmed measurements; inherited profit is always included in lifetime profit.")))
+            })
+            child(row().apply {
                 child(button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() })
                 child(button("Clear all", 65) { change(TrackerFilter(page = filter.page)); rebuild() })
                 if (filter.page == TrackerPage.TIMELINE && bodyWidth >= 220) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
@@ -102,11 +109,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
 
     private fun filters() = column().apply {
         child(button("Scope: ${filter.scope.name.replace('_', ' ')}", (bodyWidth - 8).coerceAtMost(280)) { b -> menu(b) { d ->
-            TrackerScope.entries.forEach { scope -> d.button(Component.literal(scope.name.replace('_', ' '))) { change(filter.copy(scope = scope, legacyTotals = false)); rebuild() } }
+            TrackerScope.entries.forEach { scope -> d.button(Component.literal(scope.name.replace('_', ' '))) { change(filter.copy(scope = scope, legacyTotals = filter.legacyTotals || scope == TrackerScope.UNSCOPED_LEGACY)); rebuild() } }
         } }.wrappedTooltip(Component.literal("Current profile uses account UUID and the available profile ID. All local profiles and unscoped legacy records are explicit separate views. Offline: choose All local profiles.")))
-        if (!history) child(button(if (filter.legacyTotals && !filter.needsRecords) "Data: All-time totals" else "Data: Timestamped records", (bodyWidth - 8).coerceAtMost(280)) {
-            change(filter.copy(legacyTotals = !filter.legacyTotals, from = "", until = "", session = null)); rebuild()
-        }.wrappedTooltip(Component.literal("Legacy totals include all locally tracked accounts and cannot be filtered by date, session or profile. New timestamped records can.")))
         child(button(filter.chest ?: "All chest types", 145) { b -> menu(b) { d ->
             (listOf<String?>(null) + DungeonChest.entries.map { it.name }).forEach { chest -> d.button(Component.literal(chest ?: "All chest types")) { change(filter.copy(chest = chest)); rebuild() } }
         } })
@@ -115,7 +119,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         })
         child(button(filter.session?.let { "Session ${it.take(8)}" } ?: "All sessions", 145) { b -> menu(b) { d ->
             d.button(Component.literal("All sessions")) { change(filter.copy(session = null)); rebuild() }
-            AcquisitionRepository.state.runs.asReversed().asSequence().filter { filter.scopeMatches(it.context, seenContext) }.map { it.session }.distinct().take(20).forEach { session ->
+            AcquisitionRepository.state.runs.asReversed().asSequence().filter { it.trackingVersion == 2 && filter.scopeMatches(it.context, seenContext) }.map { it.session }.distinct().take(20).forEach { session ->
                 d.button(Component.literal(session.take(8))) { change(filter.copy(session = session, legacyTotals = false)); rebuild() }
             }
         } }.wrappedTooltip(Component.literal("Recent local sessions. A new session starts on account/profile change or disconnect. Legacy aggregates have no sessions.")))
@@ -175,7 +179,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             filter.from.takeIf(String::isNotEmpty)?.let { "From $it" }, filter.until.takeIf(String::isNotEmpty)?.let { "To $it" },
             filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
             if (filter.rareOnly) "RNG" else null, if (filter.valuableOnly) "1m+" else null)
-        val source = if (!history && view.usingLegacy) "All-time totals • unscoped" else filter.scope.name.replace('_', ' ')
+        val source = if (!history && view.usingLegacy) "Historical totals • unscoped" else "${if (history && filter.legacyTotals) "Saved reports" else "Confirmed"} • ${filter.scope.name.replace('_', ' ')}${if (history && filter.legacyTotals) " + unscoped history" else ""}"
         status.text(Component.literal("$source${if (filters.isEmpty()) " • no filters" else " • ${filters.joinToString(" / ")}"}").withColor(MenuTheme.MUTED))
         if (more && height < 340) {
             status.text(Component.literal("Filters • changes apply immediately").withColor(MenuTheme.MUTED))
@@ -193,10 +197,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun overview(content: FlowLayout) {
         pageLabel.text(Component.literal("Overview").withColor(MenuTheme.MUTED))
         val s = view.summary
-        val values = listOf("Runs" to s.runs.toString(), "Tracked time${if (s.timedRuns < s.runs) " (partial)" else ""}" to
+        val values = listOf((if (view.lifetimeProfit == null) "Inherited profit (new estimate unknown)" else "Lifetime profit (estimated)") to money(view.lifetimeProfit ?: view.inheritedProfit),
+            "Historical runs / chests" to "${view.historicalRuns} / ${view.historicalChests}", "Inherited historical profit" to money(view.inheritedProfit),
+            "New lifetime profit (estimated)" to money(view.trackedLifetimeProfit),
+            "${if (view.usingLegacy) "Historical" else "Confirmed"} runs" to s.runs.toString(), "Tracked time${if (s.timedRuns < s.runs) " (partial)" else ""}" to
             (if (s.timedRuns == 0L && s.runs > 0) "Unknown" else duration(s.time)), "Average run" to (s.average?.toLong()?.let(::duration) ?: "Unknown"),
-            "Net profit${if (s.incompleteValues) " (partial)" else ""}" to money(s.net), "Gross value${if (s.incompleteValues) " (known only)" else ""}" to money(s.gross),
-            "Chest costs" to money(s.chestCost), "Reroll costs" to money(s.rerollCost), "Catacombs XP" to money(s.cataXp), "Chests / rerolls" to "${s.chests} / ${s.rerolls}")
+            "Selected profit (estimated)" to money(s.net), "Gross value${if (s.incompleteValues) " (known only)" else ""}" to money(s.gross),
+            "Chest costs${if (s.incompleteCosts) " (known only)" else ""}" to money(s.chestCost), "Reroll costs" to money(s.rerollCost), "Catacombs XP" to money(s.cataXp), "Chests / rerolls" to "${s.chests} / ${s.rerolls}")
         val columns = (bodyWidth / 180).coerceIn(1, 3)
         values.chunked(columns).forEach { group -> content.child(row().apply { group.forEach { (name, value) ->
             child(column().apply { horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns)); surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
@@ -205,14 +212,15 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         } }) }
         s.classXp.forEach { (name, xp) -> content.child(label("$name XP: ${money(xp)}", MenuTheme.MUTED)) }
         if (s.timedRuns < s.runs) content.child(label("Time known for ${s.timedRuns}/${s.runs} completed runs. Average uses only timed runs; missing historical durations are not estimated.", MenuTheme.YELLOW))
-        content.child(label(if (view.usingLegacy) "Legacy totals preserve the original save. Account, date, session and per-acquisition prices were not recorded. Average uses aggregate time/runs; observed loot rates are unavailable." else
-            "Only confirmed inventory receipts appear as chest acquisitions. Average uses completed runs with known duration. Values are estimates recorded at acquisition; unknown values remain unknown. Reroll costs cannot be split by chest type.", MenuTheme.MUTED))
+        content.child(label("Lifetime profit covers all local profiles and the selected floors, independent of date, session and chest filters. The inherited contribution is frozen at cutover and counted once.", MenuTheme.MUTED))
+        content.child(label(if (view.usingLegacy) "Historical reference preserves the original aggregate save. These runs are excluded from new tracking. Account, date and per-acquisition prices were not recorded; observed loot rates are unavailable." else
+            "New chest receipts require matching server rewards and all physical inventory arrivals. Average uses newly tracked completed runs with known duration. Values are acquisition-time estimates; unavailable costs or prices leave profit unknown. Rerolls cannot be split by chest type.", MenuTheme.MUTED))
         content.child(label(AcquisitionRepository.status, MenuTheme.MUTED)); content.child(label(DungeonTracker.storageStatus, MenuTheme.MUTED))
     }
     private fun loot(content: FlowLayout) {
         val visible = slice(view.loot)
         content.child(label("Item  /  Count  /  Recorded value  /  Observed rate", MenuTheme.SECONDARY))
-        if (visible.isEmpty()) content.child(label("No loot matches these filters. All-time totals remain available under Filters.", MenuTheme.MUTED))
+        if (visible.isEmpty()) content.child(label(if (view.usingLegacy) "No historical loot matches these filters." else "No new loot matches these filters. Use Show historical totals above to see your previous loot.", MenuTheme.MUTED))
         visible.forEach { item -> content.child(column().apply {
             surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
             child(row().apply { child(icon(item.item)); child(label(itemName(item.item)).apply { horizontalSizing(Sizing.expand()) }) })

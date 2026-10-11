@@ -52,7 +52,10 @@ private fun legacySettingsFeature(tab: SettingsTab) = when (tab) {
 
 data class SettingRow(val path: String, val element: ResourcefulConfigEntryElement) {
     val entry get() = element.entry() as ResourcefulConfigValueEntry
-    val title get() = entry.options().title().toLocalizedString().ifBlank { element.id() }
+    val title get() = if (path.startsWith("Theme & Appearance/"))
+        MenuCatalog.themeColorTitles[element.id()] ?: MenuCatalog.themeFlagTitles[element.id()] ?: MenuCatalog.themeNumberTitles[element.id()]
+            ?: entry.options().title().toLocalizedString().ifBlank { element.id() }
+        else entry.options().title().toLocalizedString().ifBlank { element.id() }
     val tip get() = entry.options().comment().toLocalizedString().ifBlank {
         when {
             entry.options().hasOption(Option.KEYBIND) -> "Choose the keyboard key for $title. Escape cancels; Backspace clears it."
@@ -77,8 +80,11 @@ fun settingGroups(rows: List<SettingRow>, tab: SettingsTab, query: String = "") 
 
 /** The shared catalog assigns the UI owner; paths still identify the persisted entries. */
 fun settingGroups(rows: List<SettingRow>, featureId: String, query: String = ""): Map<String, List<SettingRow>> {
-    val groups = MenuCatalog(rows).findFeature(featureId)?.settings.orEmpty()
-        .groupBy { it.path.substringBeforeLast('/', "Basics").substringAfterLast('/') }.toMutableMap()
+    val settings = MenuCatalog(rows).findFeature(featureId)?.settings.orEmpty()
+    val groups = if (featureId == "starred-routes") MenuCatalog.routingSettingGroups.mapValues { (_, keys) ->
+        keys.mapNotNull { key -> settings.firstOrNull { it.element.id() == key } }
+    }.filterValues { it.isNotEmpty() }.toMutableMap()
+    else settings.groupBy { it.path.substringBeforeLast('/', "Basics").substringAfterLast('/') }.toMutableMap()
     if (featureId == "party-finder") groups["Availability"] = emptyList()
     return groups.filter { (group, settings) -> query.isBlank() || group.contains(query, true) ||
         settings.any { "${it.title} ${it.tip}".contains(query, true) } || friendPreferenceSearch[group]?.contains(query, true) == true }
@@ -106,17 +112,27 @@ fun notifySettingsChanged() {
 internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
     gap(5); verticalAlignment(VerticalAlignment.CENTER)
 }
-internal fun settingsCardColumns(width: Int) = if (width >= 280) 2 else 1
-internal fun settingsDrawerWidth(width: Int) = minOf((width / 3).coerceIn(190, 240), width.coerceAtLeast(1))
-internal fun settingsCardRow(columns: Int): FlowLayout =
-    object : FlowLayout(Sizing.fill(), Sizing.content(), FlowLayout.Algorithm.HORIZONTAL) {
-        override fun calculateChildSpace(space: Size): Size {
-            val available = super.calculateChildSpace(space)
-            // owo rounds both 50% widths up at odd widths; reserve that pixel before expansion.
-            val width = available.width().coerceAtLeast(0)
-            return Size.of(width - width % columns, available.height())
-        }
-    }.apply { gap(8); verticalAlignment(VerticalAlignment.CENTER) }
+/** Only the theme editor's public overrides are exposed from hidden config entries. */
+internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = settingRows(config) +
+    config.categories()["Theme & Appearance"]?.elements().orEmpty()
+        .filterIsInstance<ResourcefulConfigEntryElement>()
+        .filter { it.isHidden && it.id() in MenuCatalog.themeColorTitles.keys + MenuCatalog.themeFlagTitles.keys + MenuCatalog.themeNumberTitles.keys }
+        .map { SettingRow("Theme & Appearance/${it.id()}", it) }
+
+internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>, category: MenuCategory, query: String): List<SettingRow> {
+    if (query.isBlank()) return rows.filter { MenuCatalog.settingLocation(it.path).category == category }
+    val matches = catalog.search(query).mapNotNull { it.settingPath }.toSet()
+    return rows.filter { it.path in matches }
+}
+
+/** Keep click feedback in the shared canvas so transformed paint and pointer mapping agree. */
+private class SettingsButton(message: Component, action: (ButtonComponent) -> Unit) : MenuButton(message, action) {
+    override fun interactionPose(hover: Double, press: Double): MotionPose {
+        val profile = ThemeConfig.animationMode.profile
+        return MotionPose(scale = 1.0 + hover * profile.hoverScale + press * profile.pressScale * 3,
+            pivotX = x + width / 2.0, pivotY = y + height / 2.0)
+    }
+}
 
 class SettingsScreen @JvmOverloads constructor(
     private val parent: Screen? = null,
@@ -127,11 +143,12 @@ class SettingsScreen @JvmOverloads constructor(
     private val onPinSetting: (String) -> Unit = { MenuShortcuts.togglePin(it) },
 ) : MenuScreen(Component.literal("Sky-Myce Settings")) {
     private val rows by lazy { settingRows(SkyMyce.config) }
+    private val commandRows by lazy { commandCenterRows(SkyMyce.config) }
     private val catalog by lazy { MenuCatalog(rows) }
     private var featureId = featureId ?: legacySettingsFeature(tab)
     internal override val canonicalFeatureId get() = featureId
-    private val feature get() = catalog.findFeature(featureId)
-    private var pendingSetting = settingPath
+    private var pendingSetting = settingPath ?: dungeonFriend?.let { "friend/$it" }
+        ?: featureId?.let { id -> catalog.findFeature(id)?.settings?.firstOrNull()?.path }
     private val controls = mutableMapOf<String, UIComponent>()
     private var renderedValues = emptyList<Any?>()
     private var renderedPins = -1L
@@ -140,26 +157,24 @@ class SettingsScreen @JvmOverloads constructor(
     private var query = ""
     private lateinit var body: FlowLayout
     private lateinit var heading: LabelComponent
-    private lateinit var drawer: FlowLayout
-    private lateinit var drawerClip: FlowLayout
-    private lateinit var drawerHeading: FlowLayout
-    private lateinit var drawerScroll: MenuScroll<FlowLayout>
+    private lateinit var contentScroll: MenuScroll<FlowLayout>
+    private lateinit var search: MenuTextBox
+    private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
     public override val menuParent get() = parent.takeIf { it is MenuScreen || it is WidgetEditorScreen }
-    override val menuCategory get() = feature?.category ?: MenuCategory.SETTINGS
+    override val menuCategory get() = category
     override val settingsCategory get() = tab
     public override fun selectSettings(tab: SettingsTab) {
         val destination = legacySettingsFeature(tab)
         if (destination == featureId) return
         val direction = if (tab.ordinal < this.tab.ordinal) -1 else 1
-        this.tab = tab; featureId = destination; query = ""; selectedGroup = null; editingDungeonFriend = null; friendDraft = null; keyCapture = null
+        this.tab = tab; featureId = destination; category = catalog.findFeature(destination)!!.category; query = ""; editingDungeonFriend = null; friendDraft = null; availabilityDraft = null; keyCapture = null
+        pendingSetting = catalog.findFeature(destination)?.settings?.firstOrNull()?.path
         rebuildMenu(direction)
     }
-    private var selectedGroup: String? = dungeonFriend?.let { "Dungeon Friends" }
-        ?: settingPath?.takeUnless { this.featureId == "settings-appearance" }?.let {
-            if (it == "Dungeons/Dungeon Friends/availability") "Availability" else settingGroupName(it)
-        }
     private var editingDungeonFriend = dungeonFriend
     private var friendDraft: FriendPreferenceDraft? = null
+    private var availabilityDraft: FriendPreferenceDraft? = null
+    private var routingAdvanced = false
     private class FriendPreferenceDraft(val group: String?, val friend: String?) {
         var floor = DungeonFriendsSettings.availability.floor
         var classes = if (group == "Availability") DungeonFriendsSettings.availability.classes
@@ -168,169 +183,88 @@ class SettingsScreen @JvmOverloads constructor(
         var template = DungeonFriendsSettings.messageTemplate
         var titles = DungeonFriendsSettings.titleNotifications
     }
-    private lateinit var details: FlowLayout
-    private val detailWidth get() = settingsDrawerWidth(menuWidth)
+    private val detailWidth get() = menuWidth
     private val controlWidth get() = (detailWidth - 28).coerceAtLeast(1)
 
     override fun init() {
         val previousBody = if (::body.isInitialized) body else null
-        val drawerOffset = if (::drawerScroll.isInitialized) drawerScroll.scrollTarget else 0.0
+        val scrollOffset = if (::contentScroll.isInitialized) contentScroll.scrollTarget else 0.0
         keyCapture = null
         SkyMyceCommands.syncSettingsKey()
         super.init()
         // Native screen reuse keeps old captions; refresh from the canonical entries on return.
         if (previousBody != null && !invalid && (renderedValues != currentValues() || renderedPins != MenuShortcuts.revision)) rebuildMenu()
-        if (previousBody != null && ::drawerScroll.isInitialized) drawerScroll.scrollBy(drawerOffset, true, false)
+        if (previousBody != null && ::contentScroll.isInitialized) contentScroll.scrollBy(scrollOffset, true, false)
     }
     override fun buildContent(root: FlowLayout) {
         renderedValues = currentValues(); renderedPins = MenuShortcuts.revision
-        val inlineSearch = menuWidth >= 560
-        val search = MenuTextBox(if (inlineSearch) Sizing.fixed(150) else Sizing.fill()).apply {
-            setMaxLength(80); text(query); setHint(Component.literal("Search settings..."))
-            tip("Search feature names and setting descriptions in this category")
-            onChanged().subscribe { query = it; keyCapture = null; populate(animate = false) }
-        }
         body = column()
-        val main = UIContainers.verticalFlow(Sizing.expand(), Sizing.fill()).apply {
-            padding(Insets.of(14)); gap(12)
+        search = MenuTextBox(Sizing.fill()).apply {
+            setMaxLength(80); text(query); setHint(Component.literal("Search all settings…"))
+            tip("Search names, descriptions and aliases across every category. Ctrl+F focuses search.")
+            onChanged().subscribe { query = it; keyCapture = null; closeMenuDropdown(); populate(animate = false) }
+        }
+        root.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()).apply {
+            padding(Insets.of(14)); gap(8)
+            child(search)
+            heading = label(category.title, MenuTheme.TEXT, 17f); child(heading)
+            contentScroll = menuScroll(Sizing.fill(), Sizing.expand(), body).apply {
+                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2); scrollStep(32)
+            }
+            child(contentScroll)
             child(settingsRow().apply {
-                gap(10)
-                child(column().apply {
-                    horizontalSizing(Sizing.expand()); gap(5)
-                    child(label(feature?.breadcrumb ?: "Settings", MenuTheme.MUTED, 8f))
-                    heading = label(feature?.title ?: "Settings", MenuTheme.TEXT, 17f)
-                    child(heading)
-                })
-                if (inlineSearch) child(search)
-            })
-            if (feature?.category == MenuCategory.SETTINGS) child(button("Settings: ${feature?.title}", minOf(220, menuWidth - 28), "Choose a global settings section") { anchor ->
-                menu(anchor) { choices -> catalog.features.filter { it.category == MenuCategory.SETTINGS }.forEach { section ->
-                    choices.button(Component.literal(section.title)) {
-                        featureId = section.id; query = ""; selectedGroup = null; pendingSetting = null; keyCapture = null
-                        rebuildMenu()
-                    }
-                } }
-            })
-            if (!inlineSearch) child(search)
-            child(menuScroll(Sizing.fill(), Sizing.expand(), body).apply {
-                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
-            })
-            child(settingsRow().apply {
-                child(label(if (featureId == "party-finder") "Friend preferences use Save" else "Changes save on close", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
+                child(label("Changes save on close • Friend preferences use Save", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
                 child(button("Done", 42, "Save settings and return") { onClose() })
             })
-        }
-        drawerHeading = column().apply { padding(Insets.of(14)) }
-        details = column().apply { padding(Insets.horizontal(14)); gap(0) }
-        drawerScroll = menuScroll(Sizing.fill(), Sizing.expand(), details).apply {
-            scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2)
-        }
-        drawer = UIContainers.verticalFlow(Sizing.fixed(detailWidth), Sizing.fill()).apply {
-            surface(Surface { g, c ->
-                MenuTheme.rounded(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.SIDEBAR, 0)
-                g.fill(c.x(), c.y(), c.x() + 1, c.y() + c.height(), MenuTheme.alpha(MenuTheme.BORDER))
-            })
-            child(drawerHeading); child(drawerScroll)
-        }
-        drawerClip = UIContainers.horizontalFlow(Sizing.fixed(if (selectedGroup == null) 0 else detailWidth), Sizing.fill())
-        drawerClip.mouseDown().subscribe { _, _ -> true }
-        drawerClip.mouseScroll().subscribe { _, _, _ -> true }
-        // On small windows the drawer overlays the cards rather than squeezing their controls out of view.
-        if (menuWidth < 440) drawerClip.positioning(Positioning.absolute(menuWidth - detailWidth, 0))
-        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.expand()).apply {
-            child(main); child(drawerClip)
         })
-        populate()
+        populate(animate = false)
     }
 
     private fun populate(animate: Boolean = true) {
         if (animate) contentChanged()
-        controls.clear()
-        body.clearChildren()
-        if (featureId == "settings-appearance") {
-            closeDetails(false)
-            feature?.settings?.firstOrNull { it.element.id() == "animationMode" }?.let { setting ->
-                if (query.isBlank() || "${setting.title} ${setting.tip}".contains(query, true)) body.child(editor(setting))
-            }
-            body.child(button("Customize shared theme", minOf(190, menuWidth - 28), "Presets, colors, opacity, spacing, preview and JSON import/export") {
-                navigateMenu(ThemeEditorScreen(this))
-            }.apply { verticalSizing(Sizing.fixed(38)) })
-            body.child(label("Theme colors and animation apply throughout Sky-Myce. Reduced and Off simplify motion. Rendering quality lives in Performance.", MenuTheme.MUTED))
-            return
-        }
-        if (featureId == "settings-hud") {
-            closeDetails(false)
-            body.child(label("Drag widgets to arrange them, scroll to scale, and right-click for their theme.", MenuTheme.MUTED))
-            body.child(button("Open HUD editor", minOf(190, menuWidth - 28), "Edit widget layout, scale and appearance") { navigateMenu(WidgetEditorScreen(this)) })
-            return
-        }
-        val groups = settingGroups(rows, featureId, query)
-        if (selectedGroup !in groups) closeDetails(false)
-        if (groups.isEmpty()) { body.child(label("No matching settings", MenuTheme.MUTED)); return }
-        val columns = settingsCardColumns(menuWidth)
-        groups.entries.chunked(columns).forEach { line -> body.child(settingsCardRow(columns).apply {
-            line.forEach { (group, settings) ->
-                val title = MenuButton(Component.literal(group)) {
-                    selectedGroup = group; editingDungeonFriend = null; keyCapture = null; populateDetails(groups); openDetails()
-                }.apply {
-                    sizing(Sizing.expand(), Sizing.fill()); navigation = true; background = false
-                    tip(if (group in friendPreferenceSearch) "Open $group preferences" else "Open all ${settings.size} $group settings")
+        controls.clear(); body.clearChildren()
+        heading.text(Component.literal(if (query.isBlank()) category.title else "Search results"))
+        val matches = commandCenterSettings(catalog, commandRows, category, query)
+        val results = if (query.isBlank()) MenuCatalog.extraSettings.filter { it.category == category } else catalog.search(query)
+        val extraPaths = results.mapNotNull { it.settingPath }.toSet()
+        catalog.features.forEach { owner ->
+            val settings = matches.filter { MenuCatalog.settingLocation(it.path).let { location ->
+                location.featureId == owner.id || location.featureId == null && owner.category == MenuCategory.SETTINGS && location.subcategory == owner.subcategory
+            } }
+            val availability = owner.id == "party-finder" && "Dungeons/Dungeon Friends/availability" in extraPaths
+            val preferences = owner.id == "party-finder" && extraPaths.any { it in setOf("Dungeons/Dungeon Friends/messageTemplate", "Dungeons/Dungeon Friends/titleNotifications") }
+            val hud = owner.id == "settings-hud" && (query.isBlank() && category == MenuCategory.SETTINGS || query.isNotBlank() && results.any { it.featureId == owner.id })
+            if (settings.isEmpty() && !availability && !preferences && !hud) return@forEach
+            body.child(label(owner.breadcrumb, MenuTheme.ACCENT, 11f))
+            if (settings.isNotEmpty()) body.child(button("Reset section", 88, "Restore defaults for these displayed settings") {
+                settings.forEach { it.entry.reset() }
+                if (settings.any { it.path == "openConfigKey" }) SkyMyceCommands.updateSettingsKey()
+                keyCapture = null; edited(); populate()
+            })
+            if (owner.id == "starred-routes") {
+                settingGroups(settings, owner.id).forEach { (group, entries) ->
+                    if (group == "Advanced") {
+                        if (entries.any { it.path == pendingSetting }) routingAdvanced = true
+                        body.child(MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal(group),
+                            routingAdvanced || query.isNotBlank()).apply {
+                            onToggled().subscribe { routingAdvanced = it }
+                            entries.forEach { child(editor(it)) }
+                        })
+                    } else {
+                        body.child(label(group, MenuTheme.MUTED, 10f))
+                        entries.forEach { body.child(editor(it)) }
+                    }
                 }
-                val quickToggle = settings.firstOrNull { it.entry.type() == EntryType.BOOLEAN && it.element.id() in setOf("enabled", "automatic", "dungeonTracker") }
-                    ?.let { toggle(it).apply { background = false } }
-                val hoverMotion = MotionValue(0.0)
-                val selectionMotion = MotionValue(if (selectedGroup == group) 1.0 else 0.0)
-                child(MenuRevealCard("settings/$featureId/$group", Sizing.expand(100 / columns), Sizing.fixed(43), FlowLayout.Algorithm.HORIZONTAL).apply {
-                    padding(Insets.of(4)); gap(2); verticalAlignment(VerticalAlignment.CENTER)
-                    surface(Surface { g, c ->
-                        val focused = title.isFocused || quickToggle?.isFocused == true
-                        val hover = title.isHovered || quickToggle?.isHovered == true
-                        hoverMotion.animateTo(if (hover) 1.0 else 0.0, 110, ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
-                        selectionMotion.animateTo(if (selectedGroup == group || focused) 1.0 else 0.0, 150, MotionEasing.QUICK, ThemeConfig.animationMode)
-                        val hovered = hoverMotion.sample().coerceIn(0.0, 1.0)
-                        val selection = selectionMotion.sample().coerceIn(0.0, 1.0)
-                        val border = MenuTheme.blend(MenuTheme.blend(MenuTheme.BORDER, MenuTheme.TEXT, (hovered * 18).toInt()), MenuTheme.ACCENT, (selection * 100).toInt())
-                        MenuTheme.shadow(g, c.x(), c.y(), c.width(), c.height(), (.3 + hovered * .65) * ThemeConfig.animationMode.profile.shadowStrength)
-                        MenuTheme.glow(g, c.x(), c.y(), c.width(), c.height(), (selection * .35 + hovered * .3) * ThemeConfig.animationMode.profile.glowStrength)
-                        MenuTheme.box(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.CARD, border)
-                        MenuTheme.sheen(g, c.x(), c.y(), c.width(), c.height(), .45 + hovered * .2)
-                        if (focused && !MenuTheme.BORDERS) g.drawRectOutline(c.x(), c.y(), c.width(), c.height(), MenuTheme.alpha(border))
-                    })
-                    child(title)
-                    quickToggle?.let { child(it) }
-                })
-            }
-            repeat(columns - line.size) { child(UIContainers.verticalFlow(Sizing.expand(100 / columns), Sizing.fixed(43))) }
-        }) }
-        if (selectedGroup != null && animate) { populateDetails(groups, animate = false); openDetails(false) }
-    }
-
-    private fun populateDetails(groups: Map<String, List<SettingRow>>, animate: Boolean = true) {
-        if (animate) contentChanged()
-        details.clearChildren()
-        drawerHeading.clearChildren()
-        drawerHeading.child(label(if (feature?.category == MenuCategory.SETTINGS) "GLOBAL SETTINGS" else "FEATURE SETTINGS", MenuTheme.MUTED, 8f))
-        drawerHeading.child(settingsRow().apply {
-            child(label(selectedGroup.orEmpty(), MenuTheme.TEXT, 12f).horizontalSizing(Sizing.expand()))
-            child(button("Close", 42, "Close feature settings") { closeDetails() })
-        })
-        val settings = groups[selectedGroup].orEmpty()
-        drawerHeading.child(label(if (selectedGroup in friendPreferenceSearch) "Save preferences below" else "${settings.size} options", MenuTheme.MUTED, 9f))
-        if (settings.isNotEmpty() && editingDungeonFriend == null) drawerHeading.child(button(
-            if (selectedGroup == "Dungeon Friends") "Reset scan setting" else "Reset feature",
-            minOf(if (selectedGroup == "Dungeon Friends") 110 else 88, controlWidth),
-            "Restore the default values for these scan or feature controls",
-        ) {
-            settings.forEach { it.entry.reset() }
-            if (settings.any { it.path == "openConfigKey" }) SkyMyceCommands.updateSettingsKey()
-            keyCapture = null; edited(); populateDetails(groups)
-        })
-        if (editingDungeonFriend == null) settings.forEach { setting ->
-            details.child(editor(setting))
-            details.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(1)).surface(Surface.flat(MenuTheme.alpha(MenuTheme.BORDER))))
+            } else settings.forEach { setting -> body.child(editor(setting)) }
+            if (availability && editingDungeonFriend == null) body.child(friendPreferences(true))
+            if (preferences || owner.id == "party-finder" && editingDungeonFriend != null) body.child(friendPreferences(false).also {
+                editingDungeonFriend?.let { name -> controls["friend/$name"] = it }
+            })
+            if (hud) body.child(button("Open HUD editor", minOf(190, controlWidth), "Arrange widget positions, scale and appearance") { navigateMenu(WidgetEditorScreen(this)) })
+            if (owner.id == "settings-appearance") body.child(button("Theme preview / import / export", minOf(210, controlWidth), "Open the shared theme preview and clipboard tools") { navigateMenu(ThemeEditorScreen(this)) })
         }
-        if (selectedGroup in friendPreferenceSearch) details.child(friendPreferences(selectedGroup == "Availability"))
-        drawerScroll.scrollTo(0.0)
+        if (body.children().isEmpty()) body.child(label("No matching settings", MenuTheme.MUTED))
+        contentScroll.scrollTo(0.0)
     }
 
     private fun friendPreferences(availabilityOnly: Boolean): FlowLayout = column().apply {
@@ -338,8 +272,8 @@ class SettingsScreen @JvmOverloads constructor(
         DungeonFriendsSettings.load()
         val friend = editingDungeonFriend
         val friendStats = friend?.let(DungeonFriendStatsCache::get)
-        val draft = friendDraft?.takeIf { it.group == selectedGroup && it.friend == friend }
-            ?: FriendPreferenceDraft(selectedGroup, friend).also { friendDraft = it }
+        val draft = (if (availabilityOnly) availabilityDraft else friendDraft)?.takeIf { it.group == (if (availabilityOnly) "Availability" else "Dungeon Friends") && it.friend == friend }
+            ?: FriendPreferenceDraft(if (availabilityOnly) "Availability" else "Dungeon Friends", friend).also { if (availabilityOnly) availabilityDraft = it else friendDraft = it }
         if (availabilityOnly) {
             child(label("Choose the floor and classes you offer when joining a party.", MenuTheme.MUTED))
             child(button("Floor: ${draft.floor.name}", detailWidth - 28, "Your available dungeon floor") { anchor ->
@@ -353,7 +287,7 @@ class SettingsScreen @JvmOverloads constructor(
         if (availabilityOnly || friend != null) {
             if (friend != null) child(label("Secondary classes: $friend", MenuTheme.ACCENT))
             DungeonClass.entries.chunked(2).forEach { options -> child(settingsRow().apply {
-                options.forEach { clazz -> child(MenuButton(Component.literal(clazz.displayName)) {
+                options.forEach { clazz -> child(SettingsButton(Component.literal(clazz.displayName)) {
                     draft.classes = if (clazz in draft.classes) draft.classes - clazz else draft.classes + clazz
                 }.apply {
                     selected = { clazz in draft.classes }; sizing(Sizing.fixed((detailWidth - 33) / 2), Sizing.fixed(24))
@@ -373,7 +307,7 @@ class SettingsScreen @JvmOverloads constructor(
         } else if (friend == null) {
             child(settingsRow().apply {
                 child(label("Title notifications").horizontalSizing(Sizing.expand()))
-                child(MenuButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
+                child(SettingsButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
                     toggled = { draft.titles }; sizing(Sizing.fixed(32), Sizing.fixed(22))
                     tip("Show invitations and joining players as titles")
                 }.also { controls["Dungeons/Dungeon Friends/titleNotifications"] = it })
@@ -416,30 +350,12 @@ class SettingsScreen @JvmOverloads constructor(
         })
     }
 
-    private fun openDetails(animate: Boolean = true) {
-        if (drawerClip.children().isEmpty()) drawerClip.child(drawer)
-        val duration = drawerDuration(animate)
-        if (duration == 0) drawerClip.horizontalSizing(Sizing.fixed(detailWidth))
-        else drawerClip.horizontalSizing().animate(duration, Easing.CUBIC, Sizing.fixed(detailWidth)).forwards()
-    }
-
     private fun closeDetails(animate: Boolean = true) {
-        if (animate) friendDraft = null
-        selectedGroup = null; keyCapture = null
-        if (!::drawerClip.isInitialized) return
-        val duration = drawerDuration(animate)
-        if (duration == 0) { drawerClip.horizontalSizing(Sizing.fixed(0)); drawerClip.clearChildren() }
-        else {
-            val closing = drawerClip
-            val animation = closing.horizontalSizing().animate(duration, Easing.CUBIC, Sizing.fixed(0))
-            animation.finished().subscribe { _, _ -> if (selectedGroup == null && drawerClip === closing) closing.clearChildren() }
-            animation.forwards()
-        }
+        friendDraft = null; availabilityDraft = null; editingDungeonFriend = null; keyCapture = null
+        populate(animate)
     }
-    private fun drawerDuration(animate: Boolean) = if (!animate || ThemeConfig.animationMode == GuiMotion.OFF) 0
-        else (ThemeConfig.animationMode.profile.layoutMillis * ThemeConfig.animationMode.profile.durationScale).roundToInt()
 
-    private fun toggle(setting: SettingRow) = MenuButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
+    private fun toggle(setting: SettingRow) = SettingsButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
         if (setting.entry.setBoolean(!setting.entry.boolean)) edited()
         b.message = Component.literal(if (setting.entry.boolean) "On" else "Off")
     }.apply {
@@ -449,11 +365,62 @@ class SettingsScreen @JvmOverloads constructor(
     private fun editor(setting: SettingRow): FlowLayout = column().apply {
         gap(8); padding(Insets.vertical(10)); tip(setting.tip)
         val entry = setting.entry
+        val themeKey = setting.element.id().takeIf { setting.path.startsWith("Theme & Appearance/") }
+        if (themeKey in MenuCatalog.themeColorTitles) {
+            child(label(setting.title))
+            val feedback = label("", MenuTheme.RED, 8f)
+            child(settingsRow().apply {
+                val hex = MenuTextBox(Sizing.fixed(minOf(100, controlWidth))).apply {
+                    setMaxLength(7); text(if (entry.int < 0) "" else "#%06X".format(entry.int)); setHint(Component.literal("Inherited")); tip("Six RGB hex digits. Inherit restores the preset color.")
+                    onChanged().subscribe { value ->
+                        val color = parseThemeHex(value)
+                        if (color != null && entry.setInt(color)) { edited(); feedback.text(Component.empty()) }
+                        else feedback.text(Component.literal("Use six RGB hex digits"))
+                    }
+                }
+                child(hex)
+                child(button("Inherit", 58, "Use the preset color") { entry.setInt(-1); edited(); hex.text(""); feedback.text(Component.empty()) })
+            })
+            child(feedback)
+            if (canPinMenuSetting(setting)) child(pinControl(setting))
+            return@apply
+        }
+        if (themeKey in MenuCatalog.themeFlagTitles) {
+            child(settingsRow().apply {
+                child(label(setting.title).horizontalSizing(Sizing.expand()))
+                fun caption() = when (entry.int) { 0 -> "Off"; 1 -> "On"; else -> "Inherited" }
+                child(button(caption(), 80, "Cycle inherited, enabled and disabled") { anchor ->
+                    if (entry.setInt(when (entry.int) { -1 -> 1; 1 -> 0; else -> -1 })) { edited() }
+                    anchor.message = Component.literal(caption())
+                })
+            })
+            return@apply
+        }
+        if (themeKey in MenuCatalog.themeNumberTitles) {
+            val min = if (themeKey == "opacity") 20 else 2
+            val max = if (themeKey == "opacity") 100 else 12
+            child(label(setting.title))
+            val valueLabel = label(if (entry.int < 0) "Inherited" else entry.int.toString()); child(valueLabel)
+            val resolved = resolveTheme(ThemeConfig.preset, ThemeConfig.overrides())
+            child(MenuSlider().apply {
+                value(((if (themeKey == "opacity") resolved.opacity else resolved.padding) - min).toDouble() / (max - min)); scrollStep(1.0 / (max - min)); tip(setting.tip)
+                onChanged().subscribe { amount ->
+                    if (entry.setInt((min + amount * (max - min)).roundToInt())) { edited(); valueLabel.text(Component.literal(entry.int.toString())) }
+                }
+            })
+            child(button("Inherit", 58, "Restore preset ${setting.title.lowercase()}") { entry.setInt(-1); edited(); populate() })
+            if (canPinMenuSetting(setting)) child(pinControl(setting))
+            return@apply
+        }
         if (entry.type() == EntryType.BOOLEAN) {
             child(settingsRow().apply {
                 child(label(setting.title).horizontalSizing(Sizing.expand()))
                 child(toggle(setting))
             })
+            if (setting.path == "Dungeons/Starred Clear Routing/routeThroughMobs") {
+                child(label("Off: route directly toward Blood.", MenuTheme.MUTED, 8f))
+                child(label("Mob markers are separate.", MenuTheme.MUTED, 8f))
+            }
             child(pinControl(setting))
             return@apply
         }
@@ -528,7 +495,7 @@ class SettingsScreen @JvmOverloads constructor(
     }.also { controls[setting.path] = it }
 
     private fun pinControl(setting: SettingRow) = button(if (MenuShortcuts.isPinned(setting.path)) "Unpin" else "Pin", 58,
-        "${feature?.breadcrumb} → ${setting.title}. Add or remove this canonical control from Quick Settings.") { anchor ->
+        "${catalog.featureForPath(setting.path)?.breadcrumb} → ${setting.title}. Add or remove this canonical control from Quick Settings.") { anchor ->
         val wasPinned = MenuShortcuts.isPinned(setting.path)
         onPinSetting(setting.path)
         val pinned = MenuShortcuts.isPinned(setting.path)
@@ -542,10 +509,8 @@ class SettingsScreen @JvmOverloads constructor(
         val component = controls[path] ?: return
         if (component.parent() == null) return
         val handler = component.focusHandler() ?: return
-        if (featureId != "settings-appearance") {
-            drawerScroll.scrollTo(component)
-            drawerScroll.scrollBy(0.0, true, false)
-        }
+        contentScroll.scrollTo(component)
+        contentScroll.scrollBy(0.0, true, false)
         handler.focus(settingsFocusTarget(component), UIComponent.FocusSource.KEYBOARD_CYCLE)
         pendingSetting = null
     }
@@ -558,7 +523,9 @@ class SettingsScreen @JvmOverloads constructor(
             if (setting.path == "openConfigKey") SkyMyceCommands.updateSettingsKey()
             button.message = Component.literal(keyName(setting.entry.int)); keyCapture = null; return true
         }
-        if (event.key == GLFW.GLFW_KEY_ESCAPE && selectedGroup != null) { closeDetails(); return true }
+        if (event.key == GLFW.GLFW_KEY_F && event.hasControlDown()) {
+            search.focusHandler()?.focus(search, UIComponent.FocusSource.KEYBOARD_CYCLE); return true
+        }
         return super.keyPressed(event)
     }
     override fun removed() {
@@ -581,22 +548,21 @@ class SettingsScreen @JvmOverloads constructor(
     private fun edited() {
         changed = true; PartyFinder.invalidateMatcher()
         heading.color(Color.ofRgb(MenuTheme.ACCENT))
+        HudTheme.changed()
     }
-    private fun rebuild() { if (uiAdapter != null) rebuildMenu() }
     private fun keyName(key: Int) = if (key == GLFW.GLFW_KEY_UNKNOWN) "Unbound" else InputConstants.Type.KEYSYM.getOrCreate(key).displayName.string
     private fun numberText(value: Double) = "%.2f".format(value).trimEnd('0').trimEnd('.', ',')
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).gap(6)
     private fun label(text: String, color: Int = MenuTheme.TEXT, size: Float = 10f) = MenuLabel(Component.literal(text)).apply {
         fontSize = size; color(Color.ofRgb(color)); shadow(MenuTheme.SHADOW); horizontalSizing(Sizing.fill())
     }
-    private fun button(text: String, width: Int, tooltip: String, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).themed().apply {
+    private fun button(text: String, width: Int, tooltip: String, action: (ButtonComponent) -> Unit) = SettingsButton(Component.literal(text), action).themed().apply {
         sizing(Sizing.fixed(width), Sizing.fixed(20)); tip(tooltip)
     }
     private fun <T : UIComponent> T.tip(text: String): T = wrappedTooltip(Component.literal(text))
     private fun menu(anchor: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(anchor, options)
     companion object {
         private val SAVE_LOCK = Any()
-        private fun settingGroupName(path: String) = path.substringBeforeLast('/', "Basics").substringAfterLast('/')
         fun forFeature(parent: Screen?, id: String) = SettingsScreen(parent, featureId = id)
         fun forSetting(parent: Screen?, path: String): SettingsScreen {
             val location = MenuCatalog.settingLocation(path)
@@ -606,7 +572,7 @@ class SettingsScreen @JvmOverloads constructor(
             return SettingsScreen(parent, featureId = id, settingPath = path)
         }
     }
-    private fun currentValues() = feature?.settings.orEmpty().map { setting ->
+    private fun currentValues() = commandRows.map { setting ->
         if (setting.entry.isArray) setting.entry.array.toList() else setting.entry.get()
     }
 }

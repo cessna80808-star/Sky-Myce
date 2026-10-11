@@ -16,11 +16,12 @@ import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 
 internal val lfgButtonAction = Regex("^(yes|no) ([a-f0-9]{16})$")
+internal val relayChatExit = Regex("(?i)^(?:sm|skymyce)\\s+chat$")
 private val chatChannelCommand = Regex("(?i)^chat\\s+(?:a|all|p|party|g|guild|o|officer|c|co|coop|co-op)$")
 internal fun userMessageError(name: String, message: String): String? = when {
     !name.matches(Regex("[A-Za-z0-9_]{1,16}")) -> "Use the player's real Minecraft name."
     message.isBlank() || message.length > 256 -> "Messages must contain 1–256 characters."
-    message.any { it.isISOControl() || it == '§' } -> "Messages cannot contain control or formatting codes."
+    message.any { it.isISOControl() || it == '§' || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' } -> "Messages cannot contain control or formatting codes."
     else -> null
 }
 internal fun relayRecipients(names: List<String>, prefix: String) = names.filter {
@@ -53,8 +54,6 @@ internal class RelayConversation {
 /** Ordinary private messages never enter the LFG parser and never fall back to Hypixel chat. */
 object RelayMessages {
     private val irc = IrcMode()
-    private val ircSeen = linkedSetOf<String>()
-    private var ircNextSend = 0L
     private val global = GlobalChatState()
     private val globalSubscription = GlobalChatSubscription()
     private var globalAccount: java.util.UUID? = null
@@ -65,33 +64,37 @@ object RelayMessages {
     @JvmStatic fun suppressChatLog() = quiet.get()
     // Reconnecting the relay must not silently turn a private conversation into public chat.
     fun reset() { conversations.relayDisconnected(); nextSend = 0 }
-    private fun session() { conversations.session(MC.instance.user.profileId.toString()) }
+    private fun session() {
+        val account = MC.instance.user.profileId
+        irc.account(account)
+        conversations.session(account.toString())
+    }
     fun init() {
         ClientSendMessageEvents.ALLOW_CHAT.register { text ->
             session()
-            if (!irc.chat(text) { if (irc.global) sendGlobal(it) else sendIrc(it) }) return@register false
+            if (!irc.chat(text) { if (irc.party) sendParty(it) else sendGlobal(it) }) return@register false
             conversations.allowChat(text, ::send)
         }
         ClientSendMessageEvents.ALLOW_COMMAND.register { command ->
-            val wasIrc = irc.selected && !irc.global
+            // This pre-dispatch exit stays available when protected command authorization expires.
+            if (relayChatExit.matches(command.trim())) {
+                leaveChat()
+                return@register false
+            }
+            val wasSelected = irc.selected
             val allow = irc.command(command)
             if (!allow) {
                 conversations.leaveChat()
-                if (irc.global) {
-                    if (wasIrc) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
-                    globalSelected()
-                } else {
-                    DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to true))
-                    display(Component.literal("Sky-Myce IRC selected. /chat p or /chat a exits. Messages stay private if delivery fails.").withColor(HudTheme.ACCENT))
-                }
-            } else if (wasIrc && !irc.selected) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
+                enableGlobal()
+                globalSelected()
+            } else if (wasSelected && !irc.selected) chatClosed()
             allow
         }
         ClientSendMessageEvents.COMMAND.register { command ->
             if (conversations.channelCommand(command)) chatClosed()
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
-            conversations.clear(); nextSend = 0; irc.selected = false; ircSeen.clear(); globalSubscription.reset()
+            conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset()
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
@@ -126,10 +129,7 @@ object RelayMessages {
     fun chat(name: String) {
         session()
         recipientError(name)?.let { error(it); return }
-        if (irc.selected) {
-            if (!irc.global) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
-            irc.selected = false
-        }
+        irc.selected = false
         conversations.chat(name)
         display(Component.literal("Relay chat → $name. Type normally to message them; /chat a or /sm chat exits.").withColor(HudTheme.ACCENT))
         val client = MC.instance
@@ -144,26 +144,42 @@ object RelayMessages {
         }
     }
     fun leaveChat() {
-        if (irc.selected) {
-            if (!irc.global) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
-            irc.selected = false
-        }
+        irc.selected = false
         conversations.leaveChat()
         chatClosed()
     }
     private fun chatClosed() = display(Component.literal("Relay chat off. Normal messages use your Hypixel chat channel.").withColor(HudTheme.MUTED))
-    fun ircReady() { if (irc.selected && !irc.global) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to true)) }
-    fun ircError() = error("Sky-Myce IRC could not deliver the message. Nothing was sent to public chat.")
-    private fun sendIrc(text: String) {
-        if (userMessageError("IRC", text) != null || System.nanoTime() < ircNextSend) { ircError(); return }
-        ircNextSend = System.nanoTime() + 1_000_000_000
-        if (!DungeonFriendRelay.ircPacket("irc_send", mapOf("text" to text))) ircError()
+
+    fun selectParty() {
+        session()
+        conversations.leaveChat()
+        irc.selectParty()
+        partyError()
+    }
+
+    fun sendParty(text: String) {
+        userMessageError("Party", text)?.let { error(it); return }
+        // No authenticated party-membership authority exists; never substitute a shared relay room.
+        partyError()
+    }
+
+    fun partyError() = error("Sky-Myce party chat is unavailable: the backend cannot verify your current Hypixel party. Nothing was sent. /sm chat returns to normal chat.")
+
+    fun chatHelp() = display(Component.literal("/sm irc — select global Minecraft/Discord chat; /sm irc <message> — send once. /sm pc selects party mode; delivery awaits verified party membership. /sm chat returns to normal chat. Failed sends never change channels.").withColor(HudTheme.TEXT))
+
+    private fun enableGlobal() {
+        if (GlobalChatConfig.enabled) return
+        GlobalChatConfig.enabled = true
+        runCatching { me.mycellium.skymyce.SkyMyce.config.save() }.onFailure {
+            me.mycellium.skymyce.SkyMyce.logger.warn("[Global chat] Could not save the receiving preference")
+        }
     }
 
     /** Only changed preferences serialize a subscription; incoming messages remain event-driven. */
     fun globalTick() {
         val account = MC.instance.user.profileId
         if (globalAccount != account) {
+            irc.account(account)
             globalAccount = account
             global.account(account.toString())
             globalNextSend = 0L
@@ -199,9 +215,9 @@ object RelayMessages {
 
     fun selectGlobal() {
         session()
-        if (irc.selected && !irc.global) DungeonFriendRelay.ircPacket("irc_subscribe", mapOf("enabled" to false))
         irc.command("chat sky")
         conversations.leaveChat()
+        enableGlobal()
         globalSelected()
         val client = MC.instance
         val connection = client.connection
@@ -217,14 +233,14 @@ object RelayMessages {
     private fun globalSelected() {
         globalTick()
         display(Component.literal(if (GlobalChatConfig.enabled)
-            "Global SkyMyce chat selected. /chat a exits input; receiving stays enabled. Failed sends stay private."
-        else "Global chat is disabled. Enable General → Global SkyMyce Chat; /chat a exits input.").withColor(HudTheme.ACCENT))
+            "Global Sky-Myce IRC selected. /sm chat returns to normal chat; receiving stays enabled. Failed sends stay in IRC."
+        else "Global chat is disabled. Enable Global SkyMyce Chat; /sm chat returns to normal chat.").withColor(HudTheme.ACCENT))
     }
 
     fun sendGlobal(text: String) {
         globalMessageError(text)?.let { error(it); return }
-        if (!GlobalChatConfig.enabled) { error("Global chat is disabled. Enable it in General → Global SkyMyce Chat."); return }
         if (!LoaderClient.onlineAllowed) { error("SkyMyce online authorization is required for global chat."); return }
+        enableGlobal()
         if (MC.instance.player == null || MC.connection == null || !DungeonFriendRelay.connected) {
             error("Global relay unavailable. Reconnect and retry; nothing was sent to normal chat."); return
         }
@@ -270,20 +286,6 @@ object RelayMessages {
             display(component, "[SkyMyce] ")
         }
         if (delivery.ping) client.soundManager.play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4f, 0.25f))
-    }
-    fun receiveIrc(json: com.google.gson.JsonObject) {
-        if (!irc.selected || irc.global || !me.mycellium.skymyce.loader.LoaderClient.onlineAllowed) return
-        val id = json.get("id").asString
-        val source = json.get("source").asString
-        val name = json.get("from").asString
-        val text = json.get("text").asString
-        require(id.matches(Regex("[a-f0-9-]{32,36}")) && source in setOf("minecraft", "discord"))
-        require(name.length in 1..80 && name.none { it.isISOControl() || it == '§' })
-        require(userMessageError("IRC", text) == null)
-        if (!ircSeen.add(id)) return
-        while (ircSeen.size > 256) ircSeen.remove(ircSeen.first())
-        display(Component.literal("[${if (source == "discord") "Discord" else "IRC"}] $name: ").withColor(HudTheme.SECONDARY)
-            .append(Component.literal(text).withColor(HudTheme.TEXT)))
     }
     fun reply(text: String) {
         session()

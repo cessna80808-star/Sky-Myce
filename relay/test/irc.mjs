@@ -51,6 +51,7 @@ export async function checkIrc(script, proof) {
     ws.send(JSON.stringify(data));
     if (closed) { assert.equal((await closed).code, 4005); return; }
     const ready = await next(); assert.equal(ready.type, "ready"); assert.equal(ready.irc, true);
+    assert.equal(ready.partyChat, false); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
   }
   const bridgeHeaders = (room, timestamp = String(Date.now())) => {
@@ -117,6 +118,28 @@ export async function checkIrc(script, proof) {
     assert.equal((await mf.dispatchFetch("http://localhost/discord/bridge?room=friends", { headers })).status, 401);
     assert.equal((await mf.dispatchFetch("http://localhost/discord/bridge?room=friends", { headers: bridgeHeaders("friends", String(Date.now() - 120000)) })).status, 401);
     assert.equal((await mf.dispatchFetch("http://localhost/discord/bridge?room=testing", { headers: bridgeHeaders("friends") })).status, 401);
+    const partyId = id();
+    for (const packet of [
+      { type: 'irc_subscribe', enabled: true, partyId: 'friends', members: [alicePerson.uuid, people.get('Bob').uuid] },
+      { type: 'irc_send', text: 'private party text', partyId: 'friends', leader: people.get('Bob').uuid },
+      { type: 'irc_send', text: 'replayed party text', partyId: 'another-party', members: [] },
+      { type: 'irc_subscribe', enabled: false },
+    ]) {
+      alice.ws.send(JSON.stringify({ ...packet, scope: 'party', id: partyId }));
+      assert.deepEqual(await alice.next(), { type: 'irc_result', id: partyId, scope: 'party', error: 'party_membership_unverified' });
+    }
+    for (const scope of ['Party', 'friends', null, {}]) {
+      alice.ws.send(JSON.stringify({ type: 'irc_send', scope, id: id(), text: 'unknown scopes stay private' }));
+      assert.equal((await alice.next()).error, 'invalid_scope');
+    }
+    bot.ws.send(JSON.stringify({ type: 'discord_message', scope: 'party', id: '900000000000000011',
+      discordId: alicePerson.discordId, from: 'Discord Alice', text: 'party text must not enter Minecraft' }));
+    assert.equal((await bot.next()).error, 'party_membership_unverified');
+    await ping(alice); await ping(bob); await ping(bot); await ping(isolated); await ping(testBot);
+    await mf.unsafeEvictDurableObject('irc-check', 'RelayRoom', { name: 'friends', webSockets: 'hibernate' });
+    alice.ws.send(JSON.stringify({ type: 'irc_send', scope: 'party', id: partyId, text: 'stale party after eviction' }));
+    assert.equal((await alice.next()).error, 'party_membership_unverified');
+    await ping(bob); await ping(bot);
     const messageId = id();
     alice.ws.send(JSON.stringify({ type: "irc_send", id: messageId, text: "hello @everyone", from: "Forged", uuid: people.get("Bob").uuid }));
     const received = await bot.next(); assert.equal(received.from, "Alice"); assert.equal(received.uuid, alicePerson.uuid); assert.equal(received.source, "minecraft");

@@ -328,6 +328,11 @@ fun main() {
 }
 
 private fun dungeonRoomContextChecks() {
+    check(dungeonRoutingActive(inDungeon = true, knownFloor = true, completed = false, inBoss = false)) // Waiting lobby and live run share the known-floor gate.
+    check(!dungeonRoutingActive(inDungeon = false, knownFloor = true, completed = false, inBoss = false))
+    check(!dungeonRoutingActive(inDungeon = true, knownFloor = false, completed = false, inBoss = false))
+    check(!dungeonRoutingActive(inDungeon = true, knownFloor = true, completed = true, inBoss = false))
+    check(!dungeonRoutingActive(inDungeon = true, knownFloor = true, completed = false, inBoss = true))
     val layout = DungeonMapLayout(5, 5, 16, -200, -200)
     fun blank() = ByteArray(16384)
     fun tile(colours: ByteArray, x: Int, z: Int, colour: Int = 63) {
@@ -349,6 +354,14 @@ private fun dungeonRoomContextChecks() {
     check(dungeonGridSegment(-200.51, -200.51) == RoomSegment(-232, -232))
     check(dungeonGridSegment(7.5, 7.5) == RoomSegment(-8, -8))
     check(dungeonGridSegment(23.5, 23.5) == RoomSegment(24, 24))
+    val boundaryRoom = LiveDungeonRoom("boundary", "Dungeon room", setOf(RoomSegment(-8, -8)), false, null)
+    for (coordinate in listOf(-8.5001, -8.5, 23.4999, 23.5)) {
+        val inside = coordinate >= -8.5 && coordinate < 23.5
+        check(boundaryRoom.containsPositionXZ(coordinate, 0.0) == inside)
+        check(boundaryRoom.containsPositionXZ(0.0, coordinate) == inside)
+        check((dungeonGridSegment(coordinate, 0.0) == RoomSegment(-8, -8)) == inside)
+    }
+    check(!boundaryRoom.containsXZ(-9, 0) && !boundaryRoom.containsXZ(24, 0)) // Collision-cell bounds stay exact.
 
     val shape = blank()
     tile(shape, 1, 1); tile(shape, 2, 1); tile(shape, 1, 2); tile(shape, 2, 2)
@@ -361,6 +374,14 @@ private fun dungeonRoomContextChecks() {
     check(!room.cleared)
     shape[(25 + 8) + (25 + 8) * 128] = 34
     check(requireNotNull(dungeonMapRoom(shape, layout, RoomSegment(-168, -168))).cleared)
+    val insetSeparator = blank()
+    tile(insetSeparator, 1, 1); tile(insetSeparator, 2, 1); tile(insetSeparator, 2, 2, 18)
+    door(insetSeparator, 1, 1, 1, 0, 63, true); door(insetSeparator, 2, 1, 0, 1, 18)
+    for (gap in 0..3) for (offset in listOf(0, 1, 2, 3, 12, 13, 14, 15))
+        insetSeparator[(25 + layout.roomSize + gap) + (25 + offset) * 128] = 0
+    val insetRoom = requireNotNull(dungeonMapRoom(insetSeparator, layout, RoomSegment(-168, -168)))
+    check(insetRoom.segments == setOf(RoomSegment(-168, -168), RoomSegment(-136, -168)))
+    check(insetRoom.exit?.doors?.single()?.from == insetRoom.segments) // Side sampling handles separators without coloured outer corners.
 
     for ((dx, dz) in listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1)) {
         val colours = blank()
@@ -370,12 +391,36 @@ private fun dungeonRoomContextChecks() {
         check(exit.kind == "Wither door")
         check(exit.door == GridCell(-121 + dx * 16, 69, -121 + dz * 16))
         check(exit.approach == GridCell(exit.door.x - dx * 3, 69, exit.door.z - dz * 3))
+        check(dungeonExitApproach(exit.approach, exit))
+        check(dungeonExitApproach(exit.approach.copy(x = exit.approach.x + dx * 2, z = exit.approach.z + dz * 2), exit))
+        check(dungeonExitApproach(exit.approach.copy(x = exit.approach.x + dz * 2, y = 75, z = exit.approach.z + dx * 2), exit))
+        check(!dungeonExitApproach(exit.door, exit))
+        check(!dungeonExitApproach(exit.door.copy(x = exit.door.x + dx, z = exit.door.z + dz), exit))
+        check(!dungeonExitApproach(exit.approach.copy(x = exit.approach.x - dx * 3, z = exit.approach.z - dz * 3), exit))
+        check(!dungeonExitApproach(exit.approach.copy(y = 76), exit))
+        val nearbyApproach = exit.approach.copy(x = exit.approach.x + dz, z = exit.approach.z + dx)
+        val approachGraph = requireNotNull(RoomNavigation.create(setOf(nearbyApproach), emptyMap(), emptyMap(),
+            healer = nearbyApproach))
+        check(dungeonExitApproach(approachGraph.healer!!, exit) && approachGraph.plan(nearbyApproach, emptySet()) != null)
+        val departure = exit.doors.single().departure
+        fun approachSurface(cell: GridCell) = cell.takeIf { it == nearbyApproach || it == departure }
+            ?.let { RoomPoint(it.x + .5, it.y.toDouble(), it.z + .5) }
+        check(approachSurface(exit.approach) == null) // A blocked canonical column does not reject an already checked nearby graph endpoint.
+        val approachContinuation = DungeonRouteContinuation(::approachSurface, { _, _ -> false }, simplify = { it })
+        approachContinuation.update(exit.copy(doors = exit.doors.map { it.copy(closed = false) }))
+        val unknownCrossing = approachContinuation.sections(approachSurface(nearbyApproach)).single()
+        check(unknownCrossing.gate && !unknownCrossing.checked &&
+            unknownCrossing.points[1] == RoomPoint(exit.door.x + .5, exit.door.y.toDouble(), exit.door.z + .5))
         check(dungeonMapExit(colours, layout, setOf(RoomSegment(-136 + dx * 32, -136 + dz * 32))) == null)
         door(colours, 2, 2, dx, dz, 18)
         val blood = requireNotNull(dungeonMapRoom(colours, layout, RoomSegment(-136, -136)))
-        check(blood.exit == exit.copy(kind = "Blood door"))
-        check(dungeonRouteVisible(false, blood) && !dungeonRouteVisible(true, blood))
-        check(dungeonMapExit(colours, layout, blood.segments) { 0 } == null) // Physically opened; stale red map pixel.
+        val bloodExit = requireNotNull(blood.exit)
+        check(bloodExit.door == exit.door && bloodExit.doors.single().kind == "Blood door" && bloodExit.reachesBlood)
+        check(dungeonRouteVisible(blood) && dungeonRouteVisible(blood, bloodOpened = false))
+        check(!dungeonRouteVisible(blood, bloodOpened = true))
+        check(!dungeonRouteVisible(dungeonMapRoom(colours, layout, RoomSegment(-136 + dx * 32, -136 + dz * 32))))
+        val opened = requireNotNull(dungeonMapExit(colours, layout, blood.segments) { 0 })
+        check(opened.reachesBlood && !opened.doors.single().closed) // Opening changes walkability, not the confirmed connection.
     }
     val topology = blank()
     for ((x, z) in listOf(2 to 1, 1 to 1, 1 to 0, 2 to 0, 3 to 0)) tile(topology, x, z)
@@ -386,7 +431,10 @@ private fun dungeonRoomContextChecks() {
     door(topology, 2, 0, 1, 0, 63)
     door(topology, 3, 0, 0, 1, 18)
     // Blood is immediately east but separated by a wall; the verified map route begins west.
-    check(requireNotNull(dungeonMapExit(topology, layout, setOf(RoomSegment(-136, -168)))).door == GridCell(-137, 69, -153))
+    val aroundWall = requireNotNull(dungeonMapExit(topology, layout, setOf(RoomSegment(-136, -168))))
+    check(aroundWall.door == GridCell(-137, 69, -153) && aroundWall.reachesBlood && aroundWall.doors.size == 5)
+    check(aroundWall.doors.map { it.door }.distinct().size == 5)
+    check(aroundWall.doors.zipWithNext().all { (a, b) -> a.to == b.from })
     check(requireNotNull(dungeonMapExit(topology, layout, setOf(RoomSegment(-136, -168))) { cell ->
         if (cell == GridCell(-105, 69, -153)) 119 else null
     }).door == GridCell(-137, 69, -153)) // A coal wall without a map doorway must not become an exit.
@@ -396,7 +444,7 @@ private fun dungeonRoomContextChecks() {
     check(requireNotNull(dungeonMapExit(unknown, layout, setOf(RoomSegment(-168, -168)))).kind == "Wither door")
     tile(unknown, 1, 2, 85); door(unknown, 1, 1, 0, 1, 119)
     check(dungeonMapExit(unknown, layout, setOf(RoomSegment(-168, -168))) == null)
-    check(dungeonMapRoom(unknown, layout, RoomSegment(-136, -168)) == null)
+    check(requireNotNull(dungeonMapRoom(unknown, layout, RoomSegment(-136, -168))).let { !it.cleared && it.name == "Dungeon room" })
     check(dungeonMapRoom(ByteArray(10), layout, RoomSegment(-168, -168)) == null)
 
     val gateBlocks = mutableMapOf<GridCell, Int>()
@@ -421,15 +469,20 @@ private fun dungeonRoomContextChecks() {
     val beforeFairy = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168)))
     val fairy = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-136, -168)))
     val fairyExit = requireNotNull(beforeFairy.exit)
-    check(fairyExit.door == GridCell(-105, 69, -153) && fairyExit.approach == GridCell(-108, 69, -153))
-    check(fairyExit.via == fairy.segments && fairy.fairy && !beforeFairy.fairy)
-    check(!beforeFairy.containsXZ(-120, -153) && beforeFairy.containsRouteXZ(-120, -153))
-    check(dungeonRouteVisible(false, beforeFairy) && dungeonRouteVisible(false, fairy))
-    check(!dungeonRouteVisible(true, beforeFairy) && !dungeonRouteVisible(true, fairy))
-    check(!dungeonRouteVisible(false, beforeFairy.copy(exit = null)))
-    check(dungeonContinueFairyRoute(fairyMap, layout, fairy, beforeFairy).key == beforeFairy.key)
-    fairyMap[33 + 33 * 128] = 34
-    check(dungeonContinueFairyRoute(fairyMap, layout, fairy, beforeFairy).cleared)
+    val fairyGate = fairyExit.doors[1]
+    check(fairyExit.door == GridCell(-137, 69, -153) && fairyExit.approach == GridCell(-140, 69, -153))
+    check(fairyExit.via.isEmpty() && fairy.fairy && !beforeFairy.fairy)
+    check(!beforeFairy.containsXZ(-120, -153) && !beforeFairy.containsRouteXZ(-120, -153))
+    check(fairyExit.reachesBlood && fairyExit.doors.map { it.door } == listOf(GridCell(-137, 69, -153), GridCell(-105, 69, -153), GridCell(-73, 69, -153)))
+    check(fairyExit.doors.first().to == fairy.segments && fairyGate.from == fairy.segments && fairyGate.closed)
+    check(fairyGate.approach == GridCell(-108, 69, -153)) // Fairy's next gate is known before entering it.
+    check(dungeonRouteVisible(beforeFairy) && dungeonRouteVisible(fairy))
+    check(!dungeonRouteVisible(beforeFairy, bloodOpened = true) && !dungeonRouteVisible(fairy, bloodOpened = true))
+    check(!dungeonRouteVisible(null, bloodOpened = false) && !dungeonRouteVisible(null, bloodOpened = true))
+    check(!dungeonRouteVisible(beforeFairy.copy(exit = null)))
+    check(dungeonContinueFairyRoute(fairyMap, layout, fairy, beforeFairy).key == fairy.key)
+    fairyMap[53 + 33 * 128] = 34
+    check(requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-136, -168))).cleared)
     // Independent solids: the Fairy tree blocks the direct line; the entrance is only three blocks wide.
     val fairySolids = listOf(
         GridCell(-128, 69, -158) to GridCell(-115, 80, -148),
@@ -445,39 +498,180 @@ private fun dungeonRoomContextChecks() {
                 minOf(from.z, to.z) - 0.3 < max.z && maxOf(from.z, to.z) + 0.3 > min.z
         } }, supported = { point, _, radius -> point.y == 69.0 && point.x - radius >= -168 &&
             point.x + radius <= -104 && point.z - radius >= -168 && point.z + radius <= -136 }, climbable = { false })
-    val fairyFlood = RoomLiveGeometry(GridCell(-167, 69, -153),
-        { beforeFairy.containsRouteXZ(it.x, it.z) && it.y in 68..72 }, { fairyMove(it, it) }, ::fairyMove)
-    fairyFlood.prioritize(listOf(fairyExit.approach))
+    val fairySeed = fairyExit.doors.first().departure
+    val fairyFlood = RoomLiveGeometry(fairySeed,
+        { fairy.containsXZ(it.x, it.z) && it.y in 68..72 }, { fairyMove(it, it) }, ::fairyMove)
+    fairyFlood.prioritize(listOf(fairyGate.approach))
     while (!fairyFlood.step(maxCells = 32, maxEdges = 64, maxNanos = Long.MAX_VALUE)) { }
     val fairyGeometry = requireNotNull(fairyFlood.result)
-    val fairyNavigation = requireNotNull(RoomNavigation.create(fairyGeometry.cells, fairyGeometry.adjacency, emptyMap(), fairyExit.approach))
-    val throughFairy = requireNotNull(fairyNavigation.plan(GridCell(-167, 69, -153), emptySet()))
-    check(throughFairy.path.last() == fairyExit.approach && throughFairy.path.any { it.x == -137 } && throughFairy.path.any { it.x == -120 })
+    val fairyNavigation = requireNotNull(RoomNavigation.create(fairyGeometry.cells, fairyGeometry.adjacency, emptyMap(), fairyGate.approach))
+    val throughFairy = requireNotNull(fairyNavigation.plan(fairySeed, emptySet()))
+    check(throughFairy.path.first() == fairySeed && throughFairy.path.last() == fairyGate.approach && throughFairy.path.any { it.x == -120 })
     check(throughFairy.path.any { it.x in -128..-115 && (it.z < -158 || it.z >= -148) })
     check(throughFairy.path.zipWithNext().all { (a, b) -> fairyMove(a, b) })
     door(fairyMap, 1, 1, 1, 0, 119)
-    check(requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168))).exit?.via?.isEmpty() == true)
+    val closedFairyEntry = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168))).exit!!
+    check(closedFairyEntry.doors.size == 3 && closedFairyEntry.doors.take(2).all { it.closed })
     // Opening the entrance must continue through Fairy even before its map pixel updates.
     val readFairyGate: (GridCell) -> Int? = { cell -> if (cell == GridCell(-137, 69, -153)) 0 else null }
     val openedEntrance = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168), readFairyGate))
-    check(openedEntrance.exit == fairyExit)
+    val openedFairyExit = requireNotNull(openedEntrance.exit)
+    check(openedFairyExit.doors.map { it.door } == fairyExit.doors.map { it.door })
+    check(!openedFairyExit.doors.first().closed && openedFairyExit.doors[1].closed)
     val insideFairy = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-136, -168), readFairyGate))
-    check(dungeonContinueFairyRoute(fairyMap, layout, insideFairy, openedEntrance, readFairyGate).key == openedEntrance.key)
-    // The next room can be Blood itself; retain the same passage and stop at its red gate.
+    check(dungeonContinueFairyRoute(fairyMap, layout, insideFairy, openedEntrance, readFairyGate).key == insideFairy.key)
+    // The next room can be Blood itself; keep the ordinary entrance and final red gate in order.
     tile(fairyMap, 3, 1, 18); door(fairyMap, 2, 1, 1, 0, 18)
-    check(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168), readFairyGate)?.exit == fairyExit.copy(kind = "Blood door"))
+    val nearbyBlood = requireNotNull(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168), readFairyGate)).exit!!
+    check(nearbyBlood.reachesBlood && nearbyBlood.doors.size == 2 && nearbyBlood.doors.last().kind == "Blood door")
     tile(fairyMap, 3, 1); door(fairyMap, 2, 1, 1, 0, 119)
     door(fairyMap, 1, 1, 1, 0, 63); door(fairyMap, 2, 1, 1, 0, 63)
-    check(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168))?.exit == null)
-    check(dungeonMapRoom(fairyMap, layout, RoomSegment(-136, -168))?.exit == null)
+    check(dungeonMapRoom(fairyMap, layout, RoomSegment(-168, -168))?.exit?.doors?.size == 3)
+    check(dungeonMapRoom(fairyMap, layout, RoomSegment(-136, -168))?.exit?.doors?.size == 2)
+
+    val partialMap = blank()
+    tile(partialMap, 1, 1); tile(partialMap, 2, 1, 82); tile(partialMap, 3, 1, 85)
+    door(partialMap, 1, 1, 1, 0, 82); door(partialMap, 2, 1, 1, 0, 119); door(partialMap, 3, 1, 1, 0, 119)
+    val partial = requireNotNull(dungeonMapExit(partialMap, layout, setOf(RoomSegment(-168, -168))))
+    check(!partial.reachesBlood && partial.doors.size == 3 && partial.doors.last().to.isEmpty())
+    check(partial.doors[1].to == setOf(RoomSegment(-104, -168))) // Gray is a known unopened room.
+    tile(partialMap, 4, 1, 18)
+    val extended = requireNotNull(dungeonMapExit(partialMap, layout, setOf(RoomSegment(-168, -168))))
+    check(extended.reachesBlood && extended.doors.size == 3 && extended.doors.map { it.door } == partial.doors.map { it.door })
+    door(partialMap, 1, 1, 0, 1, 119)
+    // A fully confirmed Blood route wins over a newly seen unrelated frontier.
+    check(dungeonMapExit(partialMap, layout, setOf(RoomSegment(-168, -168)))?.doors == extended.doors)
+
+    val grayFrontier = blank()
+    tile(grayFrontier, 1, 1); tile(grayFrontier, 2, 1, 85)
+    door(grayFrontier, 1, 1, 1, 0, 119); door(grayFrontier, 2, 1, 1, 0, 85)
+    val forward = requireNotNull(dungeonMapExit(grayFrontier, layout, setOf(RoomSegment(-168, -168))))
+    check(!forward.reachesBlood && forward.doors.size == 2 && forward.doors.last().to.isEmpty())
+    door(grayFrontier, 2, 1, 0, 1, 85)
+    val shared = requireNotNull(dungeonMapExit(grayFrontier, layout, setOf(RoomSegment(-168, -168))))
+    check(shared.doors.size == 1 && shared.doors.first().door == forward.doors.first().door) // Stop at the last unambiguous continuation.
+
+    val rareMap = blank()
+    tile(rareMap, 1, 1); tile(rareMap, 2, 1, 34); tile(rareMap, 3, 1, 18)
+    door(rareMap, 1, 1, 1, 0, 34); door(rareMap, 2, 1, 1, 0, 18)
+    check(dungeonMapExit(rareMap, layout, setOf(RoomSegment(-168, -168)))?.doors?.size == 2)
+    val rare = requireNotNull(dungeonMapRoom(rareMap, layout, RoomSegment(-136, -168)))
+    check(rare.name == "Rare room" && !rare.cleared)
+
+    val symmetric = blank()
+    tile(symmetric, 1, 1); tile(symmetric, 1, 0); tile(symmetric, 2, 1); tile(symmetric, 2, 0, 18)
+    door(symmetric, 1, 1, 0, -1, 63); door(symmetric, 1, 1, 1, 0, 63)
+    door(symmetric, 1, 0, 1, 0, 18); door(symmetric, 2, 1, 0, -1, 18)
+    val startPosition = RoomPoint(-152.5, 69.0, -152.5)
+    val stable = requireNotNull(dungeonMapExit(symmetric, layout, setOf(RoomSegment(-168, -168)), startPosition))
+    val nearbyPosition = startPosition.copy(x = startPosition.x + 1.0)
+    val retained = requireNotNull(dungeonMapExit(symmetric, layout, setOf(RoomSegment(-168, -168)), nearbyPosition, stable))
+    check(retained.doors == stable.doors) // A near-equivalent chain stays stable while the player moves slightly.
+    val movedPosition = startPosition.copy(x = startPosition.x + 5.0)
+    val shorter = requireNotNull(dungeonMapExit(symmetric, layout, setOf(RoomSegment(-168, -168)), movedPosition, stable))
+    check(shorter.doors.first().door == GridCell(-137, 69, -153) && shorter.doors != stable.doors)
+
+    val multicell = blank()
+    tile(multicell, 1, 1); tile(multicell, 2, 1, 85); tile(multicell, 2, 2); tile(multicell, 3, 2, 18)
+    door(multicell, 1, 1, 1, 0, 85, true); door(multicell, 2, 1, 0, 1, 63, true); door(multicell, 2, 2, 1, 0, 18)
+    val joined = setOf(RoomSegment(-168, -168), RoomSegment(-136, -168), RoomSegment(-136, -136))
+    for (segment in joined) {
+        val joinedExit = requireNotNull(dungeonMapExit(multicell, layout, joined))
+        check(joinedExit.reachesBlood && joinedExit.doors.single().from == joined && joinedExit.door == GridCell(-105, 69, -121))
+        check(dungeonMapRoom(multicell, layout, segment)?.segments == joined)
+    }
 
     val calibrated = blank()
     tile(calibrated, 0, 0, 30); tile(calibrated, 2, 1)
     calibrated[13 + 13 * 128] = 34 // Entrance checkmarks do not invalidate its border.
     check(dungeonNativeMapLayout(calibrated, 53, 33, -120.5, -152.5) == layout)
+    check(dungeonFloorMapLayout(calibrated, 7) == layout)
     check(dungeonNativeMapLayout(calibrated, 127, 127, -120.5, -152.5) == null)
     tile(calibrated, 1, 0, 30)
     check(dungeonNativeMapLayout(calibrated, 53, 33, -120.5, -152.5) == null)
+    check(dungeonFloorMapLayout(calibrated, 7) == null)
+
+    val displacedEntrance = blank()
+    tile(displacedEntrance, 3, 2, 30); tile(displacedEntrance, 1, 1); tile(displacedEntrance, 2, 1, 82)
+    tile(displacedEntrance, 3, 1); tile(displacedEntrance, 4, 1, 18)
+    door(displacedEntrance, 1, 1, 1, 0, 82); door(displacedEntrance, 2, 1, 1, 0, 119); door(displacedEntrance, 3, 1, 1, 0, 18)
+    val stableLayout = requireNotNull(dungeonFloorMapLayout(displacedEntrance, 7))
+    check(stableLayout == DungeonMapLayout(65, 45, 16, -104, -136)) // Entrance is away from the fixed northwest world cell.
+    val staleMarkerLayout = requireNotNull(dungeonNativeMapLayout(displacedEntrance, 33, 33, -120.5, -152.5))
+    check(staleMarkerLayout != stableLayout) // A delayed marker paired with a moved player previously shifted every room.
+    val beforePinkRoom = requireNotNull(dungeonMapRoom(displacedEntrance, stableLayout, RoomSegment(-168, -168)))
+    val inPinkRoom = requireNotNull(dungeonMapRoom(displacedEntrance, stableLayout, RoomSegment(-136, -168)))
+    check(beforePinkRoom.exit?.doors?.first()?.to == inPinkRoom.segments && inPinkRoom.fairy)
+    check(beforePinkRoom.exit?.reachesBlood == true && inPinkRoom.exit?.reachesBlood == true)
+    for (floor in 0..7) {
+        val pixels = blank()
+        val size = if (floor <= 3) 18 else 16
+        val origin = when (floor) { 0 -> RoomSegment(22, 22); 1 -> RoomSegment(22, 11); 2, 3 -> RoomSegment(11, 11); else -> RoomSegment(5, 5) }
+        val entrance = RoomSegment(origin.x + (size + 4) * 2, origin.z + (size + 4))
+        for (dx in 0 until size) for (dz in 0 until size) pixels[(entrance.x + dx) + (entrance.z + dz) * 128] = 30
+        val floorLayout = requireNotNull(dungeonFloorMapLayout(pixels, floor))
+        check(floorLayout.physicalX == -136 && floorLayout.physicalZ == -168 && floorLayout.roomSize == size)
+        check(floorLayout.world(origin) == RoomSegment(-200, -200))
+    }
+    check(dungeonFloorMapLayout(displacedEntrance, 8) == null && dungeonFloorMapLayout(ByteArray(10), 7) == null)
+
+    fun scanned(x: Int, z: Int, type: String = "NORMAL", state: String = "UNDISCOVERED",
+        door: Boolean = false, separator: Boolean = false, opened: Boolean = false, name: String? = "Unknown") =
+        DungeonScannedTile(-185 + x * 16, -185 + z * 16, type, state, door, separator, opened, name)
+    val scannedTiles = listOf(scanned(0, 0, "ENTRANCE"), scanned(2, 2),
+        scanned(3, 2, door = true), scanned(4, 2, "FAIRY", "UNOPENED", name = "Fairy"),
+        scanned(5, 2, "WITHER", door = true), scanned(6, 2),
+        scanned(7, 2, "BLOOD", door = true), scanned(8, 2, "BLOOD"))
+    val rawHotbarMap = blank().also { tile(it, 0, 0, 30); tile(it, 1, 1) }
+    val rawBeforeScan = rawHotbarMap.copyOf()
+    check(dungeonMapRoom(rawHotbarMap, layout, RoomSegment(-168, -168))?.exit == null)
+    val fullScan = requireNotNull(dungeonScannedMap(scannedTiles))
+    val scannedRoom = requireNotNull(dungeonScannedRoom(fullScan, RoomSegment(-168, -168)))
+    val scannedExit = requireNotNull(scannedRoom.exit)
+    check(scannedExit.reachesBlood && scannedExit.doors.map { it.kind } == listOf("Dungeon door", "Wither door", "Blood door"))
+    check(scannedExit.doors.drop(1).all { it.closed } && !scannedRoom.cleared)
+    check(rawHotbarMap.contentEquals(rawBeforeScan)) // Full scanned topology never overwrites the received hotbar map.
+    val scannedFairy = requireNotNull(dungeonScannedRoom(fullScan, RoomSegment(-136, -168)))
+    check(scannedFairy.fairy && scannedFairy.name == "Fairy" && scannedExit.doors.first().to == scannedFairy.segments)
+    check(scannedFairy.exit?.reachesBlood == true && scannedFairy.exit?.doors?.size == 2)
+    check(dungeonScannedRoom(fullScan, RoomSegment(-72, -168))?.exit == null) // Scanned Blood ends the route before native pixels catch up.
+    for (state in listOf("DISCOVERED", "UNOPENED", "UNDISCOVERED")) {
+        val changed = requireNotNull(dungeonScannedMap(scannedTiles.map { it.copy(state = state) }))
+        val route = requireNotNull(dungeonScannedRoom(changed, RoomSegment(-168, -168)))
+        check(route.exit?.doors == scannedExit.doors && !route.cleared && changed.cleared.isEmpty())
+    }
+    for (state in listOf("GREEN", "CLEARED")) {
+        val changed = requireNotNull(dungeonScannedMap(scannedTiles.map { it.copy(state = state) }))
+        val route = requireNotNull(dungeonScannedRoom(changed, RoomSegment(-168, -168)))
+        check(route.exit?.doors == scannedExit.doors && route.cleared)
+        check(dungeonScannedRoom(changed, RoomSegment(-136, -168))?.cleared == true)
+    }
+    val openedScan = requireNotNull(dungeonScannedMap(scannedTiles.map { it.copy(opened = it.door) }))
+    check(dungeonScannedRoom(openedScan, RoomSegment(-168, -168))?.exit?.doors?.all { !it.closed } == true)
+    val loadedGate = requireNotNull(dungeonScannedRoom(openedScan, RoomSegment(-168, -168), { cell ->
+        if (cell == scannedExit.doors[1].door) 119 else null
+    })).exit!!
+    check(loadedGate.doors[1].closed && !loadedGate.doors.last().closed) // Loaded blocks override the optional opened metadata.
+    check(dungeonScannedRoom(openedScan, RoomSegment(-168, -168), { -1 })?.exit?.doors?.drop(1)?.all { it.closed } == true)
+    val rareScan = requireNotNull(dungeonScannedMap(listOf(scanned(2, 2, "RARE", "CLEARED", name = "Rare"))))
+    check(dungeonScannedRoom(rareScan, RoomSegment(-168, -168))?.cleared == true) // Explicit metadata avoids the rare-room/checkmark colour collision.
+    val multicellTiles = listOf(scanned(2, 2), scanned(3, 2, separator = true), scanned(4, 2),
+        scanned(5, 2, "BLOOD", door = true), scanned(6, 2, "BLOOD"))
+    val scannedMulticell = requireNotNull(dungeonScannedMap(multicellTiles))
+    val connectedScan = requireNotNull(dungeonScannedRoom(scannedMulticell, RoomSegment(-168, -168)))
+    check(connectedScan.segments == setOf(RoomSegment(-168, -168), RoomSegment(-136, -168)))
+    check(connectedScan.exit?.doors?.single()?.from == connectedScan.segments)
+    val noSeam = requireNotNull(dungeonScannedMap(multicellTiles.filterNot { it.separator }))
+    check(dungeonScannedRoom(noSeam, RoomSegment(-168, -168))?.let { it.segments.size == 1 && it.exit == null } == true)
+    val missingDoor = requireNotNull(dungeonScannedMap(scannedTiles.filterNot { it.x == -105 && it.z == -153 }))
+    check(dungeonScannedRoom(missingDoor, RoomSegment(-168, -168))?.exit?.reachesBlood != true)
+    check(dungeonScannedMap(emptyList()) == null && dungeonScannedMap(List(122) { scanned(0, 0) }) == null)
+    check(dungeonScannedMap(listOf(scanned(2, 2), scanned(2, 2))) == null)
+    check(dungeonScannedMap(listOf(scanned(2, 2).copy(x = -152))) == null)
+    check(dungeonScannedMap(listOf(scanned(2, 2, door = true))) == null)
+    check(dungeonScannedMap(listOf(scanned(3, 3, door = true))) == null)
+    check(dungeonScannedMap(listOf(scanned(3, 2))) == null)
+    check(dungeonScannedMap(listOf(scanned(2, 2, separator = true))) == null)
 
     // Combined regression: an empty catalog must still produce a collision-safe automatic clear route.
     for (gateColour in listOf(18, 119)) {
@@ -494,7 +688,7 @@ private fun dungeonRoomContextChecks() {
         val detected = requireNotNull(dungeonMapRoom(colours, nativeLayout, dungeonGridSegment(feet(start).x, feet(start).z)))
         val exit = requireNotNull(detected.exit)
         check(!detected.cleared && exit.kind == if (gateColour == 18) "Blood door" else "Wither door")
-        check(dungeonRouteVisible(false, detected) && !dungeonRouteVisible(true, detected))
+        check(dungeonRouteVisible(detected))
         check(exit.approach == GridCell(-108, 69, -153))
         // Independent physical solids: a tall dividing wall with a southern opening, and a closed gate.
         val solids = listOf(GridCell(-128, 69, -168) to GridCell(-127, 73, -144),
@@ -568,11 +762,25 @@ private fun dungeonStarMobChecks() {
     check(resolve(101, health) == body)
     for (profile in listOf("Shadow Assassin", "Lost Adventurer", "Diamond Guy", "King Midas")) {
         check(dungeonMinibossProfile(profile))
-        check(dungeonStarPlayer(4, local = false, invisible = true, profile)) // Explicit Noamm profile detection.
+        check(dungeonStarPlayer(4, local = false, invisible = true, profile)) // Known profiles permit body resolution, without proving a star.
         check(!dungeonStarPlayer(2, local = true, invisible = false, profile))
+        val unstarred = "$profile 3M/3M❤"
+        val starred = "[Lv100] ✯ $unstarred"
+        check(!dungeonStarLabel(unstarred) && !dungeonMinibossLabel(unstarred))
+        check(dungeonStarLabel(starred) && dungeonMinibossLabel(starred))
+        check(dungeonMinibossLabel("✯ [Lv100] $unstarred"))
+        check(resolve(101, unstarred) == null && resolve(101, starred) == body)
+        for (throughMobs in listOf(false, true)) for (throughMinibosses in listOf(false, true)) {
+            check(!dungeonRouteStarTarget(false, true, throughMobs, throughMinibosses)) // A known miniboss without a star is always excluded.
+            check(dungeonRouteStarTarget(true, dungeonMinibossProfile(profile), throughMobs, throughMinibosses) == throughMinibosses)
+            check(dungeonRouteStarTarget(true, false, throughMobs, throughMinibosses) == throughMobs)
+        }
     }
     check(dungeonStarPlayer(2, local = false, invisible = false))
     check(!dungeonStarPlayer(4, local = false, invisible = false, "DungeonTeammate"))
     check(!dungeonStarPlayer(2, local = false, invisible = true))
     check(!dungeonMinibossProfile(null) && !dungeonMinibossProfile("Lost AdventurerFan"))
+    check(!dungeonMinibossLabel(null) && !dungeonMinibossLabel("✯ Shadow AssassinFan 3M❤"))
+    check(!dungeonMinibossLabel("✯ Shadow Assassin impersonator 3M❤") && !dungeonMinibossLabel("✯ Shadow Assassin item"))
+    check(!dungeonMinibossLabel(health))
 }

@@ -4,9 +4,9 @@ The client keeps owo's retained layout, focus, keyboard input, narration and scr
 
 The default menu and HUD palette uses dark purple surfaces and lavender accents. Existing saved color overrides and other presets still apply. Titles, body text, captions and values use the existing bundled proportional font and Unicode fallback. Widget placement remains in Minecraft GUI coordinates.
 
-The menu key and `/sm` open six category cards: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. The same surfaces move into a 52-pixel icon rail when entering a category or feature, and expand back when clicking Home. Hover tooltips identify compact icons. Clicking the current category returns to its feature list. Search and Quick Settings are accessible from the home footer and the rail's Search button. Global Settings sections are selected in the content header. Direct feature commands still open their existing destinations. See [menu organization](menu-organization.md) for canonical feature homes and shortcuts.
+The menu key and `/sm` open six category cards: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. Category cards show their purpose and, where space permits, a preview of their subgroups. The same surfaces move into a 52-pixel icon rail when entering a category, feature or Settings editor, and expand back when clicking Home. Hover tooltips identify compact icons; clicking the current category returns to its feature list. Search and Quick Settings each have a dedicated rail button and remain accessible from the home footer. Keyboard focus follows Home, the six categories, Quick Settings and Search. Settings controls remain grouped by their canonical feature in the main content. Direct feature commands still open their existing destinations. See [menu organization](menu-organization.md) for canonical feature homes and shortcuts.
 
-Navigation transfers one interruptible layout timeline and one sliding selection indicator; it never queues intermediate destinations. Content reserves its final width throughout the transformation. Card text keeps its original typography and fades before compression, so it does not rewrap during motion. Painted card bounds and elevation map back to the retained native buttons for input.
+Navigation transfers one interruptible layout timeline and one sliding selection indicator; it never queues intermediate destinations. Content reserves its final width throughout the transformation. Card text keeps its original typography and fades before compression, so it does not rewrap during motion. Logical card bounds follow only the card-to-rail layout timeline. Hover lift, scale, press and entrance reveal change their painting without changing hover, click or tooltip ownership. This prevents a stationary pointer at the lower edge from repeatedly losing and regaining the same card as it lifts. Cached home/rail rectangles are reused while layout progress and origin stay unchanged. The selected category is read from the retained screen's current state, including returns from Theme editing.
 
 ## Motion
 
@@ -14,7 +14,7 @@ Navigation transfers one interruptible layout timeline and one sliding selection
 
 Use `QUICK` for response and page content, `SMOOTH` for switches and fades, and `SETTLE` for the shell's restrained spring. Sliders follow the pointer immediately; their emphasis animates independently. Typical durations are 110–180 ms for controls, 220–245 ms for pages and entry, and 90–145 ms for exit. Profiles control depth, scale, stagger and spring strength as well as timing.
 
-`MenuIntroduction` claims the introduction once per application runtime and saves hidden `Theme & Appearance/menuIntroPlayed` only after the shell/navigation/cards settle. Ordinary page changes, configuration changes, data refreshes and window resize retain their current motion; they do not claim or restart the introduction. The flag persists across launches. Settings feature cards and Digest cards use `MenuRevealCard` with stable logical keys; first viewport visibility triggers their reveal, while scrolling back, filtering and rebuilding retain the original timeline. Reveal state is capped at 4,096 keys per runtime, with excess items appearing immediately rather than replaying older items.
+`MenuIntroduction` claims the introduction once per application runtime and saves hidden `Theme & Appearance/menuIntroPlayed` only after the shell/navigation/cards settle. During that introduction, category-card stagger begins after the shell reaches 85% of its entrance. An already saved introduction shows those cards immediately, including on a new application launch. Ordinary page changes, configuration changes, data refreshes and window resize retain their current motion; they do not claim or restart the introduction. Settings feature cards and Digest cards use `MenuRevealCard` with stable logical keys; first viewport visibility triggers their reveal, while scrolling back, filtering and rebuilding retain the original timeline. Reveal state is capped at 4,096 keys per runtime, with excess items appearing immediately rather than replaying older items.
 
 ```kotlin
 private val emphasis = MotionValue(0.0)
@@ -26,7 +26,7 @@ val amount = emphasis.sample().coerceIn(0.0, 1.0)
 graphics.layer(alpha = amount) { /* paint */ }
 ```
 
-`MenuGraphics.layer` composes opacity and transforms and restores them in `finally`. `MotionPose` supplies the inverse transform for pointer input. The screen uses the last painted shell/content poses for clicking, dragging, scrolling and hovering; the empty strip left by entering content rejects hits. Popups settle their anchor's pose before mounting. Closing screens reject clicks, keyboard input and text composition.
+`MenuGraphics.layer` composes opacity and transforms and restores them in `finally`. `MotionPose` supplies the inverse transform for pointer input. The screen uses the last painted shell/content poses for clicking, dragging, scrolling and hovering; the empty strip left by entering content rejects hits. Reveal cards also use stable unlifted bounds to decide their own hover, while their child controls receive inverse-painted coordinates so clicks follow the visible control. Pointer movement refreshes the cards' hover ownership even when it leaves the body for the rail. Clipped and unrevealed controls reject hits. Popups settle their anchor's pose before mounting. Closing screens reject clicks, keyboard input and text composition.
 
 ## Graphics and accessibility settings
 
@@ -36,16 +36,16 @@ Open **Settings → Theme & Appearance**. The graphics and animation selectors a
 | --- | --- | --- | --- | --- |
 | Extremely Light | 1× | None | None | None |
 | Light | 1.25× | One layer | None | None |
-| Medium (default) | 1.5× | Two layers | Yes | Heavy motion: three subtle points, at most 10 updates/s |
-| High | 2× | Three layers | Yes | Heavy motion: five subtle points, at most 20 updates/s |
+| Medium (default) | 1.5× | Two layers | Yes | Heavy transitions: three subtle points, at most 10 updates/s |
+| High | 2× | Three layers | Yes | Heavy transitions: five subtle points, at most 20 updates/s |
 
-Raster dimensions remain capped at 2560×1440. Light and higher add cached gradients. Shadows use bounded silhouettes; effects do not allocate blur surfaces or introduce a post-processing pass. Ambient animation changes a small decorative corner, preserving the rest of the dirty-region cache.
+Raster dimensions remain capped at 2560×1440. Light and higher add cached gradients. Shadows use bounded silhouettes; effects do not allocate blur surfaces or introduce a post-processing pass. Ambient animation changes a small decorative corner during shell, page or navigation movement, then keeps its final pose. A settled Heavy menu therefore does not continually dirty that corner.
 
 | Animations | Behavior |
 | --- | --- |
 | Light | Faster deadlines, 1.25-pixel card lift, tiny scale changes, subdued shadow, no glow/spring/ambient animation |
 | Medium (default) | 3.5-pixel card lift, restrained scale and spring, deeper hover shadow, layered entrances and responsive controls |
-| Heavy | 6-pixel card lift, stronger bounded spring/depth/glow, richer stagger and subtle page focus; ambient detail only when graphics quality allows |
+| Heavy | 6-pixel card lift, stronger bounded spring/depth/glow, richer stagger and subtle page focus; animated ambient detail during transitions when graphics quality allows |
 | Reduced | Fades and immediate interaction feedback; timelines capped at 90 ms without stagger delays, large page/shell movement, spring overshoot or ambient motion |
 | Off | Logical state and final presentation update immediately; decorative transitions and ambient motion stop |
 
@@ -90,14 +90,14 @@ The HUD editor fades its controls, help, tooltips and outlines while preserving 
 Use Java 25:
 
 ```powershell
-.\gradlew.bat menuNavigationCheck menuMotionCheck hudCheck
+.\gradlew.bat menuNavigationCheck menuMotionCheck menuCatalogCheck menuShortcutsCheck hudCheck
 .\gradlew.bat check build
 ```
 
 `menuMotionCheck` exercises fake-clock timelines at 30/60/120/240 FPS, repeated targets, rapid reversals, stagger, cancellation, accessibility changes, coordinate inverses, opacity, clipping, isolated/flattened snapshots, constant-opacity interrupted blending, shared scroll retarget/clamp logic, toast lifetime, cache/idle behavior and cleanup. It writes quality/transition PNG fixtures and prints warmed raster CPU/wall time, allocated bytes and dirty-pixel area in `build/menu-motion-check`.
 
-`menuNavigationCheck` covers responsive card/rail geometry, reversible transformation, lifted hit coordinates, rapid final intent and settled raster reuse. It writes production tile renders for home, intermediate transformation and submenu in Light/Medium/Heavy to `build/menu-navigation-check`. `hudCheck` exercises every raster quality/resize, full/partial upload parity, next-tick/fence texture lifetime and shutdown cleanup, alongside its existing retained layout, text, themes and HUD checks.
+`menuNavigationCheck` covers all card edges and repeated leave/re-entry across motion profiles, layout progress, screen origins and window sizes; hover/press/reveal cannot revise logical hit bounds. It also checks rapid final intent, bounded shortcuts, unchanged pinned values and settled geometry/raster reuse, and writes production tile renders for home, intermediate transformation and submenu in Light/Medium/Heavy to `build/menu-navigation-check`. `menuMotionCheck` exercises mounted reveal-card hover ownership, painted child coordinates, adjacent cards, clipping and idle ambient state. `hudCheck` checks that Settings inherits the shared rail/layout, keeps searchable category scopes and direct control focus, and exercises every raster quality/resize, full/partial upload parity, next-tick/fence texture lifetime and shutdown cleanup. [Measured menu costs and regression results](menu-optimization-2026-10.md) record the baseline and follow-up conditions.
 
-These fixtures use the real Java2D rasterizer but are not in-game screenshots or GPU/FPS measurements. Full native screen event dispatch and rendering need Fabric's launcher; pure timelines, ancestry and supported retained-layout checks run through JavaExec. A live performance and interaction pass needs a supported Minecraft 26.1.2 instance with the signed protected release; the raw Loom class-directory client does not satisfy release verification.
+These fixtures use the real Java2D rasterizer but are not in-game screenshots or GPU/FPS measurements. An October 10 private-world smoke pass also used the signed 2.4.27 release in the user's existing Prism session: Home/settings/Search/Quick Settings, real card-edge input, animation changes and restoring Light passed. This does not cover the entire acceptance matrix below or establish an FPS improvement; [the measured menu report](menu-optimization-2026-10.md) records the scope. The raw Loom class-directory client still does not satisfy release verification.
 
 For live acceptance, compare all four graphics qualities and Light/Medium/Heavy/Reduced/Off at 30/60/120/240 FPS. Verify a fresh profile's introduction, subsequent launches without replay, Home/card/rail reversal, every section, compact tooltips, rapid page/tab changes, first/repeated scroll reveals, popup replacement, close/reopen, resize and GUI-scale changes, dragging and scrollbar use, Unicode/long text, delayed/missing results, and disconnect/reconnect or island changes during a transition. Change graphics quality repeatedly while menus are transitioning and verify saved values after reopening. Inspect F3 frame time/GPU behavior and Java allocation/resource profiles alongside visual and input alignment. Do not report headless raster timings as Minecraft performance.

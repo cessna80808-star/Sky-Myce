@@ -3,6 +3,9 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import com.google.gson.JsonObject
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import com.mojang.brigadier.CommandDispatcher
+import me.mycellium.skymyce.commands.relayChannelCommand
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 
 private fun globalPacket(number: Int = 1, text: String = "Hello", mention: Boolean = false): JsonObject = JsonObject().apply {
     addProperty("type", "irc_message")
@@ -33,7 +36,7 @@ fun checkGlobalChat() {
     }) == null)
     check(message.mention && "private-metadata" !in message.toString())
     check(parseGlobalChat(globalPacket(text = "😀".repeat(2048)))?.text?.length == 4096)
-    for (invalid in listOf("", " ", "x".repeat(4097), "bad\u0000text", "bad\rtext", "§atext", "\ud800", "\udc00")) {
+    for (invalid in listOf("", " ", "x".repeat(4097), "bad\u0000text", "bad\rtext", "§atext", "bad\u202etext", "bad\u2066text", "\ud800", "\udc00")) {
         check(parseGlobalChat(globalPacket(text = invalid)) == null)
     }
     for ((key, bad) in listOf("type" to "other", "scope" to "room", "source" to "unknown", "id" to "internal-id",
@@ -49,6 +52,11 @@ fun checkGlobalChat() {
     check(globalMessageError("x".repeat(1024)) == null && globalMessageError("x".repeat(1025)) != null)
     check(globalMessageError("normal conversation about politics or profanity") == null)
     check(globalMessageError("invalid\nMinecraft input") != null)
+    for (invalid in listOf("", " ", "x".repeat(1025), "§ctext", "control\u0001", "bidi\u202e", "isolate\u2069", "\ud800")) {
+        check(globalMessageError(invalid) != null)
+    }
+    check(globalMessageError("Hello 😀, @Player") == null)
+    check(userMessageError("Party", "bidi\u202e") != null && userMessageError("Party", "isolate\u2066") != null)
     check("already sent" in globalDeliveryError("duplicate_text"))
     check("not configured" in globalDeliveryError("not_configured"))
     for (reason in listOf("receipt_timeout", "connection_lost")) check("unconfirmed" in globalDeliveryError(reason))
@@ -140,13 +148,56 @@ fun checkGlobalChat() {
     check(globalChatSpans("https://example.com/cut", setOf("https://example.com/cut/full-path")).none { it.url != null })
 
     val mode = IrcMode()
+    for (exit in listOf("sm chat", "skymyce chat", "SM  CHAT")) check(relayChatExit.matches(exit))
+    for (protected in listOf("sm chat Player", "sm irc", "sm help", "other chat", "sm chat text")) check(!relayChatExit.matches(protected))
     check(mode.chat("normal") { error("Normal Hypixel chat must not be intercepted") })
     check(!mode.command("chat sky") && mode.global)
     check(!mode.chat("global only even after failed delivery") { })
     check(mode.command("chat guild") && !mode.selected)
-    check(!mode.command("chat irc") && mode.selected && !mode.global)
+    check(!mode.command("chat irc") && mode.selected && mode.global && !mode.party)
     check(mode.command("chat p") && !mode.selected)
-    println("Global chat checks passed: strict public payloads, replies, mention pings, lease/account boundaries, subscription recovery, receipt expiry, replay/toggles, Unicode wrapping and safe links")
+    mode.selectParty()
+    check(mode.selected && mode.party && !mode.global)
+    check(!mode.chat("unavailable party delivery") { })
+    check(mode.party && mode.selected)
+    check(mode.command("other command") && mode.party)
+    check(mode.command("chat all") && !mode.selected && !mode.party && !mode.global)
+    for (alias in listOf("chat irc", "chat sky", "chat skymyce", "chat global", " CHAT   IRC ")) {
+        check(!mode.command(alias) && mode.selected && mode.global && !mode.party)
+    }
+    mode.account(account)
+    check(mode.global) // Initial identity association does not undo an explicit selection.
+    mode.account(account)
+    check(mode.global) // Reconnect with the same identity keeps failed sends confined.
+    mode.account(UUID.randomUUID())
+    check(!mode.selected && !mode.global && !mode.party)
+    mode.selectParty()
+    mode.account(UUID.randomUUID())
+    check(!mode.selected && !mode.global && !mode.party)
+
+    val dispatcher = CommandDispatcher<FabricClientCommandSource>()
+    val sent = mutableListOf<Pair<String, String>>()
+    for (name in listOf("irc", "global")) dispatcher.register(relayChannelCommand(name,
+        { mode.command("chat sky") }, { text -> if (globalMessageError(text) == null) sent += "global" to text }))
+    dispatcher.register(relayChannelCommand("pc", mode::selectParty,
+        { text -> if (userMessageError("Party", text) == null) sent += "party" to text }))
+    fun command(text: String) { check(dispatcher.execute(text, null) == 1) }
+    command("pc")
+    command("irc hello  world 😀")
+    check(mode.party && sent.single() == "global" to "hello  world 😀")
+    command("irc")
+    command("pc one-off party")
+    check(mode.global && sent.last() == "party" to "one-off party")
+    command("global alias message")
+    check(mode.global && sent.last() == "global" to "alias message")
+    val validSends = sent.size
+    for (invalid in listOf("§ctext", "x".repeat(1025), "bidi\u202e", "control\u0001")) command("irc $invalid")
+    for (invalid in listOf("§ctext", "x".repeat(257), "isolate\u2066")) command("pc $invalid")
+    check(sent.size == validSends && mode.global)
+    mode.selected = false
+    command("irc one-off while in normal chat")
+    check(!mode.selected && sent.last() == "global" to "one-off while in normal chat")
+    println("Global chat checks passed: strict public payloads, replies, mention pings, lease/account boundaries, subscription recovery, receipt expiry, replay/toggles, Unicode wrapping, safe links and canonical command/mode isolation")
 }
 
 fun main() = checkGlobalChat()

@@ -19,7 +19,8 @@ internal data class GlobalChatSpan(val text: String, val url: URI? = null)
 private val globalMessageId = Regex("[a-f0-9]{32}")
 private val globalUrl = Regex("(?i)https?://[^\\s<>]+")
 private fun safeGlobalText(text: String, maximum: Int, multiline: Boolean) = text.length in 1..maximum &&
-    !text.isBlank() && text.none { it == '§' || it.isISOControl() && !(multiline && it == '\n') } &&
+    !text.isBlank() && text.none { it == '§' || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' ||
+        it.isISOControl() && !(multiline && it == '\n') } &&
     text.indices.all { index -> when {
         text[index].isHighSurrogate() -> index + 1 < text.length && text[index + 1].isLowSurrogate()
         text[index].isLowSurrogate() -> index > 0 && text[index - 1].isHighSurrogate()

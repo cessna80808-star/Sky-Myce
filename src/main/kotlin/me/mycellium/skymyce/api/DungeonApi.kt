@@ -20,6 +20,7 @@ import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.base.predicates.OnlyIn
 import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
+import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerCloseEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.SlotClickEvent
@@ -28,8 +29,9 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.extentions.isSkyblockFiller
-import tech.thatgravyboat.skyblockapi.utils.regex.RegexUtils.contains
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+import java.util.UUID
 object DungeonApi : SkyMyceModule() {
     val secretDrops = setOf(
         "ARCHITECT_FIRST_DRAFT",
@@ -62,70 +64,55 @@ object DungeonApi : SkyMyceModule() {
         "Master Catacombs - Floor VII" to DungeonFloor.M7
     )
 
-    private val essenceRegex = Regex("^(.+?) Essence x(\\d+)$")
-    private val shardRegex = Regex("^(.+?) Shard x(\\d+)$")
-
-    private val costRegex = Regex("^([\\d,]+) Coins$")
-    private val rerollRegex = Regex("^Click to reroll this chest!$")
-    private val chestKeyRegex = Regex("^Dungeon Chest Key$")
-    private val openedRegex = Regex("(.+) CHEST REWARDS$")
-    private val chestControlItems = setOf("Open Reward Chest", "Reroll Chest")
-
     private var chestFloor: DungeonFloor? = null
     private var chestType: DungeonChest? = null
     private var chestContents: Map<SkyBlockId, Int> = emptyMap()
     private var chestSlots: List<Slot> = emptyList()
+    private var chestScreen: AbstractContainerScreen<*>? = null
+    private var observation = UUID.randomUUID().toString()
 
     private fun clearChest(forgetFloor: Boolean = false) {
         if (forgetFloor) chestFloor = null
         chestType = null
         chestContents = emptyMap()
         chestSlots = emptyList()
+        chestScreen = null
+        observation = UUID.randomUUID().toString()
         DungeonChestProtection.resetWarning()
     }
 
     @Subscription(ContainerCloseEvent::class)
     fun onChestClose() = clearChest()
 
-    @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class)
+    @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class, ProfileChangeEvent::class)
     fun onContextChange() = clearChest(forgetFloor = true)
 
     @Subscription
     fun getChestFloor(event: ContainerInitializedEvent) {
-        clearChest()
         if (LocationAPI.island !in arrayOf(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS)) {
-            chestFloor = null
+            clearChest(forgetFloor = true)
             return
         }
-        chestFloor = chestNames[event.title] ?: if (LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) {
+        val title = normalizeChestText(event.title) ?: return clearChest()
+        chestFloor = chestNames[title] ?: if (LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) {
             DungeonAPI.dungeonFloor
         } else {
             chestFloor
         }
 
-        chestType = DungeonChest.fromName(event.title)
+        val type = DungeonChest.fromName(title)
+        if (type == null) {
+            if (event.containerSlots.any { dungeonChestControl(it.item.hoverName.stripped) != null })
+                displayDevMessage { "Dungeon chest detection rejected: unrecognized title, titleChars=${title.length}" }
+            clearChest(); return
+        }
+        if (chestScreen !== event.screen || chestType != type) {
+            clearChest(); chestScreen = event.screen
+        }
+        chestType = type
         if (chestType != null) {
-            try {
-                chestSlots = event.containerSlots.filter {
-                    it.container !is Inventory && !it.item.isSkyblockFiller() && it.item.getSkyBlockId() != null
-                }
-                chestContents = buildMap {
-                    chestSlots.filterNot { slot ->
-                        slot.item.customName?.stripped in chestControlItems
-                    }.forEach { slot ->
-                        val id = slot.item.getSkyBlockId() ?: return@forEach
-                        val count = slot.item.skyblockCount()
-                        if (count > 0) put(id, (get(id) ?: 0) + count)
-                    }
-                }
-            } catch (exception: Exception) {
-                SkyMyce.logger.warn("Could not parse dungeon chest rewards; protection will allow the interaction", exception)
-                chestSlots = emptyList()
-                chestContents = emptyMap()
-            }
-            displayDevMessage { "chest floor: $chestFloor" }
-            displayDevMessage { "chest type: $chestType" }
-            displayDevMessage { "chest contents: $chestContents" }
+            refreshRewards(event.containerSlots)
+            displayDevMessage { "Dungeon chest preview: floor=${chestFloor?.name ?: "unknown"}, tier=${chestType?.name}, rewardKinds=${chestContents.size}" }
             DungeonChestInitializedEvent(
                 chestFloor ?: return,
                 chestType ?: return,
@@ -138,56 +125,72 @@ object DungeonApi : SkyMyceModule() {
     @OnlyIn(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS)
     fun slotClicked(event: SlotClickEvent) {
         val dungeonChest = chestType ?: return
+        if (event.screen !== chestScreen || event.isInPlayerInventory || DungeonChest.fromName(event.title) != dungeonChest) return
+        refreshRewards(event.slots.filter { it.container !is Inventory })
 
         val lore = event.item.get(DataComponents.LORE)?.lines
-        when (event.item.customName?.stripped) {
+        when (dungeonChestControl(event.item.hoverName.stripped)) {
             "Open Reward Chest" -> {
-                displayDevMessage { "Chest: $dungeonChest" }
-                val cost = lore?.firstNotNullOfOrNull { costRegex.find(it.string) }?.groupValues?.getOrNull(1)
-                    ?.replace(",", "")?.toLongOrNull()?.takeIf { it >= 0 }
+                val cost = dungeonChestCost(lore?.map { it.stripped }.orEmpty())
                 if (DungeonChestProtection.shouldBlock(dungeonChest, chestContents, cost)) {
                     event.cancel()
                     return
                 }
                 val floor = chestFloor ?: return
-                lore?.any { chestKeyRegex.contains(it.string) }
                 if (DungeonChestOpenEvent(
                         floor,
                         dungeonChest,
                         chestContents,
                         cost ?: 0,
-                        costKnown = cost != null
+                        costKnown = cost != null,
+                        observation = observation
                     ).post(SkyBlockAPI.eventBus)
                 ) event.cancel()
             }
 
             "Reroll Chest" -> {
                 val floor = chestFloor ?: return
-                val reroll = lore?.firstOrNull { rerollRegex.matches(it.string) }
+                val reroll = lore?.firstOrNull { normalizeChestText(it.stripped) == "Click to reroll this chest!" }
                 if (reroll != null) {
                     if (DungeonChestRerollEvent(
                             floor,
                             dungeonChest,
                             chestContents,
-                            chestSlots
+                            chestSlots,
+                            observation
                         ).post(SkyBlockAPI.eventBus)
-                    ) event.cancel()
+                    ) event.cancel() else observation = UUID.randomUUID().toString()
                 }
             }
         }
     }
 
     fun ItemStack.skyblockCount(): Int {
-        val name = this.customName?.string
-        if (name != null) {
-            essenceRegex.find(name)?.let {
-                return it.groupValues[2].toIntOrNull() ?: this.count
-            }
-            shardRegex.find(name)?.let {
-                return it.groupValues[2].toIntOrNull() ?: this.count
+        return dungeonRewardQuantity(hoverName.stripped, count) ?: 0
+    }
+
+    private fun refreshRewards(slots: List<Slot>) {
+        val previous = chestContents
+        val parsed = runCatching {
+            require(slots.size <= 90)
+            chestSlots = slots.filter { it.container !is Inventory && !it.item.isEmpty && !it.item.isSkyblockFiller() && dungeonChestControl(it.item.hoverName.stripped) == null }
+            buildMap<SkyBlockId, Int> {
+                for (slot in chestSlots) {
+                    val item = slot.item
+                    val id = dungeonEssenceId(item.hoverName.stripped)?.let(SkyBlockId::item) ?: item.getSkyBlockId() ?: continue
+                    val count = item.skyblockCount()
+                    require(count > 0)
+                    val total = (get(id) ?: 0).toLong() + count
+                    require(total <= 100000 && (id in this || size < 64))
+                    put(id, total.toInt())
+                }
             }
         }
-        return this.count
+        chestContents = parsed.getOrElse {
+            displayDevMessage { "Dungeon chest preview rejected: invalid reward bounds" }
+            emptyMap()
+        }
+        if (previous != chestContents) observation = UUID.randomUUID().toString()
     }
 }
 
@@ -201,7 +204,7 @@ enum class DungeonChest(val label: String, val color: ChatFormatting) {
 
     companion object {
         fun DungeonChest.formatted() = "§${this.color.char}${this.label}"
-        fun fromName(name: String) = entries.firstOrNull { it.label == name }
+        fun fromName(name: String) = normalizeChestText(name)?.let { normalized -> entries.firstOrNull { normalized == it.label || normalized == "${it.label} Chest" } }
     }
 }
 

@@ -185,11 +185,53 @@ fun main() {
     checkMotionFocus()
     checkMotionToasts()
     checkMotionScroll()
+    checkRevealCardPointer()
     checkLivingMotion()
     println("Menu motion checks passed: 30/60/120/240 FPS, reversal/stagger/cancellation, Reduced/Off, clock/input safety, isolated snapshots/constant-opacity blends, transformed input, retained rendering, scroll retarget/drag/clamp and bounded toast lifetimes")
 }
 
+private fun checkRevealCardPointer() {
+    val first = MenuRevealCard("fixture/first", Sizing.fixed(120), Sizing.fixed(80))
+    val second = MenuRevealCard("fixture/second", Sizing.fixed(120), Sizing.fixed(80))
+    val root = UIContainers.verticalFlow(Sizing.fixed(160), Sizing.fixed(220)).gap(12).children(listOf(first, second))
+    root.inflate(Size.of(160, 220)); root.mount(null, 20, 30)
+    val pose = MenuRevealCard::class.java.getDeclaredField("painted").apply { isAccessible = true }
+    val hover = MenuRevealCard::class.java.getDeclaredField("logicalHover").apply { isAccessible = true }
+    val clip = MenuRevealCard::class.java.getDeclaredField("paintedClip").apply { isAccessible = true }
+    for (mode in GuiMotion.choices) {
+        val profile = mode.profile
+        for (card in listOf(first, second)) pose.set(card, MotionPose(scale = 1 + profile.hoverScale, y = -profile.cardLift,
+            pivotX = card.x() + card.width() / 2.0, pivotY = card.y() + card.height() / 2.0))
+        repeat(40) {
+            menuCardPointer(root, first.x() + first.width() / 2.0, first.y() + first.height() - .25)
+            check(hover.getBoolean(first) && !hover.getBoolean(second)) { "$mode feature-card feedback changed its own edge hover" }
+        }
+        val x = first.x() + first.width() / 2.0; val y = first.y() + first.height() / 2.0
+        val point = checkNotNull(menuCardPointer(root, x, y))
+        val painted = pose.get(first) as MotionPose
+        near(point.first, painted.inverseX(x), "Animated feature controls lost their visible click coordinates")
+        near(point.second, painted.inverseY(y), "Animated feature controls lost their visible click coordinates")
+        menuCardPointer(root, second.x() + second.width() / 2.0, second.y() + second.height() - .25)
+        check(!hover.getBoolean(first) && hover.getBoolean(second)) { "Adjacent cards retained stale hover" }
+        menuCardPointer(root, -1.0, -1.0)
+        check(!hover.getBoolean(first) && !hover.getBoolean(second)) { "Leaving the card tree retained hover" }
+    }
+    clip.set(first, MenuRect(first.x().toDouble(), first.y().toDouble(), first.width().toDouble(), 10.0))
+    menuCardPointer(root, first.x() + 5.0, first.y() + 50.0)
+    check(!hover.getBoolean(first)) { "A clipped card area became hoverable" }
+    clip.set(first, null); pose.set(first, MotionPose(alpha = 0.0))
+    menuCardPointer(root, first.x() + 5.0, first.y() + 5.0)
+    check(!hover.getBoolean(first)) { "An unrevealed card became hoverable" }
+}
+
 private fun checkLivingMotion() {
+    var ambient = menuAmbientStep(Long.MIN_VALUE, 100_000_000, 100_000_000, false)
+    repeat(10000) { check(menuAmbientStep(ambient, 100_000_000L + it * 16_000_000L, 100_000_000, false) == ambient) {
+        "Settled Heavy motion kept invalidating the raster"
+    } }
+    ambient = menuAmbientStep(ambient, 600_000_000, 100_000_000, true)
+    check(ambient == 6L && menuAmbientStep(ambient, 650_000_000, 100_000_000, true) == ambient)
+    check(menuAmbientStep(ambient, 10_000_000_000, 100_000_000, false) == ambient)
     val profiles = listOf(GuiMotion.LIGHT, GuiMotion.MEDIUM, GuiMotion.HEAVY).map { it.profile }
     check(profiles.zipWithNext().all { (a, b) ->
         b.cardLift > a.cardLift && b.hoverScale > a.hoverScale && b.shadowStrength > a.shadowStrength &&

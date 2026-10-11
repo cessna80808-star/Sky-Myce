@@ -10,5 +10,6 @@ data class DungeonChestOpenEvent(
     val chest: DungeonChest,
     val contents: Map<SkyBlockId, Int>,
     val cost: Long,
-    val costKnown: Boolean = true
+    val costKnown: Boolean = true,
+    val observation: String = java.util.UUID.randomUUID().toString()
 ): CancellableSkyBlockEvent()

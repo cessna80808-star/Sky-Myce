@@ -1,5 +1,7 @@
 # Mod 2.4.18 mob detection and Fairy/Blood routing — deployed October 8, 2026
 
+> Latest release: **2.4.28**, deployed October 10, 2026. See the deployment record below.
+
 Production `sky-myce-backend` (`--env backend`) selects mod 2.4.18 on Worker
 version `5334c19b-d325-4b32-8b03-5a24b34ae160`, deployed at 12:06:42 UTC.
 Supported loaders discover the release on the next Minecraft launch.
@@ -457,3 +459,447 @@ restrictions, used keys and explicit device revocation remain rejected. This
 fix needs no loader update. Same-installation recovery, key replay, renewal after
 recovery and moving to a different installation are covered by the account tests.
 Evidence: `build/hwid-reset-reenroll-*.log`.
+
+## Settings command center release (2026-10-09)
+
+Mod **2.4.19** is published in the private production R2 bucket and selected by
+`sky-myce-backend` (`--env backend`). Settings now use inline category controls,
+global fuzzy search, eased click feedback and smooth scrolling. Loader 1.0.14,
+minimum loader 1.0.11 and the existing production signing key remain in use.
+
+- Artifact: `releases/Sky-Myce-2.4.19.jar`.
+- SHA-256: `df3feda7e160b8be315092984ee43aa25483b6f8fc6470884362b6cf8cc790af`.
+- Manifest: `releases/manifest-2.4.19.json`.
+- Worker version: `8a75c162-3473-4c14-a3ed-63b3385cce38`.
+- Renew the manifest before **October 16, 2026, 10:35:07.644 Stockholm**
+  (`2026-10-16T08:35:07.644Z`), retaining these exact artifact bytes.
+
+Java 25 `build -x loaderCheck`, relay `npm run check`, `npm test` and the backend
+deployment dry run passed. `loaderCheck` was excluded after its native-library
+restart fixture failed with `AccessDeniedException`; no in-game launch was run.
+The uploaded JAR was downloaded and hash-checked. Live signature, release version
+and artifact hash were verified; health returned 200 and unauthenticated artifact
+access returned 403. Existing dashboard variables and secrets were retained with
+`--keep-vars --strict`. Evidence: `build/release-2.4.19-live-verified.json`.
+
+## Continuous dungeon routing release (2026-10-09)
+
+Mod **2.4.20** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`7eeb2217-f920-40b2-8003-49d959ce1ed7`. It includes the continuous Blood route,
+closed-gate and pre-entry Fairy planning, collision-aware simplification and
+cached asynchronous onward-room searches described in `dungeon-routing.md`.
+
+- Artifact: `releases/Sky-Myce-2.4.20.jar`.
+- SHA-256: `606eac7876f2e08327a02591d3934b6fd1fddc34fef741e052807fc87615ac1c`.
+- Signed manifest: `releases/manifest-2.4.20.json`.
+- Manifest expiry: `2026-10-16T09:44:07.199Z`.
+
+Java 25 `build -x loaderCheck` passed; the existing native restart fixture's
+`AccessDeniedException` remains excluded. Backend packaging dry-run passed.
+The uploaded artifact was downloaded and hash-checked. Live manifest signature,
+version and artifact hash passed verification; health returned 200 and anonymous
+artifact access returned 403. Deployment retained dashboard variables and secrets
+using `--keep-vars --strict`; prior releases remain available for later cleanup.
+Evidence: `build/release-2.4.20-live-verified.json`. Live gameplay remains unverified.
+
+The existing operator signing key is available at
+`D:\Sky-Myce-Secrets\production-20260927.private.pem`; the older AppData path
+above is stale in this execution environment. The user authorized deployment
+as part of every completed mod release build; this preference is recorded in
+`AGENTS.md`.
+
+## Noamm full-map, Fairy handoff and route visibility release (2026-10-09)
+
+Mod **2.4.21** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`031d2f35-4515-4124-ba9c-d54ff5dfb330`. Routing reads NoammAddons 1.2.9's
+scanned room/door topology, including unopened rooms missing from the native
+filled map. Discovered-room brightness does not mark a room cleared. It also
+fixes native floor calibration, half-block room boundaries and cached Fairy
+handoff while the current graph is still partial. Routing remains visible after
+Blood opens elsewhere and hides on entering Blood or the boss phase. Brighter,
+wider outlined paths and larger repeated arrows improve readability.
+
+- Artifact: `releases/Sky-Myce-2.4.21.jar`.
+- SHA-256: `8768200a21796f36a8b2b89a2bf6d2e5666707e5c39818ca3dd58e5136250c51`.
+- Signed manifest: `releases/manifest-2.4.21.json`.
+- Manifest expiry: `2026-10-16T10:23:40.509Z`.
+
+Java 25 `build -x loaderCheck` passed all included checks. An attempted full
+`check` reproduced the existing native restart fixture's `AccessDeniedException`,
+which remains excluded. Noamm's reflection getters were checked against the
+installed 1.2.9 jar; pure fixtures cover full scanned Fairy/Blood topology despite
+missing native pixels, brightness versus clear states, mandatory doors and broad
+separators, loaded gate precedence, invalid snapshots, calibration and safe
+cached player joins. Backend packaging dry-run passed. Live version, pinned
+signature and artifact hashes passed verification; health returned 200 and
+anonymous artifact access returned 403. Existing variables and secrets were
+retained with `--keep-vars --strict`; prior releases remain for later cleanup.
+Evidence: `build/release-2.4.21-live-verified.json`. Live Minecraft rendering,
+actual Fairy traversal and FPS remain unverified.
+
+## Stair ramps, curved routes and earlier interior checks (2026-10-09)
+
+Mod **2.4.22** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`515a1fc0-f5e2-448c-875a-c59a9021b384`. It separates cached display paths from
+physical movement checks, draws monotone stair flights as ramps and rounds
+corners only after native collision/support validation. Fixed spans of at most
+64 raw edges bound repeated smoothing. Overlapping dark route strokes and arrows
+are removed. Checked Fairy handoffs retain priority during partial local scans.
+Onward interiors publish a checked provisional route before full flood completion,
+then refine it. Nearby doorway anchors prefer reachable floor over pillar tops.
+Unverified map hints remain dashed amber and say **Planned room connection**.
+
+- Artifact: `releases/Sky-Myce-2.4.22.jar`.
+- SHA-256: `ab0783b4abf3e22527850112cb2720727d8e0510baff86fa9aa00434596f84e1`.
+- Signed manifest: `releases/manifest-2.4.22.json`.
+- Manifest expiry: `2026-10-16T12:42:02.629Z`.
+
+Java 25 `dungeonRoutingCheck` and `build -x loaderCheck` passed. Coverage includes
+safe curves, stair ramps, mandatory boundaries and backward display cursors,
+early publication and final refinement, delayed worker callbacks through flood
+completion, entry during scanning, pillar anchors and raw/physical stair paths.
+The existing Windows native restart fixture's `AccessDeniedException` remains
+excluded. Backend packaging dry-run passed. Private R2 readback hash and live
+pinned Ed25519 signature, selected version and artifact hash passed verification;
+health returned 200 and unauthenticated artifact access returned 403. Deployment
+retained existing variables and secrets with `--keep-vars --strict` and retained
+previous builds. Evidence: `build/release-2.4.22-live-verified.json`.
+
+The supplied 70-second replay was inspected using 140 full-resolution frames
+at half-second intervals and seven contact sheets. This verifies the observed
+old rendering defects; live Minecraft visuals, Fairy traversal and FPS after
+the update remain unverified.
+
+## Pre-start routing, stable approach checks and simpler settings (2026-10-09)
+
+Mod **2.4.23** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`22ffba4d-132b-4626-8dc6-f31165f47f3b`. Routing starts when dungeon floor and
+map connections are available before the start announcement; that announcement
+keeps the warmed geometry and planning work. Growing checked graphs retain
+approach-probe progress instead of repeatedly testing the same blocked cells.
+Door approaches accept a nearby checked, supported endpoint even when the
+canonical anchor lacks floor, while crossing and gate validation remain required.
+
+The Dungeon Routing menu groups controls under Route, Mob markers, Appearance
+and a collapsed Advanced section. **Route through starred mobs** defaults on;
+turning it off replans toward Blood without mob stops. Observed mob markers
+remain independently configurable, and reenabling the option restores mob stops.
+Existing setting paths and defaults are preserved.
+
+- Artifact: `releases/Sky-Myce-2.4.23.jar`.
+- SHA-256: `d81017e2ad6082b98c7236e0e6a68b42a1301cff9ce089b3fcfe4e74d04f345e`.
+- Signed manifest: `releases/manifest-2.4.23.json`.
+- Manifest expiry: `2026-10-16T13:21:15.921Z`.
+
+Java 25 `dungeonRoutingCheck hudCheck menuCatalogCheck` and
+`build -x loaderCheck` passed. Coverage includes the pre-start lifecycle gate,
+direct-exit versus mob-stop planning, blocked canonical door anchors in all four
+rotations, probe progress across graph revisions and settings groups, search,
+saved defaults and independent markers. The existing Windows native restart
+fixture's `AccessDeniedException` remains excluded. Backend packaging dry-run
+passed. Private R2 readback hash and live pinned Ed25519 signature, selected
+version and artifact hash passed verification; health returned 200 and
+unauthenticated artifact access returned 403. Deployment retained existing
+variables and secrets with `--keep-vars --strict` and retained previous builds.
+Evidence: `build/release-2.4.23-live-verified.json`.
+
+The supplied 135-second replay was inspected using 271 full-resolution frames
+at half-second intervals, 14 contact sheets and detailed crops. It shows the
+full Noamm map before the start announcement and the second-run route dropout;
+it does not verify the new build's gameplay. Live pre-start routing, room
+traversal and FPS after the update remain unverified.
+
+## Teleport sight lines, carpet handling and route continuity (2026-10-09)
+
+Mod **2.4.24** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`d1c82c83-563b-4cdb-b481-0459b1a54200`. Clear teleport sight lines take priority
+between required stops, including across pits. Native checks require loaded
+space, player body clearance and a supported destination within 128 blocks,
+without requiring floor support between endpoints. Physical walking graph
+checks and mandatory mob stops/door centers remain intact. No input or teleport
+packets are generated. Clear onward rooms publish two points immediately
+without a flood or worker job; blocked sight lines retain walking detours.
+
+Carpets are absent from routing collision, standing-height and support checks;
+underlying floors, slabs and stairs retain native geometry. Repeated equivalent
+carpet/air updates do not invalidate cached interiors. Block changes are batched
+at client tick end and compared with the expected packet state; mismatches defer
+once and invalidate conservatively. Safe obstacle removals retain revalidated
+guidance during rebuilding until required destinations are rediscovered. New
+obstacles, lost landing/support and unloaded chunks invalidate it. Growing
+graphs reuse accepted paths while destinations and the player's reachable
+geometry remain unchanged. Cached handoffs now cover rooms beyond Fairy when
+mob-stop requirements allow them.
+
+Direction arrows are removed. **Line height** under Appearance adjusts cached
+strokes from 0 to 4 blocks above the floor, defaulting to 1.2, independently of
+marker positions and geometry. Rendering avoids direction calculations for
+solid strokes. Existing settings and old releases are retained.
+
+- Artifact: `releases/Sky-Myce-2.4.24.jar`.
+- SHA-256: `e5fca84c07eb36f8d7e7abf22b80927f836cf1ddcea16a9a4e0bc44ed7fce66a`.
+- Signed manifest: `releases/manifest-2.4.24.json`.
+- Manifest expiry: `2026-10-16T14:03:40.600Z`.
+
+Java 25 `build -x loaderCheck` passed all included checks. Coverage includes
+carpet/bare-floor equivalence, unsupported carpets, slab height, carpet-height
+alignment, teleport guidance across pits and elevation changes, airborne starts,
+walls/gates/ceilings, invalid/unloaded geometry, missing landings, direct-path
+cache reuse, obstacle-removal retention and safe invalidation. Menu checks cover
+the new slider's default, bounds, grouping and search. The existing Windows
+loader restart fixture's `AccessDeniedException` remains excluded. Production
+Worker packaging dry-run passed. R2 readback hash and live pinned Ed25519
+signature, selected version and artifact hash passed verification; health
+returned 200 and unauthenticated artifact access returned 403. Deployment used
+`--keep-vars --strict`, retaining existing variables, secrets and prior builds.
+Evidence: `build/release-2.4.24-live-verified.json`.
+
+Exactly 150 original full-resolution pictures were extracted from the supplied
+69-second replay, with five before 0:30 and dense coverage around 0:31–32,
+0:40–44 and 0:48–50. Eight contact sheets and detailed crops document the old
+door-handoff delay, missing carpet-room guidance and unnecessary door-approach
+loop. The user clarified that clear teleport guidance should cross the pit at
+0:49. These pictures do not verify the updated mod; real door continuity,
+teleport sight lines, carpeted-room behavior and FPS still need gameplay checks.
+
+## Stable room handoffs and Mage Blood-door reminder (2026-10-09)
+
+Mod **2.4.25** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`af1e9f91-bcf0-4694-b6cc-b0376401637f`.
+
+Temporary shortening of a confirmed door chain no longer discards its
+destination's checked interior or queued work. Door identities and relevant
+block/chunk invalidation still reject stale results. A bounded native doorway
+probe can draw checked teleport guidance before the walking flood reaches its
+exit; changes to that distant landing independently refresh the probe. Cached
+handoffs use standing-node display smoothing with the moving player join kept
+separate. Temporary join failures retain smoothed suffixes, and rendering no
+longer switches to physical staircase elbows.
+
+All routing stops when Blood opens, including outside Blood and after leaving
+it. Only Mage receives a 23-second run-scoped Blood-door reminder; re-entry does
+not extend it. The reminder respects Show Blood guidance and uses the installed
+NoammAddons 1.2.9 doorway bounds, 3×4×3 at Y 69–73. Small door-approach waypoint
+boxes and their labels are removed. Existing settings keys are preserved.
+
+- Artifact: `releases/Sky-Myce-2.4.25.jar`.
+- SHA-256: `09507c04a29f0ebd5b562d6258f8f927c163f31f797353e39e9313d74fbbe9fb`.
+- Signed manifest: `releases/manifest-2.4.25.json`.
+- Manifest expiry: `2026-10-16T14:37:55.006Z`.
+
+Java 25 `build -x loaderCheck` passed all included checks. New regressions cover
+shortened/extended chains and queued cache reuse, changed exits/chunks, multi-step
+stair handoffs and stable display suffixes, immediate Blood visibility policy,
+Mage-only timing, exact expiry, late door coordinates, reset and non-extending
+re-entry. The existing Windows loader restart fixture's `AccessDeniedException`
+remains excluded. Relay type generation/TypeScript checks and production Worker
+packaging dry-run passed. R2 readback hash and the live pinned Ed25519 signature,
+selected version and artifact hash passed; health returned 200 and unauthenticated
+artifact access returned 403. Verification completed at
+`2026-10-09T14:39:41.382Z`. Deployment used `--keep-vars --strict`, retaining
+existing variables, secrets and previous builds. Commands were checked against
+the current [Worker command reference](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+and [R2 command reference](https://developers.cloudflare.com/workers/wrangler/commands/r2/).
+Evidence: `build/release-2.4.25-live-verified.json`.
+
+Exactly 150 original 3840×2160 pictures were extracted from the 60-second
+16:09:24 replay, with eight contact sheets, selected keyframes and enlarged
+details around 0:10, 0:32–35, 0:38–43 and post-opening Blood. The old route
+disappears between 32.133 and 32.250 seconds, flips to short staircase elbows
+around 41 seconds, and reappears outside Blood after opening. Gallery and visual
+analysis are under
+`C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/routing-replay-160924/`.
+These pictures document the previous build; current live-room continuity,
+highlight appearance and client FPS still need gameplay validation.
+
+## Gap traversal, stable player guidance and starred miniboss routing (2026-10-09)
+
+Mod **2.4.26** is uploaded to private production R2 and selected by
+`sky-myce-backend` (`--env backend`), Worker version
+`467851d3-3777-4378-a9f9-538b16dfdc27`.
+
+Nearby supported landings can warm geometry scans and reconnect display guidance
+while the player is airborne. Automatic graphs add bounded, level cardinal jumps
+over one or two unsupported cells, with loaded body clearance and jump headroom;
+clear teleport guidance still crosses longer gaps. Pending target approaches and
+null plans from unfinished scans retain the prior checked route and its original
+target anchors. Door completion keeps handoff guidance until room entry. Early
+native guidance can reach the first required starred target or exit before the
+walking flood finishes; empty or exit-only partial plans cannot suppress a
+required target guide. Visible anchors remain cached, while completed negative
+probes retry after meaningful movement without starving their bounded progress.
+
+**Route through starred minibosses** is independent of regular starred-mob
+routing and defaults on. Only actual starred labels establish these targets;
+unstarred miniboss profiles are excluded. Both toggles off route directly toward
+Blood, with markers independently configurable. Mage now keeps the real Blood
+doorway highlighted throughout the run, before and after opening, except while
+physically inside Blood. Leaving Blood restores it without a timer. All route
+lines and mob markers still stop when Blood opens. Iron bars are ignored like
+carpets in collision, support, standing height and equivalent block updates;
+neither decoration can supply floor support. The player mines bars manually.
+
+- Artifact: `releases/Sky-Myce-2.4.26.jar`.
+- SHA-256: `a4e12f666c5fb5c472fecc8f0cac9ea0dba7789839e0a4064158d955b5f7d2dd`.
+- Signed manifest: `releases/manifest-2.4.26.json`.
+- Manifest expiry: `2026-10-16T15:34:53.613Z`.
+
+Java 25 focused routing/settings checks and `build -x loaderCheck` passed all
+included checks. New regressions cover supported jumps and native wall/headroom
+rejection, iron-bar floor handling, airborne display joins, pending approaches,
+retained original target anchors, partial graph failures, early visible candidate
+selection and probe progress, independent starred-miniboss settings and physical
+Blood containment. The existing Windows loader restart fixture's
+`AccessDeniedException` remains excluded. Relay type generation/TypeScript checks
+and production Worker packaging dry-run passed. Private R2 readback hash and live
+pinned Ed25519 signature, selected version and artifact hash passed; health
+returned 200 and unauthenticated artifact access returned 403. Verification
+completed at `2026-10-09T15:36:32.010Z`. Deployment used `--keep-vars --strict`,
+retaining existing variables, secrets and previous builds. Commands were checked
+against the current [Worker command reference](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+and [R2 command reference](https://developers.cloudflare.com/workers/wrangler/commands/r2/).
+Evidence: `build/release-2.4.26-live-verified.json`.
+
+The 76-second 16:47:43 replay has **180 distinct original 3840×2160 pictures**,
+nine timestamp contact sheets, 30 selected keyframes and 30 inspected detail
+crops. Sixty-one samples cover 1:07–1:10 at 20 fps, documenting three whole-route
+dropouts while the planned crossing remains visible. Gallery and visual analysis:
+`C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/routing-replay-164743/`.
+These pictures document the previous build. Actual Doors-room traversal, early
+player guidance, door continuity, Mage highlighting and FPS still need gameplay
+validation with the new build.
+
+## Menu, chest tracking, statistics cutover and global IRC (2026-10-10)
+
+Mod **2.4.27** is uploaded to private production R2 and selected by
+`sky-myce-backend` in **`--env backend`**. The initial mod-release deployment was
+`ee1f16b0-ebd5-4489-8790-a3835183f507` /
+`40b8f308-e33c-4f3d-8653-fac911454741`, created
+`2026-10-10T10:45:21.970038Z`. A subsequent backend-only subscription fix is now
+active as version `dd0588b1-a721-4695-9b62-ead63185c157`, deployment
+`edb59ed5-eb20-4e43-bf28-ecf8e34df894`, created
+`2026-10-10T12:30:22.194111Z`. It retains the exact 2.4.27 JAR/manifest, all
+bindings, secret names/types, storage namespaces and runtime configuration.
+
+This release fixes stable menu card hover, shared Settings navigation and catalog
+search allocations; repairs bounded chest/RNG observation and inventory confirmation;
+preserves inherited profit through the version 2 tracker cutover; and presents
+canonical `/sm irc`, `/sm pc` and `/sm chat` commands. Party delivery remains
+explicitly unavailable without backend-verifiable Hypixel membership. Existing
+routing behavior and previous release artifacts remain.
+
+- Artifact: `releases/Sky-Myce-2.4.27.jar`, **14,027,050 bytes**.
+- SHA-256: `6c2ce3c0d7b6f999213c7af4da8cea13eacaeed4d266897518da8d826686b4e2`.
+- Signed manifest: `releases/manifest-2.4.27.json`.
+- Signing key ID: `production-20260927`.
+- Minecraft: `26.1.2`; minimum custom loader: `1.0.11`.
+- Manifest expiry: `2026-10-17T10:44:00.323Z`.
+
+Java 25 `--offline check build` passed **all** registered checks, including the
+unchanged `loaderCheck`. The Windows restart fixture passed with a clean
+task-local Java/Windows PATH; it was not excluded or weakened. Relay tests,
+generated types/TypeScript checks and strict backend/staging packaging dry-runs
+passed. The existing signer self-check passed. The private artifact was uploaded
+before its signed manifest, downloaded and hash-checked, then activated with
+`--keep-vars --strict`. The live envelope matches the local signed bytes and
+passes pinned Ed25519 signature, version/expiry and artifact-hash checks. Health
+returned 200; unauthenticated artifact access returned 403. Verification:
+`2026-10-10T10:46:17.040Z`, `build/release-2.4.27-live-verified.json`.
+
+The final backend bundle is 340,924 bytes, SHA-256
+`d38d42027d7080d5ce52403b7779ccba769243a172c09cac7b874540d3dd334e`.
+Independent Cloudflare readback matches the reviewed strict dry-run bundle.
+The live release signature, unchanged artifact hash and access guards were
+reverified at `2026-10-10T12:35:24.679Z`;
+`build/global-chat-backend-hotfix-verified.json` records that backend-only check.
+The current private R2 artifact was downloaded again and matched the built/signed
+JAR byte-for-byte at `2026-10-10T12:46:08.938Z`.
+
+The user's current authorized Prism session obtained this exact JAR through the
+normal loader restart. Native private-world menu/chat tests and read-only live
+migration verification passed: old rows and profit were preserved, and earlier
+records are excluded from new confirmed statistics. A new Hypixel reward chest,
+controlled FPS comparison and hour-scale soak remain unverified. See the
+[implementation report](implementation-overhaul-2026-10.md),
+[menu measurements](menu-optimization-2026-10.md) and
+[tracker cutover evidence](dungeon-tracker-cutover.md).
+
+The persistent User Bot Gateway is now hosted on the existing production
+`skyblock-relay` Worker from `D:\Code\Cessna fork\relay`, with its own additive
+SQLite class and the existing `SKY_MYCE_BACKEND` service binding. It uses the
+existing bot/application/channel and private Worker secrets; no local Node
+process is required. Initial deployment was version
+`5c2f606b-003b-48ab-9b9e-0e29e8734045`; replay ordering was repaired in
+`c5adcd63-0a33-4100-b7c4-b2b27e36ca00`. The final Gateway version is
+`ecd1963b-5bfa-4f2b-b981-be2703d5aeb1`, deployment
+`54fcca30-45a2-49b7-8612-80185c635cc3`, created
+`2026-10-10T12:05:57.715626Z`. Its 113,250-byte reviewed bundle has SHA-256
+`99ae6a696ecf8fe3698c743c0d57bfefff798d6c16f260ea6590197b4a278416`.
+Clearable Upgrade-handshake timers now preserve adopted WebSockets; stalled
+handshakes still expire. Focused workerd replay, socket lifetime, cancellation,
+SQLite eviction, negative controls and TypeScript validation passed. Independent
+provider readback matches the reviewed/runtime-tested bundle.
+
+The initial observation after the final publication still saw reconnects; that
+failure remains in `build/global-chat-gateway-deployment-verified.json`. A controlled
+stop/start retained durable state and recovered both transports. The final window
+passed 39/39 samples over 96 seconds with zero pending messages. Real Minecraft
+messages and duplicate rejection were verified against Discord. The user's fresh
+`hello248` reply reached Minecraft with correct reply context and rendered mention;
+`build/global-chat-live-round-trip-verified.json` records the real round trip.
+Sound audibility and hour-scale uptime remain unverified. Private control rejects
+unauthenticated calls. Existing legacy bindings,
+secret names, RelayRoom namespace and signed admin/account forwarding were
+preserved; unsigned interactions remain rejected. The reviewed release entry
+point in `build/gateway-release/` combines the exact previously deployed legacy
+bundle with the new Gateway only, avoiding unrelated uncommitted Cessna admin/
+prompt changes. Do not publish that repository's broader dirty entry point as
+though it were this reviewed release. The active outbound sockets contribute to
+Durable Object usage; no billing plan was changed.
+
+## Dungeon tracker history and recording repair (2026-10-10)
+
+Mod **2.4.28** is selected on production `sky-myce-backend --env backend`.
+Worker version `cdf2e6e8-5914-4dfd-baf3-b0270ee05fca`, deployment
+`2209afb8-9a8e-40f8-bbd9-1ff38554c61d`, was created at
+`2026-10-10T13:18:32.714429Z` with 100% traffic.
+
+This release restores visible historical tracker totals and saved reports,
+repairs Master Mode completion and dungeon profile continuity, and observes
+direct inventory reward packets. It preserves old history separately from new
+measurements. See the [tracker repair record](dungeon-tracker-cutover.md).
+
+- Artifact: `releases/Sky-Myce-2.4.28.jar`, **14,031,505 bytes**.
+- SHA-256: `91fe4e8e46a3345d266cfba02454b0c7b1097f1ec3be5f6c3abc63b90414b96e`.
+- Signed manifest: `releases/manifest-2.4.28.json`.
+- Signing key ID: `production-20260927`.
+- Minecraft: `26.1.2`; minimum custom loader: `1.0.11`.
+- Manifest expiry: `2026-10-17T13:15:30.883Z`.
+
+Java 25 focused checks and the complete `--offline check build`, including the
+unchanged `loaderCheck`, passed. Relay type generation/TypeScript checks and
+strict backend/staging packaging dry-runs passed. The private artifact was
+uploaded and read back before its signed manifest; both matched their local
+bytes. Publication used `--keep-vars --strict`. Only the two release pointers
+and deployment message changed; other configuration, bindings, secrets and
+storage namespaces were preserved, and previous builds were retained.
+The 340,924-byte backend bundle remained byte-identical to the preceding live
+version: `d38d42027d7080d5ce52403b7779ccba769243a172c09cac7b874540d3dd334e`.
+
+Live verification at `2026-10-10T13:21:28.810Z` passed the pinned Ed25519
+signature, exact envelope, version, expiry and artifact-hash checks. Health
+returned 200. The artifact endpoint rejected GET with 405 and an unauthenticated
+POST with 403. The normal signed loader installed the matching 2.4.28 JAR in the
+user's existing Prism instance. Native private-world tracker UI checks passed
+for default historical totals, historical loot/XP and all saved reports;
+original view preferences were restored, and history files/backups remained
+byte-identical. A fresh Hypixel chest and the HUD during an actual dungeon remain
+unverified. Private operator evidence is in
+`C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/tracker-recovery-20261010/`;
+no raw player history or credentials were added to this record.

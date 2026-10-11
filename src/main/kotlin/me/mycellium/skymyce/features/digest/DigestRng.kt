@@ -2,9 +2,11 @@ package me.mycellium.skymyce.features.digest
 
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.utils.MC
+import net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket
 import net.minecraft.world.entity.player.Inventory
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
+import tech.thatgravyboat.skyblockapi.api.events.level.PacketReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.PlayerInventoryChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
@@ -40,11 +42,12 @@ object DigestRngParser {
         "OVERFLUX_CAPACITOR" to DigestRareItem("Overflux Capacitor", "slayer"),
     )
     private val dungeon = Regex("RARE REWARD! (?:\\[[A-Z+]+] )?([A-Za-z0-9_]{1,16}) found an? (.{1,100}) in their (?:Obsidian|Bedrock) Chest!")
+    private val dungeonDrop = Regex("RNG DROP! (?:\\[[A-Z+]+] )?([A-Za-z0-9_]{1,16}) just found an? (.{1,100})!")
     private val slayer = Regex("(?:CRAZY RARE DROP!|INSANE DROP!|RNGesus INCARNATE DROP!)\\s+(?:\\(([^()]{1,100})\\)|([^()]{1,100}?))(?: \\(\\+[\\d,.]+%? [^\\r\\n]{0,8}Magic Find\\))?[! ]*")
 
     fun detect(text: String, player: String, location: String, now: Long): DetectedRng? {
         if (text.length !in 1..300 || !Regex("[A-Za-z0-9_]{1,16}").matches(player) || text.any { it == '\n' || it == '\r' || it == '§' }) return null
-        val dungeonMatch = dungeon.matchEntire(text)
+        val dungeonMatch = dungeon.matchEntire(text) ?: dungeonDrop.matchEntire(text)
         val activity: String
         val name: String
         if (dungeonMatch != null) {
@@ -133,17 +136,32 @@ object DigestRng : SkyMyceModule() {
     }
 
     @Subscription fun onInventory(event: PlayerInventoryChangeEvent) {
-        if (!LocationAPI.isOnSkyBlock || !contextReady() || inventoryCheck != null) return
-        if (!DigestRngCatalog.valid(canonicalItemId(event.item.getSkyBlockId()?.id.orEmpty()), "dungeon") && event.slotIndex !in rareSlots && !DungeonTracker.awaitsInventory()) return
+        if (!LocationAPI.isOnSkyBlock || inventoryCheck != null) return
+        val digestReady = contextReady()
+        val trackerWaiting = DungeonTracker.awaitsInventory()
+        if (!digestReady && !trackerWaiting) return
+        if (!trackerWaiting && !DigestRngCatalog.valid(canonicalItemId(event.item.getSkyBlockId()?.id.orEmpty()), "dungeon") && event.slotIndex !in rareSlots) return
+        requestInventoryObservation()
+    }
+
+    @Subscription fun onPacket(event: PacketReceivedEvent) {
+        if (event.packet !is ClientboundSetPlayerInventoryPacket) return
+        // This packet writes Inventory directly, without the API's Slot.set event.
+        MC.instance.execute { requestInventoryObservation() }
+    }
+
+    /** Read after packet handling; a matching reward header can also request this once. */
+    fun requestInventoryObservation() {
+        if (!LocationAPI.isOnSkyBlock || inventoryCheck != null || !contextReady() && !DungeonTracker.awaitsInventory()) return
         val token = context
         // Coalesce the source/destination updates of item moves before comparing total counts.
         inventoryCheck = Scheduling.schedule(200.milliseconds) { MC.instance.execute {
-            if (token != context) return@execute
-            inventoryCheck = null
-            if (contextReady()) {
+            if (token == context) inventoryCheck = null
+            val digestCurrent = token == context && contextReady()
+            if (digestCurrent || DungeonTracker.awaitsInventory()) {
                 val counts = inventoryCounts(); val now = System.currentTimeMillis(); val observation = java.util.UUID.randomUUID().toString()
                 DungeonTracker.inventoryObserved(counts, now, observation)
-                acquisition.inventory(counts, now, observation).forEach(::publish)
+                if (digestCurrent) acquisition.inventory(counts, now, observation).forEach(::publish)
             }
         } }
     }

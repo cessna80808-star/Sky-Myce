@@ -15,6 +15,22 @@ import java.io.File
 import javax.imageio.ImageIO
 
 fun checkSettings() {
+    // Settings participates in the same card-to-rail navigation as tools. Inspect dispatch
+    // without starting Minecraft; a separate settings sidebar breaks this integration.
+    fun navigationOwner(name: String): Class<*> {
+        var type: Class<*>? = SettingsScreen::class.java
+        while (type != null) {
+            if (type.declaredMethods.any { it.name == name && it.parameterCount == 0 }) return type
+            type = type.superclass
+        }
+        error("Missing menu member $name")
+    }
+    check(navigationOwner("getMenuLayout") == me.mycellium.skymyce.ui.MenuScreen::class.java) {
+        "Settings must keep the shared compact category rail width"
+    }
+    check(navigationOwner("buildNavigation") == me.mycellium.skymyce.ui.MenuScreen::class.java) {
+        "Settings must retain shared category, Search and Quick Settings navigation"
+    }
     val row = settingsRow().horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(400)) as io.wispforest.owo.ui.container.FlowLayout
     val first = io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(100), io.wispforest.owo.ui.core.Sizing.fixed(20))
     val second = io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.fixed(100), io.wispforest.owo.ui.core.Sizing.fixed(20))
@@ -60,26 +76,17 @@ fun checkSettings() {
         check(content.x() == sidebar.x() + sidebar.width() && content.y() == sidebar.y())
         check(content.x() + content.width() == shell.x() + shell.width()) { "Menu content overlaps or escapes the sidebar" }
     }
-    check(settingsCardColumns(279) == 1 && settingsCardColumns(280) == 2)
-    val drawerSize = io.wispforest.owo.ui.core.AnimatableProperty.of(io.wispforest.owo.ui.core.Sizing.fixed(0))
-    drawerSize.animate(200, io.wispforest.owo.ui.core.Easing.CUBIC, io.wispforest.owo.ui.core.Sizing.fixed(190)).forwards()
-    drawerSize.update(1f)
-    check(drawerSize.get().value > 0)
-    drawerSize.animate(1, io.wispforest.owo.ui.core.Easing.CUBIC, io.wispforest.owo.ui.core.Sizing.fixed(0)).forwards()
-    drawerSize.set(io.wispforest.owo.ui.core.Sizing.fixed(0)); drawerSize.update(1f)
-    check(drawerSize.get().value == 0) { "An interrupted drawer animation reopened the closed pane" }
-    for (width in listOf(100, 216, 394, 592, 891, 1100).flatMap { listOf(it, (it - settingsDrawerWidth(it) - 10).coerceAtLeast(100)) }) {
-        val drawer = settingsDrawerWidth(width)
-        check(drawer in 1..width && drawer <= 240) { "Settings drawer escapes the menu" }
-        val columns = settingsCardColumns(width)
-        val gap = 8
-        val grid = settingsCardRow(columns).horizontalSizing(io.wispforest.owo.ui.core.Sizing.fixed(width)) as io.wispforest.owo.ui.container.FlowLayout
-        // Exercise the actual expansion mode: expand() gives every child 100%, not flex weights.
-        val cards = List(columns) { io.wispforest.owo.ui.component.UIComponents.box(io.wispforest.owo.ui.core.Sizing.expand(100 / columns), io.wispforest.owo.ui.core.Sizing.fixed(45)) }
-        grid.children(cards); grid.inflate(io.wispforest.owo.ui.core.Size.of(width, 100)); grid.mount(null, 0, 0)
-        check(cards.all { it.x() >= 0 && it.x() + it.width() <= width }) { "Settings module cards escape width $width: ${cards.map { it.x() to it.width() }}" }
-        check(cards.zipWithNext().all { (a, b) -> a.x() + a.width() + gap == b.x() }) { "Settings module columns overlap" }
+    val commandRows = commandCenterRows(wrapped)
+    check(commandRows.map { it.path }.distinct().size == commandRows.size)
+    check(commandRows.none { it.path.endsWith("/themeVersion") || it.path.endsWith("/menuIntroPlayed") })
+    check(commandRows.any { it.path == "Theme & Appearance/border" })
+    val categoryPaths = me.mycellium.skymyce.ui.MenuCategory.entries.flatMap {
+        commandCenterSettings(catalog, commandRows, it, "").map { row -> row.path }
     }
+    check(categoryPaths.sorted() == commandRows.map { it.path }.sorted()) { "Each setting must appear directly in one category" }
+    val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.COSMETICS, "dungeon profit")
+    check(searched.isNotEmpty() && searched.all { it.path.startsWith("Dungeons/") }) { "Search must override the sidebar category" }
+    check(commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.DUNGEONS, "text shadow").any { it.path == "Theme & Appearance/shadow" })
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.SOCIAL)
     check(settingsTab("General/Daily Digest/shareRng") == SettingsTab.SOCIAL)
