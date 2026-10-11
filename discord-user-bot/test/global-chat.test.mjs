@@ -5,7 +5,8 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configuration, limits, RateLimit } from '../src/config.mjs';
-import { DeliveryReceipts, GLOBAL_ROOM, discordBody, globalDiscordPacket, globalEmbedPacket, globalMinecraftContent } from '../src/global-chat.mjs';
+import { DeliveryReceipts, GLOBAL_ROOM, discordBody, discordMedia, discordMediaKey, discordMessageLinks, discordOperation,
+  minecraftCard, validBridgeOperation, safeMediaUrl, REACTION_EMOJI, globalDiscordPacket, globalEmbedPacket, globalMinecraftContent } from '../src/global-chat.mjs';
 import { RelayBridge, discordPacket } from '../src/relay.mjs';
 
 const guild = '11111111111111111', channel = '22222222222222222', author = '33333333333333333';
@@ -118,7 +119,7 @@ test('late human link previews send one embed continuation without replaying tex
     reference: { messageId: discordId, channelId: channel }, mentions: { users: new Map([[discordId, { id: discordId, username: 'Mentioned' }]]) } };
   const packet = globalEmbedPacket(previous, next, guild, channel);
   assert.equal(packet.id, previous.id); assert.equal(packet.message_id, previous.id); assert.equal(packet.part, 'embeds');
-  assert.equal(packet.text, 'Preview title\nPreview description\nhttps://example.com/page');
+  assert.equal(packet.text, 'Preview title\nPreview description');
   assert.deepEqual(packet.mentions, []); assert.equal(packet.reply, undefined); assert.ok(!packet.text.includes('attachment'));
   const results = [];
   const f = fakeBridge({ onResult: (...args) => results.push(args) }); t.after(() => f.bridge.close());
@@ -139,14 +140,18 @@ test('late human link previews send one embed continuation without replaying tex
 test('Minecraft sender identity stays primary, internal IDs stay private and native Discord nonce prevents retry duplicates', () => {
   const packet = minecraft();
   const content = globalMinecraftContent(packet);
-  assert.equal(content.content, '[SkyMyce] Steve » hello');
+  assert.equal(content.content, undefined);
+  assert.equal(content.embeds[0].author.name, 'Steve');
+  assert.equal(content.embeds[0].description, 'hello');
+  assert.equal(content.embeds[0].footer.text, 'Minecraft · Sky-Myce Global');
   assert.deepEqual(content.allowedMentions, { parse: [], repliedUser: false });
   assert.equal(content.enforceNonce, true); assert.equal(content.nonce.length, 24);
   assert.equal(globalMinecraftContent(packet).nonce, content.nonce);
   assert.notEqual(globalMinecraftContent(minecraft('b'.repeat(32))).nonce, content.nonce);
   assert.ok(!JSON.stringify(content).includes(packet.uuid) && !JSON.stringify(content).includes(author));
   const expanded = globalMinecraftContent({ ...packet, text: '*'.repeat(1024) });
-  assert.ok(expanded.content.length <= 2000 && expanded.embeds[0].description.length <= 4096);
+  assert.equal(expanded.content, undefined);
+  assert.ok(expanded.embeds[0].description.length <= 4096);
   for (const extra of [{ source: 'discord' }, { scope: 'friends' }, { room: 'testing' }, { from: '[MC] Other' },
     { message_id: 'b'.repeat(32) }, { text: 'x'.repeat(1025) }]) assert.equal(globalMinecraftContent({ ...packet, ...extra }), null);
 });
@@ -250,4 +255,99 @@ test('global quota belongs to backend; frontend still rejects loops, wrong chann
   assert.equal(f.bridge.send(packet), true); assert.equal(f.bridge.send(packet), false);
   assert.equal(f.bridge.send({ ...packet, id: '99999999999999999', message_id: '99999999999999999', channelId: author }), false);
   f.bridge.ready = false; assert.equal(f.bridge.send(packet), false);
+});
+
+
+test('signed attachment identity produces one structured GIF while preserving unrelated query semantics', () => {
+  const unsigned = `https://cdn.discordapp.com/attachments/${channel}/100000000000000001/dance.gif`;
+  const signed = `${unsigned}?ex=7fffffff&is=1&hm=${'a'.repeat(64)}`;
+  const input = { ...message(), content: unsigned,
+    attachments: new Map([['a', { id: '100000000000000001', name: 'dance.gif', url: signed, contentType: 'image/gif', size: 1234, width: 64, height: 32 }]]),
+    embeds: [{ url: unsigned, image: { url: signed }, thumbnail: { url: signed.replace('cdn.discordapp.com', 'media.discordapp.net') } }] };
+  assert.equal(discordBody(input), signed);
+  assert.deepEqual(discordMessageLinks(input), [unsigned]);
+  assert.deepEqual(discordMedia(input), [{ id: '100000000000000001', type: 'gif', url: signed, name: 'dance.gif', mime: 'image/gif', bytes: 1234, width: 64, height: 32 }]);
+  assert.equal(discordMediaKey(signed), discordMediaKey(signed.replace('cdn.discordapp.com', 'media.discordapp.net')));
+  assert.notEqual(discordMediaKey('https://example.com/a.gif?ex=1'), discordMediaKey('https://example.com/a.gif?ex=2'));
+  assert.equal(safeMediaUrl(`${unsigned}?ex=1&is=1&hm=invalid`), '');
+  assert.ok(discordBody({ ...message(), content: `${unsigned}?ex=1&is=1&hm=invalid` }).includes('?ex=1'), 'expired media retains its ordinary link fallback');
+  const previous = { ...input, embeds: [] };
+  assert.equal(globalEmbedPacket(previous, input, guild, channel), null);
+  assert.equal(globalEmbedPacket(previous, { ...input, embeds: [{ title: 'New caption', image: { url: signed } }] }, guild, channel).text, 'New caption');
+});
+
+test('video previews carry one poster and preserve bounded attachment metadata', () => {
+  const video = 'https://example.com/movie.mp4', poster = 'https://example.com/poster.png';
+  assert.deepEqual(discordMedia({ content: video, embeds: [{ video: { url: video, width: 1280, height: 720 }, thumbnail: { url: poster } }] }),
+    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: poster, width: 1280, height: 720 }]);
+  const withAttachment = discordMedia({ attachments: [{ id: author, url: video, name: 'a'.repeat(200), contentType: 'video/mp4' }],
+    embeds: [{ video: { url: video }, thumbnail: { url: poster } }] });
+  assert.equal(withAttachment.length, 1); assert.equal(withAttachment[0].name.length, 80);
+  assert.equal(withAttachment[0].thumbnailUrl, poster);
+  assert.deepEqual(discordMedia({ embeds: [{ thumbnail: { url: poster } }] }), [{ id: 'media-0', type: 'image', url: poster }], 'a separate image thumbnail is preserved');
+});
+
+test('rich cards keep trusted sender identity, compact replies and media in both scopes with no fabricated presence', () => {
+  const packet = { ...minecraft(), sender: { name: 'Steve', uuid: 'a'.repeat(32), cosmeticName: '§aChampion\u202e', avatarUrl: 'https://untrusted.example/avatar' },
+    reply: { from: 'Earlier', text: 'A bounded reply', discordMessageId: discordId },
+    media: [{ type: 'gif', url: 'https://example.com/dance.gif' }, { type: 'video', url: 'https://example.com/movie.mp4', thumbnailUrl: 'https://example.com/poster.png' }] };
+  const card = globalMinecraftContent(packet), embed = card.embeds[0];
+  assert.equal(embed.author.name, 'aChampion (Steve)');
+  assert.equal(embed.author.iconURL, `https://mc-heads.net/avatar/${'a'.repeat(32)}/64`);
+  assert.ok(!JSON.stringify(card).includes('IN-GAME') && !JSON.stringify(card).includes('untrusted.example'));
+  assert.equal(embed.description, 'hello');
+  assert.deepEqual(embed.fields[0], { name: 'Reply to Earlier', value: 'A bounded reply' });
+  assert.deepEqual(embed.image, { url: 'https://example.com/dance.gif' });
+  assert.deepEqual(embed.thumbnail, { url: 'https://example.com/poster.png' });
+  assert.deepEqual(card.reply, { messageReference: discordId, failIfNotExists: false });
+  assert.deepEqual(card.allowedMentions, { parse: [], repliedUser: false });
+  const room = minecraftCard({ ...packet, scope: 'room', room: 'testing' }, 'room', 'testing');
+  assert.equal(room.embeds[0].footer.text, 'Minecraft · Sky-Myce IRC');
+  assert.equal(minecraftCard({ ...packet, scope: 'global', room: 'friends' }, 'room', 'friends'), null);
+  assert.equal(minecraftCard({ ...packet, scope: 'party', room: 'party' }, 'party', 'party'), null, 'party never creates Discord cards');
+  assert.equal(globalMinecraftContent({ ...packet, sender: { ...packet.sender, name: 'Other' } }).embeds[0].author.name, 'Steve');
+  for (const url of ['http://example.com/a.png', 'https://localhost/a.png', 'https://127.0.0.1/a.png', 'https://[::1]/a.png', 'https://user:pass@example.com/a.png']) assert.equal(safeMediaUrl(url), '');
+  assert.equal(discordMedia({ ...message(), content: Array.from({ length: 10 }, (_, i) => `https://example.com/${i}.png`).join(' ') }).length, 4);
+});
+
+test('native lifecycle envelopes validate actors, source channels, bounded emoji and exact operation deadlines', () => {
+  const previous = { ...message(), text: 'hello', media: [] }, id = 'b'.repeat(32);
+  const edit = discordOperation('MESSAGE_UPDATE', { ...previous, content: 'Edited', editedTimestamp: 1234 }, previous, id, guild, channel, discordId);
+  assert.equal(edit.operation, 'edit'); assert.equal(edit.text, 'Edited'); assert.equal(edit.editedAt, 1234);
+  const deletion = discordOperation('MESSAGE_DELETE', { id: previous.id, guildId: guild, channelId: channel }, previous, id, guild, channel, discordId);
+  assert.equal(deletion.discordId, author);
+  assert.equal(discordOperation('MESSAGE_DELETE', { id: previous.id, guildId: guild, channelId: channel }, undefined, id, guild, channel, discordId), null);
+  const reaction = { guildId: guild, channelId: channel, messageId: previous.id, userId: author, emoji: { name: '🔥' } };
+  assert.equal(discordOperation('MESSAGE_REACTION_ADD', reaction, previous, id, guild, channel, discordId).active, true);
+  assert.equal(discordOperation('MESSAGE_REACTION_REMOVE', reaction, previous, id, guild, channel, discordId).active, false);
+  for (const change of [{ userId: discordId }, { emoji: { id: author, name: '🔥' } }, { emoji: { name: '☠' } }, { channelId: author }])
+    assert.equal(discordOperation('MESSAGE_REACTION_ADD', { ...reaction, ...change }, previous, id, guild, channel, discordId), null);
+  assert.deepEqual(REACTION_EMOJI, ['👍', '❤️', '😂', '🎉', '👀', '🔥']);
+  const outgoing = { type: 'irc_operation', id, scope: 'global', room: GLOBAL_ROOM, messageId: 'c'.repeat(32), discordMessageId: discordId,
+    operation: 'reaction', emoji: '👍', active: true, revision: 1, timestamp: 1000, expiresAt: 2000 };
+  assert.equal(validBridgeOperation(outgoing, 'global', GLOBAL_ROOM, 1000), true);
+  for (const change of [{ scope: 'room' }, { messageId: author }, { revision: 0 }, { expiresAt: 1000 }, { expiresAt: 121001 }, { active: undefined }, { emoji: '☠' }])
+    assert.equal(validBridgeOperation({ ...outgoing, ...change }, 'global', GLOBAL_ROOM, 1000), false);
+});
+
+test('rich routing and operation receipts restore without persistent text or media and never cross scopes', async t => {
+  const path = await temporary(t); let now = 1000;
+  const receipts = await new DeliveryReceipts(path, () => now).load();
+  const metadata = { room: GLOBAL_ROOM, channelId: channel, authorId: discordId, name: 'User Bot', revision: 0 };
+  await receipts.record('a'.repeat(32), discordId, metadata);
+  await receipts.rememberSource(author, { ...metadata, authorId: author, name: 'Human' });
+  receipts.setCard('a'.repeat(32), { text: 'PRIVATE BODY', media: [{ url: 'PRIVATE SIGNATURE' }] });
+  await receipts.recordOperation('b'.repeat(32), 'a'.repeat(32), 1, discordId);
+  const text = await readFile(path, 'utf8');
+  assert.ok(!text.includes('PRIVATE BODY') && !text.includes('PRIVATE SIGNATURE'));
+  const restored = await new DeliveryReceipts(path, () => now).load();
+  assert.equal(restored.get('a'.repeat(32)), discordId);
+  assert.equal(restored.source(discordId, GLOBAL_ROOM).mapped, true);
+  assert.equal(restored.source(author, GLOBAL_ROOM).authorId, author);
+  assert.equal(restored.source(author, 'friends'), undefined);
+  assert.equal(restored.operation('b'.repeat(32)).revision, 1);
+  assert.equal(restored.metadata('a'.repeat(32)).revision, 1);
+  assert.equal(restored.getCard('a'.repeat(32)), undefined);
+  await assert.rejects(restored.record('c'.repeat(32), discordId, { ...metadata, room: 'party' }));
+  now = 901000; assert.equal(restored.source(author, GLOBAL_ROOM), undefined); assert.equal(restored.operation('b'.repeat(32)), undefined);
 });

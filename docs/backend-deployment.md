@@ -903,3 +903,80 @@ byte-identical. A fresh Hypixel chest and the HUD during an actual dungeon remai
 unverified. Private operator evidence is in
 `C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/tracker-recovery-20261010/`;
 no raw player history or credentials were added to this record.
+
+## Rich Global IRC and Minecraft-only Party IRC (2026-10-11)
+
+Mod **2.4.29** is selected on production `sky-myce-backend --env backend`.
+The final backend version is `3206d3b9-26a7-4974-a1a1-656d8f13c51b`, deployment
+`ac1305f0-2a7f-4f63-b640-928bd91ba0b4`, created
+`2026-10-11T17:30:54.579477Z` with 100% traffic. It replaces the initial 2.4.29
+backend activation while retaining the exact signed mod artifact.
+
+Global IRC uses the shared Discord channel. Party IRC is Minecraft-only, with
+short authenticated matching-roster consent leases. No Party traffic enters
+Discord queues. This release adds compact native chat media previews, an image/
+GIF viewer, explicit message controls, synchronized replies/reactions/edits/
+deletions, bounded metadata, consistent Discord embed cards and GIF deduplication.
+See [the implementation and verification report](irc-redesign.md) for protocol,
+changed files, preferences, exact checks and limitations.
+
+- Artifact: `releases/Sky-Myce-2.4.29.jar`, **14,193,333 bytes**.
+- SHA-256: `b5817a183ebfdf776d87791622c61ec2a6f8a1d2035ba7c287dd45bec12ef466`.
+- Signed manifest: `releases/manifest-2.4.29.json`.
+- Key ID: `production-20260927`; Minecraft: `26.1.2`; minimum custom loader: `1.0.11`.
+- Manifest expiry: `2026-10-18T17:13:27.223Z`; loader remains `1.0.14`.
+
+Java 25 focused checks and complete `--offline --no-daemon check build` passed,
+including the unchanged loader/dungeon checks. Backend full tests and final
+focused actual-workerd regressions passed; generated types/TypeScript and strict
+backend/staging packaging passed. Node tests passed 54/54 and TypeScript passed.
+The private artifact was uploaded before its signed manifest and independently
+read back. Final pinned live signature, exact envelope, expiry, version, artifact
+size/hash and anonymous access guards passed at `2026-10-11T17:33:57.136Z`.
+Previous artifacts remain available for later cleanup.
+
+The final backend bundle is **385,367 bytes**, SHA-256
+`257c4267481708473f45efe6a061b21a5b3e2c1604dd00ffb57d0e1c5211a663`.
+Independent Cloudflare source readback matches the strict reviewed bundle.
+All 36 backend bindings were retained; only `SKY_MYCE_VERSION` and
+`ARTIFACT_MANIFEST_KEY` changed from 2.4.28. Secret names/types and existing
+storage namespaces remain unchanged.
+
+The same final backend bundle was deployed first to isolated `sky-myce-staging`,
+version `9d59bc6b-ea79-40e0-ab4d-f7365ee8234b`, deployment
+`9a88a44d-8c7d-496d-a39c-9a3482e36066`. Provider readback matched the final hash.
+At `2026-10-11T17:30:21.905Z`, staging health returned 200, anonymous artifact GET
+405/POST 403 and a protocol-3 WebSocket challenge passed. No test license/Discord
+secrets were provisioned there; authenticated lifecycle coverage came from the
+isolated actual-workerd fixtures rather than a claimed live staging round trip.
+
+The persistent User Bot Gateway is production `skyblock-relay`, version
+`4fbf8310-04c4-4a2a-b711-56b4c5a72869`, deployment
+`644b0676-5af5-4b5a-8a51-5c6237c2956b`, created
+`2026-10-11T17:33:17.726845Z` with 100% traffic. Its **142,887-byte** bundle SHA-256 is
+`b1a6f939fd0a17284e06623975401f8413437dffdcc10551f8d09ad3d4fba970`.
+Provider readback equals the reviewed and runtime-tested isolated Gateway
+package. It preserves the exact existing legacy bundle and all 18 Gateway Worker
+bindings, including secret names/types, service binding and both namespaces.
+Unrelated dirty Cessna admin/prompt changes were excluded from publication.
+
+The existing active Gateway initially reported its old protocol shape. A
+controlled stop/start closed its old connections; rich version 1 and both
+transports then stayed ready for **75,805 sampled consecutive milliseconds**.
+The 32 samples included startup and all had zero pending messages. Final check
+was `2026-10-11T17:39:15.840Z`. Legacy health returned 200, unsigned interactions
+and unauthenticated private control returned 401, both optional legacy IRC
+bridges remained off (503), and a Party Gateway route returned 404. A stored
+historical reconnect diagnostic remains; current readiness checks passed.
+
+No synthetic messages were posted to the production Discord channel. The user's
+active Hypixel session was not restarted. New GUI mouse/scroll/scale interaction,
+a fresh 2.4.29 Minecraft ↔ Discord round trip, Linux/Ubuntu/KDE rendering and a
+long-duration soak remain unverified. Videos use browser playback; native
+PNG/JPEG/GIF behavior is documented in the implementation report. The normal
+signed loader selects this build on the next client restart.
+
+Private operator evidence is in
+`C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/irc-redesign-20261011/`.
+No credentials, raw chat bodies, private player history or generated bundles are
+committed in this deployment record.

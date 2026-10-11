@@ -5,11 +5,27 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 
 object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
     var enabled by boolean(false) {
-        name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Receive global Sky-Myce and Discord chat in any world. /sm irc selects this mode; /sm irc <message> sends once. /sm chat returns to normal chat. An explicit IRC command enables this preference.")
+        name = TranslatableValue.literal("Global chat")
+        description = TranslatableValue.literal("Receive the shared Minecraft and Discord global channel. /sm irc selects it; /sm chat returns to normal chat. Separate from in-game Party IRC.")
+    }
+    var partyEnabled by boolean(false) {
+        name = TranslatableValue.literal("Party IRC")
+        description = TranslatableValue.literal("Minecraft-only chat with opted-in Sky-Myce users reporting the same complete current Hypixel party roster. Never forwarded to Discord. /sm party selects it; an incomplete roster stops routing.")
+    }
+    val mediaPreviews by boolean(true) {
+        name = TranslatableValue.literal("Chat thumbnails")
+        description = TranslatableValue.literal("Show small static image and GIF previews inside chat. Click a preview for the media viewer. Downloads use a bounded memory cache; nothing is saved to disk.")
+    }
+    val animateGifs by boolean(true) {
+        name = TranslatableValue.literal("Animate GIFs in viewer")
+        description = TranslatableValue.literal("Play GIFs in the media viewer. Chat thumbnails stay static. The viewer also has a pause button.")
+    }
+    val mentionHighlight by boolean(true) {
+        name = TranslatableValue.literal("Highlight mentions")
+        description = TranslatableValue.literal("Highlight new messages that mention your linked account. Editing or reacting to a message does not repeat its notification.")
     }
     val mentionSounds by boolean(true) {
-        name = TranslatableValue.literal("Mention Sound")
-        description = TranslatableValue.literal("Play one subtle ping when a new global message mentions your linked account.")
+        name = TranslatableValue.literal("Mention sound")
+        description = TranslatableValue.literal("Play one subtle ping for a new party or global message that mentions your account.")
     }
 }

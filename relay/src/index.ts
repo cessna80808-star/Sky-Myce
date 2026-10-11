@@ -9,7 +9,8 @@ import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, 
 import { handleDrmRequest, type DrmConfig } from "./drm";
 import type { AccountsConfig } from "./accounts";
 import { handleLoaderDownload } from "./discord-download";
-import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, PARTY_CHAT_UNAVAILABLE, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage } from "./irc";
+import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, PARTY_CHAT_UNAVAILABLE, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage, type PartyChatIdentity, type PartyChatMessage } from "./irc";
+import type { IrcUpdate } from "./irc-model";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
 export { AccountStore } from "./accounts";
 
@@ -140,7 +141,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.news = new DigestNews(ctx.storage.sql, env);
     this.rng = new DigestRng(ctx.storage.sql);
     this.cosmetics = new PlayerCosmetics(ctx.storage);
-    this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session));
+    this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session), uuid => this.cosmetics.get(uuid).name);
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS account_migration_state (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS mod_users (
       uuid TEXT PRIMARY KEY, name TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
@@ -227,7 +228,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(session);
-    server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, room: session.room, ...(session.room === GLOBAL_CHAT_ROOM ? { globalChat: true } : {}) } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
+    server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, richChatVersion: 1, room: session.room, ...(session.room === GLOBAL_CHAT_ROOM ? { globalChat: true } : {}) } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > session.expires) await this.ctx.storage.setAlarm(session.expires);
     if (bridge && session.room === GLOBAL_CHAT_ROOM) await this.irc.bridgeConnected();
@@ -236,7 +237,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     let session = ws.deserializeAttachment() as Session;
-    const maximum = session.bridge && session.room === GLOBAL_CHAT_ROOM ? 32768 : 8192;
+    const maximum = session.bridge ? 32768 : 8192;
     if (typeof raw !== "string" || encoder.encode(raw).length > maximum) { ws.close(1009, "Message too large"); return; }
     let data: Record<string, unknown>;
     try {
@@ -245,7 +246,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     } catch { ws.close(1008, "Invalid JSON message"); return; }
 
     if (session.bridge) {
-      if (session.room !== GLOBAL_CHAT_ROOM && encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
+      if (session.room !== GLOBAL_CHAT_ROOM && session.richChatVersion !== 1 && data.type !== "bridge_capabilities" && encoder.encode(raw).length > 2048) { ws.close(1009, "Message too large"); return; }
       try { await this.irc.message(ws, session, data); }
       catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
@@ -298,21 +299,21 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.challenge = "";
         ws.serializeAttachment(session);
         ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true,
-          irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), partyChat: false, partyChatError: PARTY_CHAT_UNAVAILABLE,
+          irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
           account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
 
-    const subscription = data.type === "irc_subscribe" && encoder.encode(raw).length <= (data.scope === "global" ? 8192 : 2048)
+    const subscription = data.type === "irc_subscribe" && encoder.encode(raw).length <= (data.scope === "global" || data.scope === "party" ? 8192 : 2048)
       ? this.irc.reserveSubscription(ws, session, data) : undefined;
     if (!await this.authorized(ws, session, true)) return;
     const current = currentIrcSession(ws, session);
     if (!current) return;
     session = current;
     if (!session.name) return;
-    if (data.type === "irc_send" || data.type === "irc_subscribe") {
-      if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}) })); return; }
+    if (data.type === "irc_send" || data.type === "irc_subscribe" || data.type === "irc_operation") {
+      if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" || data.scope === "party" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}) })); return; }
       try { await this.irc.message(ws, session, data, subscription); }
       catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
@@ -670,6 +671,15 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     return this.irc.globalMinecraft(sender, input);
   }
   async globalChatDeliver(message: GlobalChatMessage): Promise<void> { await this.irc.deliverGlobal(message); }
+  async globalChatOperation(sender: GlobalChatSender, input: Record<string, unknown>): Promise<GlobalChatResult> { return this.irc.globalOperation(sender, input); }
+  async globalChatUpdate(update: IrcUpdate, mines: Record<string, string[]>): Promise<void> { await this.irc.deliverUpdate(update, mines); }
+  async partyChatRegister(sender: PartyChatIdentity, input: Record<string, unknown>): Promise<GlobalChatResult> { return this.irc.partyRegister(sender, input); }
+  async partyChatMinecraft(sender: PartyChatIdentity, partyId: string, input: GlobalChatSend): Promise<GlobalChatResult> { return this.irc.partyMinecraft(sender, partyId, input); }
+  async partyChatOperation(sender: PartyChatIdentity, partyId: string, input: Record<string, unknown>): Promise<GlobalChatResult> { return this.irc.partyOperation(sender, partyId, input); }
+  async partyChatDeliver(message: PartyChatMessage): Promise<void> { await this.irc.deliverParty(message); }
+  async partyChatUpdate(update: IrcUpdate, mines: Record<string, string[]>): Promise<void> { if (update.scope === "party") await this.irc.deliverUpdate(update, mines); }
+  /** Internal lookup only; chat identity always retains the independently verified Minecraft name. */
+  ircCosmeticName(uuid: string): string | null { return /^[a-f0-9]{32}$/.test(uuid) ? this.cosmetics.get(uuid).name : null; }
 
   private async broadcast(sender: WebSocket, packet: object): Promise<void> {
     const text = JSON.stringify(packet);

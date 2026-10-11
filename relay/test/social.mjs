@@ -46,7 +46,7 @@ export async function checkSocial(script, proof) {
     assert.ok(limited); alice.ws.send("ping"); assert.equal(await alice.next(), "pong");
     const storage = await mf.unsafeGetDurableObjectStorage("social-check", "RelayRoom", { name: "friends" });
     const tables = await storage.exec("SELECT name FROM sqlite_master WHERE type = 'table'");
-    assert.ok(!tables.some(row => /message|chat/i.test(row.name) && !row.name.startsWith("global_chat_")));
+    assert.ok(!tables.some(row => /message|chat/i.test(row.name) && !row.name.startsWith("global_chat_") && row.name !== "party_chat_consents"));
     for (const table of ["global_chat_messages", "global_chat_outbox"]) {
       assert.equal((await storage.exec(`SELECT COUNT(*) AS count FROM ${table}`))[0].count, 0);
     } // Private messages never enter the separate temporary global delivery outbox.

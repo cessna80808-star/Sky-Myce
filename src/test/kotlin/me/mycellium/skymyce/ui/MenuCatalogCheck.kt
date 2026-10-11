@@ -51,7 +51,10 @@ fun main() {
     check(isolatedIndex.search("blood") == catalog.search("blood")) { "Search index retained a mutable caller inventory" }
     check(MenuSearchIndex(emptyList()).search("anything").isEmpty())
     val irc = checkNotNull(catalog.findFeature("global-chat"))
-    check(irc.title == "Global IRC" && "/sm irc" in irc.description && "/sm irc <message>" in irc.description)
+    check(irc.title == "IRC Chat" && "/sm party" in irc.description && "/sm irc" in irc.description)
+    for (key in listOf("enabled", "partyEnabled", "mediaPreviews", "animateGifs", "mentionHighlight", "mentionSounds"))
+        check(irc.settings.any { it.path == "General/Global SkyMyce Chat/$key" })
+    check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
     check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)

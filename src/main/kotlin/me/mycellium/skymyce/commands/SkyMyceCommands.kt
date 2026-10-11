@@ -101,6 +101,12 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(messageCommand("msg", RelayMessages::send))
             .then(relayChannelCommand("irc", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
             .then(relayChannelCommand("global", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
+            .then(relayChannelCommand("party", RelayMessages::selectParty, RelayMessages::sendParty))
+            .then(literal("ircstatus").executes { RelayMessages.ircStatus(); 1 })
+            .then(literal("irccancel").executes { RelayMessages.cancelReply(); 1 })
+            .then(literal("ircaction").then(argument("action", StringArgumentType.greedyString()).executes {
+                RelayMessages.chatAction("/sm ircaction " + StringArgumentType.getString(it, "action")); 1
+            }))
             .then(relayChannelCommand("pc", RelayMessages::selectParty, RelayMessages::sendParty))
             .then(literal("help").executes { RelayMessages.chatHelp(); 1 })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }

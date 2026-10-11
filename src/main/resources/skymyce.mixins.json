@@ -7,6 +7,8 @@
   ],
   "client": [
     "RelayChatPrivacyMixin",
+    "IrcChatAccessor",
+    "IrcChatScreenAccessor",
     "AvatarCosmeticsMixin",
     "AvatarCosmeticStateMixin",
     "CosmeticFontMixin",

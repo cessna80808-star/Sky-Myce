@@ -128,7 +128,7 @@ export async function checkGlobalChat(script, proof) {
       installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${token}`), person.key.privateKey).toString('base64'), ...changes.packet }));
     if (closed) { assert.equal((await closed).code, 4005); return; }
     const ready = await next(); assert.equal(ready.type, 'ready'); assert.equal(ready.globalChat, true);
-    assert.equal(ready.partyChat, false); assert.equal(ready.partyChatError, 'party_membership_unverified');
+    assert.equal(ready.partyChat, true); assert.equal(ready.partyChatVersion, 1); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
   }
   const bridgeHeaders = () => {

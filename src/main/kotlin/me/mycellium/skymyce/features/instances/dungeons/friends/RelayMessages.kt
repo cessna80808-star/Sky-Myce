@@ -14,6 +14,8 @@ import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.sounds.SoundEvents
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
+import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
+import tech.thatgravyboat.skyblockapi.api.events.hypixel.PartyInfoEvent
 
 internal val lfgButtonAction = Regex("^(yes|no) ([a-f0-9]{16})$")
 internal val relayChatExit = Regex("(?i)^(?:sm|skymyce)\\s+chat$")
@@ -56,6 +58,20 @@ object RelayMessages {
     private val irc = IrcMode()
     private val global = GlobalChatState()
     private val globalSubscription = GlobalChatSubscription()
+    private val partySubscription = GlobalChatSubscription()
+    internal val chatStore = IrcChatStore()
+    private val partySeen = linkedSetOf<String>()
+    private var partySeenBoundary = ""
+    private var richBoundary = ""
+    private var verifiedParty: IrcPartyRoster? = null
+    private var verifiedPartyAt = 0L
+    private var activeParty = ""
+    private var partySubscribedId = ""
+    private var partySubscribedUntil = 0L
+    private var nextPartySubscribe = 0L
+    private var nextPartyRosterRequest = 0L
+    internal val partyId get() = livePartyRoster()?.id
+    private var replyDraft: IrcKey? = null
     private var globalAccount: java.util.UUID? = null
     private var globalNextSend = 0L
     private val conversations = RelayConversation()
@@ -63,13 +79,17 @@ object RelayMessages {
     private var nextSend = 0L
     @JvmStatic fun suppressChatLog() = quiet.get()
     // Reconnecting the relay must not silently turn a private conversation into public chat.
-    fun reset() { conversations.relayDisconnected(); nextSend = 0 }
+    fun reset() {
+        conversations.relayDisconnected(); nextSend = 0; globalSubscription.reset(); partySubscription.reset(); replyDraft = null
+        partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
+    }
     private fun session() {
         val account = MC.instance.user.profileId
         irc.account(account)
         conversations.session(account.toString())
     }
     fun init() {
+        IrcChatRendering.init()
         ClientSendMessageEvents.ALLOW_CHAT.register { text ->
             session()
             if (!irc.chat(text) { if (irc.party) sendParty(it) else sendGlobal(it) }) return@register false
@@ -94,7 +114,9 @@ object RelayMessages {
             if (conversations.channelCommand(command)) chatClosed()
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
-            conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset()
+            conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset(); partySubscription.reset()
+            verifiedParty = null; verifiedPartyAt = 0; activeParty = ""; partySubscribedId = ""; partySubscribedUntil = 0
+            clearRichSession("")
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
@@ -145,27 +167,16 @@ object RelayMessages {
     }
     fun leaveChat() {
         irc.selected = false
+        replyDraft = null
         conversations.leaveChat()
         chatClosed()
     }
     private fun chatClosed() = display(Component.literal("Relay chat off. Normal messages use your Hypixel chat channel.").withColor(HudTheme.MUTED))
 
-    fun selectParty() {
-        session()
-        conversations.leaveChat()
-        irc.selectParty()
-        partyError()
-    }
+    fun selectParty() = selectIrc("party")
+    fun sendParty(text: String) = sendIrc("party", text)
 
-    fun sendParty(text: String) {
-        userMessageError("Party", text)?.let { error(it); return }
-        // No authenticated party-membership authority exists; never substitute a shared relay room.
-        partyError()
-    }
-
-    fun partyError() = error("Sky-Myce party chat is unavailable: the backend cannot verify your current Hypixel party. Nothing was sent. /sm chat returns to normal chat.")
-
-    fun chatHelp() = display(Component.literal("/sm irc — select global Minecraft/Discord chat; /sm irc <message> — send once. /sm pc selects party mode; delivery awaits verified party membership. /sm chat returns to normal chat. Failed sends never change channels.").withColor(HudTheme.TEXT))
+    fun chatHelp() = notice("/sm irc — global Minecraft/Discord chat; /sm party — Minecraft-only Party IRC. Add a message to send once. Click ⋯ for replies, reactions and your own edit/delete controls. /sm ircstatus shows status; /sm chat exits.")
 
     private fun enableGlobal() {
         if (GlobalChatConfig.enabled) return
@@ -175,117 +186,267 @@ object RelayMessages {
         }
     }
 
-    /** Only changed preferences serialize a subscription; incoming messages remain event-driven. */
+    private fun enableParty() {
+        if (GlobalChatConfig.partyEnabled) return
+        GlobalChatConfig.partyEnabled = true
+        runCatching { me.mycellium.skymyce.SkyMyce.config.save() }.onFailure {
+            me.mycellium.skymyce.SkyMyce.logger.warn("[IRC] Could not save the receiving preference")
+        }
+    }
+
+    internal fun partyInfo(event: PartyInfoEvent) {
+        val client = MC.instance
+        if (!client.isSameThread) {
+            val connection = client.connection
+            val account = client.user.profileId
+            client.execute { if (client.connection === connection && client.user.profileId == account) partyInfo(event) }
+            return
+        }
+        if (!LocationAPI.onHypixel || MC.instance.player == null) return
+        val leaders = event.members.entries.filter { it.value.role.name == "LEADER" }
+        verifiedParty = validatedIrcPartyRoster(event.inParty, event.members.keys.toList(), leaders.singleOrNull()?.key, MC.instance.user.profileId)
+        verifiedPartyAt = System.nanoTime()
+        nextPartyRosterRequest = verifiedPartyAt + 25_000_000_000L
+        refreshPartyBoundary()
+    }
+    private fun livePartyRoster(): IrcPartyRoster? {
+        if (!LocationAPI.onHypixel || MC.instance.player == null || MC.connection == null || System.nanoTime() - verifiedPartyAt !in 0..65_000_000_000L) return null
+        val verified = verifiedParty ?: return null
+        if (MC.instance.user.profileId.toString().replace("-", "") !in verified.members) return null
+        if (!PartyAPI.inParty || PartyAPI.members.size != verified.members.size || PartyAPI.leader?.uuid?.toString()?.replace("-", "") != verified.leader) return null
+        val members = PartyAPI.members.map { it.uuid?.toString()?.replace("-", "") ?: return null }.sorted()
+        return verified.takeIf { members == it.members && PartyAPI.members.count { member -> member.role.name == "LEADER" } == 1 }
+    }
+    private fun refreshPartyBoundary() {
+        val id = if (GlobalChatConfig.partyEnabled) partyId.orEmpty() else ""
+        if (id == activeParty) return
+        val old = chatStore.values().filter { it.scope == "party" }
+        activeParty = id; partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0; partySubscription.reset()
+        if (replyDraft?.scope == "party") replyDraft = null
+        chatStore.clearScope("party"); IrcChatRendering.clearScope("party")
+        if ((MC.screen as? IrcMediaViewerScreen)?.messageKey?.scope == "party" || (MC.screen as? IrcMessageControlsScreen)?.scope == "party") MC.instance.setScreen(null)
+        old.flatMap { it.media }.forEach { media -> IrcMediaAssets.cancel(media, false); IrcMediaAssets.cancel(media, true) }
+    }
+
+    private fun clearRichSession(boundary: String) {
+        if (richBoundary == boundary) return
+        richBoundary = boundary
+        chatStore.boundary(boundary)
+        replyDraft = null
+        partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
+        IrcMediaAssets.reset(boundary)
+        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.setScreen(null)
+        IrcChatRendering.clear()
+    }
+
+    /** Changed preferences serialize one scoped subscription; settings also refresh existing chat rows. */
     fun globalTick() {
         val account = MC.instance.user.profileId
+        val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
+        clearRichSession("$account|$endpoint|${LoaderClient.authorization.lease}|${DungeonFriendRelay.sessionGeneration}")
+        if (GlobalChatConfig.partyEnabled && LoaderClient.localAllowed && LocationAPI.onHypixel && System.nanoTime() >= nextPartyRosterRequest) {
+            DungeonFriends.requestIrcPartyInfo(); nextPartyRosterRequest = System.nanoTime() + 10_000_000_000L
+        }
+        refreshPartyBoundary()
+        val seenBoundary = "$account|$endpoint|$activeParty"
+        if (partySeenBoundary != seenBoundary) { partySeenBoundary = seenBoundary; partySeen.clear() }
         if (globalAccount != account) {
-            irc.account(account)
-            globalAccount = account
-            global.account(account.toString())
-            globalNextSend = 0L
-            globalSubscription.reset()
+            irc.account(account); globalAccount = account; global.account(account.toString())
+            globalNextSend = 0L; globalSubscription.reset(); partySubscription.reset()
+            verifiedParty = null; verifiedPartyAt = 0; nextPartyRosterRequest = 0; refreshPartyBoundary()
         }
-        if (!DungeonFriendRelay.connected || !DungeonFriendRelay.globalChatAvailable) return
-        val enabled = GlobalChatConfig.enabled
-        val revision = globalSubscription.take(enabled, System.nanoTime()) ?: return
-        if (DungeonFriendRelay.globalPacket("irc_subscribe", mapOf("enabled" to enabled), currentGlobalResult { reason ->
-            if (globalSubscription.complete(revision, reason, System.nanoTime())) globalError(reason)
-        })) {
-            globalSubscription.queued(revision, enabled)
+        chatStore.expire(System.currentTimeMillis())
+        IrcChatRendering.tick()
+        if (!DungeonFriendRelay.connected) return
+        for (scope in listOf("global", "party")) {
+            if (!(if (scope == "global") DungeonFriendRelay.globalChatAvailable else DungeonFriendRelay.partyChatAvailable)) continue
+            val subscription = if (scope == "global") globalSubscription else partySubscription
+            val roster = if (scope == "party") livePartyRoster() else null
+            val enabled = if (scope == "global") GlobalChatConfig.enabled else GlobalChatConfig.partyEnabled && roster != null
+            if (scope == "party" && enabled && System.nanoTime() >= nextPartySubscribe) subscription.reset()
+            val revision = subscription.take(enabled, System.nanoTime()) ?: continue
+            val fields = buildMap<String, Any> {
+                put("enabled", enabled)
+                if (DungeonFriendRelay.richChatAvailable) put("richChatVersion", 1)
+                if (scope == "party" && roster != null && enabled) { put("members", roster.members); put("leader", roster.leader) }
+            }
+            var grantMillis = 0L
+            if (DungeonFriendRelay.ircPacket(scope, "irc_subscribe", fields, currentGlobalResult { reason ->
+                if (scope == "party" && subscription.current(revision)) {
+                    if (reason == null && enabled && roster?.id == activeParty) {
+                        partySubscribedId = roster.id; partySubscribedUntil = System.nanoTime() + grantMillis * 1_000_000L
+                    } else { partySubscribedId = ""; partySubscribedUntil = 0 }
+                }
+                if (subscription.complete(revision, reason, System.nanoTime())) ircError(scope, reason)
+            }, receipt = { response -> grantMillis = ircPartyGrantMillis(response, roster?.id, System.currentTimeMillis()) ?: 0L })) {
+                subscription.queued(revision, enabled)
+                if (scope == "party") nextPartySubscribe = System.nanoTime() + 30_000_000_000L
+            }
         }
     }
 
-    fun globalReady() {
-        globalSubscription.reset()
-        globalTick()
-    }
+    fun globalReady() { globalSubscription.reset(); partySubscription.reset(); globalTick() }
 
-    /** Late receipts cannot affect another account, endpoint or renewed authorization. */
+    /** Late receipts cannot affect a different login, endpoint, authorization or reconnect session. */
     private fun currentGlobalResult(action: (String?) -> Unit): (String?) -> Unit {
         val client = MC.instance
         val account = client.user.profileId
         val lease = LoaderClient.authorization.lease
         val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
+        val generation = DungeonFriendRelay.sessionGeneration
         return { reason ->
             if (client.user.profileId == account && LoaderClient.authorization.lease == lease &&
                 me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl == endpoint &&
-                LoaderClient.onlineAllowed && client.player != null && client.connection != null) action(reason)
+                DungeonFriendRelay.sessionGeneration == generation && LoaderClient.onlineAllowed &&
+                client.player != null && client.connection != null) action(reason)
         }
     }
 
-    fun selectGlobal() {
-        session()
-        irc.command("chat sky")
-        conversations.leaveChat()
-        enableGlobal()
-        globalSelected()
+    fun selectGlobal() = selectIrc("global")
+    private fun selectIrc(scope: String) {
+        session(); conversations.leaveChat()
+        if (scope == "global") { irc.command("chat sky"); enableGlobal() }
+        else { irc.selectParty(); enableParty(); DungeonFriends.requestIrcPartyInfo() }
+        if (replyDraft?.scope != scope) replyDraft = null
+        globalTick()
+        notice("${if (scope == "global") "Global chat" else "Minecraft-only Party IRC"} selected. /sm chat returns to normal chat.")
         val client = MC.instance
         val connection = client.connection
         val account = client.user.profileId
         client.schedule {
             if (client.connection === connection && client.user.profileId == account && client.player != null &&
-                irc.selected && irc.global && (client.screen == null || client.screen is ChatScreen)) {
+                irc.selected && (if (scope == "global") irc.global else irc.party) && (client.screen == null || client.screen is ChatScreen))
                 client.setScreen(ChatScreen("", false))
-            }
         }
     }
+    private fun globalSelected() { globalTick(); notice("Global chat selected. /sm chat returns to normal chat.") }
 
-    private fun globalSelected() {
-        globalTick()
-        display(Component.literal(if (GlobalChatConfig.enabled)
-            "Global Sky-Myce IRC selected. /sm chat returns to normal chat; receiving stays enabled. Failed sends stay in IRC."
-        else "Global chat is disabled. Enable Global SkyMyce Chat; /sm chat returns to normal chat.").withColor(HudTheme.ACCENT))
-    }
-
-    fun sendGlobal(text: String) {
-        globalMessageError(text)?.let { error(it); return }
-        if (!LoaderClient.onlineAllowed) { error("SkyMyce online authorization is required for global chat."); return }
-        enableGlobal()
-        if (MC.instance.player == null || MC.connection == null || !DungeonFriendRelay.connected) {
-            error("Global relay unavailable. Reconnect and retry; nothing was sent to normal chat."); return
+    fun sendGlobal(text: String) = sendIrc("global", text)
+    private fun sendIrc(scope: String, text: String) {
+        val problem = ircClientMessageError(scope, text)
+        if (problem != null) { notice(problem, true); return }
+        if (!LoaderClient.onlineAllowed) { notice("Online authorization is required for IRC.", true); return }
+        if (scope == "global") enableGlobal() else enableParty()
+        if (MC.instance.player == null || MC.connection == null || !DungeonFriendRelay.currentGlobalSession()) {
+            notice("IRC is unavailable. Reconnect and retry; nothing was sent to normal chat.", true); return
         }
-        if (!DungeonFriendRelay.globalChatAvailable) { error("This relay does not support global chat yet."); return }
+        if (!(if (scope == "global") DungeonFriendRelay.globalChatAvailable else DungeonFriendRelay.partyChatAvailable)) {
+            notice("This relay does not support this IRC channel.", true); return
+        }
         val now = System.nanoTime()
-        if (now < globalNextSend) { error("Wait a moment before sending another global message."); return }
-        globalTick() // Queue opt-in first when the setting changed just before this command.
-        if (!globalSubscription.enabled) { globalError("not_subscribed"); return }
-        if (DungeonFriendRelay.globalPacket("irc_send", mapOf("text" to text), currentGlobalResult { reason ->
+        if (now < globalNextSend) { notice("Wait a moment before sending another IRC message.", true); return }
+        globalTick()
+        val subscription = if (scope == "global") globalSubscription else partySubscription
+        if (!subscription.enabled) { ircError(scope, "not_subscribed"); return }
+        if (scope == "party" && !currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) {
+            notice("Party IRC needs a complete current Hypixel roster and a confirmed subscription. Wait for party info, then retry.", true); return
+        }
+        val draft = replyDraft?.takeIf { it.scope == scope && currentIrcChannel(it) && chatStore.get(it)?.deleted == false }
+        val fields = buildMap<String, Any> {
+            put("text", text)
+            if (draft != null && DungeonFriendRelay.richChatAvailable) put("replyTo", draft.id)
+        }
+        val sendPartyId = if (scope == "party") partyId else null
+        if (DungeonFriendRelay.ircPacket(scope, "irc_send", fields, currentGlobalResult { reason ->
+            if (scope == "party" && partyId != sendPartyId) return@currentGlobalResult
             if (reason != null) {
-                if (reason == "not_subscribed") globalSubscription.reset()
-                globalError(reason)
+                if (reason == "not_subscribed") subscription.reset()
+                ircError(scope, reason)
             }
-        })) globalNextSend = now + 500_000_000
-        else globalError(null)
-        // The authoritative broadcast includes the sender; no local echo or automatic resend.
+        })) { globalNextSend = now + 500_000_000; replyDraft = null }
+        else ircError(scope, null)
+        // Only the authoritative broadcast renders a send. Uncertain deliveries are never resent.
     }
 
-    fun globalError(reason: String?) = error(globalDeliveryError(reason))
+    private fun ircError(scope: String, reason: String?) = notice(globalDeliveryError(reason).replace("Global chat", if (scope == "party") "Party IRC" else "Global chat"), true)
+    fun globalError(reason: String?) = ircError("global", reason)
+    internal fun currentIrcChannel(key: IrcKey): Boolean = DungeonFriendRelay.currentGlobalSession() &&
+        MC.instance.player != null && MC.connection != null && if (key.scope == "global") {
+            key.room == "global-chat" && GlobalChatConfig.enabled && DungeonFriendRelay.globalChatAvailable && globalSubscription.enabled
+        } else key.scope == "party" && key.room == partyId && key.room == partySubscribedId &&
+            System.nanoTime() < partySubscribedUntil && GlobalChatConfig.partyEnabled && DungeonFriendRelay.partyChatAvailable && partySubscription.enabled
 
     fun receiveGlobal(json: com.google.gson.JsonObject, deliveredTo: String) {
         val client = MC.instance
         val delivery = global.receive(json, deliveredTo, client.user.profileId.toString(), GlobalChatConfig.enabled,
-            DungeonFriendRelay.currentGlobalSession() && client.player != null && client.connection != null,
+            DungeonFriendRelay.currentGlobalSession() && DungeonFriendRelay.globalChatAvailable && client.player != null && client.connection != null,
             GlobalChatConfig.mentionSounds) ?: return
-        val message = delivery.message
-        message.reply?.let { reply ->
-            val preview = reply.text?.let { splitGlobalChatText(it.replace('\n', ' '), 96, 1).firstOrNull() }
-            display(Component.literal("↩ ${reply.from}${preview?.let { ": $it" }.orEmpty()}").withColor(HudTheme.MUTED), "[SkyMyce] ")
+        acceptIrc(delivery.message, delivery.ping)
+    }
+    fun receiveParty(json: com.google.gson.JsonObject, deliveredTo: String) {
+        val roster = livePartyRoster() ?: return
+        if (deliveredTo != MC.instance.user.profileId.toString() || !currentIrcChannel(IrcKey("party", roster.id, ""))) return
+        val message = parsePartyIrc(json, roster.id) ?: return
+        if (message.sender?.uuid !in roster.members) return
+        if (!partySeen.add(message.id)) return
+        while (partySeen.size > 512) partySeen.remove(partySeen.first())
+        acceptIrc(message, message.mention && GlobalChatConfig.mentionSounds)
+    }
+    private fun acceptIrc(message: GlobalChatMessage, ping: Boolean) {
+        if (message.model == 1 && !DungeonFriendRelay.richChatAvailable || !chatStore.accept(message, System.currentTimeMillis())) return
+        IrcChatRendering.add(message)
+        if (ping) MC.instance.soundManager.play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4f, 0.25f))
+    }
+    fun receiveUpdate(json: com.google.gson.JsonObject, deliveredTo: String) {
+        if (deliveredTo != MC.instance.user.profileId.toString() || !DungeonFriendRelay.richChatAvailable) return
+        val update = parseIrcUpdate(json) ?: return
+        if (!currentIrcChannel(update.key)) return
+        val previous = chatStore.get(update.key) ?: return
+        val next = chatStore.apply(update, System.currentTimeMillis()) ?: return
+        if (next.deleted && replyDraft == next.key) replyDraft = null
+        if (previous.media != next.media || next.deleted) {
+            if ((MC.screen as? IrcMediaViewerScreen)?.messageKey == next.key) MC.instance.setScreen(MC.instance.gui.chat.restoreChatScreen())
+            previous.media.filter { it !in next.media }.forEach { media -> IrcMediaAssets.cancel(media, false); IrcMediaAssets.cancel(media, true) }
         }
-        val name = if (message.source == "discord") "@${message.from}" else message.from
-        val heading = "$name: "
-        val links = globalChatSpans(message.text).mapNotNull { it.url?.toString() }.toSet()
-        for (line in splitGlobalChatText(message.text, 256 - 10 - heading.length)) {
-            val component = Component.literal(heading).withColor(if (message.mention) HudTheme.ACCENT else HudTheme.SECONDARY)
-            for (span in globalChatSpans(line, links)) {
-                val part = Component.literal(span.text).withColor(HudTheme.TEXT)
-                if (span.url != null) part.withStyle {
-                    it.withClickEvent(ClickEvent.OpenUrl(span.url)).withHoverEvent(HoverEvent.ShowText(Component.literal("Open link")))
-                }
-                component.append(part)
-            }
-            display(component, "[SkyMyce] ")
+        IrcChatRendering.update(next)
+    }
+    internal fun key(scope: String, id: String) = IrcKey(scope, when (scope) { "global" -> "global-chat"; "party" -> partyId.orEmpty(); else -> DungeonFriendRelay.ircRoom }, id)
+    fun chatAction(command: String) {
+        val action = parseIrcChatAction(command) ?: return
+        val key = key(action.scope, action.id)
+        val message = chatStore.get(key)?.takeUnless { it.deleted } ?: return
+        if (!currentIrcChannel(key)) return
+        if (MC.screen is ChatScreen) MC.instance.gui.chat.preserveCurrentChatScreen()
+        if (action.kind == "media") {
+            val media = message.media.getOrNull(action.mediaIndex ?: return) ?: return
+            val context = message.reply?.let { "Reply to ${it.from}: ${it.text.orEmpty().replace('\n', ' ').take(96)}" }
+                ?: message.text.replace('\n', ' ').take(160)
+            MC.instance.setScreen(IrcMediaViewerScreen(MC.screen, media, message.from, "${ircPrefix(message.scope)} $context", key))
+        } else if (message.model == 1 && DungeonFriendRelay.richChatAvailable)
+            MC.instance.setScreen(IrcMessageControlsScreen(MC.screen, key))
+    }
+    internal fun prepareReply(key: IrcKey) {
+        if (!currentIrcChannel(key) || chatStore.get(key)?.deleted != false || !DungeonFriendRelay.richChatAvailable) return
+        selectIrc(key.scope)
+        replyDraft = key
+        notice("Replying to ${chatStore.get(key)?.from}. /sm irccancel cancels the reply.")
+        MC.instance.setScreen(ChatScreen("", false))
+    }
+    fun cancelReply() { replyDraft = null; notice("Reply cancelled.") }
+    internal fun canManage(key: IrcKey): Boolean = currentIrcChannel(key) && DungeonFriendRelay.richChatAvailable &&
+        chatStore.manageable(key, MC.instance.user.profileId.toString().replace("-", ""), System.currentTimeMillis())
+    internal fun operation(key: IrcKey, operation: String, text: String? = null, emoji: String? = null, active: Boolean? = null): Boolean {
+        val message = chatStore.get(key)?.takeUnless { it.deleted } ?: return false
+        if (!currentIrcChannel(key) || !DungeonFriendRelay.richChatAvailable || message.model != 1) return false
+        if (operation in setOf("edit", "delete") && !canManage(key)) return false
+        if (operation !in setOf("edit", "delete", "reaction") || operation == "edit" && (text == null || ircClientMessageError(key.scope, text) != null) ||
+            operation == "reaction" && (emoji !in IRC_REACTIONS || active == null)) return false
+        val fields = buildMap<String, Any> {
+            put("messageId", key.id); put("operation", operation)
+            text?.let { put("text", it) }; emoji?.let { put("emoji", it) }; active?.let { put("active", it) }
         }
-        if (delivery.ping) client.soundManager.play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4f, 0.25f))
+        return DungeonFriendRelay.ircPacket(key.scope, "irc_operation", fields, currentGlobalResult { reason ->
+            if (reason != null && currentIrcChannel(key) && chatStore.get(key) != null) notice(ircOperationError(reason), true)
+        }).also { if (!it) notice("Message control unavailable. Reconnect and try again.", true) }
+    }
+    fun ircStatus() {
+        notice("${DungeonFriendRelay.status}. Global: ${if (globalSubscription.enabled && GlobalChatConfig.enabled) "receiving" else "off"}; Party: ${if (currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) "in-game only" else if (GlobalChatConfig.partyEnabled) "waiting for verified roster/subscription" else "off"}. ${if (DungeonFriendRelay.richChatAvailable) "Media and message controls supported." else "Legacy text/link compatibility."}")
+    }
+    internal fun notice(text: String, failed: Boolean = false) = display(IrcChatRendering.prefixComponent("room")
+        .append(Component.literal(text).withColor(if (failed) HudTheme.RED else HudTheme.MUTED)), "")
+    internal fun <T> quietChat(action: () -> T): T {
+        val previous = quiet.get(); quiet.set(true)
+        return try { action() } finally { quiet.set(previous) }
     }
     fun reply(text: String) {
         session()

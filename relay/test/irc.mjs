@@ -51,7 +51,7 @@ export async function checkIrc(script, proof) {
     ws.send(JSON.stringify(data));
     if (closed) { assert.equal((await closed).code, 4005); return; }
     const ready = await next(); assert.equal(ready.type, "ready"); assert.equal(ready.irc, true);
-    assert.equal(ready.partyChat, false); assert.equal(ready.partyChatError, 'party_membership_unverified');
+    assert.equal(ready.partyChat, true); assert.equal(ready.partyChatVersion, 1); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
   }
   const bridgeHeaders = (room, timestamp = String(Date.now())) => {

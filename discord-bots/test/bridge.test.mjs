@@ -21,7 +21,11 @@ test('Gateway identity is authoritative; bots, webhooks, wrong guilds and other 
 });
 test('Minecraft display cannot mention anyone or loop Discord messages back into the channel', () => {
   const packet = { type: 'irc_message', id: 'a'.repeat(32), message_id: 'a'.repeat(32), room: 'friends', source: 'minecraft', from: 'Steve', text: '@everyone **hello**' };
-  assert.deepEqual(minecraftContent(packet), { content: '[MC] Steve » @everyone \\*\\*hello\\*\\*', allowedMentions: { parse: [], repliedUser: false } });
+  const content = minecraftContent(packet);
+  assert.equal(content.content, undefined);
+  assert.equal(content.embeds[0].author.name, 'Steve');
+  assert.equal(content.embeds[0].description, '@everyone \\*\\*hello\\*\\*');
+  assert.deepEqual(content.allowedMentions, { parse: [], repliedUser: false });
   assert.equal(minecraftContent({ ...packet, source: 'discord' }), null);
   assert.equal(minecraftContent({ ...packet, from: '[MC] Other' }), null);
   assert.equal(minecraftContent({ ...packet, id: '' }), null);

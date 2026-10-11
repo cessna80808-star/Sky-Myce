@@ -1,5 +1,7 @@
 import type { AccountStore } from "./accounts";
 import type { RelayRoom } from "./index";
+import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircOperation, ircPlainText, ircPreview, ircTextDigest,
+  type IrcMedia, type IrcPublicSender, type IrcReply, type IrcRecord, type IrcOperation, type IrcUpdate } from "./irc-model";
 
 export type IrcConfig = {
   ACCOUNT_STORE: DurableObjectNamespace<AccountStore>;
@@ -25,12 +27,15 @@ export type IrcConfig = {
   GLOBAL_CHAT_OUTBOX_TTL_MS?: string;
   GLOBAL_CHAT_MC_MAX_LENGTH?: string;
   GLOBAL_CHAT_DISCORD_MAX_LENGTH?: string;
+  DISCORD_INTERACTIONS_ROOM?: string;
 };
 export type IrcSession = {
   bridge?: boolean; room?: string; ircSubscribed?: boolean; globalChatSubscribed?: boolean; accountId?: string; discordId?: string;
   uuid?: string; name?: string; installationId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
+  richChatVersion?: number;
+  partySubscribed?: boolean; partyId?: string; partySubscribeRevision?: number; partyConsentExpiresAt?: number;
 };
-type SubscriptionIntent = { field: "ircSubscribed" | "globalChatSubscribed"; token: symbol };
+type SubscriptionIntent = { field: "ircSubscribed" | "globalChatSubscribed" | "partySubscribed"; token: symbol; revision?: number };
 const identityFields = ["bridge", "room", "accountId", "discordId", "uuid", "name", "installationId", "generation",
   "leaseExpiresAt", "buildId", "loaderVersion", "connectionId"] as const;
 
@@ -48,18 +53,22 @@ const encoder = new TextEncoder();
 const snowflake = /^\d{17,20}$/;
 const packetId = /^[a-f0-9]{32}$/;
 export const GLOBAL_CHAT_ROOM = "global-chat";
+export const PARTY_CHAT_ROOM = "party-chat";
 export const PARTY_CHAT_UNAVAILABLE = "party_membership_unverified";
 export const globalChatChannel = (env: IrcConfig): string | undefined => {
   const channel = env.GLOBAL_CHAT_CHANNEL_ID ?? env.DISCORD_IRC_CHANNEL_ID;
   return channel && snowflake.test(channel) ? channel : undefined;
 };
-export type GlobalChatSender = Pick<IrcSession, "accountId" | "discordId" | "uuid" | "name" | "installationId" | "generation" | "leaseExpiresAt" | "buildId" | "loaderVersion">;
-export type GlobalChatSend = { id: string; text: string };
-export type GlobalChatResult = { ok: boolean; error?: string; id?: string };
-type GlobalReply = { message_id?: string; from: string; text: string };
+export type GlobalChatSender = Pick<IrcSession, "accountId" | "discordId" | "uuid" | "name" | "installationId" | "generation" | "leaseExpiresAt" | "buildId" | "loaderVersion" | "connectionId">;
+export type GlobalChatSend = { id: string; text: string; replyTo?: string };
+export type GlobalChatResult = { ok: boolean; error?: string; id?: string; room?: string; expiresAt?: number };
+export type PartyChatIdentity = GlobalChatSender & { room: string; revision: number };
+export type PartyChatMessage = GlobalChatMessage & { room: string; scope: "party" };
+type GlobalReply = IrcReply & { message_id?: string };
 export type GlobalChatMessage = {
   id: string; source: "minecraft" | "discord"; from: string; text: string; timestamp: number; expiresAt: number;
   discordId: string; uuid?: string; mentions: string[]; reply?: GlobalReply; sender?: GlobalChatSender;
+  sourceId?: string; media?: IrcMedia[]; identity?: IrcPublicSender; revision?: number;
 };
 type PendingDelivery = { id: string; destination: string; attempts: number; packet: string; expires: number };
 const bounded = (value: string | undefined, fallback: number, minimum: number, maximum: number) => {
@@ -95,8 +104,12 @@ export async function verifyBridge(request: Request, env: IrcConfig, room: strin
 export class RoomIrc {
   // Awaited handlers keep this instance active; restarts cancel them. Persist subscriptions, not in-flight ordering.
   private readonly subscriptionIntents = new WeakMap<WebSocket, Partial<Record<SubscriptionIntent["field"], symbol>>>();
+  private readonly lifecycle: IrcLifecycle;
   constructor(private ctx: DurableObjectState, private env: IrcConfig,
-      private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>) {
+      private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>, private cosmeticName?: (uuid: string) => string | null) {
+    this.lifecycle = new IrcLifecycle(ctx.storage);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS party_chat_consents (uuid TEXT NOT NULL, origin_room TEXT NOT NULL, connection_id TEXT NOT NULL,
+      party_id TEXT NOT NULL, revision INTEGER NOT NULL, expires INTEGER NOT NULL, PRIMARY KEY(uuid,origin_room,connection_id))`);
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS irc_nonces (nonce TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS irc_seen (id TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS irc_limits (actor TEXT PRIMARY KEY, credits REAL NOT NULL, updated INTEGER NOT NULL)");
@@ -146,8 +159,17 @@ export class RoomIrc {
   /** Record ordering before the caller's authorization RPC, without granting any subscription. */
   reserveSubscription(ws: WebSocket, session: IrcSession, data: Record<string, unknown>): SubscriptionIntent | undefined {
     if (session.bridge || !session.accountId || data.type !== "irc_subscribe" || typeof data.enabled !== "boolean" ||
-        typeof data.id !== "string" || !packetId.test(data.id) || data.scope !== undefined && data.scope !== "global") return;
-    const intent: SubscriptionIntent = { field: data.scope === "global" ? "globalChatSubscribed" : "ircSubscribed", token: Symbol() };
+        typeof data.id !== "string" || !packetId.test(data.id) || data.scope !== undefined && data.scope !== "global" && data.scope !== "room" && !(data.scope === "party" && data.richChatVersion === 1)) return;
+    const intent: SubscriptionIntent = { field: data.scope === "global" ? "globalChatSubscribed" : data.scope === "party" ? "partySubscribed" : "ircSubscribed", token: Symbol() };
+    if (intent.field === "partySubscribed") {
+      const current = currentIrcSession(ws, session);
+      if (!current) return;
+      intent.revision = (current.partySubscribeRevision ?? 0) + 1;
+      current.partySubscribeRevision = intent.revision;
+      // Revoke first: an in-flight roster change can never retain its old audience.
+      current.partySubscribed = false; delete current.partyId; delete current.partyConsentExpiresAt;
+      ws.serializeAttachment(current);
+    }
     const pending = this.subscriptionIntents.get(ws) ?? {};
     pending[intent.field] = intent.token;
     this.subscriptionIntents.set(ws, pending);
@@ -163,13 +185,23 @@ export class RoomIrc {
     const pending = this.subscriptionIntents.get(ws);
     if (!intent || pending?.[intent.field] !== intent.token) { result("subscription_superseded"); return; }
     current[field] = data.enabled;
+    if (data.richChatVersion === 1) current.richChatVersion = 1;
     delete pending[intent.field];
     ws.serializeAttachment(current); result();
   }
 
   async message(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent?: SubscriptionIntent): Promise<void> {
+    if (session.bridge && data.type === "bridge_capabilities") {
+      if (typeof data.id !== "string" || !packetId.test(data.id) || data.richChatVersion !== 1) return;
+      session.richChatVersion = 1; ws.serializeAttachment(session);
+      ws.send(JSON.stringify({ type: "irc_result", id: data.id, ...(session.room === GLOBAL_CHAT_ROOM ? { scope: "global" } : { scope: "room" }), room: session.room }));
+      await this.flushOperations(); return;
+    }
+    if (!session.bridge && data.scope === "party" && (data.type === "irc_subscribe" && data.richChatVersion === 1 || session.richChatVersion === 1)) {
+      await this.partyMessage(ws, session, data, intent); return;
+    }
     // Client-observed Hypixel rosters have no backend-verifiable membership proof.
-    if (data.scope !== undefined && data.scope !== "global") {
+    if (data.scope !== undefined && data.scope !== "global" && data.scope !== "room" || data.scope === "room" && session.room === GLOBAL_CHAT_ROOM) {
       if (typeof data.id !== "string" || !(session.bridge ? snowflake : packetId).test(data.id)) {
         ws.close(1008, "Invalid IRC packet"); return;
       }
@@ -180,26 +212,53 @@ export class RoomIrc {
     if (data.scope === "global" || session.bridge && session.room === GLOBAL_CHAT_ROOM) {
       await this.globalMessage(ws, session, data, intent); return;
     }
-    const result = (error?: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, ...(error ? { error } : {}) })); };
+    const result = (error?: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id,
+      ...(data.scope === "room" ? { scope: "room", room: session.room } : {}), ...(error ? { error } : {}) })); };
+    if (data.room !== undefined && data.room !== session.room) { result("invalid_route"); return; }
+    if (data.type === "irc_operation" && !session.bridge || data.type === "discord_operation" && session.bridge) {
+      const outcome = await this.operation(session, data, "room"); result(outcome.error); return;
+    }
+    if (session.bridge && data.type === "discord_operation_ack") { result(this.acknowledgeOperation(data, session.room!)); return; }
+    if (session.bridge && data.type === "discord_operation_result") { if (data.channelId === this.roomChannel(session.room!)) this.failedOperation(data); return; }
+    if (session.bridge && data.type === "discord_ack") {
+      const record = typeof data.id === "string" ? this.lifecycle.get(data.id) : undefined;
+      if (!record || record.source !== "minecraft" || data.channelId !== this.roomChannel(session.room!) || typeof data.message_id !== "string" || !snowflake.test(data.message_id)) { result("invalid_ack"); return; }
+      this.lifecycle.receipt(record.id, data.message_id); result(); await this.flushOperations(); return;
+    }
     if (typeof data.id !== "string" || !(session.bridge ? snowflake : packetId).test(data.id)) { ws.close(1008, "Invalid IRC packet"); return; }
     if (session.bridge && (data.room !== session.room || data.source !== "discord" || data.message_id !== data.id)) { result("invalid_route"); return; }
     if (!session.bridge && data.type === "irc_subscribe") {
       await this.subscribe(ws, session, data, intent, "ircSubscribed", result); return;
     }
-    if (data.type !== (session.bridge ? "discord_message" : "irc_send") || !validIrcText(data.text)) { result("invalid_message"); return; }
+    if (data.type !== (session.bridge ? "discord_message" : "irc_send") || !(session.bridge && session.richChatVersion === 1 ? ircPlainText(data.text, 4096) : validIrcText(data.text))) { result("invalid_message"); return; }
     if (!session.bridge && !session.ircSubscribed) { result("not_subscribed"); return; }
     const discordId = session.bridge ? data.discordId : session.discordId;
     if (typeof discordId !== "string" || !snowflake.test(discordId)) { result("not_authorized"); return; }
     const account = await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(discordId);
     if (!account.ok) { result("not_authorized"); return; }
+    if (!session.bridge && !currentIrcSession(ws, session)?.ircSubscribed) return;
+    const media = ircMedia(data.text as string, session.bridge ? data.media : undefined);
+    if (!media || data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result("invalid_media"); return; }
     const error = this.accept(`${session.bridge ? "dc" : "mc"}:${discordId}`, data.id);
     if (error) { result(error); return; }
     // The bot's signed transport carries the Gateway identity. Minecraft names/UUIDs come from verifyAccount.
     const from = session.bridge ? (typeof data.from === "string" ? data.from.replace(/[\x00-\x1f\x7f\u00a7]/g, "").slice(0, 64) : "Discord user") : session.name;
     const messageId = crypto.randomUUID().replaceAll("-", "");
-    const packet = JSON.stringify({ type: "irc_message", id: messageId, message_id: messageId, room: session.room,
+    const identity = await this.publicSender(session.bridge ? { name: displayName(from), discordId } : session);
+    const bodyDigest = await ircTextDigest(data.text as string);
+    if (!session.bridge && (!await this.authorized(ws, session) || !currentIrcSession(ws, session)?.ircSubscribed)) return;
+    const reply = session.bridge ? this.discordReply(data.reply) : data.replyTo ? this.lifecycle.reply(data.replyTo as string) : undefined;
+    const timestamp = Date.now();
+    this.lifecycle.remember({ id: messageId, scope: "room", room: session.room!, source: session.bridge ? "discord" : "minecraft",
+      sourceId: data.id, from: displayName(from), discordId, ...(session.uuid ? { uuid: session.uuid } : {}), sender: identity,
+      preview: ircPreview(data.text as string), bodyDigest, media, ...(reply ? { reply } : {}), revision: 0, timestamp, expiresAt: timestamp + IRC_MANAGEMENT_MS,
+      ...(session.bridge ? { discordMessageId: data.id } : {}) });
+    const base = { type: "irc_message", id: messageId, message_id: messageId, room: session.room,
       source: session.bridge ? "discord" : "minecraft", from, text: data.text,
-      ...(session.bridge ? { discordId } : { uuid: session.uuid }) });
+      ...(session.bridge ? { discordId } : { uuid: session.uuid }) };
+    const packet = JSON.stringify(base);
+    const rich = { ...base, scope: "room", model: 1, sourceId: data.id, timestamp, revision: 0, media, sender: identity,
+      reactions: [], ...(reply ? { reply } : {}) };
     for (const peer of this.ctx.getWebSockets()) {
       if (peer.readyState !== WebSocket.OPEN) continue;
       const recipient = peer.deserializeAttachment() as IrcSession;
@@ -207,13 +266,44 @@ export class RoomIrc {
       if (!recipient.bridge && !await this.authorized(peer, recipient)) continue;
       const current = currentIrcSession(peer, recipient);
       if (!current || !current.bridge && !current.ircSubscribed) continue;
-      try { peer.send(packet); } catch { /* Live relay only: reconnect restores subscriptions, never message history. */ }
+      const mention = session.bridge ? Array.isArray(data.mentions) && !!current.discordId && data.mentions.includes(current.discordId) :
+        !!current.name && new RegExp(`(^|[^A-Za-z0-9_])@${current.name}(?=$|[^A-Za-z0-9_])`, "i").test(data.text as string);
+      try { peer.send(current.bridge || current.richChatVersion === 1 ? JSON.stringify({ ...rich, mention }) : packet); }
+      catch { /* Live relay only: reconnect restores subscriptions, never message history. */ }
     }
     result();
+    await this.armGlobal();
   }
 
   private coordinator(): boolean { return this.ctx.id.equals(this.env.RELAY_ROOMS.idFromName(GLOBAL_CHAT_ROOM)); }
-  private rooms(): string[] { return [...new Set(this.env.ROOMS.split(",").filter(room => /^[a-z0-9_-]{1,32}$/.test(room) && room !== GLOBAL_CHAT_ROOM))].slice(0, 64); }
+  private partyCoordinator(): boolean { return this.ctx.id.equals(this.env.RELAY_ROOMS.idFromName(PARTY_CHAT_ROOM)); }
+  private roomChannel(room: string): string | undefined {
+    return room === GLOBAL_CHAT_ROOM ? globalChatChannel(this.env) : room === "testing" ? this.env.DISCORD_IRC_TEST_CHANNEL_ID : room === "friends" ? this.env.DISCORD_IRC_CHANNEL_ID : undefined;
+  }
+  private sender(session: IrcSession): GlobalChatSender {
+    return { accountId: session.accountId, discordId: session.discordId, uuid: session.uuid, name: session.name,
+      installationId: session.installationId, generation: session.generation, leaseExpiresAt: session.leaseExpiresAt, buildId: session.buildId, loaderVersion: session.loaderVersion, connectionId: session.connectionId };
+  }
+  private async publicSender(sender: Pick<IrcSession, "uuid" | "name" | "discordId">): Promise<IrcPublicSender> {
+    const identity: IrcPublicSender = { name: displayName(sender.name), discordId: sender.discordId! };
+    if (sender.uuid && packetId.test(sender.uuid)) {
+      identity.uuid = sender.uuid;
+      identity.avatarUrl = `https://mc-heads.net/avatar/${sender.uuid}/64`;
+      try {
+        const name = this.coordinator() || this.partyCoordinator() ? await this.env.RELAY_ROOMS.getByName(this.env.DISCORD_INTERACTIONS_ROOM ?? "friends").ircCosmeticName(sender.uuid) : this.cosmeticName?.(sender.uuid);
+        if (name) identity.cosmeticName = ircPreview(name, 64);
+      } catch { /* A real account identity remains usable if optional cosmetic lookup is unavailable. */ }
+    }
+    return identity;
+  }
+  private discordReply(candidate: unknown): IrcReply | undefined {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return;
+    const reply = candidate as Record<string, unknown>;
+    if (typeof reply.message_id !== "string" || !snowflake.test(reply.message_id)) return;
+    const record = this.lifecycle.fromDiscord(reply.message_id);
+    return record ? this.lifecycle.reply(record.id) : { discordMessageId: reply.message_id, from: displayName(reply.from), text: typeof reply.text === "string" ? ircPreview(reply.text) : "Unavailable message" };
+  }
+  private rooms(): string[] { return [...new Set(this.env.ROOMS.split(",").filter(room => /^[a-z0-9_-]{1,32}$/.test(room) && room !== GLOBAL_CHAT_ROOM && room !== PARTY_CHAT_ROOM))].slice(0, 64); }
   private textLimit(discord: boolean): number { return Math.floor(discord ? bounded(this.env.GLOBAL_CHAT_DISCORD_MAX_LENGTH, 4096, 1, 4096) : bounded(this.env.GLOBAL_CHAT_MC_MAX_LENGTH, 1024, 1, 1024)); }
 
   private async validSender(sender: GlobalChatSender): Promise<boolean> {
@@ -226,13 +316,125 @@ export class RoomIrc {
     return state.ok && state.discordId === sender.discordId && sender.leaseExpiresAt! > Date.now();
   }
 
+  private partyIdentity(session: IrcSession): PartyChatIdentity {
+    return { ...this.sender(session), room: session.room!, revision: session.partySubscribeRevision ?? 0 };
+  }
+  private async partyMessage(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent?: SubscriptionIntent): Promise<void> {
+    const result = (outcome: GlobalChatResult) => { const room = outcome.room ?? (data.type !== "irc_subscribe" ? session.partyId : undefined);
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+      type: "irc_result", scope: "party", id: data.id, ...(outcome.error ? { error: outcome.error } : {}),
+      ...(room ? { room, ...(outcome.expiresAt ? { expiresAt: outcome.expiresAt } : {}) } : {}) })); };
+    if (typeof data.id !== "string" || !packetId.test(data.id)) { ws.close(1008, "Invalid party chat packet"); return; }
+    const coordinator = this.env.RELAY_ROOMS.getByName(PARTY_CHAT_ROOM);
+    if (data.type === "irc_subscribe") {
+      const pending = this.subscriptionIntents.get(ws);
+      if (!intent || pending?.partySubscribed !== intent.token || typeof data.enabled !== "boolean") { result({ ok: false, error: "subscription_superseded" }); return; }
+      const identity = { ...this.partyIdentity(session), revision: intent.revision! };
+      const outcome = await coordinator.partyChatRegister(identity, data);
+      const current = currentIrcSession(ws, session);
+      if (!current || pending.partySubscribed !== intent.token || current.partySubscribeRevision !== intent.revision) return;
+      delete pending.partySubscribed;
+      current.richChatVersion = 1;
+      current.partySubscribed = data.enabled && outcome.ok;
+      if (current.partySubscribed) { current.partyId = outcome.room; current.partyConsentExpiresAt = outcome.expiresAt; }
+      ws.serializeAttachment(current); result(outcome); return;
+    }
+    if (!session.partySubscribed || !session.partyId || (session.partyConsentExpiresAt ?? 0) <= Date.now()) { result({ ok: false, error: "not_subscribed" }); return; }
+    if (data.room !== session.partyId) { result({ ok: false, error: "invalid_route" }); return; }
+    if (data.type === "irc_send") {
+      if (!validGlobalText(data.text, 1024) || data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result({ ok: false, error: "invalid_message" }); return; }
+      result(await coordinator.partyChatMinecraft(this.partyIdentity(session), session.partyId, { id: data.id, text: data.text,
+        ...(data.replyTo ? { replyTo: data.replyTo as string } : {}) }));
+    } else if (data.type === "irc_operation") result(await coordinator.partyChatOperation(this.partyIdentity(session), session.partyId, data));
+    else result({ ok: false, error: "invalid_message" });
+  }
+  /** Each authenticated participant independently consents to exactly the same UUID roster and leader. */
+  async partyRegister(sender: PartyChatIdentity, input: Record<string, unknown>): Promise<GlobalChatResult> {
+    if (!this.partyCoordinator() || !this.rooms().includes(sender.room) || !sender.connectionId || sender.connectionId.length > 80 ||
+        !Number.isSafeInteger(sender.revision) || sender.revision < 1 || typeof input.enabled !== "boolean" || !await this.validSender(sender)) return { ok: false, error: "not_authorized" };
+    let partyId = "";
+    if (input.enabled) {
+      if (!Array.isArray(input.members) || input.members.length < 2 || input.members.length > 20 ||
+          input.members.some(value => typeof value !== "string" || !packetId.test(value)) || new Set(input.members).size !== input.members.length ||
+          typeof input.leader !== "string" || !input.members.includes(input.leader) || !input.members.includes(sender.uuid) ||
+          !(await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(sender.discordId!)).ok) return { ok: false, error: PARTY_CHAT_UNAVAILABLE };
+      partyId = (await ircTextDigest(`sky-myce-party-v1\n${input.leader}\n${[...input.members].sort().join("\n")}`)).slice(0, 32);
+    }
+    if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
+    const expiresAt = Math.min(sender.leaseExpiresAt!, Date.now() + 60_000), sql = this.ctx.storage.sql;
+    const outcome = this.ctx.storage.transactionSync(() => {
+      sql.exec("DELETE FROM party_chat_consents WHERE expires<=?", Date.now());
+      const previous = sql.exec<{ revision: number; party_id: string }>("SELECT revision,party_id FROM party_chat_consents WHERE uuid=? AND origin_room=? AND connection_id=?", sender.uuid!, sender.room, sender.connectionId!).toArray()[0];
+      if (previous && (previous.revision > sender.revision || previous.revision === sender.revision && previous.party_id !== partyId)) return { ok: false, error: "subscription_superseded" };
+      if (!previous && sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM party_chat_consents").one().count >= 4096) return { ok: false, error: "temporarily_unavailable" };
+      sql.exec("INSERT INTO party_chat_consents VALUES(?,?,?,?,?,?) ON CONFLICT(uuid,origin_room,connection_id) DO UPDATE SET party_id=excluded.party_id,revision=excluded.revision,expires=excluded.expires", sender.uuid!, sender.room, sender.connectionId!, partyId, sender.revision, expiresAt);
+      return { ok: true, ...(partyId ? { room: partyId, expiresAt } : {}) };
+    });
+    await this.armGlobal(); return outcome;
+  }
+  private async partyAuthorized(sender: PartyChatIdentity, partyId: string): Promise<boolean> {
+    if (!this.partyCoordinator() || !packetId.test(partyId) || !sender.uuid || !sender.connectionId || !this.rooms().includes(sender.room) ||
+        !await this.validSender(sender)) return false;
+    return this.ctx.storage.sql.exec("SELECT 1 FROM party_chat_consents WHERE uuid=? AND origin_room=? AND connection_id=? AND party_id=? AND revision=? AND expires>?",
+      sender.uuid, sender.room, sender.connectionId, partyId, sender.revision, Date.now()).toArray().length === 1;
+  }
+  async partyMinecraft(sender: PartyChatIdentity, partyId: string, input: GlobalChatSend): Promise<GlobalChatResult> {
+    if (!packetId.test(input.id) || !validGlobalText(input.text, 1024) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
+    if (!await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
+    const identity = await this.publicSender(sender), bodyDigest = await ircTextDigest(input.text);
+    if (!await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
+    const error = this.accept(`party:${sender.uuid}`, input.id); if (error) return { ok: false, error };
+    const now = Date.now(), id = crypto.randomUUID().replaceAll("-", ""), target = input.replyTo ? this.lifecycle.get(input.replyTo) : undefined;
+    const reply = input.replyTo ? target?.scope === "party" && target.room === partyId ? this.lifecycle.reply(input.replyTo) : { from: "Unavailable message", text: "" } : undefined;
+    const message: PartyChatMessage = { id, scope: "party", room: partyId, source: "minecraft", sourceId: input.id, from: sender.name!, text: input.text,
+      timestamp: now, expiresAt: Math.min(sender.leaseExpiresAt!, now + 10_000), discordId: sender.discordId!, uuid: sender.uuid,
+      mentions: [], sender, identity, media: ircMedia(input.text)!, revision: 0, ...(reply ? { reply } : {}) };
+    this.lifecycle.remember({ id, scope: "party", room: partyId, source: "minecraft", sourceId: input.id, from: sender.name!, discordId: sender.discordId!,
+      uuid: sender.uuid, sender: identity, preview: ircPreview(input.text), bodyDigest, media: message.media!, revision: 0,
+      timestamp: now, expiresAt: now + IRC_MANAGEMENT_MS, ...(reply ? { reply } : {}) });
+    await this.armGlobal();
+    await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).partyChatDeliver(message)));
+    return { ok: true, id };
+  }
+  async partyOperation(sender: PartyChatIdentity, partyId: string, data: Record<string, unknown>): Promise<GlobalChatResult> {
+    if (data.scope !== "party" || data.room !== partyId || !await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
+    const record = typeof data.messageId === "string" ? this.lifecycle.get(data.messageId) : undefined;
+    if (!record || record.scope !== "party" || record.room !== partyId) return { ok: false, error: "message_expired" };
+    const input = ircOperation(data, 1024); if (!input) return { ok: false, error: "invalid_operation" };
+    if (input.operation === "edit") input.bodyDigest = await ircTextDigest(input.text!);
+    if (!await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
+    // Party mutations are live Minecraft fan-out; they never enter the Discord outbox.
+    const outcome = this.lifecycle.operate(`mc:${sender.uuid}`, input, { native: false, uuid: sender.uuid, discordId: sender.discordId });
+    if (outcome.error) return { ok: false, error: outcome.error };
+    if (outcome.update) await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).partyChatUpdate(outcome.update!, this.mineActors(record.id))));
+    await this.armGlobal(); return { ok: true, id: input.id };
+  }
+  async deliverParty(message: PartyChatMessage): Promise<void> {
+    if (message.scope !== "party" || message.source !== "minecraft" || !packetId.test(message.room) || !packetId.test(message.id) || message.expiresAt <= Date.now()) return;
+    for (const peer of this.ctx.getWebSockets()) {
+      const recipient = peer.deserializeAttachment() as IrcSession;
+      if (peer.readyState !== WebSocket.OPEN || recipient.bridge || recipient.richChatVersion !== 1 || !recipient.partySubscribed ||
+          recipient.partyId !== message.room || (recipient.partyConsentExpiresAt ?? 0) <= Date.now() || !await this.authorized(peer, recipient)) continue;
+      const current = currentIrcSession(peer, recipient);
+      if (!current?.partySubscribed || current.partyId !== message.room || (current.partyConsentExpiresAt ?? 0) <= Date.now() || message.expiresAt <= Date.now()) continue;
+      try { peer.send(JSON.stringify({ type: "irc_message", model: 1, scope: "party", room: message.room, id: message.id,
+        source: "minecraft", sourceId: message.sourceId, from: message.from, text: message.text, sender: message.identity,
+        timestamp: message.timestamp, media: message.media ?? [], revision: 0, reactions: [], mention: !!current.name &&
+        new RegExp(`(^|[^A-Za-z0-9_])@${current.name}(?=$|[^A-Za-z0-9_])`, "i").test(message.text), ...(message.reply ? { reply: message.reply } : {}) })); }
+      catch { /* Party chat is live-only. */ }
+    }
+  }
+
   /** Binding-only coordinator RPC; the original authenticated socket supplies this identity. */
   async globalMinecraft(sender: GlobalChatSender, input: GlobalChatSend): Promise<GlobalChatResult> {
     if (!this.coordinator() || !globalChatChannel(this.env)) return { ok: false, error: "not_configured" };
-    if (!packetId.test(input.id) || !validGlobalText(input.text, this.textLimit(false))) return { ok: false, error: "invalid_message" };
+    if (!packetId.test(input.id) || !validGlobalText(input.text, this.textLimit(false)) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
+    if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
+    const identity = await this.publicSender(sender);
     if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
     return this.enqueue(`mc:${sender.accountId}`, input.id, { source: "minecraft", from: sender.name!, text: input.text,
-      discordId: sender.discordId!, uuid: sender.uuid, mentions: [], sender });
+      discordId: sender.discordId!, uuid: sender.uuid, mentions: [], sender, identity, media: ircMedia(input.text)!,
+      ...(input.replyTo ? { reply: this.lifecycle.reply(input.replyTo) } : {}) });
   }
 
   private async globalMessage(ws: WebSocket, session: IrcSession, data: Record<string, unknown>, intent?: SubscriptionIntent): Promise<void> {
@@ -241,10 +443,15 @@ export class RoomIrc {
     if (!globalChatChannel(this.env)) { result("not_configured"); return; }
     if (session.bridge) {
       if (!this.coordinator() || session.room !== GLOBAL_CHAT_ROOM || data.scope !== "global" || data.room !== GLOBAL_CHAT_ROOM || data.channelId !== globalChatChannel(this.env)) { result("invalid_route"); return; }
-      if (data.type === "discord_ack") { result(this.acknowledge(data)); return; }
+      if (data.type === "discord_ack") { result(this.acknowledge(data)); await this.flushOperations(); return; }
+      if (data.type === "discord_operation_ack") { result(this.acknowledgeOperation(data, GLOBAL_CHAT_ROOM)); return; }
+      if (data.type === "discord_operation_result") { this.failedOperation(data); return; }
+      if (data.type === "discord_operation") { const outcome = await this.operation(session, data, "global"); result(outcome.error); return; }
       if (data.type !== "discord_message" || data.source !== "discord" || typeof data.id !== "string" || !snowflake.test(data.id) || data.message_id !== data.id ||
           typeof data.discordId !== "string" || !snowflake.test(data.discordId) || !validGlobalText(data.text, this.textLimit(true))) { result("invalid_message"); return; }
       if (data.part !== undefined && data.part !== "embeds") { result("invalid_part"); return; }
+      const media = ircMedia(data.text, data.media);
+      if (!media) { result("invalid_media"); return; }
       const continuation = data.part === "embeds";
       if (data.mentions !== undefined && (!Array.isArray(data.mentions) || data.mentions.length > 100 || data.mentions.some(id => typeof id !== "string" || !snowflake.test(id)))) { result("invalid_mentions"); return; }
       if (continuation && (data.reply !== undefined || Array.isArray(data.mentions) && data.mentions.length > 0)) { result("invalid_part"); return; }
@@ -255,26 +462,33 @@ export class RoomIrc {
         if (typeof candidate.message_id !== "string" || !snowflake.test(candidate.message_id) || typeof candidate.from !== "string" || candidate.from.length > 64 ||
             candidate.text !== undefined && (typeof candidate.text !== "string" || candidate.text.length > 256 || !candidate.text.isWellFormed() || unsafeText.test(candidate.text))) { result("invalid_reply"); return; }
         const receipt = this.ctx.storage.sql.exec<{ from_name: string }>("SELECT from_name FROM global_chat_receipts WHERE message_id=? AND expires>?", candidate.message_id, Date.now()).toArray()[0];
-        reply = { message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
+        reply = { ...this.discordReply(candidate)!, message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
       }
       const outcome = await this.enqueue(`dc:${data.discordId}`, `${data.id}${continuation ? ":embeds" : ""}`, { source: "discord", from: displayName(data.from), text: data.text,
-        discordId: data.discordId, mentions: [...new Set((data.mentions as string[] | undefined) ?? [])], ...(reply ? { reply } : {}) }, continuation ? data.id : undefined);
+        discordId: data.discordId, identity: { name: displayName(data.from), discordId: data.discordId }, media,
+        mentions: [...new Set((data.mentions as string[] | undefined) ?? [])], ...(reply ? { reply } : {}) }, continuation ? data.id : undefined);
       result(outcome.error); return;
     }
     if (typeof data.id !== "string" || !packetId.test(data.id)) { ws.close(1008, "Invalid global chat packet"); return; }
     if (data.type === "irc_subscribe") {
       await this.subscribe(ws, session, data, intent, "globalChatSubscribed", result); return;
     }
+    if (data.type === "irc_operation") {
+      if (!session.globalChatSubscribed || session.richChatVersion !== 1) { result("not_subscribed"); return; }
+      const outcome = await this.env.RELAY_ROOMS.getByName(GLOBAL_CHAT_ROOM).globalChatOperation(this.sender(session), data);
+      result(outcome.error); return;
+    }
     if (data.type !== "irc_send" || !validGlobalText(data.text, this.textLimit(false))) { result("invalid_message"); return; }
     if (!session.globalChatSubscribed) { result("not_subscribed"); return; }
-    const sender: GlobalChatSender = { accountId: session.accountId, discordId: session.discordId, uuid: session.uuid, name: session.name,
-      installationId: session.installationId, generation: session.generation, leaseExpiresAt: session.leaseExpiresAt, buildId: session.buildId, loaderVersion: session.loaderVersion };
-    const outcome = await this.env.RELAY_ROOMS.getByName(GLOBAL_CHAT_ROOM).globalChatMinecraft(sender, { id: data.id, text: data.text });
+    if (data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result("invalid_reply"); return; }
+    const outcome = await this.env.RELAY_ROOMS.getByName(GLOBAL_CHAT_ROOM).globalChatMinecraft(this.sender(session), { id: data.id, text: data.text, ...(data.replyTo ? { replyTo: data.replyTo as string } : {}) });
     result(outcome.error);
   }
 
   private prune(now: number): void {
+    this.lifecycle.prune(now);
     const sql = this.ctx.storage.sql;
+    sql.exec("DELETE FROM party_chat_consents WHERE expires<=?", now);
     sql.exec("DELETE FROM global_chat_messages WHERE expires<=?", now);
     sql.exec("DELETE FROM global_chat_outbox WHERE id NOT IN (SELECT id FROM global_chat_messages)");
     for (const table of ["global_chat_seen", "global_chat_repeats", "global_chat_delivered", "global_chat_receipts"]) sql.exec(`DELETE FROM ${table} WHERE expires<=?`, now);
@@ -282,6 +496,7 @@ export class RoomIrc {
   }
 
   private async enqueue(actor: string, sourceId: string, input: Omit<GlobalChatMessage, "id" | "timestamp" | "expiresAt">, continuationFor?: string): Promise<GlobalChatResult> {
+    const bodyDigest = await ircTextDigest(input.text);
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(input.text.trim().replace(/\s+/g, " "))))].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const now = Date.now(), sql = this.ctx.storage.sql;
     const outcome = this.ctx.storage.transactionSync((): GlobalChatResult => {
@@ -303,7 +518,12 @@ export class RoomIrc {
       if (!continuationFor) sql.exec("INSERT INTO global_chat_limits VALUES(?,?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated,last_sent=excluded.last_sent", actor, credits - 1, now, now);
       sql.exec("INSERT INTO global_chat_limits VALUES('global',?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated,last_sent=excluded.last_sent", available - 1, now, now);
       const id = crypto.randomUUID().replaceAll("-", ""), expiresAt = now + bounded(this.env.GLOBAL_CHAT_OUTBOX_TTL_MS, 120_000, 1000, 120_000);
-      const packet: GlobalChatMessage = { ...input, id, timestamp: now, expiresAt };
+      const packet: GlobalChatMessage = { ...input, id, sourceId, timestamp: now, expiresAt, revision: 0 };
+      this.lifecycle.remember({ id, scope: "global", room: GLOBAL_CHAT_ROOM, source: input.source, sourceId,
+        from: input.from, discordId: input.discordId, ...(input.uuid ? { uuid: input.uuid } : {}),
+        sender: input.identity ?? { name: input.from, discordId: input.discordId }, preview: ircPreview(input.text), bodyDigest, media: input.media ?? [],
+        ...(input.reply ? { reply: input.reply } : {}), revision: 0, timestamp: now, expiresAt: now + IRC_MANAGEMENT_MS,
+        ...(input.source === "discord" ? { discordMessageId: sourceId.replace(/:embeds$/, "") } : {}) });
       sql.exec("INSERT INTO global_chat_seen VALUES(?,?,?)", dedupId, id, now + 3_600_000);
       sql.exec("INSERT INTO global_chat_repeats VALUES(?,?,?)", actor, digest, now + bounded(this.env.GLOBAL_CHAT_DUPLICATE_MS, 15_000, 0, 120_000));
       sql.exec("INSERT INTO global_chat_messages VALUES(?,?,?)", id, JSON.stringify(packet), expiresAt);
@@ -339,7 +559,10 @@ export class RoomIrc {
       const isMentioned = message.source === "discord" ? !!recipient.discordId && message.mentions.includes(recipient.discordId) :
         !!recipient.name && new RegExp(`(^|[^A-Za-z0-9_])@${recipient.name}(?=$|[^A-Za-z0-9_])`, "i").test(message.text);
       try {
-        peer.send(isMentioned ? mentioned : normal);
+        peer.send(current.richChatVersion === 1 ? JSON.stringify({ ...base, model: 1, room: GLOBAL_CHAT_ROOM,
+          sourceId: message.sourceId ?? message.id, sender: message.identity ?? { name: message.from, discordId: message.discordId, ...(message.uuid ? { uuid: message.uuid } : {}) },
+          media: message.media ?? ircMedia(message.text) ?? [], revision: message.revision ?? 0, reactions: [], mention: isMentioned,
+          ...(message.reply ? { reply: message.reply } : {}) }) : isMentioned ? mentioned : normal);
         sql.exec("INSERT OR IGNORE INTO global_chat_delivered VALUES(?,?)", peerDelivery, Date.now() + 300_000);
       } catch { /* Live clients reconnect without replaying history. */ }
     }
@@ -357,6 +580,7 @@ export class RoomIrc {
     if (!row) return "unknown_delivery";
     const message = JSON.parse(row.packet) as GlobalChatMessage;
     sql.exec("INSERT INTO global_chat_receipts VALUES(?,?,?,?,?)", data.message_id, data.id, message.discordId, message.from, Date.now() + 86_400_000);
+    this.lifecycle.receipt(data.id, data.message_id);
     sql.exec("DELETE FROM global_chat_receipts WHERE rowid NOT IN (SELECT rowid FROM global_chat_receipts ORDER BY rowid DESC LIMIT 10000)");
     sql.exec("DELETE FROM global_chat_outbox WHERE id=? AND destination='discord'", data.id);
     sql.exec("DELETE FROM global_chat_messages WHERE id NOT IN (SELECT id FROM global_chat_outbox)");
@@ -364,13 +588,13 @@ export class RoomIrc {
   }
 
   async bridgeConnected(): Promise<void> {
-    if (!this.coordinator()) return;
-    this.ctx.storage.sql.exec("UPDATE global_chat_outbox SET next_at=MIN(next_at,?) WHERE destination='discord' AND attempts<5", Date.now());
+    if (this.coordinator()) this.ctx.storage.sql.exec("UPDATE global_chat_outbox SET next_at=MIN(next_at,?) WHERE destination='discord' AND attempts<5", Date.now());
+    this.ctx.storage.sql.exec("UPDATE irc_operation_outbox SET next_at=MIN(next_at,?) WHERE attempts<5", Date.now());
     await this.flushGlobal(); await this.armGlobal();
   }
 
   async flushGlobal(): Promise<void> {
-    if (!this.coordinator()) return;
+    if (!this.coordinator()) { this.prune(Date.now()); await this.flushOperations(); return; }
     const now = Date.now(), sql = this.ctx.storage.sql;
     const bridge = this.ctx.getWebSockets().find(ws => ws.readyState === WebSocket.OPEN && (ws.deserializeAttachment() as IrcSession).bridge);
     const rows = this.ctx.storage.transactionSync(() => {
@@ -399,15 +623,123 @@ export class RoomIrc {
         sql.exec("DELETE FROM global_chat_outbox WHERE id=? AND destination=?", row.id, row.destination);
       } else {
         if (bridge?.readyState === WebSocket.OPEN) bridge.send(JSON.stringify({ type: "irc_message", scope: "global", room: GLOBAL_CHAT_ROOM, source: "minecraft", id: message.id, message_id: message.id,
-          from: message.from, text: message.text, timestamp: message.timestamp, expiresAt: message.expiresAt, discordId: message.discordId, uuid: message.uuid }));
+          from: message.from, text: message.text, timestamp: message.timestamp, expiresAt: message.expiresAt, discordId: message.discordId, uuid: message.uuid,
+          model: 1, sourceId: message.sourceId, media: message.media ?? [], sender: message.identity, revision: message.revision ?? 0, reactions: [], ...(message.reply ? { reply: message.reply } : {}) }));
       }
     }));
     sql.exec("DELETE FROM global_chat_messages WHERE id NOT IN (SELECT id FROM global_chat_outbox)");
+    await this.flushOperations();
   }
 
   nextGlobalAlarm(): number | null {
     const row = this.ctx.storage.sql.exec<{ next_at: number }>("SELECT MIN(o.next_at) AS next_at FROM global_chat_outbox o JOIN global_chat_messages m ON m.id=o.id").toArray()[0];
-    return row?.next_at === null || row?.next_at === undefined ? null : Math.max(Date.now() + 100, row.next_at);
+    const operation = this.ctx.storage.sql.exec<{ next_at: number | null }>("SELECT MIN(next_at) AS next_at FROM irc_operation_outbox").toArray()[0]?.next_at;
+    const metadata = this.ctx.storage.sql.exec<{ expires: number | null }>("SELECT MIN(expires) AS expires FROM irc_metadata").toArray()[0]?.expires;
+    const seen = this.ctx.storage.sql.exec<{ expires: number | null }>("SELECT MIN(expires) AS expires FROM irc_operations_seen").toArray()[0]?.expires;
+    const party = this.ctx.storage.sql.exec<{ expires: number | null }>("SELECT MIN(expires) AS expires FROM party_chat_consents").toArray()[0]?.expires;
+    const next = Math.min(row?.next_at ?? Infinity, operation ?? Infinity, metadata ?? Infinity, seen ?? Infinity, party ?? Infinity);
+    return Number.isFinite(next) ? Math.max(Date.now() + 100, next) : null;
+  }
+  /** Binding-only global mutation RPC. The authenticated room socket supplies the current account lease. */
+  async globalOperation(sender: GlobalChatSender, data: Record<string, unknown>): Promise<GlobalChatResult> {
+    if (!this.coordinator() || !globalChatChannel(this.env)) return { ok: false, error: "not_configured" };
+    if (data.scope !== "global" || !await this.validSender(sender)) return { ok: false, error: "not_authorized" };
+    return this.operation({ ...sender, room: GLOBAL_CHAT_ROOM, globalChatSubscribed: true, richChatVersion: 1 }, data, "global");
+  }
+  private async operation(session: IrcSession, data: Record<string, unknown>, scope: "room" | "global"): Promise<GlobalChatResult> {
+    const native = session.bridge === true;
+    if (data.scope !== scope || data.room !== undefined && data.room !== session.room ||
+        !native && (session.richChatVersion !== 1 || !(scope === "global" ? session.globalChatSubscribed : session.ircSubscribed))) return { ok: false, error: "not_subscribed" };
+    let record: IrcRecord | undefined;
+    if (native) {
+      if (session.richChatVersion !== 1 || data.source !== "discord" || data.channelId !== this.roomChannel(session.room!) ||
+          typeof data.message_id !== "string" || !snowflake.test(data.message_id) || typeof data.discordId !== "string" || !snowflake.test(data.discordId)) return { ok: false, error: "invalid_route" };
+      record = this.lifecycle.fromDiscord(data.message_id);
+    } else if (typeof data.messageId === "string") record = this.lifecycle.get(data.messageId);
+    if (!record || record.scope !== scope || record.room !== session.room) return { ok: false, error: "message_expired" };
+    const input = ircOperation({ ...data, messageId: record.id }, native ? 4096 : scope === "global" ? this.textLimit(false) : 256, native);
+    if (!input) return { ok: false, error: "invalid_operation" };
+    const discordId = native ? data.discordId as string : session.discordId;
+    // Discord already enforces deletion permissions. A tombstone must still remove previously accepted media after a license changes.
+    if (!(native && (scope === "global" || input.operation === "delete")) && (!discordId || !(await this.env.ACCOUNT_STORE.getByName("global").canUseIrc(discordId)).ok)) return { ok: false, error: "not_authorized" };
+    if (input.operation === "edit") input.bodyDigest = await ircTextDigest(input.text!);
+    if (!native && !await this.validSender(this.sender(session))) return { ok: false, error: "not_authorized" };
+    const actor = native ? `dc:${discordId}` : `mc:${session.uuid}`;
+    const outcome = this.lifecycle.operate(actor, input, { native, uuid: session.uuid, discordId }, native ? undefined : (update, latest) => {
+      const now = Date.now();
+      const packet = { ...update, type: "irc_operation", id: input.id,
+        scope, room: latest.room, messageId: latest.id, operation: input.operation, revision: latest.revision,
+        ...(latest.discordMessageId ? { discordMessageId: latest.discordMessageId } : {}),
+        ...(input.operation === "reaction" ? { emoji: input.emoji, active: this.lifecycle.minecraftReacted(latest.id, input.emoji!) } : {}),
+        timestamp: now, expiresAt: now + 120_000, authorization: this.sender(session) };
+      this.ctx.storage.sql.exec("INSERT INTO irc_operation_outbox VALUES(?,?,?,0,?)", input.id, JSON.stringify(packet), now, now + 120_000);
+      // An edit before initial delivery updates its existing transient outbox, rather than publishing an outdated body.
+      if (scope === "global" && input.operation === "edit") {
+        const queued = this.ctx.storage.sql.exec<{ packet: string }>("SELECT packet FROM global_chat_messages WHERE id=?", latest.id).toArray()[0];
+        if (queued) this.ctx.storage.sql.exec("UPDATE global_chat_messages SET packet=? WHERE id=?", JSON.stringify({ ...JSON.parse(queued.packet), text: input.text, media: input.media, revision: latest.revision }), latest.id);
+      }
+    });
+    if (outcome.error) return { ok: false, error: outcome.error };
+    if (outcome.update) {
+      const mines = this.mineActors(record.id);
+      if (scope === "global") await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).globalChatUpdate(outcome.update!, mines)));
+      else await this.deliverUpdate(outcome.update, mines);
+      if (!native) { await this.armGlobal(); await this.flushOperations(); }
+    }
+    return { ok: true, id: input.id };
+  }
+  private mineActors(messageId: string): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    for (const row of this.ctx.storage.sql.exec<{ emoji: string; actor: string }>("SELECT emoji,actor FROM irc_reactions WHERE message_id=? AND actor LIKE 'mc:%'", messageId).toArray()) (result[row.emoji] ??= []).push(row.actor.slice(3));
+    return result;
+  }
+  async deliverUpdate(update: IrcUpdate, mines: Record<string, string[]>): Promise<void> {
+    if (update.model !== 1 || !packetId.test(update.messageId) || !Number.isSafeInteger(update.revision) || update.revision < 1 ||
+        update.scope === "room" && !this.ctx.id.equals(this.env.RELAY_ROOMS.idFromName(update.room))) return;
+    for (const peer of this.ctx.getWebSockets()) {
+      const recipient = peer.deserializeAttachment() as IrcSession;
+      const field = update.scope === "global" ? "globalChatSubscribed" : update.scope === "party" ? "partySubscribed" : "ircSubscribed";
+      if (peer.readyState !== WebSocket.OPEN || recipient.bridge || recipient.richChatVersion !== 1 || !recipient[field] || !await this.authorized(peer, recipient)) continue;
+      const current = currentIrcSession(peer, recipient);
+      if (!current || current.richChatVersion !== 1 || !current[field]) continue;
+      if (update.scope === "party" && (current.partyId !== update.room || (current.partyConsentExpiresAt ?? 0) <= Date.now())) continue;
+      try { peer.send(JSON.stringify({ ...update, reactions: update.reactions.map(reaction => ({ ...reaction, mine: !!current.uuid && (mines[reaction.emoji] ?? []).includes(current.uuid) })) })); }
+      catch { /* Updates remain live-only; a reconnect does not restore chat history. */ }
+    }
+  }
+  private acknowledgeOperation(data: Record<string, unknown>, room: string): string | undefined {
+    if (data.channelId !== this.roomChannel(room) || typeof data.id !== "string" || !packetId.test(data.id) ||
+        typeof data.message_id !== "string" || !snowflake.test(data.message_id)) return "invalid_ack";
+    const row = this.ctx.storage.sql.exec<{ packet: string; attempts: number }>("SELECT packet,attempts FROM irc_operation_outbox WHERE id=? AND expires>?", data.id, Date.now()).toArray()[0];
+    if (!row) return undefined; // A repeated receipt is harmless, and never creates a mapping.
+    const packet = JSON.parse(row.packet), record = this.lifecycle.get(packet.messageId);
+    if (!row.attempts || packet.room !== room || packet.messageId !== data.messageId || packet.revision !== data.revision || record?.discordMessageId !== data.message_id) return "invalid_ack";
+    this.ctx.storage.sql.exec("DELETE FROM irc_operation_outbox WHERE id=?", data.id);
+    return undefined;
+  }
+  private failedOperation(data: Record<string, unknown>): void {
+    if (typeof data.id !== "string" || !packetId.test(data.id) || !["message_deleted", "message_expired", "not_authorized", "invalid_operation", "superseded"].includes(String(data.error))) return;
+    this.ctx.storage.sql.exec("DELETE FROM irc_operation_outbox WHERE id=?", data.id);
+  }
+  async flushOperations(): Promise<void> {
+    this.lifecycle.prune();
+    const bridge = this.ctx.getWebSockets().find(ws => ws.readyState === WebSocket.OPEN &&
+      (ws.deserializeAttachment() as IrcSession).bridge && (ws.deserializeAttachment() as IrcSession).richChatVersion === 1);
+    const sql = this.ctx.storage.sql, now = Date.now();
+    const rows = sql.exec<{ id: string; packet: string; attempts: number; expires: number }>("SELECT id,packet,attempts,expires FROM irc_operation_outbox WHERE next_at<=? ORDER BY rowid LIMIT 32", now).toArray();
+    for (const row of rows) {
+      if (row.attempts >= 5) { sql.exec("DELETE FROM irc_operation_outbox WHERE id=?", row.id); continue; }
+      const packet = JSON.parse(row.packet), record = this.lifecycle.get(packet.messageId);
+      if (!record) { sql.exec("DELETE FROM irc_operation_outbox WHERE id=?", row.id); continue; }
+      if (!bridge || !record.discordMessageId) { sql.exec("UPDATE irc_operation_outbox SET next_at=? WHERE id=?", now + 5000, row.id); continue; }
+      if (!await this.validSender(packet.authorization)) { sql.exec("DELETE FROM irc_operation_outbox WHERE id=?", row.id); continue; }
+      if (row.expires <= Date.now() || bridge.readyState !== WebSocket.OPEN) continue;
+      const { authorization: _privateLease, ...publicPacket } = packet;
+      // Persist delivery intent before the native request can succeed without its receipt reaching us.
+      sql.exec("UPDATE irc_operation_outbox SET attempts=attempts+1,next_at=? WHERE id=?", Date.now() + Math.min(40_000, 5000 * 2 ** row.attempts), row.id);
+      try { bridge.send(JSON.stringify({ ...publicPacket, discordMessageId: record.discordMessageId })); } catch { /* The bounded outbox retries after reconnect. */ }
+    }
+    await this.armGlobal();
   }
   private async armGlobal(): Promise<void> {
     const next = this.nextGlobalAlarm(); if (next === null) return;

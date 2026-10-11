@@ -3,7 +3,7 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import com.google.gson.JsonObject
 import java.net.URI
 
-internal data class GlobalChatReply(val from: String, val text: String?)
+internal data class GlobalChatReply(val from: String, val text: String?, val messageId: String? = null)
 internal data class GlobalChatMessage(
     val id: String,
     val source: String,
@@ -12,7 +12,16 @@ internal data class GlobalChatMessage(
     val timestamp: Long,
     val mention: Boolean,
     val reply: GlobalChatReply?,
-)
+    val scope: String = "global",
+    val room: String = "global-chat",
+    val model: Int = 0,
+    val sourceId: String? = null,
+    val media: List<IrcMedia> = emptyList(),
+    val sender: IrcSender? = null,
+    val revision: Int = 0,
+    val reactions: List<IrcReaction> = emptyList(),
+    val deleted: Boolean = false,
+) { val key get() = IrcKey(scope, room, id) }
 internal data class GlobalChatDelivery(val message: GlobalChatMessage, val ping: Boolean)
 internal data class GlobalChatSpan(val text: String, val url: URI? = null)
 
@@ -53,27 +62,18 @@ internal fun parseGlobalChat(json: JsonObject): GlobalChatMessage? = runCatching
         return field.asString
     }
     require(string("type") == "irc_message" && string("scope") == "global")
+    if (json.has("model")) require(string("room") == "global-chat")
     val id = string("id"); require(id.matches(globalMessageId))
     val source = string("source"); require(source in setOf("minecraft", "discord"))
     val from = string("from"); require(safeGlobalText(from, 80, false))
-    val text = string("text"); require(safeGlobalText(text, 4096, true))
+    val text = string("text"); require(if (json.get("model")?.asInt == 1) ircText(text, 4096, true) else safeGlobalText(text, 4096, true))
     val rawTime = json.get("timestamp")
     require(rawTime != null && rawTime.isJsonPrimitive && rawTime.asJsonPrimitive.isNumber &&
         rawTime.asString.matches(Regex("[0-9]{1,16}")))
     val timestamp = rawTime.asString.toLong(); require(timestamp in 0..9_007_199_254_740_991L)
     val rawMention = json.get("mention")
     require(rawMention != null && rawMention.isJsonPrimitive && rawMention.asJsonPrimitive.isBoolean)
-    val reply = json.get("reply")?.takeUnless { it.isJsonNull }?.let {
-        require(it.isJsonObject)
-        val value = it.asJsonObject
-        val author = string("from", value); require(safeGlobalText(author, 80, false))
-        val preview = value.get("text")?.takeUnless { field -> field.isJsonNull }?.let { _ ->
-            string("text", value).also { preview -> require(preview.length <= 512) }.takeUnless { preview -> preview.isBlank() }
-                ?.also { preview -> require(safeGlobalText(preview, 512, true)) }
-        }
-        GlobalChatReply(author, preview)
-    }
-    GlobalChatMessage(id, source, from, text, timestamp, rawMention.asBoolean, reply)
+    enrichIrcMessage(json, GlobalChatMessage(id, source, from, text, timestamp, rawMention.asBoolean, parseIrcReply(json)))
 }.getOrNull()
 
 /** Account boundary and replay protection survive relay reconnects, but never cross accounts. */
@@ -107,6 +107,7 @@ internal class GlobalChatSubscription {
     private var retryAfter = 0L
     private var lastError: String? = null
     val enabled get() = queued == true
+    fun current(token: Long) = token == revision
     fun reset() {
         desired = null; queued = null; revision++; retryAfter = 0L; lastError = null
     }
@@ -182,5 +183,55 @@ internal fun globalChatSpans(text: String, fullUrls: Set<String>? = null): List<
         start = match.range.first + candidate.length
     }
     if (start < text.length) output.add(GlobalChatSpan(text.substring(start)))
+    return output
+}
+
+/** Wrap presentation spans after parsing URLs, retaining each original signed click target. */
+internal fun globalChatLines(text: String, maximum: Int = 256, maxLines: Int = 32): List<List<GlobalChatSpan>> {
+    require(maximum in 32..256 && maxLines in 1..32)
+    val output = ArrayList<List<GlobalChatSpan>>()
+    val line = ArrayList<GlobalChatSpan>()
+    var length = 0
+    fun flush() {
+        if (line.isNotEmpty()) { output.add(line.toList()); line.clear(); length = 0 }
+    }
+    fun shortened(): List<List<GlobalChatSpan>> {
+        val suffix = "… (message shortened)"
+        val previous = output.last().joinToString("") { it.text }
+        var end = minOf(previous.length, maximum - suffix.length)
+        if (end > 0 && previous[end - 1].isHighSurrogate()) end--
+        output[output.lastIndex] = listOf(GlobalChatSpan(previous.substring(0, end) + suffix))
+        return output
+    }
+    for (original in globalChatSpans(text)) {
+        val gif = original.url?.let(::trustedIrcGifUrl) == true
+        val span = if (gif) original.copy(text = "[GIF]") else original
+        if (gif && length + span.text.length > maximum) flush()
+        var start = 0
+        while (start < span.text.length) {
+            if (span.text[start] == '\n') { flush(); start++; continue }
+            if (length == maximum) flush()
+            if (output.size == maxLines) return shortened()
+            val paragraphEnd = span.text.indexOf('\n', start).takeIf { it >= 0 } ?: span.text.length
+            val available = maximum - length
+            var end = minOf(start + available, paragraphEnd)
+            if (end < paragraphEnd) {
+                if (span.text[end - 1].isHighSurrogate()) end--
+                if (span.url == null) {
+                    val space = span.text.lastIndexOf(' ', end - 1)
+                    if (space > start + available / 2) end = space
+                }
+            }
+            if (end == start) { flush(); continue }
+            line.add(GlobalChatSpan(span.text.substring(start, end), span.url))
+            length += end - start
+            start = end
+            if (start < paragraphEnd) {
+                flush()
+                if (span.text[start] == ' ') start++
+            }
+        }
+    }
+    flush()
     return output
 }

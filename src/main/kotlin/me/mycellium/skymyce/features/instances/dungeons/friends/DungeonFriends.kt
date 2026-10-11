@@ -166,7 +166,7 @@ object DungeonFriends : SkyMyceModule() {
     }
 
     override fun tick() {
-        val global = me.mycellium.skymyce.config.misc.GlobalChatConfig.enabled
+        val global = me.mycellium.skymyce.config.misc.GlobalChatConfig.enabled || me.mycellium.skymyce.config.misc.GlobalChatConfig.partyEnabled
         DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
             global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
         RelayMessages.globalTick()
@@ -367,6 +367,7 @@ object DungeonFriends : SkyMyceModule() {
     @Subscription(priority = Subscription.LOW, receiveCancelled = true)
     fun onPartyInfo(event: PartyInfoEvent) {
         if (MC.instance.player == null) return
+        RelayMessages.partyInfo(event)
         if (!event.inParty) {
             if (party.members.size > 1) partyRevision++
             party = DungeonFriendParty()
@@ -383,6 +384,11 @@ object DungeonFriends : SkyMyceModule() {
         syncParty()
         party.roster(party.members.toList(), if (event.inParty) event.members.size else 1, true)
         syncParty()
+    }
+
+    /** IRC reuses this module's throttled party-info request; it never sends a duplicate packet. */
+    internal fun requestIrcPartyInfo() {
+        if (LocationAPI.onHypixel && MC.instance.player != null) nextPartyRequest = minOf(nextPartyRequest, now())
     }
 
     @Subscription(priority = Subscription.LOW, receiveCancelled = true)

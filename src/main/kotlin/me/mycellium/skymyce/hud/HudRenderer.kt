@@ -64,7 +64,8 @@ object HudRenderer : SkyMyceModule() {
         ClientLifecycleEvents.CLIENT_STOPPING.register { dispose() }
     }
 
-    private fun hovered(mouseX: Int, mouseY: Int): Widget? = if (!interactive) null else
+    private fun hovered(mouseX: Int, mouseY: Int): Widget? = if (!interactive ||
+        me.mycellium.skymyce.features.instances.dungeons.friends.IrcChatRendering.hasInteractionAt(mouseX, mouseY)) null else
         WidgetManager.widgetAt(mouseX, mouseY)
 
     fun render(context: GuiGraphicsExtractor, partialTicks: Float) {

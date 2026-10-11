@@ -40,7 +40,7 @@ internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean,
     localAllowed && active && identity.isNotEmpty() && identity == requestedIdentity
 
 internal fun relayPacketSizeAllowed(length: Int, type: String?) = length in 0..65536 &&
-    (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result", "irc_message"))
+    (length <= 8192 || type in setOf("digest_news_result", "rng_result", "cosmetics_result", "irc_message", "irc_update"))
 
 /** Turning a feature off unsubscribes its messages while the world's shared authorization remains open. */
 internal fun relayActive(inWorld: Boolean, globalEnabled: Boolean, friendsActive: Boolean, connected: Boolean) =
@@ -133,6 +133,7 @@ object DungeonFriendRelay {
     private val digestRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val cosmeticsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     private val globalRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
+    private val partyRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
     var cosmeticsAvailable = false
         private set
     var cosmeticsNamesAvailable = false
@@ -147,6 +148,12 @@ object DungeonFriendRelay {
         private set
     var globalChatAvailable = false
         private set
+    var richChatAvailable = false
+        private set
+    var partyChatAvailable = false
+        private set
+    internal val sessionGeneration get() = generation
+    internal val ircRoom get() = relayUri(DungeonFriendsSettings.relayUrl)?.rawQuery?.substringAfter("room=") ?: "friends"
     private var activeLease: String? = null
     var onDigestEvent: ((JsonObject) -> Unit)? = null
     var onDigestReady: (() -> Unit)? = null
@@ -217,6 +224,7 @@ object DungeonFriendRelay {
         expireRelayRequests(digestRequests, now)
         expireRelayRequests(cosmeticsRequests, now)
         expireRelayRequests(globalRequests, now, cancelled = false)
+        expireRelayRequests(partyRequests, now, cancelled = false)
         if ((connecting || socket != null) && now >= deadline) failed("Relay timed out; reconnecting")
         if (connected && now >= nextPing) { packet("ping"); nextPing = now + 45000 }
         if (socket != null || connecting || now < retry.nextAttempt) return
@@ -329,6 +337,8 @@ object DungeonFriendRelay {
                                         cosmeticsNamesAvailable = cosmeticsAvailable && json.get("cosmeticsNames")?.asBoolean == true
                                         ircAvailable = json.get("irc")?.asBoolean == true
                                         globalChatAvailable = json.get("globalChat")?.asBoolean == true
+                                        richChatAvailable = richIrcCapability(json)
+                                        partyChatAvailable = partyIrcCapability(json)
                                         retry.reset()
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -344,12 +354,21 @@ object DungeonFriendRelay {
                                         if (json.get("scope")?.asString == "global") {
                                             check(globalChatAvailable)
                                             RelayMessages.receiveGlobal(json, user.profileId.toString())
+                                        } else if (json.get("scope")?.asString == "party") {
+                                            check(partyChatAvailable)
+                                            RelayMessages.receiveParty(json, user.profileId.toString())
                                         }
+                                    }
+                                    "irc_update" -> {
+                                        check(connected && richChatAvailable)
+                                        RelayMessages.receiveUpdate(json, user.profileId.toString())
                                     }
                                     "irc_result" -> {
                                         check(connected)
                                         if (json.get("scope")?.asString == "global") {
                                             globalRequests.remove(json.get("id")?.asString)?.second?.complete(json)
+                                        } else if (json.get("scope")?.asString == "party") {
+                                            partyRequests.remove(json.get("id")?.asString)?.second?.complete(json)
                                         }
                                     }
                                     "authorization_revoked" -> {
@@ -461,14 +480,31 @@ object DungeonFriendRelay {
         return sendDelivery("message", name, text, received) { failed() }
     }
 
-    fun globalPacket(type: String, fields: Map<String, Any>, result: (String?) -> Unit): Boolean {
-        if (!connected || !globalChatAvailable || !LoaderClient.onlineAllowed || !currentGlobalSession() ||
-            globalRequests.size >= 8 || type !in setOf("irc_send", "irc_subscribe")) return false
+    fun globalPacket(type: String, fields: Map<String, Any>, result: (String?) -> Unit): Boolean = ircPacket("global", type, fields, result)
+
+    internal fun ircPacket(scope: String, type: String, fields: Map<String, Any>, result: (String?) -> Unit,
+        receipt: (JsonObject) -> Unit = {}): Boolean {
+        if (scope !in setOf("global", "party")) return false
+        val requests = if (scope == "global") globalRequests else partyRequests
+        val available = if (scope == "global") globalChatAvailable else partyChatAvailable
+        if (!connected || !available || !currentGlobalSession() ||
+            requests.size >= 8 || type !in setOf("irc_send", "irc_subscribe", "irc_operation") || type == "irc_operation" && !richChatAvailable) return false
+        val expectedParty = if (scope == "party") RelayMessages.partyId else null
+        if (scope == "party" && type != "irc_subscribe" && expectedParty == null) return false
         val id = UUID.randomUUID().toString().replace("-", "")
         val future = CompletableFuture<JsonObject?>()
-        globalRequests[id] = DungeonFriends.now() + 12000 to future
-        future.thenAccept { response -> result(if (response == null) "receipt_timeout" else response.get("error")?.asString) }
-        packet(fields + mapOf("type" to type, "scope" to "global", "id" to id))
+        requests[id] = DungeonFriends.now() + 12000 to future
+        future.thenAccept { response ->
+            val reason = if (response == null) "receipt_timeout" else response.get("error")?.asString
+                ?: if (scope == "party" && fields["enabled"] != false && response.get("room")?.asString != expectedParty) "invalid_route"
+                else if (scope == "party" && type == "irc_subscribe" && fields["enabled"] == true &&
+                    ircPartyGrantMillis(response, expectedParty, System.currentTimeMillis()) == null) "not_subscribed" else null
+            if (reason == null && response != null) receipt(response)
+            result(reason)
+        }
+        val route = if (scope == "global") mapOf("scope" to "global", "room" to "global-chat")
+            else if (type == "irc_subscribe") mapOf("scope" to "party") else mapOf("scope" to "party", "room" to (expectedParty ?: return false))
+        packet(fields + route + mapOf("type" to type, "id" to id))
         return true
     }
 
@@ -640,6 +676,8 @@ object DungeonFriendRelay {
         userMessagesAvailable = false
         ircAvailable = false
         globalChatAvailable = false
+        richChatAvailable = false
+        partyChatAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false
@@ -660,6 +698,9 @@ object DungeonFriendRelay {
         globalRequests.clear()
         val globalFailure = JsonObject().apply { addProperty("error", "connection_lost") }
         pendingGlobal.forEach { it.second.complete(globalFailure) }
+        val pendingParty = partyRequests.values.toList()
+        partyRequests.clear()
+        pendingParty.forEach { it.second.complete(globalFailure) }
         onDigestClosed?.invoke()
         connecting = false
         authenticating = false

@@ -2,6 +2,7 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import com.google.gson.JsonObject
 import java.util.UUID
+import java.net.URI
 import java.util.concurrent.CompletableFuture
 import com.mojang.brigadier.CommandDispatcher
 import me.mycellium.skymyce.commands.relayChannelCommand
@@ -146,6 +147,23 @@ fun checkGlobalChat() {
     check(links.joinToString("") { it.text } == linkedText)
     check(links.mapNotNull { it.url?.toString() } == listOf("https://example.com/page", "https://example.com/wiki/Foo_(Bar)"))
     check(globalChatSpans("https://example.com/cut", setOf("https://example.com/cut/full-path")).none { it.url != null })
+    val signedGif = "https://cdn.discordapp.com/attachments/1/2/animation.gif?signature=" + "a".repeat(600)
+    val compact = globalChatLines("See ($signedGif), then reply.", 32)
+    check(compact.flatten().joinToString("") { it.text } == "See ([GIF]), then reply.")
+    check(compact.flatten().filter { it.url != null } == listOf(GlobalChatSpan("[GIF]", URI(signedGif))))
+    check(compact.all { line -> line.sumOf { it.text.length } <= 32 })
+    val longLink = "https://example.com/download?signature=" + "b".repeat(600)
+    val longSpans = globalChatLines(longLink, 32).flatten()
+    check(longSpans.joinToString("") { it.text } == longLink)
+    check(longSpans.all { it.url == URI(longLink) }) // No shortened target can open a different resource.
+    val atomicGif = globalChatLines("x".repeat(30) + signedGif, 32)
+    check(atomicGif.size == 2 && atomicGif.last().single() == GlobalChatSpan("[GIF]", URI(signedGif)))
+    check(globalChatLines(emoji, 163).flatten().joinToString("") { it.text } == emoji)
+    check(globalChatLines(emoji, 163).flatten().all { !it.text.first().isLowSurrogate() && !it.text.last().isHighSurrogate() })
+    check(globalChatLines("one\n\nsecond").map { line -> line.joinToString("") { it.text } } == listOf("one", "second"))
+    val shortenedLinks = globalChatLines((1..100).joinToString("\n") { "line $it" }, 32)
+    check(shortenedLinks.size == 32 && "message shortened" in shortenedLinks.last().single().text)
+    check(globalChatLines("https://tenor.com/view/example", 32).flatten().none { it.text == "[GIF]" })
 
     val mode = IrcMode()
     for (exit in listOf("sm chat", "skymyce chat", "SM  CHAT")) check(relayChatExit.matches(exit))

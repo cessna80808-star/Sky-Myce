@@ -14,7 +14,6 @@ internal class IrcMode {
         private set
     var party = false
         private set
-
     fun selectParty() { selected = true; global = false; party = true }
 
     fun command(command: String): Boolean {

@@ -7,6 +7,7 @@ import { checkSocial } from "./social.mjs";
 import { checkCosmetics } from "./cosmetics.mjs";
 import { checkIrc } from "./irc.mjs";
 import { checkGlobalChat } from "./global-chat.mjs";
+import { checkRichIrc } from "./rich-irc.mjs";
 import { checkAccounts } from "./accounts.mjs";
 import { checkStrictCosmetics } from "./cosmetics-strict.mjs";
 import { checkDiscordUx } from "./discord-ux.mjs";
@@ -34,6 +35,10 @@ function proof(name, challenge, changes = {}) {
     keySignature: sign("RSA-SHA1", certificate, authority.privateKey).toString("base64"),
     proof: sign("RSA-SHA256", Buffer.from(`SkyMyce relay v2\n${challenge}\n${id}\n${changes.name ?? name}`), playerKey.privateKey).toString("base64"),
     profile, profileSignature: sign("RSA-SHA1", Buffer.from(profile), profileAuthority.privateKey).toString("base64") };
+}
+if (process.argv.includes("--rich-only")) {
+  await checkRichIrc(script, proof);
+  process.exit(0);
 }
 const options = convertV4MiniflareOptions({
   name: "relay-check",
@@ -407,4 +412,5 @@ await checkAccounts(script, proof);
 await checkStrictCosmetics(script, proof);
 await checkIrc(script, proof);
 await checkGlobalChat(script, proof);
+await checkRichIrc(script, proof);
 await checkDiscordUx(script, proof);

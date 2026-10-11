@@ -443,7 +443,16 @@ val globalChatCheck by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.GlobalChatCheckKt"
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck) }
+val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
+    tasks.register<JavaExec>(checkName.replaceFirstChar { it.lowercase() } + "Check") {
+        group = "verification"
+        description = "Checks bounded IRC message and media behavior"
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt"
+    }
+}
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 
