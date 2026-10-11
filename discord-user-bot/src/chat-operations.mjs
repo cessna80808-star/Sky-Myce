@@ -38,11 +38,11 @@ export async function applyDiscordOperation(packet, { channel, guild, ownBotId, 
   if (packet.operation === 'edit') {
     const identity = packet.sender;
     const next = { ...packet, type: 'irc_message', source: 'minecraft', id: packet.messageId, message_id: packet.messageId,
-      from: identity?.name, sender: identity };
+      from: identity?.name, sender: identity, mentions: [] };
     const card = minecraftCard(next, packet.scope, packet.room);
     if (!card) throw new Error('invalid_operation');
     expectEdit?.(message.id, card.embeds[0].description);
-    await message.edit({ ...card, reply: undefined });
+    await message.edit({ ...card, content: '', reply: undefined });
     receipts.setCard(packet.messageId, next);
     return;
   }

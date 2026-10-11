@@ -1,9 +1,57 @@
-# IRC redesign — 2.4.29
+# IRC behavior and verification — 2.4.30
 
 Global IRC is the shared Minecraft ↔ Discord channel. Party IRC is Minecraft-only,
 with delivery restricted to opted-in clients reporting the same complete current
 party roster. Party messages, replies, reactions and mutations never enter a
 Discord delivery queue. This follows the user's final audience clarification.
+
+## 2.4.30 fixes (2026-10-11)
+
+Party subscriptions previously rejected valid 60-second grants when the client
+clock lagged behind Cloudflare. Twenty live timing samples measured a 418–465 ms
+offset. The client now accepts bounded clock skew, subtracts five seconds from
+its local deadline and renews at half that conservative grant. Server expiry,
+authentication and complete matching UUID/leader roster checks remain enforced.
+Automatic and manual party-info requests share one 60-second guard, including
+updates requested by other mods. Missing or stale rosters get a specific message.
+
+Global history now survives socket reconnects and authorization renewal. It still
+clears on account/endpoint changes or deliberate world disconnects. Party history
+still clears when membership, roster freshness or consent changes. The optional
+ChatPatches integration prevents its duplicate compaction from merging distinct
+IRC messages with identical text or `[GIF]` labels; ordinary chat retains its
+normal compaction behavior.
+
+In-game sender names appear once and use the existing cosmetic font hook. Replies
+show `sender ↩ replied-to sender: message`, with the quoted text available on
+hover rather than displaying a long attachment URL. Previews fit the whole image
+in a 96×72 chat area; Discord thumbnail requests omit the height that caused
+server-side cropping. Decoded thumbnails remain bounded to 192×144 pixels.
+
+Typing `@MinecraftName` or a linked Discord username resolves only an exact,
+unambiguous, IRC-authorized account. Global forwards those individual mentions
+to Discord and highlights the corresponding recipient in Minecraft. Party
+mentions stay in Minecraft. `@everyone`, `@here`, raw Discord IDs and role tags
+do not notify anyone. Edits clear notification tags and never ping again.
+
+Final Java 25 `check build`, backend `npm test` and `npm run check`, Node User Bot
+tests (55/55) and TypeScript checks passed. Cessna TypeScript and its focused
+actual-workerd Gateway tests passed, including individual mention allowlists,
+silent edits and escaped external edits. The isolated Gateway package passed
+its legacy/auth/admin routing checks. New client regressions cover renewal
+timing, request cadence, history boundaries, sender/reply rendering, nested
+ChatPatches guards and full-image aspect ratios.
+
+The signed private artifact and live release passed independent byte/hash and
+pinned Ed25519 verification. Both production Worker bundles match their reviewed
+dry-run hashes; all existing bindings were preserved apart from the two release
+pointers. The Gateway passed its controlled restart and 75-second readiness
+check. See [the deployment record](backend-deployment.md) for exact identifiers.
+
+No synthetic Discord messages were posted and the user's active Minecraft
+session was not restarted. The new native chat layout, optional ChatPatches hook,
+real two-player Party connection and live individual-mention notification remain
+unverified in the running client. It will select this build after restarting.
 
 ## Using it
 
@@ -27,7 +75,7 @@ verified Minecraft name and an optional server-owned cosmetic name. Player-head
 URLs derive from the authenticated UUID. The footer says `Minecraft`; it does not
 claim continuous online presence after the original send.
 
-Image/GIF previews occupy two native chat rows with a compact 48×18 content area.
+Image/GIF previews occupy eight native chat rows with a 96×72 content area.
 They follow vanilla wrapping, scrolling, resize and chat scale because each row
 belongs to the native message identified by its scoped tag. Clicking opens the
 viewer; chat GIF thumbnails remain static. The viewer offers fit, zoom, drag/pan,
@@ -182,7 +230,7 @@ reviewed Gateway deployment package preserves the exact previously deployed
 legacy bundle and adds only Gateway changes; unrelated local Cessna admin/prompt
 changes are excluded.
 
-## Checks actually run
+## Original 2.4.29 checks
 
 | Check | Result |
 | --- | --- |

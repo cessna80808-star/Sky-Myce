@@ -1,6 +1,6 @@
 # Mod 2.4.18 mob detection and Fairy/Blood routing — deployed October 8, 2026
 
-> Latest release: **2.4.28**, deployed October 10, 2026. See the deployment record below.
+> Latest release: **2.4.30**, deployed October 11, 2026. See the deployment record below.
 
 Production `sky-myce-backend` (`--env backend`) selects mod 2.4.18 on Worker
 version `5334c19b-d325-4b32-8b03-5a24b34ae160`, deployed at 12:06:42 UTC.
@@ -980,3 +980,61 @@ Private operator evidence is in
 `C:/Users/krister/.codex/visualizations/2026/10/09/01a11fbc-365f-72a0-9cb1-06fb1c068891/irc-redesign-20261011/`.
 No credentials, raw chat bodies, private player history or generated bundles are
 committed in this deployment record.
+
+## Party IRC, complete previews and individual mentions (2026-10-11)
+
+Mod **2.4.30** is selected on production `sky-myce-backend --env backend`, Worker
+version `0714e072-e028-4111-a532-d6945889864a`, deployment
+`cf9f6a0a-ba8a-4258-8bd4-a6f92418cbef`, created
+`2026-10-11T18:29:33.527329Z` with 100% traffic.
+
+This release fixes Party grant clock skew and excessive roster requests, retains
+Global messages during transport/authorization renewal, prevents ChatPatches
+from merging distinct IRC attachments, enlarges previews without cropping,
+removes duplicated sender names and compacts reply context. Linked individual
+mentions notify; mass/role/raw-ID mentions remain inert. Global stays connected
+to Discord and Party stays in game. See [the implementation report](irc-redesign.md).
+
+- Artifact: `releases/Sky-Myce-2.4.30.jar`, **14,198,003 bytes**.
+- SHA-256: `3917b484eae459406926e1313f279622fdcf4b2d6be3dee0c2346130f4c2b65d`.
+- Signed manifest: `releases/manifest-2.4.30.json`.
+- Key ID: `production-20260927`; Minecraft: `26.1.2`; minimum custom loader: `1.0.11`.
+- Manifest expiry: `2026-10-18T18:28:43.343Z`; loader remains `1.0.14`.
+
+Final Java 25 `--offline --no-daemon check build` passed after the last Party
+renewal change. Backend tests/type generation, Node tests (55/55)/TypeScript,
+Cessna TypeScript and focused actual-workerd Gateway tests passed. The private
+artifact was uploaded before its manifest, then both were independently read
+back. Live release verification passed at `2026-10-11T18:30:06.795Z`: exact
+envelope, pinned signature, version, expiry, artifact hash/size, no-store response,
+health 200 and anonymous artifact GET 405/POST 403. Earlier builds are retained.
+
+The **386,402-byte** backend bundle SHA-256 is
+`fc8c8a65531cc2744e01552bdb41b1fdb5d4b8c8cfaeab6bce8fd9bb3a84ddbb`.
+Cloudflare source readback matches the strict reviewed bundle. All 36 bindings
+were retained; only `SKY_MYCE_VERSION` and `ARTIFACT_MANIFEST_KEY` changed.
+Existing secret names/types and storage namespaces are preserved.
+
+Production Gateway `skyblock-relay` is Worker version
+`4222cd13-262e-42ce-9730-80f7e8944da5`, deployment
+`dd53db27-cd76-4580-9f74-ebbc09c35b2a`, created
+`2026-10-11T18:26:43.474175Z` with 100% traffic. Its **143,156-byte** bundle SHA-256 is
+`a4c83f700816d640b9a5f9929575ef60f9d0c4a6b576a296bbd11e216a5ce2a7`.
+Provider readback equals the runtime-tested isolated package, preserving the
+exact previous legacy bundle and all 18 bindings. Unrelated Cessna worktree
+changes were excluded. Publication used `--keep-vars --strict` for both Workers.
+
+A controlled Gateway stop/start adopted the new code. Both transports and rich
+version 1 stayed ready for **75,866 sampled consecutive milliseconds**, across
+31 samples with zero pending messages; final verification was
+`2026-10-11T18:29:41.816Z`. Legacy health returned 200, unsigned interactions and
+private control returned 401, optional legacy room bridges returned 503 and
+Party Gateway routing returned 404. The stored historical reconnect diagnostic
+did not prevent current readiness.
+
+No new production Discord test messages were sent. The user's active client was
+not restarted. Native GUI/ChatPatches behavior, a real two-player Party round
+trip and live individual-mention notification still need in-game verification.
+The signed loader selects the release on the next Minecraft launch. Private
+operator evidence remains in the existing `irc-redesign-20261011` visualization
+directory, with separate `2.4.30` filenames; no secrets or raw chat were committed.

@@ -19,6 +19,7 @@ import tech.thatgravyboat.skyblockapi.api.events.hypixel.PartyInfoEvent
 
 internal val lfgButtonAction = Regex("^(yes|no) ([a-f0-9]{16})$")
 internal val relayChatExit = Regex("(?i)^(?:sm|skymyce)\\s+chat$")
+internal fun ircHistoryBoundary(account: java.util.UUID, endpoint: String) = "$account|$endpoint"
 private val chatChannelCommand = Regex("(?i)^chat\\s+(?:a|all|p|party|g|guild|o|officer|c|co|coop|co-op)$")
 internal fun userMessageError(name: String, message: String): String? = when {
     !name.matches(Regex("[A-Za-z0-9_]{1,16}")) -> "Use the player's real Minecraft name."
@@ -63,13 +64,13 @@ object RelayMessages {
     private val partySeen = linkedSetOf<String>()
     private var partySeenBoundary = ""
     private var richBoundary = ""
+    private var richSessionBoundary = ""
     private var verifiedParty: IrcPartyRoster? = null
     private var verifiedPartyAt = 0L
     private var activeParty = ""
     private var partySubscribedId = ""
     private var partySubscribedUntil = 0L
     private var nextPartySubscribe = 0L
-    private var nextPartyRosterRequest = 0L
     internal val partyId get() = livePartyRoster()?.id
     private var replyDraft: IrcKey? = null
     private var globalAccount: java.util.UUID? = null
@@ -82,6 +83,7 @@ object RelayMessages {
     fun reset() {
         conversations.relayDisconnected(); nextSend = 0; globalSubscription.reset(); partySubscription.reset(); replyDraft = null
         partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
+        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.setScreen(null)
     }
     private fun session() {
         val account = MC.instance.user.profileId
@@ -116,7 +118,7 @@ object RelayMessages {
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
             conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset(); partySubscription.reset()
             verifiedParty = null; verifiedPartyAt = 0; activeParty = ""; partySubscribedId = ""; partySubscribedUntil = 0
-            clearRichSession("")
+            clearRichHistory(""); richSessionBoundary = ""
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
@@ -206,7 +208,6 @@ object RelayMessages {
         val leaders = event.members.entries.filter { it.value.role.name == "LEADER" }
         verifiedParty = validatedIrcPartyRoster(event.inParty, event.members.keys.toList(), leaders.singleOrNull()?.key, MC.instance.user.profileId)
         verifiedPartyAt = System.nanoTime()
-        nextPartyRosterRequest = verifiedPartyAt + 25_000_000_000L
         refreshPartyBoundary()
     }
     private fun livePartyRoster(): IrcPartyRoster? {
@@ -228,7 +229,7 @@ object RelayMessages {
         old.flatMap { it.media }.forEach { media -> IrcMediaAssets.cancel(media, false); IrcMediaAssets.cancel(media, true) }
     }
 
-    private fun clearRichSession(boundary: String) {
+    private fun clearRichHistory(boundary: String) {
         if (richBoundary == boundary) return
         richBoundary = boundary
         chatStore.boundary(boundary)
@@ -243,17 +244,16 @@ object RelayMessages {
     fun globalTick() {
         val account = MC.instance.user.profileId
         val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
-        clearRichSession("$account|$endpoint|${LoaderClient.authorization.lease}|${DungeonFriendRelay.sessionGeneration}")
-        if (GlobalChatConfig.partyEnabled && LoaderClient.localAllowed && LocationAPI.onHypixel && System.nanoTime() >= nextPartyRosterRequest) {
-            DungeonFriends.requestIrcPartyInfo(); nextPartyRosterRequest = System.nanoTime() + 10_000_000_000L
-        }
+        clearRichHistory(ircHistoryBoundary(account, endpoint))
+        val sessionBoundary = "$richBoundary|${LoaderClient.authorization.lease}|${DungeonFriendRelay.sessionGeneration}"
+        if (richSessionBoundary != sessionBoundary) { richSessionBoundary = sessionBoundary; reset() }
         refreshPartyBoundary()
         val seenBoundary = "$account|$endpoint|$activeParty"
         if (partySeenBoundary != seenBoundary) { partySeenBoundary = seenBoundary; partySeen.clear() }
         if (globalAccount != account) {
             irc.account(account); globalAccount = account; global.account(account.toString())
             globalNextSend = 0L; globalSubscription.reset(); partySubscription.reset()
-            verifiedParty = null; verifiedPartyAt = 0; nextPartyRosterRequest = 0; refreshPartyBoundary()
+            verifiedParty = null; verifiedPartyAt = 0; refreshPartyBoundary()
         }
         chatStore.expire(System.currentTimeMillis())
         IrcChatRendering.tick()
@@ -275,6 +275,7 @@ object RelayMessages {
                 if (scope == "party" && subscription.current(revision)) {
                     if (reason == null && enabled && roster?.id == activeParty) {
                         partySubscribedId = roster.id; partySubscribedUntil = System.nanoTime() + grantMillis * 1_000_000L
+                        nextPartySubscribe = System.nanoTime() + ircPartyRefreshMillis(grantMillis) * 1_000_000L
                     } else { partySubscribedId = ""; partySubscribedUntil = 0 }
                 }
                 if (subscription.complete(revision, reason, System.nanoTime())) ircError(scope, reason)
@@ -337,6 +338,9 @@ object RelayMessages {
         if (now < globalNextSend) { notice("Wait a moment before sending another IRC message.", true); return }
         globalTick()
         val subscription = if (scope == "global") globalSubscription else partySubscription
+        if (scope == "party" && livePartyRoster() == null) {
+            DungeonFriends.requestIrcPartyInfo(); notice(partyRosterError(), true); return
+        }
         if (!subscription.enabled) { ircError(scope, "not_subscribed"); return }
         if (scope == "party" && !currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) {
             notice("Party IRC needs a complete current Hypixel roster and a confirmed subscription. Wait for party info, then retry.", true); return
@@ -440,8 +444,12 @@ object RelayMessages {
         }).also { if (!it) notice("Message control unavailable. Reconnect and try again.", true) }
     }
     fun ircStatus() {
-        notice("${DungeonFriendRelay.status}. Global: ${if (globalSubscription.enabled && GlobalChatConfig.enabled) "receiving" else "off"}; Party: ${if (currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) "in-game only" else if (GlobalChatConfig.partyEnabled) "waiting for verified roster/subscription" else "off"}. ${if (DungeonFriendRelay.richChatAvailable) "Media and message controls supported." else "Legacy text/link compatibility."}")
+        val partyStatus = if (!GlobalChatConfig.partyEnabled) "off" else if (livePartyRoster() == null) partyRosterError()
+            else if (currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) "in-game only" else "waiting for confirmed subscription"
+        notice("${DungeonFriendRelay.status}. Global: ${if (globalSubscription.enabled && GlobalChatConfig.enabled) "receiving" else "off"}; Party: $partyStatus. ${if (DungeonFriendRelay.richChatAvailable) "Media and message controls supported." else "Legacy text/link compatibility."}")
     }
+    private fun partyRosterError() = ircPartyRosterError(LocationAPI.onHypixel, PartyAPI.inParty, PartyAPI.members.size,
+        verifiedParty?.let { (System.nanoTime() - verifiedPartyAt) / 1_000_000L })
     internal fun notice(text: String, failed: Boolean = false) = display(IrcChatRendering.prefixComponent("room")
         .append(Component.literal(text).withColor(if (failed) HudTheme.RED else HudTheme.MUTED)), "")
     internal fun <T> quietChat(action: () -> T): T {

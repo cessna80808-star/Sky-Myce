@@ -21,6 +21,16 @@ const id = /^[a-f0-9]{32}$/;
 const controls = /[\x00-\x09\x0b-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/;
 export const ircPlainText = (value: unknown, maximum: number): value is string => typeof value === "string" &&
   value.trim().length > 0 && value.length <= maximum && value.isWellFormed() && !controls.test(value);
+export function ircMentionNames(text: string): string[] {
+  const names = new Set<string>();
+  // Only typed usernames are candidates; URLs, Discord IDs and mass mentions stay plain text.
+  for (const match of text.replace(/https?:\/\/\S+/giu, "").matchAll(/(?:^|[^A-Za-z0-9_.@<])@([A-Za-z0-9_][A-Za-z0-9_.]{0,31})(?=$|[^A-Za-z0-9_.])/gu)) {
+    const name = match[1].replace(/\.+$/, "").toLowerCase();
+    if (name !== "everyone" && name !== "here") names.add(name);
+    if (names.size >= 8) break;
+  }
+  return [...names];
+}
 export function ircPreview(value: string, maximum = 256): string {
   let result = value.toWellFormed().replace(/[\x00-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/g, " ").slice(0, maximum);
   if (!result.isWellFormed()) result = result.slice(0, -1);

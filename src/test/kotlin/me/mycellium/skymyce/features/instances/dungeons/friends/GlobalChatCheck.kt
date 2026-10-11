@@ -91,6 +91,39 @@ fun checkGlobalChat() {
     check(!subscription.enabled && !subscription.complete(retry, null, 6_000_000_000L))
     check(subscription.take(true, 6_000_000_000L) != null)
 
+    val history = IrcChatStore()
+    val historyBoundary = ircHistoryBoundary(account, endpoint)
+    check(history.boundary(historyBoundary) && history.accept(message, 1000))
+    subscription.reset() // Authorization renewal and socket reconnect reset receipts, not account-scoped history.
+    check(!history.boundary(ircHistoryBoundary(account, endpoint)) && history.get(message.key) == message)
+    val partyMessage = message.copy(scope = "party", room = "a".repeat(32))
+    check(history.accept(partyMessage, 1001))
+    history.clearScope("party") // Leaving/changing the party still removes its private history.
+    check(history.get(partyMessage.key) == null && history.get(message.key) == message)
+    check(history.boundary(ircHistoryBoundary(account, "wss://other.example/websocket")) && history.values().isEmpty())
+    check(history.accept(message, 1002))
+    check(history.boundary(ircHistoryBoundary(UUID.randomUUID(), endpoint)) && history.values().isEmpty())
+    check(history.accept(message, 1003))
+    check(history.boundary("") && history.values().isEmpty()) // A deliberate world disconnect still clears history.
+
+    check(partyInfoRequestDue(0, 0, 0))
+    val receivedPartyInfoAt = 10_000L
+    val partyInfoAllowedAt = receivedPartyInfoAt + PARTY_INFO_REQUEST_MILLIS
+    for (commandAt in listOf(10_001L, 20_000L, 35_000L, 69_999L)) {
+        check(!partyInfoRequestDue(commandAt, commandAt, partyInfoAllowedAt)) // Manual selection/polls cannot bypass the shared minute guard.
+    }
+    check(partyInfoRequestDue(partyInfoAllowedAt, 35_000L, partyInfoAllowedAt))
+    check(!partyInfoRequestDue(partyInfoAllowedAt, partyInfoAllowedAt + 1, partyInfoAllowedAt))
+    check(ircPartyRefreshMillis(55_000) == 27_500L)
+    check(ircPartyRefreshMillis(15_000) == 7_500L)
+    check(ircPartyRefreshMillis(1) == 5_000L)
+    check(ircPartyRefreshMillis(60_000) == 30_000L)
+    check("Join Hypixel" in ircPartyRosterError(false, true, 2, 1))
+    check("2–20" in ircPartyRosterError(true, false, 1, null))
+    check("complete" in ircPartyRosterError(true, true, 2, null))
+    check("expired" in ircPartyRosterError(true, true, 2, 65_001))
+    check("changed" in ircPartyRosterError(true, true, 2, 65_000))
+
     val receipt = CompletableFuture<JsonObject?>()
     var completions = 0
     receipt.thenAccept { check(it == null); completions++ }

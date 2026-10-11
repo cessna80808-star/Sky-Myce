@@ -8,6 +8,8 @@ import me.mycellium.skymyce.api.events.PlayerMessageEvent
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsConfig
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
 import me.mycellium.skymyce.config.instances.dungeons.PartyListing
+import me.mycellium.skymyce.config.misc.GlobalChatConfig
+import me.mycellium.skymyce.loader.LoaderClient
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils.sendCommand
 import me.mycellium.skymyce.utils.Utils.displayTitle
@@ -166,10 +168,17 @@ object DungeonFriends : SkyMyceModule() {
     }
 
     override fun tick() {
-        val global = me.mycellium.skymyce.config.misc.GlobalChatConfig.enabled || me.mycellium.skymyce.config.misc.GlobalChatConfig.partyEnabled
+        val global = GlobalChatConfig.enabled || GlobalChatConfig.partyEnabled
         DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
             global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
         RelayMessages.globalTick()
+        if ((isEnabled() || GlobalChatConfig.partyEnabled && LoaderClient.localAllowed) && LocationAPI.onHypixel && MC.instance.player != null &&
+            partyInfoRequestDue(now(), nextPartyRequest, partyRequestAllowedAt)) {
+            val requestAt = now()
+            val sent = HypixelModAPI.getInstance().sendPacket(ServerboundPartyInfoPacket())
+            partyRequestAllowedAt = requestAt + if (sent) PARTY_INFO_REQUEST_MILLIS else 5000
+            nextPartyRequest = partyRequestAllowedAt
+        }
         if (!isEnabled()) { publishClosedPolicy(); return }
         if (!LocationAPI.isOnSkyBlock) { fallbackMessages.clear(); publishClosedPolicy() }
         if (!LocationAPI.onHypixel || MC.instance.player == null) return
@@ -182,11 +191,6 @@ object DungeonFriends : SkyMyceModule() {
         joining.prune(now())
         party.members.forEach { replies.forget(it) }
         if (partyObservationChanged()) syncParty()
-        if (now() >= nextPartyRequest && now() >= partyRequestAllowedAt) {
-            val sent = HypixelModAPI.getInstance().sendPacket(ServerboundPartyInfoPacket())
-            partyRequestAllowedAt = now() + 10000
-            nextPartyRequest = now() + if (sent) 60000 else 5000
-        }
         val active = DungeonFriendsConfig.enabled && LocationAPI.isOnSkyBlock
         val statusChecker = active || MC.screen is DungeonFriendsScreen
         if (statusChecker) {
@@ -367,6 +371,8 @@ object DungeonFriends : SkyMyceModule() {
     @Subscription(priority = Subscription.LOW, receiveCancelled = true)
     fun onPartyInfo(event: PartyInfoEvent) {
         if (MC.instance.player == null) return
+        partyRequestAllowedAt = now() + PARTY_INFO_REQUEST_MILLIS
+        nextPartyRequest = partyRequestAllowedAt
         RelayMessages.partyInfo(event)
         if (!event.inParty) {
             if (party.members.size > 1) partyRevision++
@@ -708,6 +714,7 @@ object DungeonFriends : SkyMyceModule() {
         observedScannerVersion = -1L; statsActive = false; statsScanner = null; publishedPolicy = null
         observedScanner = null; observedFriends = emptyList(); friendUuids = emptyMap()
         nextPartyRequest = 0
+        if (disconnectRelay) partyRequestAllowedAt = 0
         nextAction = 0
         replies.clear()
         joinedTitles.clear()

@@ -1,6 +1,6 @@
 import type { AccountStore } from "./accounts";
 import type { RelayRoom } from "./index";
-import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircOperation, ircPlainText, ircPreview, ircTextDigest,
+import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircMentionNames, ircOperation, ircPlainText, ircPreview, ircTextDigest,
   type IrcMedia, type IrcPublicSender, type IrcReply, type IrcRecord, type IrcOperation, type IrcUpdate } from "./irc-model";
 
 export type IrcConfig = {
@@ -267,7 +267,7 @@ export class RoomIrc {
       const current = currentIrcSession(peer, recipient);
       if (!current || !current.bridge && !current.ircSubscribed) continue;
       const mention = session.bridge ? Array.isArray(data.mentions) && !!current.discordId && data.mentions.includes(current.discordId) :
-        !!current.name && new RegExp(`(^|[^A-Za-z0-9_])@${current.name}(?=$|[^A-Za-z0-9_])`, "i").test(data.text as string);
+        !!current.name && ircMentionNames(data.text as string).includes(current.name.toLowerCase());
       try { peer.send(current.bridge || current.richChatVersion === 1 ? JSON.stringify({ ...rich, mention }) : packet); }
       catch { /* Live relay only: reconnect restores subscriptions, never message history. */ }
     }
@@ -420,7 +420,7 @@ export class RoomIrc {
       try { peer.send(JSON.stringify({ type: "irc_message", model: 1, scope: "party", room: message.room, id: message.id,
         source: "minecraft", sourceId: message.sourceId, from: message.from, text: message.text, sender: message.identity,
         timestamp: message.timestamp, media: message.media ?? [], revision: 0, reactions: [], mention: !!current.name &&
-        new RegExp(`(^|[^A-Za-z0-9_])@${current.name}(?=$|[^A-Za-z0-9_])`, "i").test(message.text), ...(message.reply ? { reply: message.reply } : {}) })); }
+        ircMentionNames(message.text).includes(current.name.toLowerCase()), ...(message.reply ? { reply: message.reply } : {}) })); }
       catch { /* Party chat is live-only. */ }
     }
   }
@@ -431,9 +431,10 @@ export class RoomIrc {
     if (!packetId.test(input.id) || !validGlobalText(input.text, this.textLimit(false)) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
     if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
     const identity = await this.publicSender(sender);
+    const mentions = await this.env.ACCOUNT_STORE.getByName("global").resolveIrcMentions(input.text);
     if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
     return this.enqueue(`mc:${sender.accountId}`, input.id, { source: "minecraft", from: sender.name!, text: input.text,
-      discordId: sender.discordId!, uuid: sender.uuid, mentions: [], sender, identity, media: ircMedia(input.text)!,
+      discordId: sender.discordId!, uuid: sender.uuid, mentions, sender, identity, media: ircMedia(input.text)!,
       ...(input.replyTo ? { reply: this.lifecycle.reply(input.replyTo) } : {}) });
   }
 
@@ -556,8 +557,7 @@ export class RoomIrc {
       if (message.expiresAt <= Date.now()) break;
       const peerDelivery = `peer:${message.id}:${recipient.connectionId}`;
       if (sql.exec("SELECT 1 FROM global_chat_delivered WHERE id=?", peerDelivery).toArray().length) continue;
-      const isMentioned = message.source === "discord" ? !!recipient.discordId && message.mentions.includes(recipient.discordId) :
-        !!recipient.name && new RegExp(`(^|[^A-Za-z0-9_])@${recipient.name}(?=$|[^A-Za-z0-9_])`, "i").test(message.text);
+      const isMentioned = !!recipient.discordId && message.mentions.includes(recipient.discordId);
       try {
         peer.send(current.richChatVersion === 1 ? JSON.stringify({ ...base, model: 1, room: GLOBAL_CHAT_ROOM,
           sourceId: message.sourceId ?? message.id, sender: message.identity ?? { name: message.from, discordId: message.discordId, ...(message.uuid ? { uuid: message.uuid } : {}) },
@@ -624,7 +624,7 @@ export class RoomIrc {
       } else {
         if (bridge?.readyState === WebSocket.OPEN) bridge.send(JSON.stringify({ type: "irc_message", scope: "global", room: GLOBAL_CHAT_ROOM, source: "minecraft", id: message.id, message_id: message.id,
           from: message.from, text: message.text, timestamp: message.timestamp, expiresAt: message.expiresAt, discordId: message.discordId, uuid: message.uuid,
-          model: 1, sourceId: message.sourceId, media: message.media ?? [], sender: message.identity, revision: message.revision ?? 0, reactions: [], ...(message.reply ? { reply: message.reply } : {}) }));
+          model: 1, sourceId: message.sourceId, media: message.media ?? [], sender: message.identity, mentions: message.mentions, revision: message.revision ?? 0, reactions: [], ...(message.reply ? { reply: message.reply } : {}) }));
       }
     }));
     sql.exec("DELETE FROM global_chat_messages WHERE id NOT IN (SELECT id FROM global_chat_outbox)");

@@ -156,6 +156,19 @@ test('Minecraft sender identity stays primary, internal IDs stay private and nat
     { message_id: 'b'.repeat(32) }, { text: 'x'.repeat(1025) }]) assert.equal(globalMinecraftContent({ ...packet, ...extra }), null);
 });
 
+test('only backend-resolved individual mentions notify; mass words and raw Discord tags stay inert', () => {
+  const packet = { ...minecraft(), text: `@everyone @here @Linked <@${author}> <@&${author}>`, mentions: [discordId, discordId] };
+  const card = globalMinecraftContent(packet);
+  assert.equal(card.content, `<@${discordId}>`);
+  assert.deepEqual(card.allowedMentions, { parse: [], users: [discordId], repliedUser: false });
+  assert.ok(card.embeds[0].description.includes('@everyone'));
+  assert.equal(globalMinecraftContent({ ...packet, mentions: [] }).content, undefined);
+  assert.deepEqual(globalMinecraftContent({ ...packet, mentions: [] }).allowedMentions, { parse: [], repliedUser: false });
+  assert.equal(minecraftCard({ ...packet, scope: 'room', room: 'testing' }, 'room', 'testing').content, undefined);
+  for (const mentions of ['everyone', ['everyone'], [null], Array(9).fill(discordId)])
+    assert.equal(globalMinecraftContent({ ...packet, mentions }), null);
+});
+
 test('delivery receipts persist only IDs, restore after bot restart, expire and remain bounded', async t => {
   const path = await temporary(t); let now = 1000;
   const receipts = await new DeliveryReceipts(path, () => now).load();

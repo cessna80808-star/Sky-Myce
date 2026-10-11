@@ -158,7 +158,7 @@ for (const room of [GLOBAL_ROOM, 'testing']) {
   test(`${room}: edits and deletes fetch the real Discord owner before changing a card`, async t => {
     const { receipts } = await storage(t); await owned(receipts, room);
     const d = discordFixture();
-    const edit = operation(room, { text: '*body*', reply: { from: 'Earlier', text: 'reply preview', discordMessageId: stranger },
+    const edit = operation(room, { text: '*body*', mentions: [stranger], reply: { from: 'Earlier', text: 'reply preview', discordMessageId: stranger },
       media: [{ type: 'gif', url: 'https://example.com/dance.gif' }] });
     await applyDiscordOperation(edit, d.context(receipts));
     assert.deepEqual(d.calls[0], { kind: 'fetch', options: { message: destination, force: true } });
@@ -166,6 +166,7 @@ for (const room of [GLOBAL_ROOM, 'testing']) {
     assert.equal(body.embeds[0].description, '\\*body\\*');
     assert.deepEqual(body.embeds[0].image, { url: 'https://example.com/dance.gif' });
     assert.deepEqual(body.allowedMentions, { parse: [], repliedUser: false });
+    assert.equal(body.content, '', 'Edits clear notification tags without notifying again');
     assert.equal(body.reply, undefined);
     assert.deepEqual(d.expected, [{ id: destination, hash: descriptionFingerprint(body.embeds[0].description) }]);
     assert.equal(receipts.getCard(canonical).text, '*body*');

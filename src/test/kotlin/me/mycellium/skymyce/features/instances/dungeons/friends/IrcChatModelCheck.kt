@@ -40,11 +40,16 @@ fun checkIrcChatModel() {
     check(!partyIrcCapability(JsonParser.parseString("""{"partyChat":true,"partyChatVersion":1}""").asJsonObject))
     val grant = JsonParser.parseString("""{"type":"irc_result","scope":"party","room":"${roster.id}","expiresAt":61000}""").asJsonObject
     check(ircPartyGrantMillis(grant, roster.id, 1000) == 55000L)
-    grant.addProperty("expiresAt", 21000); check(ircPartyGrantMillis(grant, roster.id, 1000) == 20000L)
+    grant.addProperty("expiresAt", 21000); check(ircPartyGrantMillis(grant, roster.id, 1000) == 15000L)
     check(ircPartyGrantMillis(grant, "f".repeat(32), 1000) == null)
     check(ircPartyGrantMillis(grant, roster.id, 21000) == null)
     grant.addProperty("expiresAt", "61000"); check(ircPartyGrantMillis(grant, roster.id, 1000) == null)
-    grant.addProperty("expiresAt", 61001); check(ircPartyGrantMillis(grant, roster.id, 1000) == null)
+    grant.addProperty("expiresAt", 61448); check(ircPartyGrantMillis(grant, roster.id, 1000) == 55000L) // Measured Windows/Cloudflare clock lag.
+    grant.addProperty("expiresAt", 11448); check(ircPartyGrantMillis(grant, roster.id, 1000) == 5448L) // Skew cannot extend a short lease.
+    grant.addProperty("expiresAt", 66000); check(ircPartyGrantMillis(grant, roster.id, 1000) == 55000L)
+    grant.addProperty("expiresAt", 66001); check(ircPartyGrantMillis(grant, roster.id, 1000) == null)
+    grant.addProperty("expiresAt", 6000); check(ircPartyGrantMillis(grant, roster.id, 1000) == null)
+    grant.addProperty("expiresAt", 6001); check(ircPartyGrantMillis(grant, roster.id, 1000) == 1L)
     val roomJson = richMessage(scope = "room", room = "testing")
     val room = requireNotNull(parseRoomIrc(roomJson, "testing"))
     check(room.key != global.key && parseRoomIrc(roomJson, "friends") == null && parseGlobalChat(roomJson) == null)
@@ -95,7 +100,28 @@ fun checkIrcChatModel() {
         check(colors.size == label.length && colors.first() == 0x44E4EF && colors.last() == 0xA46BFF && colors.distinct().size > 5)
     }
     for (action in listOf("/sm ircaction media global ${global.id} 4", "/sm ircaction media room ${global.id} -1", "/sm ircaction manage global ${global.id} 0", "/sm ircaction manage global bad", "/sm ircaction media other ${global.id} 0")) check(parseIrcChatAction(action) == null)
-    check(IRC_THUMBNAIL_WIDTH <= 64 && IRC_THUMBNAIL_HEIGHT <= 24)
+    check(IRC_THUMBNAIL_WIDTH == 96 && IRC_THUMBNAIL_HEIGHT == 72 && IRC_THUMBNAIL_ROWS * 9 >= IRC_THUMBNAIL_HEIGHT)
+    check(ircMessageHeader(global, false).string == "Alice: ")
+    check(ircMessageHeader(global.copy(source = "discord"), false).string == "@Alice: ")
+    val replied = global.copy(reply = GlobalChatReply("Bob", "https://cdn.discordapp.com/attachments/1/2/clip.gif?signature=${"x".repeat(180)}"))
+    val replyHeader = ircMessageHeader(replied, false)
+    check(replyHeader.string == "Alice ↩ Bob: " && !replyHeader.string.contains("shortened"))
+    check(replyHeader.siblings.first().style.hoverEvent is net.minecraft.network.chat.HoverEvent.ShowText)
+    val names = me.mycellium.skymyce.features.social.CosmeticNameMap()
+    names.update(mapOf("Alice" to net.minecraft.network.chat.Component.literal("✈ Alice ✈")))
+    val displayed = StringBuilder()
+    names.sequence(replyHeader.visualOrderText).accept { _, _, code -> displayed.appendCodePoint(code); true }
+    check(displayed.toString() == "✈ Alice ✈ ↩ Bob: ")
+    check(!IrcChatRendering.addingMessage())
+    check(runCatching {
+        IrcChatRendering.withTaggedMessage {
+            check(IrcChatRendering.addingMessage())
+            IrcChatRendering.withTaggedMessage { check(IrcChatRendering.addingMessage()) }
+            check(IrcChatRendering.addingMessage())
+            error("test insertion failure")
+        }
+    }.isFailure)
+    check(!IrcChatRendering.addingMessage())
     check(relayPacketSizeAllowed(65536, "irc_update") && !relayPacketSizeAllowed(65537, "irc_update"))
     val mode = IrcMode(); mode.selectParty(); check(mode.selected && mode.party && !mode.global)
     mode.command("chat global"); check(mode.global && !mode.party); mode.selectParty(); check(mode.party && !mode.global)

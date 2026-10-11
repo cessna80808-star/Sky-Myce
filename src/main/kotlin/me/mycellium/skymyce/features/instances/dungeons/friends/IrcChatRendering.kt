@@ -28,8 +28,22 @@ import net.minecraft.network.chat.MutableComponent
 import net.minecraft.resources.Identifier
 import kotlin.math.roundToInt
 
-internal const val IRC_THUMBNAIL_WIDTH = 48
-internal const val IRC_THUMBNAIL_HEIGHT = 18
+internal const val IRC_THUMBNAIL_WIDTH = 96
+internal const val IRC_THUMBNAIL_HEIGHT = 72
+internal const val IRC_THUMBNAIL_ROWS = IRC_THUMBNAIL_HEIGHT / 9
+
+internal fun ircMessageHeader(message: GlobalChatMessage, highlight: Boolean): MutableComponent {
+    val name = if (message.source == "discord") "@${message.from}" else message.from
+    // The shared cosmetic font hook decorates the real name once, including with other chat mods installed.
+    val result = Component.literal(name).withColor(if (message.mention && highlight) 0xFFE18A else 0xAACBFF)
+        .withStyle { it.withHoverEvent(HoverEvent.ShowText(Component.literal("${if (message.source == "discord") "Discord" else "Minecraft"}: ${message.from}"))) }
+    message.reply?.takeUnless { message.deleted }?.let { reply ->
+        result.append(Component.literal(" ↩ ${reply.from}").withColor(0x969DA8).withStyle {
+            it.withHoverEvent(HoverEvent.ShowText(Component.literal(reply.text ?: "Reply to ${reply.from}")))
+        })
+    }
+    return result.append(": ")
+}
 
 /** Chat owns wrapping, scrolling and hit testing. Our tagged placeholder rows own only their thumbnails. */
 object IrcChatRendering {
@@ -39,6 +53,14 @@ object IrcChatRendering {
     private var frame = 0L
     private var preferences = ""
     private var initialized = false
+    private val taggedMessage = ThreadLocal.withInitial { false }
+
+    @JvmStatic fun addingMessage(): Boolean = taggedMessage.get()
+    internal fun <T> withTaggedMessage(action: () -> T): T {
+        val previous = taggedMessage.get()
+        taggedMessage.set(true)
+        return try { action() } finally { taggedMessage.set(previous) }
+    }
 
     fun init() {
         if (initialized) return
@@ -75,7 +97,9 @@ object IrcChatRendering {
     private fun accessor() = MC.instance.gui.chat as IrcChatAccessor
     internal fun add(message: GlobalChatMessage) {
         val tag = GuiMessageTag(0x4A8EFF, null, Component.literal(ircPrefix(message.scope)), message.key.tag)
-        RelayMessages.quietChat { accessor().`skymyce$addMessage`(component(message), null, GuiMessageSource.SYSTEM_CLIENT, tag) }
+        withTaggedMessage {
+            RelayMessages.quietChat { accessor().`skymyce$addMessage`(component(message), null, GuiMessageSource.SYSTEM_CLIENT, tag) }
+        }
     }
     internal fun update(message: GlobalChatMessage) {
         val chat = accessor()
@@ -104,7 +128,7 @@ object IrcChatRendering {
         if (chat.`skymyce$getMessages`().removeIf { it.tag()?.logTag()?.startsWith("skymyce:irc:$scope:") == true }) refresh(chat)
     }
     fun tick() {
-        val current = "${GlobalChatConfig.mediaPreviews}|${GlobalChatConfig.mentionHighlight}|${DungeonFriendRelay.richChatAvailable}"
+        val current = "${GlobalChatConfig.mediaPreviews}|${GlobalChatConfig.mentionHighlight}|${DungeonFriendRelay.richChatAvailable}|${MC.instance.options.chatWidth().get()}|${MC.instance.options.chatScale().get()}"
         val changed = current != preferences
         preferences = current
         val known = RelayMessages.chatStore.values().associateBy { it.key.tag }
@@ -147,16 +171,8 @@ object IrcChatRendering {
     }
     private fun component(message: GlobalChatMessage): Component {
         val result = prefixComponent(message.scope)
-        val realName = if (message.source == "discord") "@${message.from}" else message.from
-        val cosmetic = message.sender?.cosmeticName?.takeUnless { it == message.from }
-        val name = cosmetic?.let { "$it ($realName)" } ?: realName
-        result.append(Component.literal("$name: ").withColor(if (message.mention && GlobalChatConfig.mentionHighlight) 0xFFE18A else 0xAACBFF)
-            .withStyle { it.withHoverEvent(HoverEvent.ShowText(Component.literal("${if (message.source == "discord") "Discord" else "Minecraft"}: ${message.from}"))) })
+        result.append(ircMessageHeader(message, GlobalChatConfig.mentionHighlight))
         if (message.deleted) return result.append(Component.literal("Message deleted").withColor(0x969DA8).withStyle { it.withItalic(true) })
-        message.reply?.let { reply ->
-            val preview = reply.text?.replace('\n', ' ')?.let { splitGlobalChatText(it, 96, 1).firstOrNull() }.orEmpty()
-            result.append(Component.literal("↩ ${reply.from}${if (preview.isEmpty()) "" else ": $preview"}\n").withColor(0x969DA8))
-        }
         for (span in globalChatSpans(message.text)) {
             val url = span.url
             val mediaIndex = message.media.indexOfFirst { it.url == url }
@@ -178,8 +194,14 @@ object IrcChatRendering {
         message.media.forEachIndexed { index, media ->
             if (GlobalChatConfig.mediaPreviews) {
                 val label = when (media.type) { "gif" -> "GIF"; "video" -> "Video"; else -> "Image" }
-                // Two real vanilla lines reserve space; their exact styles also define the native click area.
-                result.append("\n").append(actionStyle("[$label ${index + 1}]      \n            ",
+                val title = "[$label ${index + 1}]"
+                val spaceWidth = MC.instance.font.width("\u00a0").coerceAtLeast(1)
+                val width = thumbnailWidth()
+                val padding = "\u00a0".repeat(((width - MC.instance.font.width(title)) / spaceWidth).coerceAtLeast(0))
+                val blank = "\u00a0".repeat((width / spaceWidth).coerceAtLeast(1))
+                // Native rows reserve the whole image and retain its click area during wrapping and scrolling.
+                val placeholder = (listOf(title + padding) + List(IRC_THUMBNAIL_ROWS - 1) { blank }).joinToString("\n")
+                result.append("\n").append(actionStyle(placeholder,
                     IrcChatAction("media", message.scope, message.id, index), "View ${media.name ?: label}"))
             } else if (message.text.indexOf(media.url.toString()) < 0) {
                 result.append(" ").append(actionStyle("[${media.type.uppercase()} ${index + 1}]", IrcChatAction("media", message.scope, message.id, index), "View media"))
@@ -203,6 +225,8 @@ object IrcChatRendering {
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
     fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
+    private fun thumbnailWidth() = minOf(IRC_THUMBNAIL_WIDTH,
+        (ChatComponent.getWidth(MC.instance.options.chatWidth().get()) / MC.instance.options.chatScale().get()).toInt()).coerceAtLeast(1)
 
     private fun render(output: GuiGraphicsExtractor) {
         frame++
@@ -211,7 +235,7 @@ object IrcChatRendering {
         output.guiRenderState.forEachText { state ->
             var visibleText = ""
             state.text.accept { _, _, codepoint -> visibleText += String(Character.toChars(codepoint)); visibleText.length < 80 }
-            if (!visibleText.trimStart().matches(Regex("\\[(Image|GIF|Video) [1-4]]\\s*"))) return@forEachText
+            if (!visibleText.trimStart().matches(Regex("\\[(Image|GIF|Video) [1-4]][\\s\u00a0]*"))) return@forEachText
             var candidate = false
             state.text.accept { _, style, _ ->
                 val action = (style.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction)
@@ -245,7 +269,8 @@ object IrcChatRendering {
             output.pose().pushMatrix()
             output.pose().set(anchor.state.pose)
             output.pose().translate(anchor.x, anchor.y)
-            output.fill(0, 0, IRC_THUMBNAIL_WIDTH, IRC_THUMBNAIL_HEIGHT, 0xFF17212E.toInt())
+            val previewWidth = thumbnailWidth()
+            output.fill(0, 0, previewWidth, IRC_THUMBNAIL_HEIGHT, 0xFF17212E.toInt())
             if (asset != null) {
                 val textureKey = key.tag + ":" + media.id
                 var texture = textures[textureKey]
@@ -254,11 +279,11 @@ object IrcChatRendering {
                     texture = Texture(MenuTexture(), asset, frame); textures[textureKey] = texture
                 }
                 texture.seen = frame
-                val scale = minOf(IRC_THUMBNAIL_WIDTH.toDouble() / asset.width, IRC_THUMBNAIL_HEIGHT.toDouble() / asset.height)
+                val scale = minOf(previewWidth.toDouble() / asset.width, IRC_THUMBNAIL_HEIGHT.toDouble() / asset.height)
                 val width = (asset.width * scale).roundToInt().coerceAtLeast(1)
                 val height = (asset.height * scale).roundToInt().coerceAtLeast(1)
                 output.pose().pushMatrix()
-                output.pose().translate((IRC_THUMBNAIL_WIDTH - width) / 2f, (IRC_THUMBNAIL_HEIGHT - height) / 2f)
+                output.pose().translate((previewWidth - width) / 2f, (IRC_THUMBNAIL_HEIGHT - height) / 2f)
                 texture.texture.render(output, asset.frames.first().image, width, height, 0)
                 output.pose().popMatrix()
             } else output.text(MC.instance.font, when (state.status) {

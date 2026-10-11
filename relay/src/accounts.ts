@@ -6,6 +6,7 @@ import { AuthorizationError, bootstrapPurpose, createLease, decode64, deny, ensu
   seconds, sha256, validateLaunchInput, validateLease, verifyInstallation, type AuthenticationPurpose, type ClientPlatform, type DrmConfig, type InstallationInput, type LeaseClaims } from "./drm";
 import { PromptJobs, type PromptActor, type PromptConfig } from "./prompts";
 import { deliverAccountAlert } from "./discord-notifications";
+import { ircMentionNames, ircPlainText } from "./irc-model";
 
 export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore> };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
@@ -960,5 +961,16 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     const account = this.byDiscord(discordId), denial = licenseDenial(account); if (denial) return { ok: false, error: denial };
     if (!account!.activated_at || !account!.device_hash || !this.ctx.storage.sql.exec("SELECT uuid FROM minecraft_accounts WHERE account_id=? LIMIT 1", account!.account_id).toArray().length) return { ok: false, error: "account_required" };
     return { ok: true, accountId: account!.account_id, discordId };
+  }
+  resolveIrcMentions(text: string): string[] {
+    if (!ircPlainText(text, 1024)) return [];
+    const mentions = new Set<string>();
+    for (const name of ircMentionNames(text)) {
+      const matches = this.ctx.storage.sql.exec<{ discord_id: string }>(`SELECT DISTINCT a.discord_id FROM sky_accounts a
+        JOIN minecraft_accounts m ON a.account_id=m.account_id LEFT JOIN account_discord_names d ON a.discord_id=d.discord_id
+        WHERE lower(m.name)=? OR lower(d.username)=? LIMIT 2`, name, name).toArray();
+      if (matches.length === 1 && this.canUseIrc(matches[0].discord_id).ok) mentions.add(matches[0].discord_id);
+    }
+    return [...mentions];
   }
 }

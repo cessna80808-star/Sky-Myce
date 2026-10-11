@@ -176,6 +176,19 @@ export async function checkGlobalChat(script, proof) {
     }
     const globalSql = await mf.unsafeGetDurableObjectStorage('global-chat-check', 'RelayRoom', { name: 'global-chat' });
     const coordinator = (await mf.getDurableObjectNamespace('RELAY_ROOMS')).getByName('global-chat');
+    const accounts = (await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');
+    await authority.exec('INSERT INTO account_discord_names VALUES(?,?,?,?)', bobPerson.discordId, 'bob.discord', 'Decorated Bob', Date.now());
+    assert.deepEqual(await accounts.resolveIrcMentions('@bOB @bob.discord @Bob.'), [bobPerson.discordId]);
+    for (const text of ['@everyone @here @Carol', '@Bobby x@Bob @Bob_suffix @PrefixBob',
+      `https://example.com/@Bob <@${bobPerson.discordId}> <@!${bobPerson.discordId}> @Decorated Bob`,
+      `${Array.from({ length: 8 }, (_, i) => `@unknown${i}`).join(' ')} @Bob`, 'invalid\t@Bob'])
+      assert.deepEqual(await accounts.resolveIrcMentions(text), []);
+    await authority.exec('INSERT INTO account_discord_names VALUES(?,?,?,?)', alicePerson.discordId, 'bob', 'Alice', Date.now());
+    assert.deepEqual(await accounts.resolveIrcMentions('@Bob'), [], 'Ambiguous verified usernames never choose an account');
+    await authority.exec('DELETE FROM account_discord_names WHERE discord_id=?', alicePerson.discordId);
+    await authority.exec("UPDATE sky_accounts SET status='suspended' WHERE discord_id=?", bobPerson.discordId);
+    assert.deepEqual(await accounts.resolveIrcMentions('@Bob'), [], 'Suspended accounts cannot become notification targets');
+    await authority.exec("UPDATE sky_accounts SET status='active' WHERE discord_id=?", bobPerson.discordId);
     const clearQuota = () => globalSql.exec('DELETE FROM global_chat_limits');
     const sender = person => ({ accountId: person.accountId, discordId: person.discordId, uuid: person.uuid, name: person.name,
       installationId: person.installationId, generation: 0, leaseExpiresAt: Date.now() + 300000, buildId: '2.4.2', loaderVersion: '1.0.0' });
@@ -202,7 +215,7 @@ export async function checkGlobalChat(script, proof) {
       assert.equal((await globalSql.exec(`SELECT COUNT(*) AS count FROM ${table}`))[0].count, 0);
     }
     async function minecraft(client, text, recipients = [alice, bob, otherAlice], hasBridge = true) {
-      const requestId = id(); client.ws.send(JSON.stringify({ type: 'irc_send', scope: 'global', id: requestId, text, from: 'Spoofed', discordId: '999999999999999999' }));
+      const requestId = id(); client.ws.send(JSON.stringify({ type: 'irc_send', scope: 'global', id: requestId, text, from: 'Spoofed', discordId: '999999999999999999', mentions: [alicePerson.discordId] }));
       const packets = [];
       for (const recipient of recipients) packets.push(clientPacket(await recipient.next(), text));
       const result = await client.next(); assert.equal(result.type, 'irc_result'); assert.equal(result.id, requestId); assert.equal(result.error, undefined);
@@ -368,7 +381,15 @@ export async function checkGlobalChat(script, proof) {
     const longDiscord = '😀'.repeat(2040) + '\nhttps://a.test';
     await discord(longDiscord, { discordId: '888888888888888888', from: 'Embed author' });
     await clearQuota();
+    const discordUsernameMention = await minecraft(alice, '@bob.discord @everyone @here hello');
+    assert.deepEqual(discordUsernameMention.packets.map(packet => packet.mention), [false, true, false]);
+    assert.deepEqual(discordUsernameMention.delivery.mentions, [bobPerson.discordId]); await ack(bot, discordUsernameMention.delivery);
+    const massMention = await minecraft(alice, `@everyone @here <@${bobPerson.discordId}> no notifications`);
+    assert.ok(massMention.packets.every(packet => !packet.mention));
+    assert.deepEqual(massMention.delivery.mentions, [], 'Raw client mention IDs are never trusted'); await ack(bot, massMention.delivery);
+    await clearQuota();
     const mentioned = await minecraft(alice, '@Bob @Bob, hello @Bobby x@Bob @AnotherUser');
+    assert.deepEqual(mentioned.delivery.mentions, [bobPerson.discordId]);
     assert.deepEqual(mentioned.packets.map(packet => packet.mention), [false, true, false]); await ack(bot, mentioned.delivery);
     const noMention = await minecraft(alice, '@Bobby x@Bob @AnotherUser @Bob_suffix @PrefixBob');
     assert.ok(noMention.packets.every(packet => !packet.mention)); await ack(bot, noMention.delivery);

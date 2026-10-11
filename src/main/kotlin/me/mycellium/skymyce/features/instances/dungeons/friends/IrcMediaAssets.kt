@@ -31,6 +31,8 @@ private val mediaHosts = setOf("cdn.discordapp.com", "media.discordapp.net", "me
     "media.tenor.com", "i.imgur.com", "images.unsplash.com")
 private const val FULL_IMAGE_BYTES = 12 * 1024 * 1024
 private const val THUMBNAIL_BYTES = 2 * 1024 * 1024
+private const val THUMBNAIL_WIDTH = 192
+private const val THUMBNAIL_HEIGHT = 144
 private const val MAX_IMAGE_DIMENSION = 4096
 private const val MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 private const val MAX_IMAGE_DECODED_BYTES = 32L * 1024 * 1024
@@ -63,9 +65,10 @@ internal fun publicIrcMediaAddress(address: InetAddress): Boolean {
 
 internal fun ircDiscordThumbnail(uri: URI): URI? {
     if (!trustedIrcMediaUrl(uri) || uri.host.lowercase() !in setOf("cdn.discordapp.com", "media.discordapp.net")) return null
+    // Supplying both dimensions makes Discord crop the frame; resize the complete image locally.
     val query = uri.rawQuery.orEmpty().split('&').filter {
-        it.isNotEmpty() && it.substringBefore('=').lowercase() !in setOf("width", "height", "format")
-    } + listOf("width=64", "height=32", "format=png")
+        it.isNotEmpty() && it.substringBefore('=').lowercase() !in setOf("width", "height", "format", "fit")
+    } + listOf("width=$THUMBNAIL_WIDTH", "format=png")
     return URI("https://media.discordapp.net${uri.rawPath}?${query.joinToString("&")}")
 }
 
@@ -132,7 +135,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
                     override fun thumbnailComplete(source: ImageReader) = stop(source)
                     override fun readAborted(source: ImageReader) = Unit
                 })
-                var sample = if (thumbnail) maxOf(1, width / 64, height / 32) else 1
+                var sample = if (thumbnail) maxOf(1, width / THUMBNAIL_WIDTH, height / THUMBNAIL_HEIGHT) else 1
                 while (ceil(width.toDouble() / sample).toLong() * ceil(height.toDouble() / sample).toLong() * 4 > MAX_IMAGE_DECODED_BYTES) sample++
                 val parameters = reader.defaultReadParam.apply { setSourceSubsampling(sample, sample, 0, 0) }
                 val decoded = reader.read(0, parameters)
@@ -144,7 +147,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
                         retained = true
                         return IrcGif(decoded.width, decoded.height, listOf(IrcGifFrame(decoded, 100)), -1)
                     }
-                    val scale = if (thumbnail) minOf(1.0, 64.0 / decoded.width, 32.0 / decoded.height) else 1.0
+                    val scale = minOf(1.0, THUMBNAIL_WIDTH.toDouble() / decoded.width, THUMBNAIL_HEIGHT.toDouble() / decoded.height)
                     val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
                     val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
                     val image = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB)
@@ -226,7 +229,7 @@ internal fun ircMediaThumbnailUrl(media: IrcMedia): URI? {
         trustedIrcMediaUrl(it) && (!it.path.endsWith(".gif", true) ||
             it.host.lowercase() == "media.discordapp.net" && it.query.orEmpty().split('&').any { part -> part.equals("format=png", true) })
     }
-    return explicit ?: (if (media.type != "video") ircDiscordThumbnail(media.url) else null)
+    return explicit?.let { ircDiscordThumbnail(it) ?: it } ?: (if (media.type != "video") ircDiscordThumbnail(media.url) else null)
         ?: media.url.takeIf { media.type == "image" && trustedIrcMediaUrl(it) && !it.path.endsWith(".gif", true) }
 }
 
