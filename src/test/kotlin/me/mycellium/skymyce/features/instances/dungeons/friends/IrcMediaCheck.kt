@@ -29,11 +29,11 @@ private fun pngWidth(bytes: ByteArray, width: Int): ByteArray = bytes.clone().al
 
 fun checkIrcMedia() {
     for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com",
-        "media.tenor.com", "i.imgur.com", "images.unsplash.com")) check(trustedIrcMediaUrl(URI("https://$host/path/image.png?signature=abc%2Fdef")))
+        "media.tenor.com", "media1.tenor.com", "i.imgur.com", "images.unsplash.com")) check(trustedIrcMediaUrl(URI("https://$host/path/image.png?signature=abc%2Fdef")))
     check(trustedIrcMediaUrl(URI("https://I.IMGUR.COM:443/attachment.jpeg")))
     for (url in listOf("http://i.imgur.com/a.png", "https://i.imgur.com:444/a.png", "https://user@i.imgur.com/a.png",
         "https://i.imgur.com/a.png#fragment", "https://i.imgur.com.evil.invalid/a.png", "https://i.imgur.com./a.png",
-        "https://127.0.0.1/a.png", "https://imgur.com/gallery/a.png", "https://tenor.com/view/a.gif",
+        "https://127.0.0.1/a.png", "https://imgur.com/gallery/a.png", "https://tenor.com/view/a.gif", "https://media1.tenor.com.evil.invalid/a.gif",
         "https://i.imgur.com/%00a.png", "https://i.imgur.com/%0Aa.png", "https://i.imgur.com/%255Ca.png",
         "https://i.imgur.com/%5Ca.png", "https://i.imgur.com/a.png?signature=%0A", "https://i.imgur.com/")) {
         check(!trustedIrcMediaUrl(URI(url))) { url }
@@ -55,12 +55,15 @@ fun checkIrcMedia() {
     check(ircDiscordThumbnail(URI("https://media.tenor.com/a.gif")) == null)
     check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", discord)) == derivative)
     val gif = URI("https://media.tenor.com/a.gif")
-    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif)) == null)
-    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, gif)) == null)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif)) == gif)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, gif)) == gif)
+    val tenor = URI("https://media1.tenor.com/m/example/complete.gif")
+    check(trustedIrcMediaUrl(tenor) && ircMediaThumbnailUrl(IrcMedia("gif", "gif", tenor)) == tenor)
     val poster = URI("https://i.imgur.com/poster.png")
     check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, poster)) == poster)
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://cdn.discordapp.com/a.mp4"))) == null)
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://cdn.discordapp.com/a.mp4"), poster)) == poster)
+    check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://media.tenor.com/a.mp4"), tenor)) == tenor)
 
     // A modal browser confirmation may return after a session change, deletion, or media replacement.
     val viewerMedia = IrcMedia("image", "image", poster)

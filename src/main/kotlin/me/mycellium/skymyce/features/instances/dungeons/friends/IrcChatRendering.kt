@@ -30,7 +30,17 @@ import kotlin.math.roundToInt
 
 internal const val IRC_THUMBNAIL_WIDTH = 96
 internal const val IRC_THUMBNAIL_HEIGHT = 72
-internal const val IRC_THUMBNAIL_ROWS = IRC_THUMBNAIL_HEIGHT / 9
+internal data class IrcThumbnailLayout(val width: Int, val height: Int, val rows: Int) {
+    fun title(fullTitle: String, textWidth: Int, index: Int) = if (textWidth <= width) fullTitle else "[${index + 1}]"
+}
+
+internal fun ircThumbnailLayout(percent: Int, availableWidth: Int, lineHeight: Int): IrcThumbnailLayout {
+    val requestedWidth = (IRC_THUMBNAIL_WIDTH * percent.coerceIn(50, 200) / 100.0).roundToInt()
+    val width = minOf(requestedWidth, availableWidth.coerceAtLeast(1))
+    val height = (width * IRC_THUMBNAIL_HEIGHT.toDouble() / IRC_THUMBNAIL_WIDTH).roundToInt().coerceAtLeast(1)
+    val rows = (height - 1) / lineHeight.coerceAtLeast(1) + 1
+    return IrcThumbnailLayout(width, height, rows)
+}
 
 internal fun ircMessageHeader(message: GlobalChatMessage, highlight: Boolean): MutableComponent {
     val name = if (message.source == "discord") "@${message.from}" else message.from
@@ -128,7 +138,7 @@ object IrcChatRendering {
         if (chat.`skymyce$getMessages`().removeIf { it.tag()?.logTag()?.startsWith("skymyce:irc:$scope:") == true }) refresh(chat)
     }
     fun tick() {
-        val current = "${GlobalChatConfig.mediaPreviews}|${GlobalChatConfig.mentionHighlight}|${DungeonFriendRelay.richChatAvailable}|${MC.instance.options.chatWidth().get()}|${MC.instance.options.chatScale().get()}"
+        val current = "${GlobalChatConfig.mediaPreviews}|${GlobalChatConfig.previewSize}|${GlobalChatConfig.mentionHighlight}|${DungeonFriendRelay.richChatAvailable}|${MC.instance.options.chatWidth().get()}|${MC.instance.options.chatScale().get()}|${MC.instance.options.chatLineSpacing().get()}"
         val changed = current != preferences
         preferences = current
         val known = RelayMessages.chatStore.values().associateBy { it.key.tag }
@@ -194,13 +204,15 @@ object IrcChatRendering {
         message.media.forEachIndexed { index, media ->
             if (GlobalChatConfig.mediaPreviews) {
                 val label = when (media.type) { "gif" -> "GIF"; "video" -> "Video"; else -> "Image" }
-                val title = "[$label ${index + 1}]"
+                val layout = thumbnailLayout()
+                val fullTitle = "[$label ${index + 1}]"
+                val title = layout.title(fullTitle, MC.instance.font.width(fullTitle), index)
                 val spaceWidth = MC.instance.font.width("\u00a0").coerceAtLeast(1)
-                val width = thumbnailWidth()
+                val width = layout.width
                 val padding = "\u00a0".repeat(((width - MC.instance.font.width(title)) / spaceWidth).coerceAtLeast(0))
                 val blank = "\u00a0".repeat((width / spaceWidth).coerceAtLeast(1))
                 // Native rows reserve the whole image and retain its click area during wrapping and scrolling.
-                val placeholder = (listOf(title + padding) + List(IRC_THUMBNAIL_ROWS - 1) { blank }).joinToString("\n")
+                val placeholder = (listOf(title + padding) + List(layout.rows - 1) { blank }).joinToString("\n")
                 result.append("\n").append(actionStyle(placeholder,
                     IrcChatAction("media", message.scope, message.id, index), "View ${media.name ?: label}"))
             } else if (message.text.indexOf(media.url.toString()) < 0) {
@@ -225,8 +237,9 @@ object IrcChatRendering {
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
     fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
-    private fun thumbnailWidth() = minOf(IRC_THUMBNAIL_WIDTH,
-        (ChatComponent.getWidth(MC.instance.options.chatWidth().get()) / MC.instance.options.chatScale().get()).toInt()).coerceAtLeast(1)
+    private fun thumbnailLayout() = ircThumbnailLayout(GlobalChatConfig.previewSize,
+        (ChatComponent.getWidth(MC.instance.options.chatWidth().get()) / MC.instance.options.chatScale().get()).toInt(),
+        (MC.instance.font.lineHeight * (MC.instance.options.chatLineSpacing().get() + 1)).toInt())
 
     private fun render(output: GuiGraphicsExtractor) {
         frame++
@@ -235,7 +248,7 @@ object IrcChatRendering {
         output.guiRenderState.forEachText { state ->
             var visibleText = ""
             state.text.accept { _, _, codepoint -> visibleText += String(Character.toChars(codepoint)); visibleText.length < 80 }
-            if (!visibleText.trimStart().matches(Regex("\\[(Image|GIF|Video) [1-4]][\\s\u00a0]*"))) return@forEachText
+            if (!visibleText.trimStart().matches(Regex("\\[(?:(Image|GIF|Video) )?[1-4]][\\s\u00a0]*"))) return@forEachText
             var candidate = false
             state.text.accept { _, style, _ ->
                 val action = (style.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction)
@@ -269,8 +282,8 @@ object IrcChatRendering {
             output.pose().pushMatrix()
             output.pose().set(anchor.state.pose)
             output.pose().translate(anchor.x, anchor.y)
-            val previewWidth = thumbnailWidth()
-            output.fill(0, 0, previewWidth, IRC_THUMBNAIL_HEIGHT, 0xFF17212E.toInt())
+            val layout = thumbnailLayout()
+            output.fill(0, 0, layout.width, layout.height, 0xFF17212E.toInt())
             if (asset != null) {
                 val textureKey = key.tag + ":" + media.id
                 var texture = textures[textureKey]
@@ -279,18 +292,18 @@ object IrcChatRendering {
                     texture = Texture(MenuTexture(), asset, frame); textures[textureKey] = texture
                 }
                 texture.seen = frame
-                val scale = minOf(previewWidth.toDouble() / asset.width, IRC_THUMBNAIL_HEIGHT.toDouble() / asset.height)
+                val scale = minOf(layout.width.toDouble() / asset.width, layout.height.toDouble() / asset.height)
                 val width = (asset.width * scale).roundToInt().coerceAtLeast(1)
                 val height = (asset.height * scale).roundToInt().coerceAtLeast(1)
                 output.pose().pushMatrix()
-                output.pose().translate((previewWidth - width) / 2f, (IRC_THUMBNAIL_HEIGHT - height) / 2f)
+                output.pose().translate((layout.width - width) / 2f, (layout.height - height) / 2f)
                 texture.texture.render(output, asset.frames.first().image, width, height, 0)
                 output.pose().popMatrix()
             } else output.text(MC.instance.font, when (state.status) {
                 IrcMediaAssetStatus.FAILED -> "Retry…"; IrcMediaAssetStatus.UNSUPPORTED -> "Open…"; else -> "Loading…"
             }, 2, 4, 0xFFB9CDE4.toInt())
             if (media.type == "video") {
-                output.fill(0, 8, 12, IRC_THUMBNAIL_HEIGHT, 0xC0000000.toInt())
+                output.fill(0, 8, minOf(12, layout.width), layout.height, 0xC0000000.toInt())
                 output.text(MC.instance.font, "▶", 2, 9, 0xFFFFFFFF.toInt())
             }
             output.pose().popMatrix()

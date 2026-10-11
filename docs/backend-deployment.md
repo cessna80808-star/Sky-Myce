@@ -1,6 +1,6 @@
 # Mod 2.4.18 mob detection and Fairy/Blood routing — deployed October 8, 2026
 
-> Latest release: **2.4.30**, deployed October 11, 2026. See the deployment record below.
+> Latest release: **2.4.31**, deployed October 11, 2026. See the deployment record below.
 
 Production `sky-myce-backend` (`--env backend`) selects mod 2.4.18 on Worker
 version `5334c19b-d325-4b32-8b03-5a24b34ae160`, deployed at 12:06:42 UTC.
@@ -1038,3 +1038,70 @@ trip and live individual-mention notification still need in-game verification.
 The signed loader selects the release on the next Minecraft launch. Private
 operator evidence remains in the existing `irc-redesign-20261011` visualization
 directory, with separate `2.4.30` filenames; no secrets or raw chat were committed.
+
+## GIF viewer compatibility and adjustable previews (2026-10-11)
+
+Mod **2.4.31** is selected on production `sky-myce-backend --env backend`, Worker
+version `fcdd1e73-3e3d-43de-b7d2-ac7de2285002`, deployment
+`0f6cd0f1-aacf-464c-b9b0-1e253f6be42e`, created
+`2026-10-11T19:29:50.477048Z` with 100% traffic.
+
+This release accepts safe larger GIF canvases, samples long animations within
+the existing memory budgets, decodes complete first-frame chat thumbnails and
+supports the exact Tenor media host used by the reported GIF. Both maintained
+Discord bridges select the supplied animated GIF once from `gifv` embeds.
+The new **Chat preview size (%)** slider ranges from 50% to 200%, with native
+chat rows and click targets resized together. Global remains connected to
+Discord; Party remains in game. See [the implementation report](irc-redesign.md).
+
+- Artifact: `releases/Sky-Myce-2.4.31.jar`, **14,202,355 bytes**.
+- SHA-256: `fa202b56e708ed9dd7edb439e666cf337f5881ecfe96ce5d20ee87648282077b`.
+- Signed manifest: `releases/manifest-2.4.31.json`.
+- Key ID: `production-20260927`; Minecraft: `26.1.2`; minimum custom loader: `1.0.11`.
+- Manifest expiry: `2026-10-18T19:25:54.871Z`; loader remains `1.0.14`.
+
+Final Java 25 focused checks and full `--offline --no-daemon check build` passed.
+Backend full tests and generated types/TypeScript passed; Node tests passed
+56/56 and TypeScript passed. Companion TypeScript, actual-workerd Gateway tests
+and isolated legacy/auth/admin routing checks passed. Both affected downloaded
+GIFs passed full and thumbnail decoding under a 128 MiB heap. Regressions cover
+disposal, sampling/duration, storage limits, exact-host validation, duplicate
+embed selection and preview slider registration/layout.
+
+The private artifact was uploaded before its manifest. Independent R2 readbacks
+equal both local files. Live release verification passed at
+`2026-10-11T19:30:47.512Z`: exact envelope, pinned Ed25519 signature, version,
+expiry, artifact hash/size, no-store response, health 200 and anonymous artifact
+GET 405/POST 403. Previous builds remain available for later cleanup.
+
+The **386,402-byte** backend bundle SHA-256 remains
+`fc8c8a65531cc2744e01552bdb41b1fdb5d4b8c8cfaeab6bce8fd9bb3a84ddbb`.
+Cloudflare source readback matches the strict reviewed bundle. All 36 bindings
+were retained; only `SKY_MYCE_VERSION` and `ARTIFACT_MANIFEST_KEY` changed.
+
+Production Gateway `skyblock-relay` is Worker version
+`40436787-a66c-4f34-ad38-1a4ed8ae2989`, deployment
+`ba591b9a-68b9-4db0-a140-dece7ba76e6d`, created
+`2026-10-11T19:29:36.989992Z` with 100% traffic. Its **143,339-byte** bundle SHA-256 is
+`15cbbda9811ba0cf60f6887bc38779fdb1cd7ed3055c3b1a4900ee69d199991a`.
+Provider readback equals the runtime-tested isolated package; the exact existing
+legacy bundle and all 18 bindings, secret names/types and storage namespaces
+were preserved. Unrelated companion worktree changes were excluded.
+Publication used `--keep-vars --strict` for both Workers.
+
+A controlled Gateway stop/start adopted the deployed code. Both transports and
+rich version 1 stayed ready for **75,780 sampled consecutive milliseconds**;
+the 32 startup/readiness samples had zero pending messages. Final verification
+was `2026-10-11T19:32:27.167Z`. Legacy health returned 200, unsigned interactions
+and private control returned 401, optional legacy room bridges returned 503 and
+Party Gateway routing returned 404. A historical reconnect diagnostic remains
+stored; current readiness passed.
+
+No production Discord test messages were sent and the user's active Minecraft
+session was not restarted. Native preview mouse/scroll/scale interaction and a
+fresh Minecraft ↔ Discord GIF round trip remain unverified. Large animations
+can use lower stored resolution or fewer displayed frames to stay within the
+memory limits. The signed loader selects this release on the next client launch.
+Private operator evidence uses separate `2.4.31` files in the existing
+`irc-redesign-20261011` visualization directory; no credentials, raw chat bodies
+or generated release bundles are committed.

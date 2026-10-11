@@ -28,11 +28,11 @@ internal fun ircMediaViewerCurrent(capturedGeneration: Long, generation: Long, m
     (key == null || currentChannel && message != null && message.key == key && !message.deleted && media in message.media)
 
 private val mediaHosts = setOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com",
-    "media.tenor.com", "i.imgur.com", "images.unsplash.com")
+    "media.tenor.com", "media1.tenor.com", "i.imgur.com", "images.unsplash.com")
 private const val FULL_IMAGE_BYTES = 12 * 1024 * 1024
 private const val THUMBNAIL_BYTES = 2 * 1024 * 1024
-private const val THUMBNAIL_WIDTH = 192
-private const val THUMBNAIL_HEIGHT = 144
+internal const val IRC_MEDIA_THUMBNAIL_WIDTH = 192
+internal const val IRC_MEDIA_THUMBNAIL_HEIGHT = 144
 private const val MAX_IMAGE_DIMENSION = 4096
 private const val MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 private const val MAX_IMAGE_DECODED_BYTES = 32L * 1024 * 1024
@@ -68,7 +68,7 @@ internal fun ircDiscordThumbnail(uri: URI): URI? {
     // Supplying both dimensions makes Discord crop the frame; resize the complete image locally.
     val query = uri.rawQuery.orEmpty().split('&').filter {
         it.isNotEmpty() && it.substringBefore('=').lowercase() !in setOf("width", "height", "format", "fit")
-    } + listOf("width=$THUMBNAIL_WIDTH", "format=png")
+    } + listOf("width=$IRC_MEDIA_THUMBNAIL_WIDTH", "format=png")
     return URI("https://media.discordapp.net${uri.rawPath}?${query.joinToString("&")}")
 }
 
@@ -135,7 +135,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
                     override fun thumbnailComplete(source: ImageReader) = stop(source)
                     override fun readAborted(source: ImageReader) = Unit
                 })
-                var sample = if (thumbnail) maxOf(1, width / THUMBNAIL_WIDTH, height / THUMBNAIL_HEIGHT) else 1
+                var sample = if (thumbnail) maxOf(1, width / IRC_MEDIA_THUMBNAIL_WIDTH, height / IRC_MEDIA_THUMBNAIL_HEIGHT) else 1
                 while (ceil(width.toDouble() / sample).toLong() * ceil(height.toDouble() / sample).toLong() * 4 > MAX_IMAGE_DECODED_BYTES) sample++
                 val parameters = reader.defaultReadParam.apply { setSourceSubsampling(sample, sample, 0, 0) }
                 val decoded = reader.read(0, parameters)
@@ -147,7 +147,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
                         retained = true
                         return IrcGif(decoded.width, decoded.height, listOf(IrcGifFrame(decoded, 100)), -1)
                     }
-                    val scale = minOf(1.0, THUMBNAIL_WIDTH.toDouble() / decoded.width, THUMBNAIL_HEIGHT.toDouble() / decoded.height)
+                    val scale = minOf(1.0, IRC_MEDIA_THUMBNAIL_WIDTH.toDouble() / decoded.width, IRC_MEDIA_THUMBNAIL_HEIGHT.toDouble() / decoded.height)
                     val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
                     val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
                     val image = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB)
@@ -225,12 +225,9 @@ private data class MediaSource(val uri: URI, val full: Boolean, val maximumBytes
 }
 
 internal fun ircMediaThumbnailUrl(media: IrcMedia): URI? {
-    val explicit = media.thumbnailUrl?.takeIf {
-        trustedIrcMediaUrl(it) && (!it.path.endsWith(".gif", true) ||
-            it.host.lowercase() == "media.discordapp.net" && it.query.orEmpty().split('&').any { part -> part.equals("format=png", true) })
-    }
+    val explicit = media.thumbnailUrl?.takeIf(::trustedIrcMediaUrl)
     return explicit?.let { ircDiscordThumbnail(it) ?: it } ?: (if (media.type != "video") ircDiscordThumbnail(media.url) else null)
-        ?: media.url.takeIf { media.type == "image" && trustedIrcMediaUrl(it) && !it.path.endsWith(".gif", true) }
+        ?: media.url.takeIf { media.type in setOf("image", "gif") && trustedIrcMediaUrl(it) }
 }
 
 private fun mediaSource(media: IrcMedia, full: Boolean): MediaSource? {
@@ -363,7 +360,7 @@ internal object IrcMediaAssets {
                 val format = imageFormat(bytes)
                 require(mime == "application/octet-stream" || mime == "image/$format")
                 val decodeDeadline = minOf(deadline, System.nanoTime() + 2_000_000_000L)
-                val asset = if (format == "gif" && load.source.full) decodeIrcGif(bytes, decodeDeadline)
+                val asset = if (format == "gif") decodeIrcGif(bytes, decodeDeadline, !load.source.full)
                     else decodeIrcImage(bytes, decodeDeadline, !load.source.full)
                 if (load.cancelled) { asset?.release(); return IrcMediaAssetState(IrcMediaAssetStatus.IDLE) }
                 return if (asset != null) IrcMediaAssetState(IrcMediaAssetStatus.READY, asset)

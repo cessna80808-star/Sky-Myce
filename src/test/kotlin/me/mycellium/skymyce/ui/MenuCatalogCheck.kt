@@ -52,8 +52,12 @@ fun main() {
     check(MenuSearchIndex(emptyList()).search("anything").isEmpty())
     val irc = checkNotNull(catalog.findFeature("global-chat"))
     check(irc.title == "IRC Chat" && "/sm party" in irc.description && "/sm irc" in irc.description)
-    for (key in listOf("enabled", "partyEnabled", "mediaPreviews", "animateGifs", "mentionHighlight", "mentionSounds"))
+    for (key in listOf("enabled", "partyEnabled", "mediaPreviews", "previewSize", "animateGifs", "mentionHighlight", "mentionSounds"))
         check(irc.settings.any { it.path == "General/Global SkyMyce Chat/$key" })
+    val previewSize = checkNotNull(catalog.setting("General/Global SkyMyce Chat/previewSize")).entry
+    check(previewSize.int == 100 && previewSize.options().hasOption(com.teamresourceful.resourcefulconfig.api.types.options.Option.SLIDER))
+    val previewRange = checkNotNull(previewSize.options().getOption(com.teamresourceful.resourcefulconfig.api.types.options.Option.RANGE))
+    check(previewRange.min == 50.0 && previewRange.max == 200.0)
     check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
     check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))

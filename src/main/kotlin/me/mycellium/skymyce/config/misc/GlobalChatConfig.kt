@@ -14,7 +14,13 @@ object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
     }
     val mediaPreviews by boolean(true) {
         name = TranslatableValue.literal("Chat thumbnails")
-        description = TranslatableValue.literal("Show small static image and GIF previews inside chat. Click a preview for the media viewer. Downloads use a bounded memory cache; nothing is saved to disk.")
+        description = TranslatableValue.literal("Show static image and GIF previews inside chat. Click a preview for the media viewer. Downloads use a bounded memory cache; nothing is saved to disk.")
+    }
+    val previewSize by int(100) {
+        name = TranslatableValue.literal("Chat preview size (%)")
+        description = TranslatableValue.literal("Resize image and GIF previews in chat. 100% is the normal size; previews always fit the chat width and show the whole image.")
+        range = 50..200
+        slider = true
     }
     val animateGifs by boolean(true) {
         name = TranslatableValue.literal("Animate GIFs in viewer")

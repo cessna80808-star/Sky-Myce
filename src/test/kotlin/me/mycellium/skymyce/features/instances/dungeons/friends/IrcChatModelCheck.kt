@@ -100,7 +100,20 @@ fun checkIrcChatModel() {
         check(colors.size == label.length && colors.first() == 0x44E4EF && colors.last() == 0xA46BFF && colors.distinct().size > 5)
     }
     for (action in listOf("/sm ircaction media global ${global.id} 4", "/sm ircaction media room ${global.id} -1", "/sm ircaction manage global ${global.id} 0", "/sm ircaction manage global bad", "/sm ircaction media other ${global.id} 0")) check(parseIrcChatAction(action) == null)
-    check(IRC_THUMBNAIL_WIDTH == 96 && IRC_THUMBNAIL_HEIGHT == 72 && IRC_THUMBNAIL_ROWS * 9 >= IRC_THUMBNAIL_HEIGHT)
+    check(ircThumbnailLayout(100, 320, 9) == IrcThumbnailLayout(96, 72, 8))
+    check(ircThumbnailLayout(50, 320, 9) == IrcThumbnailLayout(48, 36, 4))
+    check(ircThumbnailLayout(200, 320, 9) == IrcThumbnailLayout(192, 144, 16))
+    check(ircThumbnailLayout(200, 40, 9) == IrcThumbnailLayout(40, 30, 4))
+    check(ircThumbnailLayout(100, 40, 9).title("[Image 1]", 48, 0) == "[1]")
+    check(ircThumbnailLayout(100, 320, 9).title("[Image 1]", 48, 0) == "[Image 1]")
+    check(ircThumbnailLayout(0, 320, 9) == ircThumbnailLayout(50, 320, 9))
+    check(ircThumbnailLayout(999, 320, 9) == ircThumbnailLayout(200, 320, 9))
+    check(ircThumbnailLayout(100, 0, 0) == IrcThumbnailLayout(1, 1, 1))
+    for (percent in 50..200) for (width in listOf(40, 73, 96, 192, 320)) for (lineHeight in 9..18) {
+        val layout = ircThumbnailLayout(percent, width, lineHeight)
+        check(layout.width in 1..width && layout.height > 0 && layout.rows > 0)
+        check((layout.rows - 1) * lineHeight < layout.height && layout.rows * lineHeight >= layout.height)
+    }
     check(ircMessageHeader(global, false).string == "Alice: ")
     check(ircMessageHeader(global.copy(source = "discord"), false).string == "@Alice: ")
     val replied = global.copy(reply = GlobalChatReply("Bob", "https://cdn.discordapp.com/attachments/1/2/clip.gif?signature=${"x".repeat(180)}"))

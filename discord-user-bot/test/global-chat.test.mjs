@@ -289,6 +289,37 @@ test('signed attachment identity produces one structured GIF while preserving un
   assert.equal(globalEmbedPacket(previous, { ...input, embeds: [{ title: 'New caption', image: { url: signed } }] }, guild, channel).text, 'New caption');
 });
 
+test('gifv previews select the supplied animated GIF once from the original message and delayed embeds', () => {
+  const page = 'https://tenor.com/view/sample-animation-gif-123456789';
+  const gif = 'https://media1.tenor.com/m/sampleAAAAC/sample.gif';
+  const video = 'https://media.tenor.com/sampleAAAPo/sample.mp4';
+  const embed = { type: 'gifv', url: page, video: { url: video, width: 400, height: 300 },
+    thumbnail: { url: gif, width: 400, height: 300 } };
+  const expected = [{ id: 'media-0', type: 'gif', url: gif, width: 400, height: 300 }];
+  const previous = { ...message(), content: page, embeds: [] };
+  for (const preview of [embed, { data: embed }]) {
+    const input = { ...previous, embeds: [preview] };
+    const packet = globalDiscordPacket(input, guild, channel);
+    assert.equal(packet.text, `${page}\n${gif}`, 'original content contains only the view page; embed supplies the GIF');
+    assert.deepEqual(packet.media, expected);
+    const continuation = globalEmbedPacket(previous, input, guild, channel);
+    assert.equal(continuation.text, gif);
+    assert.deepEqual(continuation.media, expected);
+    assert.deepEqual(discordMedia({ ...input, content: gif }), expected, 'a direct GIF link and its embed remain one item');
+  }
+  assert.deepEqual(discordMedia({ embeds: [{ ...embed, type: 'video' }] }),
+    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: gif, width: 400, height: 300 }],
+    'ordinary videos keep their video URL and poster even when the poster is a GIF');
+  for (const invalid of ['http://media1.tenor.com/sample.gif', 'https://localhost/sample.gif',
+    'https://user:password@media1.tenor.com/sample.gif'])
+    assert.deepEqual(discordMedia({ embeds: [{ ...embed, thumbnail: { url: invalid } }] }),
+      [{ id: 'media-0', type: 'video', url: video, width: 400, height: 300 }], 'unsafe GIF thumbnails cannot replace a video');
+  const poster = 'https://media1.tenor.com/sample.png';
+  assert.deepEqual(discordMedia({ embeds: [{ ...embed, thumbnail: { url: poster } }] }),
+    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: poster, width: 400, height: 300 }],
+    'gifv without an actual GIF retains browser playback and its poster');
+});
+
 test('video previews carry one poster and preserve bounded attachment metadata', () => {
   const video = 'https://example.com/movie.mp4', poster = 'https://example.com/poster.png';
   assert.deepEqual(discordMedia({ content: video, embeds: [{ video: { url: video, width: 1280, height: 720 }, thumbnail: { url: poster } }] }),

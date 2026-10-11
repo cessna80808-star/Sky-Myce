@@ -57,19 +57,20 @@ private fun gifFixture(width: Int, height: Int, frames: List<GifFixtureFrame>, l
 }
 
 fun checkIrcGif() {
-    for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com")) {
+    for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com", "media1.tenor.com")) {
         check(trustedIrcGifUrl(URI("https://$host/path/name.GIF?signature=abc%2Fdef")))
     }
     check(trustedIrcGifUrl(URI("https://MEDIA.TENOR.COM:443/test.gif")))
     for (url in listOf("http://media.tenor.com/test.gif", "https://media.tenor.com.evil.invalid/test.gif",
         "https://tenor.com/view/test.gif", "https://giphy.com/test.gif", "https://media.tenor.com:444/test.gif",
+        "https://media1.tenor.com.evil.invalid/test.gif", "https://media2.tenor.com/test.gif",
         "https://user@media.tenor.com/test.gif", "https://media.tenor.com/test.gif#fragment",
         "https://media.tenor.com/test.png", "https://media.tenor.com/%00test.gif", "https://media.tenor.com/%0atest.gif",
         "https://media.tenor.com/%255ctest.gif", "https://media.tenor.com/%5ctest.gif", "https://media.tenor.com./test.gif")) {
         check(!trustedIrcGifUrl(URI(url))) { url }
     }
 
-    fun decode(bytes: ByteArray) = decodeIrcGif(bytes, System.nanoTime() + 2_000_000_000L)
+    fun decode(bytes: ByteArray, thumbnail: Boolean = false) = decodeIrcGif(bytes, System.nanoTime() + 2_000_000_000L, thumbnail)
     val sequence = gifFixture(2, 1, listOf(GifFixtureFrame(intArrayOf(1, 1), 2, delay = 3),
         GifFixtureFrame(intArrayOf(0, 2), 2, delay = 7, transparent = true)))
     var closed = false
@@ -129,14 +130,62 @@ fun checkIrcGif() {
     }
     val clear = requireNotNull(decode(gifFixture(2, 1, listOf(GifFixtureFrame(intArrayOf(0, 1), 2, transparent = true)))))
     check(clear.frames.single().image.getRGB(0, 0) == 0)
+
+    // Caption GIFs can be a single wide image rather than a small animation.
+    val caption = gifFixture(1726, 909, listOf(GifFixtureFrame(IntArray(1726) { 1 }, 1726)))
+    val wide = requireNotNull(decode(caption))
+    check(wide.width == 1726 && wide.height == 909 && wide.frames.size == 1)
+    val thumbnail = requireNotNull(decode(caption, thumbnail = true))
+    check(thumbnail.width == 192 && thumbnail.height == 101 && thumbnail.frames.size == 1)
+    val firstFrame = requireNotNull(decode(sequence, thumbnail = true))
+    check(firstFrame.width == 2 && firstFrame.height == 1 && firstFrame.frames.size == 1)
+    check(firstFrame.frames.single().image.getRGB(1, 0) == 0xffff0000.toInt())
+
+    val longSequence = requireNotNull(decode(gifFixture(1, 1, List(121) {
+        GifFixtureFrame(intArrayOf(if (it == 120) 2 else 1), 1)
+    }, loopCount = null)))
+    check(longSequence.frames.size == 61 && longSequence.frames.sumOf { it.durationMillis } == 6050L)
+    check(longSequence.frames.dropLast(1).all { it.durationMillis == 100L })
+    check(longSequence.frames.last().durationMillis == 50L)
+    check(longSequence.frameIndexAt(6050) == longSequence.frames.lastIndex)
+    check(longSequence.frames.last().image.getRGB(0, 0) == 0xff0000ff.toInt())
+    for (disposal in listOf("doNotDispose", "restoreToBackgroundColor", "restoreToPrevious")) {
+        val sampled = requireNotNull(decode(gifFixture(2, 1, List(121) { index ->
+            when (index) {
+                0 -> GifFixtureFrame(intArrayOf(1, 1), 2, transparent = true)
+                1 -> GifFixtureFrame(intArrayOf(2), 1, disposal = disposal, transparent = true)
+                2 -> GifFixtureFrame(intArrayOf(3), 1, left = 1, transparent = true)
+                else -> GifFixtureFrame(intArrayOf(0), 1, transparent = true)
+            }
+        })))
+        val expected = when (disposal) {
+            "doNotDispose" -> 0xff0000ff.toInt()
+            "restoreToPrevious" -> 0xffff0000.toInt()
+            else -> 0
+        }
+        check(sampled.frames[1].image.getRGB(0, 0) == expected)
+        check(sampled.frames[1].image.getRGB(1, 0) == 0xff00ff00.toInt())
+    }
+
+    val bounded = requireNotNull(decode(gifFixture(1024, 1024, List(9) { GifFixtureFrame(intArrayOf(1), 1) })))
+    check(bounded.frames.size == 9 && bounded.width in 1 until 1024 && bounded.height == bounded.width)
+    val storedBytes = bounded.frames.sumOf { it.image.width.toLong() * it.image.height * 4 }
+    check(storedBytes <= 32L * 1024 * 1024 && storedBytes + 2L * 1024 * 1024 * 4 <= 40L * 1024 * 1024)
+    val withRestore = gifFixture(2048, 2048, listOf(GifFixtureFrame(intArrayOf(1), 1, disposal = "restoreToPrevious")))
+    check(decode(withRestore) == null)
+    check(requireNotNull(decode(withRestore, thumbnail = true)).frames.size == 1)
+
     check(decodeIrcGif(sequence, System.nanoTime() - 1) == null)
     check(decode(ByteArray(IRC_GIF_MAX_BYTES + 1)) == null)
     check(decode("not a gif".toByteArray()) == null)
-    for (length in listOf(0, 6, 13, sequence.size - 1, sequence.size / 2)) check(decode(sequence.copyOf(length)) == null)
-    val tooWide = sequence.clone().also { it[6] = 1; it[7] = 4 }
+    for (length in listOf(0, 6, 13, sequence.size - 1, sequence.size / 2)) {
+        check(decode(sequence.copyOf(length)) == null)
+        check(decode(sequence.copyOf(length), thumbnail = true) == null)
+    }
+    val tooWide = sequence.clone().also { it[6] = 1; it[7] = 16 }
     check(decode(tooWide) == null)
-    check(decode(gifFixture(1, 1, List(121) { GifFixtureFrame(intArrayOf(1), 1) })) == null)
-    check(decode(gifFixture(1024, 1024, List(9) { GifFixtureFrame(intArrayOf(1), 1) })) == null)
+    check(decode(gifFixture(1, 1, List(2001) { GifFixtureFrame(intArrayOf(1), 1) })) == null)
+    check(decode(gifFixture(4096, 4096, listOf(GifFixtureFrame(intArrayOf(1), 1)))) == null)
     println("IRC GIF checks passed")
 }
 

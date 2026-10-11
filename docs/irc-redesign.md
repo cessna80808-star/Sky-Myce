@@ -1,9 +1,42 @@
-# IRC behavior and verification — 2.4.30
+# IRC behavior and verification — 2.4.31
 
 Global IRC is the shared Minecraft ↔ Discord channel. Party IRC is Minecraft-only,
 with delivery restricted to opted-in clients reporting the same complete current
 party roster. Party messages, replies, reactions and mutations never enter a
 Discord delivery queue. This follows the user's final audience clarification.
+
+## 2.4.31 fixes (2026-10-11)
+
+The failing Discord caption GIF has a 1726×909 canvas; the previous 1024-pixel
+dimension limit rejected it. Safe larger GIFs now decode within the existing
+40 MiB working and 32 MiB stored-frame budgets. Long animations retain at most
+120 sampled frames with their original total duration; stored resolution can
+decrease to fit those budgets. Source framing, disposal, transparency, download
+limits and the decoder deadline remain checked. Chat thumbnails decode only
+the first composited frame and contain the whole image.
+
+Discord's Tenor `gifv` embeds supply an actual animated GIF alongside an MP4.
+Both bridge implementations now select that supplied GIF once. The client accepts
+the exact `media1.tenor.com` host used by the reported image, with its existing
+HTTPS, destination and byte checks. Ordinary videos still use browser playback.
+
+Settings → IRC Chat → **Chat preview size (%)** adjusts previews from 50% to
+200%, defaulting to 100%. The default area is 96×72 chat pixels; the largest is
+192×144. Previews shrink proportionally in narrow chat windows and reserve the
+required native rows at the configured line spacing. Clicking uses the same
+geometry as drawing, so changing size does not leave a cropped click target.
+
+Java 25 `check build`, all Node User Bot tests (56/56), backend tests/type checks,
+and the companion Gateway's TypeScript and actual-workerd checks passed. New
+regressions cover larger GIFs, sampled durations/disposal, storage bounds,
+first-frame thumbnails, exact Tenor host validation, duplicate embed selection
+and the registered preview slider. The two reported downloaded GIF files also
+decoded successfully in both full-viewer and thumbnail modes under a 128 MiB
+heap. Native Minecraft UI interaction has not been exercised on this build.
+The private artifact and live release passed independent byte/hash and pinned
+signature checks. The deployed Gateway bundle matched the reviewed package,
+preserved all bindings and stayed ready for 75 sampled seconds after restarting.
+See [the deployment record](backend-deployment.md) for exact identifiers.
 
 ## 2.4.30 fixes (2026-10-11)
 
@@ -63,8 +96,8 @@ public chat.
 
 The existing Global settings category retains its path and disabled default. It
 now contains separate Global/Party switches, chat thumbnails, GIF animation in the
-viewer, mention highlighting and mention sounds. Party routing stops when the
-roster is incomplete, membership changes, the consent lease expires, or account/
+viewer, preview size, mention highlighting and mention sounds. Party routing stops
+when the roster is incomplete, membership changes, the consent lease expires, or account/
 relay authorization changes.
 
 Messages use the cyan → blue → violet `Sky-Myce Global:` and `Sky-Myce Party:`
@@ -75,7 +108,8 @@ verified Minecraft name and an optional server-owned cosmetic name. Player-head
 URLs derive from the authenticated UUID. The footer says `Minecraft`; it does not
 claim continuous online presence after the original send.
 
-Image/GIF previews occupy eight native chat rows with a 96×72 content area.
+Image/GIF previews default to a 96×72 content area. The preview-size slider
+adjusts it from 48×36 to 192×144, reserving enough native rows for line spacing.
 They follow vanilla wrapping, scrolling, resize and chat scale because each row
 belongs to the native message identified by its scoped tag. Clicking opens the
 viewer; chat GIF thumbnails remain static. The viewer offers fit, zoom, drag/pan,
@@ -119,7 +153,7 @@ Paths below are relative to this repository unless another root is named.
 | Client `GlobalChatCheck.kt`, `IrcChatModelCheck.kt`, `IrcGifCheck.kt`, `IrcMediaCheck.kt`, `MenuCatalogCheck.kt`; `build.gradle.kts` | Executable pure-logic/client regressions and registration in Gradle `check`. |
 | `relay/test/rich-irc.mjs`, `relay.mjs`, `irc.mjs`, `global-chat.mjs`, `social.mjs` | Actual workerd rich lifecycle, Party audience/expiry and older-client compatibility regressions. |
 | `discord-user-bot/test/rich-relay.test.mjs`, `global-chat.test.mjs`, `discord-bots/test/bridge.test.mjs` | Delivery/receipt/restart/failure/native-operation and embed/media regressions. |
-| `gradle.properties`, `relay/wrangler.jsonc` | Release 2.4.29 and its signed private-artifact pointers. |
+| `gradle.properties`, `relay/wrangler.jsonc` | Current release and its signed private-artifact pointers. |
 | `D:/Code/Cessna fork/relay/src/gateway-chat.ts`, `global-chat-gateway.ts` | Persistent Cloudflare Gateway counterpart using the same rich normalization, native events, ownership rules, receipt/revision recovery and bounded queues. |
 | Cessna `relay/test/global-chat-gateway.mjs`, `GLOBAL_CHAT_GATEWAY.md` | Gateway actual-workerd regressions and hosting/protocol instructions. |
 | Cessna `relay/src/index.ts`, `package.json`, `wrangler.jsonc` | Selective Gateway route/export/type, test command and service/DO/identity binding integration; unrelated local admin/cosmetic changes are excluded from the commit. |
@@ -188,7 +222,7 @@ with at most five attempts. Bridge routing/receipt metadata also expires after
 
 The backend does not fetch arbitrary media. Client downloads allow only HTTPS on
 `cdn.discordapp.com`, `media.discordapp.net`, `media.giphy.com`, `i.giphy.com`,
-`media.tenor.com`, `i.imgur.com`, and `images.unsplash.com`. Numeric/private/local
+`media.tenor.com`, `media1.tenor.com`, `i.imgur.com`, and `images.unsplash.com`. Numeric/private/local
 destinations, credentials, unusual ports, unsafe DNS addresses and redirects are
 rejected. Returned bytes and decoder input are checked; MIME/extensions alone
 are not trusted.
@@ -198,8 +232,10 @@ watchdog cancels queued/active work by token, rejects late results and keeps a
 blocked native DNS job counted until it exits. Thumbnail downloads are at most
 2 MiB; full still images 12 MiB; GIFs 6 MiB. Still images allow dimensions up to
 4,096 and 16 million pixels, with decoded storage bounded to 32 MiB. GIFs allow
-1,024-pixel dimensions, 120 frames, 32 MiB stored frames and a 40 MiB working
-budget. The shared decoded cache is 48 MiB/64 entries with a two-minute idle TTL.
+dimensions up to 4,096 subject to a 40 MiB working budget, up to 2,000 source
+frames and at most 120 retained snapshots within 32 MiB. Sampling preserves
+the total animation duration; stored resolution can decrease to fit the budget.
+The shared decoded cache is 48 MiB/64 entries with a two-minute idle TTL.
 Account/disconnect/replacement cancellation prevents stale jobs from updating
 another message; images/GPU resources are released on eviction/viewer close.
 

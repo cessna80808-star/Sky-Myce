@@ -192,6 +192,12 @@ export function discordMedia(message) {
   for (const item of values(message.embeds).slice(0, 10)) {
     const embed = item?.data ?? item;
     if (!embed || typeof embed !== 'object') continue;
+    const gif = safeMediaUrl(embed.thumbnail?.url);
+    if (embed.type === 'gifv' && gif && mediaType(undefined, gif) === 'gif') {
+      // Discord supplies the animated GIF alongside its video variant; use that actual GIF once.
+      add(gif, embed.thumbnail);
+      continue;
+    }
     add(embed.video?.url, { ...embed.video, thumbnailUrl: embed.thumbnail?.url });
     add(embed.image?.url, embed.image);
     if (chosen.get(discordMediaKey(embed.video?.url))?.type !== 'video') add(embed.thumbnail?.url, embed.thumbnail);
