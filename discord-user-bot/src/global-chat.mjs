@@ -306,10 +306,10 @@ export function discordOperation(event, message, previous, id, guild, channel, o
 
 /** Bounded delivery mappings and receipts; never persist chat bodies or tokens. */
 export class DeliveryReceipts {
-  constructor(path, now = Date.now, receiptTtlMs = 120000) {
+  constructor(path, now = Date.now, receiptTtlMs = 120000, retainUntilAcknowledged = false) {
     if (!Number.isSafeInteger(receiptTtlMs) || receiptTtlMs < 120000 || receiptTtlMs > 900000) throw new Error('Invalid delivery receipt retention');
-    Object.assign(this, { path, now, receiptTtlMs }); this.entries = new Map(); this.sources = new Map(); this.operations = new Map(); this.cards = new Map();
-    this.writing = Promise.resolve();
+    Object.assign(this, { path, now, receiptTtlMs, retainUntilAcknowledged }); this.entries = new Map(); this.sources = new Map(); this.operations = new Map(); this.cards = new Map();
+    this.writing = Promise.resolve(); this.pendingOffset = 0;
   }
   async load() {
     let handle, text;
@@ -327,7 +327,7 @@ export class DeliveryReceipts {
     for (const row of data.entries) {
       const rich = data.schema === 2 && row?.length === 4;
       if (!Array.isArray(row) || row.length !== (rich ? 4 : 3) || !packetId.test(row[0]) || !snowflake.test(row[1]) ||
-          !Number.isSafeInteger(row[2]) || row[2] > this.now() + (rich ? 900000 : this.receiptTtlMs) || this.entries.has(row[0]) || rich && !this.validMetadata(row[3])) throw new Error('Global chat receipt storage invalid');
+          !Number.isSafeInteger(row[2]) || row[2] > this.now() + (rich ? 900000 : this.receiptTtlMs) && !(this.retainUntilAcknowledged && !rich && row[2] === Number.MAX_SAFE_INTEGER) || this.entries.has(row[0]) || rich && !this.validMetadata(row[3])) throw new Error('Global chat receipt storage invalid');
       if (row[2] > this.now()) this.entries.set(row[0], { discordId: row[1], expires: row[2], ...(rich ? row[3] : {}) });
     }
     for (const row of data.sources ?? []) {
@@ -352,10 +352,26 @@ export class DeliveryReceipts {
     const now = this.now();
     for (const [map, maximum] of [[maps.entries, 1024], [maps.sources, 1024], [maps.operations, 4096], [this.cards, 1024]]) {
       for (const [id, row] of map) if (row.expires <= now) map.delete(id);
+      if (this.retainUntilAcknowledged && map === maps.entries && map.size > maximum) throw new Error('Receipt capacity exceeded');
       while (map.size > maximum) map.delete(map.keys().next().value);
     }
   }
   get(id) { this.prune(); return this.entries.get(id)?.discordId; }
+  pending() {
+    this.prune();
+    const pending = [...this.entries].filter(([, row]) => row.expires === Number.MAX_SAFE_INTEGER);
+    if (!pending.length) { this.pendingOffset = 0; return []; }
+    const start = this.pendingOffset % pending.length;
+    const batch = pending.slice(start).concat(pending.slice(0, start)).slice(0, 32);
+    this.pendingOffset = (start + batch.length) % pending.length;
+    return batch.map(([id, row]) => ({ id, messageId: row.discordId }));
+  }
+  assertCapacity(id) {
+    this.prune();
+    if (!packetId.test(id) || !this.entries.has(id) && this.entries.size >= 1024) throw new Error('Receipt capacity exceeded');
+  }
+  acknowledge(id) { return this.persist(maps => { const entry = maps.entries.get(id); if (entry) entry.expires = this.now() + this.receiptTtlMs; }); }
+  forget(id) { return this.persist(maps => maps.entries.delete(id)); }
   metadata(id) { this.prune(); return this.entries.get(id); }
   source(id, room) {
     this.prune(); const source = this.sources.get(id);
@@ -365,7 +381,7 @@ export class DeliveryReceipts {
   operation(id) { this.prune(); return this.operations.get(id); }
   async record(id, discordId, metadata) {
     if (!packetId.test(id) || !snowflake.test(discordId) || metadata !== undefined && !this.validMetadata(metadata)) throw new Error('Invalid global chat receipt');
-    return this.persist(maps => maps.entries.set(id, { discordId, expires: this.now() + (metadata ? 900000 : this.receiptTtlMs), ...(metadata ? this.cleanMetadata(metadata) : {}) }));
+    return this.persist(maps => maps.entries.set(id, { discordId, expires: this.retainUntilAcknowledged && !metadata ? Number.MAX_SAFE_INTEGER : this.now() + (metadata ? 900000 : this.receiptTtlMs), ...(metadata ? this.cleanMetadata(metadata) : {}) }));
   }
   cleanMetadata(value) {
     return { room: value.room, channelId: value.channelId, authorId: value.authorId, revision: value.revision ?? 0, ...(value.name ? { name: value.name } : {}) };

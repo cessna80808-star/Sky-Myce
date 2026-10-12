@@ -30,12 +30,14 @@ const source = `import {DurableObject} from 'cloudflare:workers';
   validateEvent(event){return validatedPublicRngEvent(event)}
   pending(){return this.sql.exec('SELECT id FROM community_rng_delivery').toArray()}
   forceRetry(){this.sql.exec('UPDATE community_rng_delivery SET claim_until=0,next_at=0')}
+  expirePending(){this.sql.exec('UPDATE community_rng_delivery SET received_at=?,claim_until=0,next_at=0 WHERE message_id IS NULL',Date.now()-600001)}
+  attemptedBatch(uuid){for(let index=1;index<=500;index++){const id=index.toString(16).padStart(32,'0'),event={id,item:'NECRON_HANDLE',activity:'dungeon',occurredAt:Date.now(),player:'Anonymous',unverified:true};this.sql.exec('INSERT INTO community_rng_delivery VALUES(?,?,?,?,?,1,NULL,0,?,NULL,0)',id,uuid,JSON.stringify(event),Date.now()-600001,0,this.env.DISCORD_RNG_CHANNEL_ID)}}
   delivered(uuid,index,named=false){const id=index.toString(16).padStart(32,'0'),event={id,item:'NECRON_HANDLE',activity:'dungeon',occurredAt:Date.now()-1000,player:named?'OldestPlayer':'Anonymous',unverified:true};this.sql.exec('INSERT INTO community_rng_delivery VALUES(?,?,?,?,?,0,NULL,0,?,?,0)',id,uuid,JSON.stringify(event),Date.now()-300000+index,0,this.env.DISCORD_RNG_CHANNEL_ID,String(95000000000000000n+BigInt(index)))}
   deliveredBatch(oldest,others,named=false){for(let index=1;index<=205;index++)this.delivered(index===1?oldest:others,index,index===1&&named)}
   flagDelivery(index){this.sql.exec('UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE id=?',index.toString(16).padStart(32,'0'))}
   async communityLeaderboard(token,query){return token==='t'.repeat(43)?this.boards.query(query):{ok:false,error:'session_expired'}}
   acceptCommunityFeedNonce(nonce){return this.boards.acceptNonce(nonce)}
-  claimCommunityRng(channel){return this.boards.claim(channel)}
+  claimCommunityRng(channel,receipts){return this.boards.claim(channel,receipts)}
   acknowledgeCommunityRng(raw,channel){return this.boards.acknowledge(raw,channel)}
  }
  export default{async fetch(request,env){return await handleCommunityFeed(request,env)??await handleLeaderboardsRequest(request,new URL(request.url).pathname==='/community/journal-comparison'?{...env,ACCOUNT_STORE:env.ACCOUNT_AUTH}:env)??new Response('Not found',{status:404})}};`;
@@ -97,6 +99,35 @@ try {
  const ack=await request({action:'ack',id:deliveries[0].id,claim:deliveries[0].claim,operation:'publish',messageId:'44444444444444444'});assert.equal((await ack.response.json()).deleteRequired,true,'Consent changed in flight triggers removal');
  const retract=await request({action:'claim'}), removal=(await retract.response.json()).deliveries[0];assert.equal(removal.operation,'delete');assert.equal(removal.messageId,'44444444444444444');
  const removed=await request({action:'ack',id:removal.id,claim:removal.claim,operation:'delete'});assert.equal((await removed.response.json()).ok,true);assert.equal((await store.pending()).length,0);
+ // A successful Discord send with a lost ACK must remain retractable after consent changes or expiry.
+ const feedNamespace=await mf.getDurableObjectNamespace('ACCOUNT_STORE');
+ for(const reason of['consent','expiry']){
+  const lost=feedNamespace.getByName('lost-ack-'+reason),author='6'.repeat(32);await lost.seed(author,'LostAckPlayer');
+  assert.equal((await lost.accept(author,{...event,id:'7'.repeat(32),player:'Anonymous',occurredAt:Date.now()},'8'.repeat(32))).ok,true);
+  const original=(await lost.claimCommunityRng(channel)).deliveries[0];assert.equal(original.operation,'publish');
+  if(reason==='consent'){await lost.policy(author,{rng:false});await lost.forceRetry()}else await lost.expirePending();
+  await lost.remount();
+  const cancellation=(await lost.claimCommunityRng(channel)).deliveries[0];assert.equal(cancellation.operation,'delete');
+  assert.equal(cancellation.messageId,undefined);assert.equal(cancellation.event,undefined);assert.equal((await lost.pending()).length,1);
+  const removalAck={id:cancellation.id,claim:cancellation.claim,operation:'delete'};
+  assert.equal((await lost.acknowledgeCommunityRng(removalAck,'33333333333333333')).ok,false);
+  assert.equal((await lost.acknowledgeCommunityRng({...removalAck,claim:original.claim},channel)).ok,false);
+  assert.equal((await lost.acknowledgeCommunityRng(removalAck,channel)).ok,true);assert.equal((await lost.pending()).length,0);
+ }
+ const neverClaimed=feedNamespace.getByName('expired-unclaimed'),unclaimedAuthor='9'.repeat(32);await neverClaimed.seed(unclaimedAuthor,'UnclaimedPlayer');
+ await neverClaimed.accept(unclaimedAuthor,{...event,id:'a'.repeat(32),player:'Anonymous',occurredAt:Date.now()},'b'.repeat(32));await neverClaimed.expirePending();
+ assert.deepEqual((await neverClaimed.claimCommunityRng(channel)).deliveries,[]);assert.equal((await neverClaimed.pending()).length,0);
+ const capacity=feedNamespace.getByName('cancel-capacity');await capacity.seed(unclaimedAuthor,'CapacityPlayer');await capacity.attemptedBatch(unclaimedAuthor);await capacity.remount();
+ assert.equal((await capacity.accept(unclaimedAuthor,{...event,id:'c'.repeat(32),player:'Anonymous',occurredAt:Date.now()},'d'.repeat(32))).error,'rng_feed_busy');
+ assert.equal((await capacity.pending()).length,500,'Unacknowledged posts are retained under the existing pending cap');
+ assert.ok((await capacity.claimCommunityRng(channel)).deliveries.every(delivery=>delivery.operation==='delete'&&!delivery.event));
+ const confirmed=feedNamespace.getByName('accepted-ack-lost');await confirmed.seed(unclaimedAuthor,'ConfirmedPlayer');
+ const confirmedId='e'.repeat(32),confirmedMessage='55555555555555555';await confirmed.accept(unclaimedAuthor,{...event,id:confirmedId,player:'Anonymous',occurredAt:Date.now()},'f'.repeat(32));
+ const sent=(await confirmed.claimCommunityRng(channel)).deliveries[0];await confirmed.acknowledgeCommunityRng({id:sent.id,claim:sent.claim,operation:'publish',messageId:confirmedMessage},channel);await confirmed.remount();
+ const confirmation=await confirmed.claimCommunityRng(channel,[{id:confirmedId,messageId:confirmedMessage},{id:confirmedId,messageId:'66666666666666666'},{id:'f'.repeat(32),messageId:confirmedMessage}]);
+ assert.deepEqual(confirmation.deliveries,[]);assert.deepEqual(confirmation.acknowledged,[confirmedId],'Accepted publish ACK can be confirmed without another publication');
+ assert.deepEqual((await confirmed.claimCommunityRng('33333333333333333',[{id:confirmedId,messageId:confirmedMessage}])).acknowledged,[],'Receipt confirmation remains channel-bound');
+ for(const receipts of[null,{},[{id:confirmedId,messageId:123}],[{id:confirmedId,messageId:Number(confirmedMessage)}],Array(2).fill({id:confirmedId,messageId:confirmedMessage}),Array(33).fill({id:confirmedId,messageId:confirmedMessage}),[{id:confirmedId,messageId:confirmedMessage,privateUuid:c}]])assert.equal((await request({action:'claim',receipts})).response.status,400);
  const denied=await mf.dispatchFetch('https://fixture.example/community/leaderboard');assert.equal(denied.status,401);
  const http=await mf.dispatchFetch('https://fixture.example/community/leaderboard?category=economy&metric=networth',{headers:{Authorization:'Bearer '+'t'.repeat(43)}});assert.equal(http.status,200);assert.equal((await http.json()).entries[0].value,80);
 

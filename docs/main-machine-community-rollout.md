@@ -1,5 +1,8 @@
 # Main-machine rollout: Sky-Myce 2.5.0
 
+The completed main-machine deployment and its verification limits are recorded in
+[deployment-2.5.0.md](deployment-2.5.0.md). The original operator handoff follows.
+
 This is a manual operator handoff for the existing Discord applications and
 Cloudflare account. These changes have not been deployed or registered from the
 laptop. Its Wrangler session is unauthenticated; production operator credentials,
@@ -225,8 +228,16 @@ domain, short timestamps and persistent nonce rejection at
 `POST /discord/community-feed`. Discord tokens stay in the User Bot process.
 Keep `RNG_FEED_RECEIPTS_PATH` on durable storage writable by its existing service
 account; its default is `.data/rng-feed-receipts.json`. Receipts contain delivery
-and Discord message IDs, expire after fifteen minutes and prevent resend after a
-lost acknowledgement or process restart. Keep them when restarting the service.
+and Discord message IDs. Unacknowledged receipts remain until the post is
+acknowledged or cancelled; acknowledged receipts expire after fifteen minutes.
+The 1,024-receipt cap rejects new posts rather than discarding pending mappings.
+Keep them when restarting the service.
+
+Each claim confirms a rotating batch of at most 32 pending ID/message pairs with
+the account Worker. This recovers committed acknowledgements whose responses were
+lost without republishing; successful deletion clears its receipt before the
+cancellation acknowledgement. Deploy the matching account Worker before updating
+the bot/Gateway consumer so the new optional claim field is recognized.
 
 Only newly accepted supported acquisition reports enter the feed. The global
 SQLite outbox deduplicates the same acquisition across rooms, rechecks current
@@ -234,8 +245,9 @@ sharing preferences before delivery, and requests removal when RNG/name/global
 sharing is disabled after a post. A failed delete stays retryable while the bot
 is offline or lacks permission. Posts identify client reports as unverified;
 anonymous posts contain no Discord IDs, Minecraft UUIDs or hardware identifiers.
-There is no seven-day Digest-history replay. Pending deliveries expire after ten
-minutes, at most 500 remain pending, and delivery retries use bounded delays.
+There is no seven-day Digest-history replay. Pending publication expires after ten
+minutes. Attempted deliveries with a lost acknowledgement remain cancellation
+records, still under the 500-pending cap; retries use bounded delays.
 Delivered message references remain for later consent removal. Contribution and
 dedup archives have explicit 100,000-record limits; reaching them rejects new
 records instead of silently deleting all-time history. Review capacity before a

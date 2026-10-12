@@ -138,6 +138,16 @@ and use structured embeds labeled as unverified client reports. Durable local
 message receipts plus a stable Discord nonce prevent publication retries after
 lost acknowledgements/restarts. Only IDs are persisted in these bot receipts.
 Failed receipt writes retract the post before withholding success.
+Unacknowledged receipts remain until delivery or cancellation succeeds;
+acknowledged receipts expire after fifteen minutes. The 1,024-receipt cap blocks
+new posts rather than evicting pending mappings.
+
+Claim requests may include up to 32 unique pending delivery/message pairs. The
+Worker confirms only exact matches in that channel's stored publication receipts.
+Bots validate the entire confirmation list before resuming fifteen-minute expiry;
+rotating batches prevent unmatched older receipts from starving later matches.
+Successful deletion clears its local mapping before the cancellation acknowledgement.
+Deploy the matching account Worker before the bot/Gateway consumer update.
 
 Each claim also checks at most 100 delivered, unflagged receipts in a rotating
 ID order with a persisted per-channel cursor. Blacklisting, relinking or changed
@@ -159,8 +169,12 @@ room opt-outs delete pending entries. A full queue returns an explicit sharing
 error while preserving the player's local journal. A local queued acknowledgement
 is not a completed Discord-delivery receipt.
 
-Pending entries expire after ten minutes and are limited to 500. They do not
-backfill the seven-day Digest feed. Delivered references remain available for
+Pending publication expires after ten minutes. Attempted deliveries with unknown
+Discord message IDs remain cancellation records under the same 500-pending cap:
+the bot resolves its durable receipt, removes that post if present, then
+acknowledges cancellation without republishing the event. Never-attempted expired
+entries are discarded. They do not backfill the seven-day Digest feed.
+Delivered references remain available for
 later consent removal; a failed delete stays retryable. Explicit 100,000-record
 archives reject new entries at capacity rather than silently losing all-time
 history. This bounded implementation does not promise unlimited archival storage.

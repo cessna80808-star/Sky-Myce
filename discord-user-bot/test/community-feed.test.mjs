@@ -88,10 +88,103 @@ test('durable delivery receipt prevents duplicates across failed ACK, restart an
   const options = { url: 'https://relay.example', secret: 's'.repeat(32), channelId, fetcher, channel: { async send() { sends++; return { id: '44444444444444444' }; } } };
   const first = new CommunityFeed({ ...options, receipts: await communityFeedReceipts(path) });
   await first.tick(); first.stop(); assert.equal(sends, 1);
-  const restored = await new DeliveryReceipts(path, () => Date.now() + 360000, 900000).load();
+  const restored = await communityFeedReceipts(path, () => Date.now() + 360000);
   assert.equal(restored.get('a'.repeat(32)), '44444444444444444');
   const second = new CommunityFeed({ ...options, receipts: restored }); await second.tick(); second.stop();
   assert.equal(sends, 1); assert.equal(acks, 2);
+});
+
+test('lost ACK receipts survive prolonged offline time and retract a cancelled publication after restart', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sky-myce-rng-'));
+  t.after(async () => { assert.ok(directory.startsWith(join(tmpdir(), 'sky-myce-rng-'))); await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, 'receipts.json'); let now = Date.now(), sends = 0, removed = [], acked = [];
+  const receipts = await communityFeedReceipts(path, () => now);
+  await receipts.record('a'.repeat(32), '44444444444444444');
+  await assert.rejects(new DeliveryReceipts(path, () => now, 900000).load(), /invalid/);
+  now += 3600000;
+  const restored = await communityFeedReceipts(path, () => now);
+  assert.equal(restored.get('a'.repeat(32)), '44444444444444444');
+  const feed = new CommunityFeed({ url: 'https://relay.example', secret: 's'.repeat(32), channelId, receipts: restored,
+    channel: { async send() { sends++; }, messages: { async delete(id) { removed.push(id); } } },
+    fetcher: async (_url, options) => { const body = JSON.parse(options.body);
+      if (body.action === 'ack') { acked.push(body); return Response.json({ ok: true }); }
+      return Response.json({ ok: true, deliveries: [{ id: 'a'.repeat(32), claim: 'c'.repeat(43), channelId, operation: 'delete' },
+        { id: 'b'.repeat(32), claim: 'd'.repeat(43), channelId, operation: 'delete' }] }); } });
+  await feed.tick(); feed.stop();
+  assert.equal(feed.failures, 0); assert.equal(sends, 0); assert.deepEqual(removed, ['44444444444444444']);
+  assert.deepEqual(acked.map(row => row.operation), ['delete', 'delete']);
+  assert.equal((await communityFeedReceipts(path, () => now)).get('a'.repeat(32)), undefined);
+});
+
+test('pending receipt capacity fails closed before sending; acknowledged receipts still expire', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sky-myce-rng-'));
+  t.after(async () => { assert.ok(directory.startsWith(join(tmpdir(), 'sky-myce-rng-'))); await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, 'receipts.json'); let now = Date.now(), sends = 0;
+  const receipts = await communityFeedReceipts(path, () => now);
+  for (let index = 1; index <= 1024; index++) receipts.entries.set(index.toString(16).padStart(32, '0'), { discordId: '44444444444444444', expires: Number.MAX_SAFE_INTEGER });
+  await receipts.persist();
+  const restored = await communityFeedReceipts(path, () => now);
+  const feed = new CommunityFeed({ url: 'https://relay.example', secret: 's'.repeat(32), channelId, receipts: restored,
+    channel: { async send() { sends++; } }, fetcher: async () => Response.json({ ok: true, deliveries: [delivery()] }) });
+  await feed.tick(); feed.stop(); assert.equal(sends, 0); assert.equal(feed.failures, 1); assert.equal(restored.entries.size, 1024);
+  await assert.rejects(restored.record('a'.repeat(32), '44444444444444444'), /capacity/);
+  const first = '1'.padStart(32, '0'); await restored.acknowledge(first);
+  now += 900001;
+  const expired = await communityFeedReceipts(path, () => now); assert.equal(expired.get(first), undefined); assert.equal(expired.entries.size, 1023);
+  expired.assertCapacity('a'.repeat(32));
+});
+
+test('pending receipt confirmation batches rotate past unmatched records', () => {
+  const receipts = new DeliveryReceipts('unused.json', Date.now, 900000, true);
+  for (let index = 1; index <= 40; index++) receipts.entries.set(index.toString(16).padStart(32, '0'), { discordId: '44444444444444444', expires: Number.MAX_SAFE_INTEGER });
+  const first = receipts.pending(), second = receipts.pending();
+  assert.equal(first.length, 32); assert.equal(second.length, 32);
+  assert.equal(new Set(second.map(row => row.id)).size, 32);
+  assert.equal(new Set([...first, ...second].map(row => row.id)).size, 40);
+  receipts.entries.clear(); assert.deepEqual(receipts.pending(), []);
+});
+
+test('accepted publication ACK with a lost response is confirmed without republishing or retaining an immortal receipt', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sky-myce-rng-'));
+  t.after(async () => { assert.ok(directory.startsWith(join(tmpdir(), 'sky-myce-rng-'))); await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, 'receipts.json'); let now = Date.now(), sends = 0, published = false;
+  const options = { url: 'https://relay.example', secret: 's'.repeat(32), channelId, now: () => now,
+    channel: { async send() { sends++; return { id: '44444444444444444' }; } },
+    fetcher: async (_url, options) => { const body = JSON.parse(options.body);
+      if (body.action === 'ack') { published = true; return new Response('', { status: 503 }); }
+      if (!published) return Response.json({ ok: true, deliveries: [delivery()] });
+      assert.deepEqual(body.receipts, [{ id: 'a'.repeat(32), messageId: '44444444444444444' }]);
+      return Response.json({ ok: true, deliveries: [], acknowledged: ['a'.repeat(32)] }); } };
+  const first = new CommunityFeed({ ...options, receipts: await communityFeedReceipts(path, () => now) });
+  await first.tick(); first.stop(); assert.equal(first.failures, 1);
+  const restored = await communityFeedReceipts(path, () => now);
+  const second = new CommunityFeed({ ...options, receipts: restored }); await second.tick(); second.stop();
+  assert.equal(sends, 1); assert.equal(second.failures, 0); assert.deepEqual(restored.pending(), []);
+  now += 900001; assert.equal((await communityFeedReceipts(path, () => now)).get('a'.repeat(32)), undefined);
+});
+
+test('successful cancellation forgets its receipt before a committed delete ACK response is lost', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sky-myce-rng-'));
+  t.after(async () => { assert.ok(directory.startsWith(join(tmpdir(), 'sky-myce-rng-'))); await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, 'receipts.json'), receipts = await communityFeedReceipts(path); let deleted = false, removed = 0;
+  await receipts.record('a'.repeat(32), '44444444444444444');
+  const feed = new CommunityFeed({ url: 'https://relay.example', secret: 's'.repeat(32), channelId, receipts,
+    channel: { messages: { async delete() { removed++; } } }, fetcher: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.action === 'ack') { deleted = true; return new Response('', { status: 503 }); }
+      return Response.json({ ok: true, deliveries: deleted ? [] : [{ id: 'a'.repeat(32), claim: 'c'.repeat(43), channelId, operation: 'delete' }] }); } });
+  await feed.tick(); feed.stop(); assert.equal(deleted, true); assert.equal(removed, 1);
+  assert.equal((await communityFeedReceipts(path)).get('a'.repeat(32)), undefined);
+});
+
+test('receipt confirmations reject foreign or duplicate IDs before changing any local receipt', async () => {
+  for (const acknowledged of [['b'.repeat(32)], ['a'.repeat(32), 'a'.repeat(32)]]) {
+    let changes = 0;
+    const feed = new CommunityFeed({ url: 'https://relay.example', secret: 's'.repeat(32), channelId, channel: {},
+      receipts: { pending() { return [{ id: 'a'.repeat(32), messageId: '44444444444444444' }]; }, async acknowledge() { changes++; } },
+      fetcher: async () => Response.json({ ok: true, deliveries: [], acknowledged }) });
+    await feed.tick(); feed.stop(); assert.equal(feed.failures, 1); assert.equal(changes, 0);
+  }
 });
 test('failed durable receipt retracts the post; later consent removal deletes only the acknowledged message', async () => {
   let removed = [], acked = [], publications = 0;

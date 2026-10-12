@@ -4,7 +4,7 @@ This file is the repository's development reference. Prefer code and build confi
 
 ## Project at a glance
 
-- Sky-Myce is a client-side Fabric mod for Minecraft 26.1.2, written primarily in Kotlin with some Java. The mod and loader compile for Java 25.
+- Sky-Myce is a standalone client-side Fabric mod for Minecraft 26.1.2, written primarily in Kotlin with some Java and compiled for Java 25. Historical Loader sources remain for compatibility checks; the installed mod requires no custom Loader.
 - `relay/` is a separate TypeScript Cloudflare Worker and Durable Object service.
 - Gradle dependency versions and Minecraft/Fabric versions are in `gradle.properties`; dependency wiring and build/test tasks are in `build.gradle.kts`.
 - Do not edit generated output, runtime data or dependency caches under `build/`, `.gradle/`, or `run/`.
@@ -20,6 +20,7 @@ This file is the repository's development reference. Prefer code and build confi
 | `.../features/general/` | General client features, auction browser and widgets |
 | `.../features/instances/dungeons/` | Dungeon features, friends and tracker |
 | `.../features/digest/` | Daily Digest and RNG tracking |
+| `.../community/` | Optional Discord connection, sharing, leaderboards and signed Fabric updates |
 | `.../hud/` | HUD widgets and theme/editor UI |
 | `.../utils/` | Shared Minecraft, item, text and persistence helpers |
 | `src/main/java/me/mycellium/mixin/` | Narrow Minecraft UI/input integrations |
@@ -64,7 +65,9 @@ npm run check
 
 Run the narrowest relevant checks while iterating, then `./gradlew check` for mod-wide changes. Report any verification that could not be run and why.
 
-The user has authorized deployment of every completed mod release build to the production Cloudflare backend. Include deployment in future build tasks without asking again: use a new release version, upload the private artifact before its signed manifest, activate it on `--env backend`, and verify the live signature and artifact hash. Retain previous builds for later cleanup.
+The user has authorized deployment of every completed mod release build to the production Cloudflare backend. Include deployment in future build tasks without asking again: use a new release version, upload the private artifact before its signed protocol-4 Fabric manifest (`sign-community`), activate `releases/community-current.json` on `--env backend`, and verify the live signature and artifact hash. Retain previous builds and historical Loader release pointers for later cleanup.
+
+The sole production Discord Gateway lives in the separate `D:\Code\Cessna fork\relay` checkout. Update that existing service for Gateway changes; do not start a competing Node bot. Keep RNG posts in a dedicated channel, Global bridged to Discord and Party restricted to game clients. Local features and personal history remain usable without a community session.
 
 ## Working safely
 

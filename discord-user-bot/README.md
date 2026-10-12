@@ -114,6 +114,13 @@ from every IRC/global channel, retain the bridge credential and persist
 `RNG_FEED_RECEIPTS_PATH` (default `.data/rng-feed-receipts.json`). The feed polls
 a signed, bounded global outbox, posts structured unverified reports, deduplicates
 retries across restarts and removes bot-owned posts when sharing is withdrawn.
+Unacknowledged receipt IDs persist until delivery or cancellation succeeds;
+acknowledged receipts expire after fifteen minutes. At 1,024 receipts, new
+publications stop until capacity is available rather than dropping pending IDs.
+Each poll confirms a rotating batch of at most 32 pending ID/message pairs with
+the account Worker. A committed acknowledgement with a lost response therefore
+resumes normal expiry without reposting. Successful cancellation clears its local
+receipt before acknowledging deletion, so a lost deletion response cannot pin it.
 Posts include observed rarity, the actual plain item name and dungeon floor when
 the accepted new event supplies them. Names are rendered as inert text; metadata
 cannot enable mentions or change anonymous attribution. Older events omit unknown
