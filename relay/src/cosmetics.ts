@@ -1,14 +1,16 @@
 /** Public rendering data is deliberately separate from private ownership and audit tables. */
 import { cosmeticText, type CosmeticText } from "./cosmetic-style";
 export type CosmeticProfile = { uuid: string; name: string | null; scale: number; revision: number; updatedAt: number;
-  nameStyle: CosmeticText | null; scaleX: number; scaleY: number; scaleZ: number };
+  nameStyle: CosmeticText | null; scaleX: number; scaleY: number; scaleZ: number; nametagScale: number; capePreset: string | null; capeAsset: CapeAsset | null };
+export type CapeAsset = { id: string; sha256: string; size: number; width: number; height: number };
+export const CAPE_PRESETS = [{ id: "sky-myce", label: "Sky-Myce" }, { id: "forest", label: "Forest" }, { id: "sunset", label: "Sunset" }, { id: "void", label: "Void" }];
 export type CosmeticsConfig = { DISCORD_APPLICATION_ID?: string; DISCORD_PUBLIC_KEY?: string; DISCORD_INTERACTIONS_ROOM?: string;
   COSMETICS_COMMAND_CHANNEL?: string };
 export const COSMETICS_CHANNEL = "1552057526969835612";
 export type DiscordCommand = { id: string; actor: string; channel: string;
   action: "link" | "set" | "show" | "reset" | "unlink"; options: Record<string, unknown> };
 type CosmeticRow = { uuid: string; display_name: string | null; scale: number; revision: number; updated_at: number;
-  name_json: string | null; scale_x: number | null; scale_y: number | null; scale_z: number | null };
+  name_json: string | null; scale_x: number | null; scale_y: number | null; scale_z: number | null; nametag_scale: number | null; cape_preset: string | null; cape_asset_json: string | null };
 const encoder = new TextEncoder();
 const ephemeral = (content: string) => ({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
 class CosmeticValidation extends Error {}
@@ -28,17 +30,24 @@ export function cosmeticScale(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0.1 || value > 3) message("Scale must be a number between 0.1 and 3.0.");
   return Math.round(value * 1000) / 1000;
 }
+export function nametagScale(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0.5 || value > 2) message("Nametag scale must be between 0.5 and 2.0.");
+  return Math.round(value * 1000) / 1000;
+}
 export async function codeHash(code: string): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(code)))].map(it => it.toString(16).padStart(2, "0")).join("");
 }
 function publicRow(row: CosmeticRow): CosmeticProfile {
   return { uuid: row.uuid, name: row.display_name, scale: row.scale_y ?? row.scale, revision: row.revision, updatedAt: row.updated_at,
     nameStyle: row.name_json ? JSON.parse(row.name_json) : row.display_name ? { text: row.display_name } : null,
-    scaleX: row.scale_x ?? row.scale, scaleY: row.scale_y ?? row.scale, scaleZ: row.scale_z ?? row.scale };
+    scaleX: row.scale_x ?? row.scale, scaleY: row.scale_y ?? row.scale, scaleZ: row.scale_z ?? row.scale,
+    nametagScale: row.nametag_scale ?? 1, capePreset: row.cape_preset ?? null, capeAsset: row.cape_asset_json ? JSON.parse(row.cape_asset_json) : null };
 }
 export function cosmeticPayload(profile: CosmeticProfile, version?: number): object {
-  if (version === 3) return profile;
-  if (version === 2) return { ...profile, scale: Math.max(0.5, Math.min(2, profile.scale)),
+  if (version === 4) return profile;
+  const { nametagScale: _nametag, capePreset: _preset, capeAsset: _asset, ...previous } = profile;
+  if (version === 3) return previous;
+  if (version === 2) return { ...previous, scale: Math.max(0.5, Math.min(2, profile.scale)),
     scaleX: Math.max(0.5, Math.min(2, profile.scaleX)), scaleY: Math.max(0.5, Math.min(2, profile.scaleY)),
     scaleZ: Math.max(0.5, Math.min(2, profile.scaleZ)) };
   const { uuid, name, scale, revision, updatedAt } = profile;
@@ -52,7 +61,7 @@ export class PlayerCosmetics {
     sql.exec(`CREATE TABLE IF NOT EXISTS cosmetics_public (uuid TEXT PRIMARY KEY, display_name TEXT, scale REAL NOT NULL DEFAULT 1,
       revision INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     const columns = new Set(sql.exec<{ name: string }>("PRAGMA table_info(cosmetics_public)").toArray().map(row => row.name));
-    for (const [column, definition] of Object.entries({ name_json: "TEXT", scale_x: "REAL", scale_y: "REAL", scale_z: "REAL" })) {
+    for (const [column, definition] of Object.entries({ name_json: "TEXT", scale_x: "REAL", scale_y: "REAL", scale_z: "REAL", nametag_scale: "REAL", cape_preset: "TEXT", cape_asset_json: "TEXT" })) {
       if (!columns.has(column)) sql.exec(`ALTER TABLE cosmetics_public ADD COLUMN ${column} ${definition}`);
     }
     sql.exec(`CREATE TABLE IF NOT EXISTS cosmetics_links (discord TEXT PRIMARY KEY, uuid TEXT UNIQUE NOT NULL, linked_at INTEGER NOT NULL)`);
@@ -64,7 +73,50 @@ export class PlayerCosmetics {
   }
   get(uuid: string): CosmeticProfile {
     const row = this.storage.sql.exec<CosmeticRow>("SELECT * FROM cosmetics_public WHERE uuid = ?", uuid).toArray()[0];
-    return row ? publicRow(row) : { uuid, name: null, scale: 1, revision: 0, updatedAt: 0, nameStyle: null, scaleX: 1, scaleY: 1, scaleZ: 1 };
+    return row ? publicRow(row) : { uuid, name: null, scale: 1, revision: 0, updatedAt: 0, nameStyle: null, scaleX: 1, scaleY: 1, scaleZ: 1, nametagScale: 1, capePreset: null, capeAsset: null };
+  }
+  import(profile: CosmeticProfile): void {
+    if (!/^[a-f0-9]{32}$/.test(profile.uuid) || !Number.isSafeInteger(profile.revision) || profile.revision < 0 || this.get(profile.uuid).revision > 0) return;
+    this.storage.sql.exec("INSERT OR IGNORE INTO cosmetics_public(uuid,display_name,scale,revision,updated_at,name_json,scale_x,scale_y,scale_z,nametag_scale,cape_preset,cape_asset_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL)",
+      profile.uuid, profile.name, profile.scale, profile.revision, profile.updatedAt, profile.nameStyle ? JSON.stringify(profile.nameStyle) : null, profile.scaleX, profile.scaleY, profile.scaleZ, profile.nametagScale ?? 1, profile.capePreset ?? null);
+  }
+  replicate(profile: CosmeticProfile): void {
+    if (!/^[a-f0-9]{32}$/.test(profile.uuid) || !Number.isSafeInteger(profile.revision) || profile.revision < this.get(profile.uuid).revision) return;
+    this.storage.sql.exec(`INSERT INTO cosmetics_public(uuid,display_name,scale,revision,updated_at,name_json,scale_x,scale_y,scale_z,nametag_scale,cape_preset,cape_asset_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(uuid) DO UPDATE SET display_name=excluded.display_name,scale=excluded.scale,revision=excluded.revision,updated_at=excluded.updated_at,name_json=excluded.name_json,
+      scale_x=excluded.scale_x,scale_y=excluded.scale_y,scale_z=excluded.scale_z,nametag_scale=excluded.nametag_scale,cape_preset=excluded.cape_preset,cape_asset_json=excluded.cape_asset_json`,
+      profile.uuid, profile.name, profile.scale, profile.revision, profile.updatedAt, profile.nameStyle ? JSON.stringify(profile.nameStyle) : null,
+      profile.scaleX, profile.scaleY, profile.scaleZ, profile.nametagScale, profile.capePreset, profile.capeAsset ? JSON.stringify(profile.capeAsset) : null);
+  }
+  save(uuid: string, revision: number, raw: unknown, asset: CapeAsset | null, actor: string): { ok: boolean; error?: string; profile: CosmeticProfile } {
+    return this.storage.transactionSync(() => {
+      const current = this.get(uuid);
+      if (!Number.isSafeInteger(revision) || revision < 0) return { ok: false, error: "invalid_revision", profile: current };
+      if (revision !== current.revision) return { ok: false, error: "revision_conflict", profile: current };
+      try {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) message("Invalid profile.");
+        const value = raw as Record<string, unknown>, keys = ["name", "scaleX", "scaleY", "scaleZ", "nametagScale", "capePreset", "capeAsset"];
+        if (keys.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !keys.includes(key))) message("Invalid profile fields.");
+        let text = { plain: null as string | null, component: null as CosmeticText | null };
+        if (value.name !== null) { try { text = cosmeticText(typeof value.name === "string" ? value.name : JSON.stringify(value.name)); } catch { message("Invalid cosmetic name."); } }
+        const x = cosmeticScale(value.scaleX), y = cosmeticScale(value.scaleY), z = cosmeticScale(value.scaleZ), tag = nametagScale(value.nametagScale);
+        if (value.capePreset !== null && value.capePreset !== "none" && !CAPE_PRESETS.some(preset => preset.id === value.capePreset)) message("Invalid cape preset.");
+        if (value.capeAsset !== null && (!asset || value.capeAsset !== asset.id) || value.capeAsset !== null && value.capePreset !== null) message("Invalid cape selection.");
+        const now = Date.now();
+        this.storage.sql.exec(`INSERT INTO cosmetics_public(uuid,display_name,scale,revision,updated_at,name_json,scale_x,scale_y,scale_z,nametag_scale,cape_preset,cape_asset_json) VALUES(?,?,?,1,?,?,?,?,?,?,?,?)
+          ON CONFLICT(uuid) DO UPDATE SET display_name=excluded.display_name,scale=excluded.scale,revision=cosmetics_public.revision+1,updated_at=excluded.updated_at,name_json=excluded.name_json,
+          scale_x=excluded.scale_x,scale_y=excluded.scale_y,scale_z=excluded.scale_z,nametag_scale=excluded.nametag_scale,cape_preset=excluded.cape_preset,cape_asset_json=excluded.cape_asset_json`,
+          uuid, text.plain, y, now, text.component ? JSON.stringify(text.component) : null, x, y, z, tag, value.capePreset, asset ? JSON.stringify(asset) : null);
+        const profile = this.get(uuid); this.audit(uuid, actor, "studio_save", profile.revision, now); return { ok: true, profile };
+      } catch (error) { if (error instanceof CosmeticValidation) return { ok: false, error: "invalid_profile", profile: current }; throw error; }
+    });
+  }
+  clearAsset(id: string): CosmeticProfile[] {
+    return this.storage.transactionSync(() => {
+      const rows = this.storage.sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_public WHERE json_extract(cape_asset_json,'$.id')=?", id).toArray();
+      this.storage.sql.exec("UPDATE cosmetics_public SET cape_asset_json=NULL,revision=revision+1,updated_at=? WHERE json_extract(cape_asset_json,'$.id')=?", Date.now(), id);
+      return rows.map(row => this.get(row.uuid));
+    });
   }
   issue(uuid: string, hash: string, now: number): { error?: string; expiresAt?: number } {
     return this.storage.transactionSync(() => {
@@ -133,6 +185,7 @@ export class PlayerCosmetics {
           sql.exec("DELETE FROM cosmetics_links WHERE discord = ?", command.actor);
           sql.exec("UPDATE cosmetics_challenges SET hash = 'revoked:' || hash WHERE uuid = ?", target);
         }
+        if (reset) sql.exec("UPDATE cosmetics_public SET nametag_scale=1,cape_preset=NULL,cape_asset_json=NULL WHERE uuid=?", target);
         const changed = this.get(target);
         this.audit(target, command.actor, command.action, changed.revision, now);
         return { response: ephemeral(command.action === "unlink" ? "Account unlinked and cosmetics reset. Obtain a fresh in-game code to link again." :

@@ -7,19 +7,20 @@ async function load(entry) {
     bundle: true, format: 'esm', platform: 'browser', write: false });
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 }
-const { accountCommand, handleAccountInteraction } = await load('discord-accounts.ts');
-const { createLoaderDownload, validLoaderDownload, handleLoaderDownload } = await load('discord-download.ts');
+const { accountCommand, handleAccountInteraction, handleAccountAutocomplete } = await load('discord-accounts.ts');
 const { verifiedInteraction } = await load('discord.ts');
 const { deliverAccountAlert } = await load('discord-notifications.ts');
 const actor = { id: '11111111111111111', guildId: '22222222222222222', roles: [], interactionId: '33333333333333333' };
-const config = { DISCORD_GUILD_ID: actor.guildId, DEVELOPER_ROLE_ID: '44444444444444444', DEVELOPER_USER_IDS: actor.id };
-const privateArtifacts = { head: async key => key.endsWith('.json') ? null : { size: 3, customMetadata: { version: '1.0.10' } },
-  get: async () => ({ size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }) };
-const command = (name = 'account', sub = 'status', options = []) => ({ type: 2, id: actor.interactionId, guild_id: actor.guildId,
+const config = { DISCORD_GUILD_ID: actor.guildId };
+const target = '66666666666666666', targetOption = { type: 6, name: 'user', value: target };
+const mcUuid = 'a'.repeat(32), device = 'd'.repeat(64);
+const identity = { accountId: 'private-account-reference', discordId: target, username: 'example', displayName: 'Example member', blacklisted: false,
+  uuids: [{ uuid: mcUuid, name: 'ExamplePlayer', firstSeen: 1800000000000, lastSeen: 1800001000000 }] };
+const command = (name = 'status', sub = null, options = []) => ({ type: 2, id: actor.interactionId, guild_id: actor.guildId,
   application_id: '55555555555555555', token: 'interaction-token-never-log-this', member: { user: { id: actor.id }, roles: actor.roles },
   data: { name, options: sub ? [{ type: 1, name: sub, options }] : options } });
 
-test('each bot accepts only its own Discord application signature and fresh signed body', async () => {
+test('each bot accepts only its own Discord signature, exact body and fresh timestamp', async () => {
   const keys = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
   const hex = bytes => Buffer.from(bytes).toString('hex');
   const publicKey = hex(await crypto.subtle.exportKey('raw', keys.publicKey));
@@ -34,407 +35,247 @@ test('each bot accepts only its own Discord application signature and fresh sign
   assert.equal(await verifiedInteraction(request(body, '1000000000'), env), null);
 });
 
-test('user commands cannot choose a different owner or access developer functions', () => {
+test('self-service connection belongs to the signed caller, has no approval/key workflow and accepts only a short-lived fallback code', () => {
+  const code = { name: 'code', type: 3, value: 'ABCD-EFGH-JKLM' };
+  assert.equal(accountCommand(command('connect', null, [code]), 'user').target, actor.id);
+  assert.equal(accountCommand(command('account', 'link', [code]), 'user').action, 'connect');
   assert.equal(accountCommand(command(), 'user').target, actor.id);
-  assert.equal(accountCommand(command('account', 'status', [{ type: 6, name: 'user', value: '66666666666666666' }]), 'user'), null);
-  assert.equal(accountCommand(command('license', 'revoke'), 'user'), null);
-  assert.equal(accountCommand(command('account', 'reset', [{ type: 5, name: 'confirm', value: false }]), 'user'), null);
-  assert.equal(accountCommand(command('account', 'reset', [{ type: 5, name: 'confirm', value: true }]), 'user').target, actor.id);
-  assert.equal(accountCommand(command('account', 'unlink', [{ type: 3, name: 'uuid', value: 'a'.repeat(32) }, { type: 5, name: 'confirm', value: true }]), 'user').action, 'unlink');
-  assert.equal(accountCommand({ ...command(), guild_id: undefined }, 'user'), null);
-  assert.equal(accountCommand(command('hwid', 'reset', [{ type: 5, name: 'confirm', value: true }]), 'user').target, actor.id);
-  assert.equal(accountCommand(command('hwid', 'reset', [{ type: 6, name: 'user', value: '66666666666666666' }, { type: 5, name: 'confirm', value: true }]), 'user'), null);
-  assert.equal(accountCommand(command('hwid', 'reset', [{ type: 5, name: 'confirm', value: true }, { type: 3, name: 'reason', value: 'administrator_reset' }]), 'user'), null);
+  assert.equal(accountCommand(command('connect', null, [code]), 'backend'), null);
+  for (const options of [[], [code, targetOption], [{ ...code, value: 'stolen-or-malformed-code' }], [{ ...code, type: 6 }], [code, code]])
+    assert.equal(accountCommand(command('connect', null, options), 'user'), null);
+  assert.equal(accountCommand(command('account', 'unlink', [{ name: 'uuid', type: 3, value: mcUuid }]), 'user').options.uuid, mcUuid);
+  assert.equal(accountCommand(command('account', 'unlink', [{ name: 'uuid', type: 3, value: mcUuid }, targetOption]), 'user'), null);
+  for (const data of [command('authorise', null, [targetOption]), command('license', 'whitelist', [targetOption]), command('license', 'key', [targetOption]),
+    command('hwid', 'reset'), command('account', 'approve', [code]), command('account', 'reset'), command('key'), command('loader')])
+    for (const kind of ['user', 'backend']) assert.equal(accountCommand(data, kind), null);
 });
 
-test('administrator hardware commands propagate an optional security reason', () => {
-  const user = { type: 6, name: 'user', value: '66666666666666666' };
-  const reason = { type: 3, name: 'reason', value: 'Confirmed credential compromise' };
-  for (const sub of ['reset', 'revoke', 'bind']) {
-    const device = sub === 'bind' ? [{ type: 3, name: 'device-hash', value: 'd'.repeat(64) }] : [];
-    const parsed = accountCommand(command('hwid', sub, [user, ...device, reason]), 'backend');
-    assert.equal(parsed.action, `hwid_${sub}`); assert.equal(parsed.target, user.value);
-    assert.deepEqual(parsed.options, { ...sub === 'bind' ? { deviceHash: device[0].value } : {}, reason: reason.value });
-    assert.ok(accountCommand(command('hwid', sub, [user, ...device]), 'backend'), 'The security reason remains optional');
+test('blacklist selections are exact identity-only admin operations and cannot target hardware', () => {
+  const reason = { name: 'reason', type: 3, value: 'Reviewed abusive online activity' };
+  const uuid = { name: 'uuid', type: 3, value: mcUuid };
+  for (const sub of ['add', 'remove']) {
+    const discord = accountCommand(command('blacklist', sub, [reason, targetOption]), 'backend');
+    assert.equal(discord.action, `blacklist_${sub}`); assert.equal(discord.target, target);
+    assert.deepEqual(discord.options, { reason: reason.value, kind: 'discord', identity: target });
+    const minecraft = accountCommand(command('blacklist', sub, [reason, uuid]), 'backend');
+    assert.deepEqual(minecraft.options, { reason: reason.value, kind: 'minecraft', identity: mcUuid });
+    for (const options of [[reason], [reason, targetOption, uuid], [targetOption], [reason, { ...uuid, value: 'bad' }],
+      [reason, { name: 'hwid', type: 3, value: device }], [reason, { name: 'device-hash', type: 3, value: device }],
+      [reason, targetOption, { name: 'confirm', type: 5, value: true }], [{ ...reason, value: 'x'.repeat(501) }, targetOption]])
+      assert.equal(accountCommand(command('blacklist', sub, options), 'backend'), null);
+    assert.equal(accountCommand(command('blacklist', sub, [reason, targetOption]), 'user'), null);
   }
+  assert.equal(accountCommand(command('blacklist', 'info', [uuid]), 'backend').options.kind, 'minecraft');
+  assert.equal(accountCommand(command('blacklist', 'list', [{ name: 'page', type: 4, value: 2 }]), 'backend').options.page, 2);
+  assert.equal(accountCommand(command('blacklist', 'info', []), 'backend'), null);
 });
 
-test('authorise preserves caller and target identity while the removed authenticate alias is rejected', async () => {
-  const target = '66666666666666666';
-  const data = command('authorise', null, [{ type: 6, name: 'user', value: target }, { type: 5, name: 'reissue', value: true }]);
-  const parsed = accountCommand(data, 'backend');
-  assert.equal(parsed.action, 'authorise'); assert.equal(parsed.actor.id, actor.id); assert.equal(parsed.target, target);
-  assert.deepEqual(parsed.options, { reissue: true });
-  assert.equal(accountCommand(data, 'user'), null);
-  const removed = command('authenticate', null, [{ type: 6, name: 'user', value: target }]);
-  for (const kind of ['backend', 'user']) assert.equal(accountCommand(removed, kind), null);
-  const response = handleAccountInteraction(removed, config, { waitUntil() { throw Error('Removed commands must not execute'); } }, 'backend');
-  assert.deepEqual(await response.json(), { type: 4, data: { content: 'Invalid Sky-Myce command. Confirm the requested action and try again.', flags: 64, allowed_mentions: { parse: [] } } });
-});
-
-test('persisted admin check happens after private defer and before any target lookup or write; roles and allowlists cannot bypass it', async () => {
-  const originalFetch=globalThis.fetch;
-  try {
-    for (const member of [{user:{id:actor.id},roles:[]}, {user:{id:actor.id},roles:[config.DEVELOPER_ROLE_ID]},
-      {user:{id:actor.id},roles:[],permissions:'8'}]) {
-      const pending=[],calls=[]; let writes=0,checks=0;
-      globalThis.fetch=async (url,options)=>{calls.push({url,options});assert.equal(options.method,'PATCH');return Response.json({});};
-      const env={...config,DISCORD_BACKEND_BOT_TOKEN:'test-only',ACCOUNT_STORE:{getByName:()=>({
-        isAdmin:async caller=>{checks++;assert.equal(caller.id,actor.id);return false;},
-        developerCommand:async ()=>{writes++;throw Error('Nonadmin must never execute');}})}};
-      const response=handleAccountInteraction({...command('authorise',null,[{name:'user',type:6,value:'66666666666666666'}]),member},env,
-        {waitUntil:p=>pending.push(p)},'backend');
-      assert.deepEqual(await response.json(),{type:5,data:{flags:64}});await Promise.all(pending);
-      assert.equal(checks,1);assert.equal(writes,0);assert.equal(calls.length,1);
-      assert.match(JSON.parse(calls[0].options.body).content,/Only Sky-Myce admin accounts/);
-      const wrongGuild=handleAccountInteraction({...command('audit',null,[{name:'user',type:6,value:actor.id}]),guild_id:'99999999999999999'},env,
-        {waitUntil(){throw Error('Wrong guild must not access the backend');}},'backend');
-      assert.match((await wrongGuild.json()).data.content,/permission/);
-    }
-  } finally {globalThis.fetch=originalFetch;}
-});
-
-test('admin add binds authorization to caller, validates a human target and stays private', async () => {
-  const target='66666666666666666', data=command('admin','add',[{type:6,name:'user',value:target}]);
-  assert.equal(accountCommand(data,'backend').action,'admin_add');
-  assert.equal(accountCommand(data,'backend').actor.id,actor.id);
-  assert.equal(accountCommand(data,'backend').target,target);
-  assert.equal(accountCommand(data,'user'),null);
-  assert.equal(accountCommand(command('admin','add',[{type:3,name:'user',value:target}]),'backend'),null);
-  const originalFetch=globalThis.fetch;
-  try {
-    for(const bot of [true,false]) {
-      const pending=[],calls=[];let writes=0;
-      globalThis.fetch=async(url,options)=>{calls.push({url,options});return Response.json(url.endsWith('/users/'+target)?{id:target,bot}:{});};
-      const execute=async(caller,action,id)=>{writes++;assert.equal(caller.id,actor.id);assert.equal(action,'admin_add');assert.equal(id,target);return{ok:true,adminAdded:true,action,target:id,options:{}};};
-      const env={...config,ROOMS:'friends',DISCORD_BACKEND_BOT_TOKEN:'test-only',DISCORD_AUDIT_CHANNEL_ID:'99999999999999999',
-        ACCOUNT_STORE:{getByName:()=>({isAdmin:async caller=>caller.id===actor.id,developerCommand:execute,
-          prepareManagement:async()=>({ok:true,token:'t'.repeat(43),action:'admin_add',target,options:{},expiresAt:Date.now()+120000}),
-          confirmManagement:async caller=>execute(caller,'admin_add',target)})}};
-      assert.deepEqual(await handleAccountInteraction(data,env,{waitUntil:p=>pending.push(p)},'backend').json(),{type:5,data:{flags:64}});
-      await Promise.all(pending);assert.equal(writes,0,'Administrator grants wait for confirmation');
-      if(!bot){pending.length=0;handleAccountInteraction({...data,type:3,data:{component_type:2,custom_id:`sky:confirm:${'t'.repeat(43)}`}},env,{waitUntil:p=>pending.push(p)},'backend');await Promise.all(pending);assert.equal(writes,1);}
-      const edit=JSON.parse(calls.findLast(call=>call.options.method==='PATCH').options.body);
-      assert.match(edit.content,bot?/human Discord account/:/now a Sky-Myce admin/);assert.deepEqual(edit.allowed_mentions,{parse:[]});
-      assert.ok(calls.every(call=>!call.url.includes('/users/@me/channels')));
-    }
-  } finally {globalThis.fetch=originalFetch;}
-});
-
-test('missing backend capability fails closed without acknowledging fake success', async () => {
-  const response = handleAccountInteraction(command(), config, { waitUntil() { throw new Error('No backend work allowed'); } }, 'user');
-  assert.match((await response.json()).data.content, /currently unavailable/);
-});
-
-test('status remains pending until activation; invalid authorise targets cannot issue keys', async () => {
-  const originalFetch = globalThis.fetch, pending = [], edits = [];
-  let writes = 0;
-  globalThis.fetch = async (url, options) => {
-    if (options.method === 'PATCH') edits.push(JSON.parse(options.body).content);
-    if (url.endsWith('/users/66666666666666666')) return Response.json({ id: '66666666666666666', bot: true });
-    return Response.json({});
+async function responseFor(data, result = { ok: true, identity }, kind = 'user', settings = {}) {
+  const previous = globalThis.fetch, calls = [], pending = [], operations = [], invalidated = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return Response.json({}); };
+  const store = {
+    isAdmin: async caller => { operations.push(['isAdmin', caller.id]); return settings.admin !== false; },
+    cacheDiscordIdentity: async () => ({ ok: true }),
+    communityUserCommand: async (caller, action, options) => { operations.push(['user', caller.id, action, options]); return result; },
+    discordLeaderboard: async (caller, options) => { operations.push(['leaderboard', caller, options]); return result; },
+    communityRead: async (caller, action, selected, options) => { operations.push(['read', caller.id, action, selected, options]); return result; },
+    communityManage: async () => { throw Error('Native managed mutations must not bypass confirmation'); },
+    prepareCommunityManagement: async (caller, selectedKind, action, selected, options) => {
+      operations.push(['prepare', caller.id, selectedKind, action, selected, options]);
+      return { ...result, token: 't'.repeat(43), expiresAt: Date.now() + 120000, action, target: selected, options };
+    },
+    confirmCommunityManagement: async (caller, selectedKind, token, confirm) => {
+      operations.push(['confirm', caller.id, selectedKind, token, confirm]);
+      if (settings.confirmError) return { ok: false, error: settings.confirmError };
+      const prepared = operations.find(operation => operation[0] === 'prepare');
+      return confirm ? { ...result, action: prepared[3], target: prepared[4], options: prepared[5] } : { ok: true, action: 'cancelled' };
+    },
   };
-  const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only',
-    PRIVATE_ARTIFACTS: privateArtifacts,
-    ACCOUNT_STORE: { getByName: () => ({
-      isAdmin: async () => true,
-      buildAllowed: async () => ({ ok: true }),
-      userCommand: async () => ({ ok: true, account: { status: 'active', activated: false, licenseStatus: 'active',
-        licenseExpiresAt: null, deviceRegistered: false, hwidResetAt: null, uuids: [] } }),
-      developerCommand: async () => { writes++; throw new Error('Must not issue activation'); },
-    }) } };
+  const env = { ...config, ROOMS: 'testing', ACCOUNT_STORE: { getByName: () => store },
+    RELAY_ROOMS: { getByName: () => ({ invalidateAccount: async id => invalidated.push(id) }) } };
   try {
-    const ctx = { waitUntil: promise => pending.push(promise) };
-    handleAccountInteraction(command(), env, ctx, 'user');
-    handleAccountInteraction(command('authorise', null, [{ type: 6, name: 'user', value: '66666666666666666' }]), env, ctx, 'backend');
-    await Promise.all(pending);
-    assert.ok(edits.some(value => /pending activation/i.test(value)));
-    assert.ok(edits.some(value => value.includes('human Discord account')));
-    assert.equal(writes, 0);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('blocked activation DM reports failure privately and never posts the activation key', async () => {
-  const calls = [], pending = [], originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options });
-    if (url.endsWith('/users/66666666666666666')) return Response.json({ id: '66666666666666666' });
-    if (url.endsWith('/users/@me/channels')) return Response.json({}, { status: 403 });
-    return Response.json({});
-  };
-  try {
-    const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only',
-      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async () => ({ ok: true, activationKey: 'never-public-test-key' }) }) },
-      PRIVATE_ARTIFACTS: privateArtifacts };
-    const response = handleAccountInteraction(command('authorise', null, [{ type: 6, name: 'user', value: '66666666666666666' }]), env,
-      { waitUntil: promise => pending.push(promise) }, 'backend');
-    assert.equal((await response.json()).type, 5); await Promise.all(pending);
-    assert.ok(calls.some(call => call.options.method === 'PATCH' && call.options.body.includes('private delivery failed')));
-    assert.ok(calls.every(call => !String(call.options.body).includes('never-public-test-key')));
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('private loader ticket expires, rejects tampering, and keeps credentials outside the request URL', async () => {
-  const env = { SKYMYCE_PUBLIC_URL: 'https://worker.example', DISCORD_LOADER_DOWNLOAD_SECRET: 's'.repeat(32) };
-  const link = new URL(await createLoaderDownload(env, actor.id, 1_800_000_000_000));
-  assert.equal(link.search, '');
-  const token = link.hash.slice(1);
-  assert.ok(await validLoaderDownload(env, token, 1_800_000_000_001));
-  assert.equal(await validLoaderDownload(env, token, 1_800_000_900_000), false);
-  assert.equal(await validLoaderDownload(env, token + 'x', 1_800_000_000_001), false);
-  assert.equal(await validLoaderDownload({ ...env, DISCORD_LOADER_DOWNLOAD_SECRET: 'x'.repeat(32) }, token, 1_800_000_000_001), false);
-  const get = await handleLoaderDownload(new Request('https://worker.example/discord/loader'), env);
-  assert.equal(get.headers.get('Cache-Control'), 'no-store');
-  assert.match(await get.text(), /history.replaceState/);
-  const post = await handleLoaderDownload(new Request('https://worker.example/discord/loader', { method: 'POST' }), env);
-  assert.equal(post.status, 403);
-});
-
-test('authorise defers promptly, privately delivers code and loader instructions, and omits the code from replies and audit', async () => {
-  const calls = [], pending = [], key = 'one-time-key-only-in-authorised-dm';
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    assert.equal(options.redirect, 'manual'); // Workers supports manual/follow; redirects must never carry credentials elsewhere.
-    calls.push({ url, options });
-    if (url.endsWith('/users/66666666666666666')) return Response.json({ id: '66666666666666666', bot: false });
-    if (url.endsWith('/users/@me/channels')) return Response.json({ id: '77777777777777777' });
-    return Response.json({ id: '88888888888888888' });
-  };
-  try {
-    const data = command('authorise', null, [{ type: 3, name: 'user', value: '66666666666666666' }]);
-    const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'backend-token', DISCORD_AUDIT_CHANNEL_ID: '99999999999999999',
-      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async (signedActor, action, target) => {
-        assert.equal(signedActor.id, actor.id); assert.equal(action, 'authorise'); assert.equal(target, '66666666666666666');
-        return { ok: true, activationKey: key };
-      } }) },
-      PRIVATE_ARTIFACTS: privateArtifacts };
-    const response = handleAccountInteraction(data, env, { waitUntil: promise => pending.push(promise) }, 'backend');
-    assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } });
-    await Promise.all(pending);
-    const dm = calls.find(call => call.options.body instanceof FormData);
-    assert.ok(dm); assert.match(dm.options.body.get('payload_json'), new RegExp(key));
-    assert.match(dm.options.body.get('payload_json'), /pending activation/);
-    assert.match(dm.options.body.get('payload_json'), /Minecraft 26.1.2/);
-    assert.match(dm.options.body.get('payload_json'), /Java 25/);
-    assert.match(dm.options.body.get('payload_json'), /Enter this code.*press Confirm/);
-    assert.match(dm.options.body.get('payload_json'), /starts Minecraft automatically/);
-    assert.match(dm.options.body.get('payload_json'), /Updates are checked before startup/);
-    assert.match(dm.options.body.get('payload_json'), /Get key.*Help/);
-    assert.doesNotMatch(dm.options.body.get('payload_json'), /account approve|request Discord approval/);
-    assert.match(dm.url, /77777777777777777/);
-    assert.ok(calls.filter(call => !(call.options.body instanceof FormData)).every(call => !String(call.options.body).includes(key)));
-    assert.ok(calls.some(call => call.options.method === 'PATCH' && call.options.body.includes('delivered by DM')));
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('explicit key-only delivery needs no R2 and clearly leaves activation pending', async () => {
-  const originalFetch = globalThis.fetch, calls = [], pending = [], key = 'key-only-private-test-value';
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options });
-    if (url.endsWith('/users/66666666666666666')) return Response.json({ id: '66666666666666666', bot: false });
-    if (url.endsWith('/users/@me/channels')) return Response.json({ id: '77777777777777777' });
-    return Response.json({});
-  };
-  try {
-    const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only', DISCORD_LOADER_DELIVERY_ENABLED: 'false',
-      DISCORD_LICENSE_CHANNEL_ID: '88888888888888888',
-      ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => true, developerCommand: async () => ({ ok: true, activationKey: key }) }) } };
-    const response = handleAccountInteraction(command('authorise', null, [{ type: 6, name: 'user', value: '66666666666666666' }]), env,
-      { waitUntil: promise => pending.push(promise) }, 'backend');
-    assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } });
-    await Promise.all(pending);
-    const dm = calls.find(call => call.url.endsWith('/channels/77777777777777777/messages'));
-    const payload = JSON.parse(dm.options.body);
-    assert.ok(payload.content.includes(key));
-    assert.match(payload.content, /pending activation/);
-    assert.equal(payload.enforce_nonce, true);
-    assert.deepEqual(payload.allowed_mentions, { parse: [] });
-    assert.ok(calls.filter(call => call !== dm).every(call => !String(call.options.body).includes(key)));
-    const edit = JSON.parse(calls.find(call => call.options.method === 'PATCH').options.body);
-    assert.match(edit.content, /pending activation/);
-    assert.match(edit.content, /Loader delivery is currently unavailable/);
-    assert.ok(!edit.content.includes('Loader were delivered'));
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-async function responseFor(data, result, kind = 'backend', dmBlocked = false) {
-  const originalFetch = globalThis.fetch, calls = [], pending = [];
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options });
-    if (url.endsWith('/users/66666666666666666')) return Response.json({ id: '66666666666666666', bot: false });
-    if (url.endsWith('/users/@me/channels')) return Response.json({ id: '77777777777777777' });
-    if (dmBlocked && url.endsWith('/channels/77777777777777777/messages')) return Response.json({}, { status: 403 });
-    return Response.json({});
-  };
-  try {
-    const parsed = accountCommand(data, kind);
-    const store = { isAdmin: async () => true, buildAllowed: async () => ({ ok: true }), developerCommand: async () => result, userCommand: async () => result,
-      managementRead: async () => ({ ...result, ...result.audit ? { events: result.audit.slice(0, 8).map(event => ({ ...event, severity: event.severity ?? 'information', metadata: JSON.parse(event.metadata ?? '{}') })) } : {} }),
-      prepareManagement: async () => ({ ...result, token: 't'.repeat(43), action: parsed.action, target: parsed.target, options: parsed.options }),
-      confirmManagement: async () => ({ ...result, action: parsed.action, target: parsed.target, options: parsed.options }) };
-    const env = { ...config, ROOMS: 'testing', DISCORD_BACKEND_BOT_TOKEN: 'test-only', USER_BOT_TOKEN: 'test-only-user', DISCORD_SECURITY_CHANNEL_ID: '88888888888888888',
-      ACCOUNT_STORE: { getByName: () => store }, RELAY_ROOMS: { getByName: () => ({ invalidateAccount: async () => {} }) },
-      PRIVATE_ARTIFACTS: privateArtifacts };
     const response = handleAccountInteraction(data, env, { waitUntil: promise => pending.push(promise) }, kind);
-    assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } });
-    await Promise.all(pending);
-    const initial = JSON.parse(calls.findLast(call => call.options.method === 'PATCH').options.body);
+    assert.deepEqual(await response.json(), { type: 5, data: { flags: 64 } }); await Promise.all(pending);
+    const initial = JSON.parse(calls.at(-1).options.body);
     const confirm = initial.components?.flatMap(row => row.components).find(button => button.custom_id?.startsWith('sky:confirm:'));
-    if (confirm) {
-      pending.length = 0;
-      handleAccountInteraction({ ...data, type: 3, data: { component_type: 2, custom_id: confirm.custom_id } }, env, { waitUntil: promise => pending.push(promise) }, kind);
-      await Promise.all(pending);
+    if (confirm && settings.confirm !== false) {
+      settings.review?.({ initial, operations, calls }); pending.length = 0;
+      handleAccountInteraction({ ...data, id: '77777777777777777', type: 3,
+        data: { component_type: 2, custom_id: settings.cancel ? confirm.custom_id.replace('sky:confirm:', 'sky:cancel:') : confirm.custom_id } },
+      env, { waitUntil: promise => pending.push(promise) }, kind); await Promise.all(pending);
     }
-    const reply = JSON.parse(calls.findLast(call => call.options.method === 'PATCH').options.body);
+    const reply = JSON.parse(calls.at(-1).options.body);
     assert.deepEqual(reply.allowed_mentions, { parse: [] });
-    assert.ok(reply.content.length <= 1900);
-    return { content: reply.content, text: [reply.content, ...(reply.embeds ?? []).flatMap(embed => [embed.title, embed.description, ...(embed.fields ?? []).map(field => `${field.name}\n${field.value}`)])].join('\n'), data: reply, calls };
-  } finally { globalThis.fetch = originalFetch; }
+    assert.ok((reply.content ?? '').length <= 1900);
+    assert.ok(calls.every(call => call.options.method === 'PATCH'), 'Bot tokens, DMs and release artifacts are unnecessary for connection');
+    return { reply, initial, operations, calls, invalidated, text: JSON.stringify(reply) };
+  } finally { globalThis.fetch = previous; }
 }
-const accountSummary = { accountId: 'account-reference', discordId: '66666666666666666', status: 'active', isAdmin: false,
-  activated: true, licenseStatus: 'active', licenseExpiresAt: null, deviceRegistered: true, hwidResetAt: null, uuids: [] };
-const targetOption = { type: 6, name: 'user', value: '66666666666666666' };
 
-test('admin reset and self-service transfer preparation DM a key only to the target and report blocked delivery privately', async () => {
-  const key = 'reset-key-private-test', expiresAt = Date.now() + 86400000;
-  for (const kind of ['backend', 'user']) {
-    const data = command('hwid', 'reset', kind === 'backend' ? [targetOption] : [{ type: 5, name: 'confirm', value: true }]);
-    const result = { ok: true, account: accountSummary, activationKey: key, expiresAt };
-    for (const blocked of [false, true]) {
-      const { content, calls } = await responseFor(data, result, kind, blocked);
-      const createDm = calls.find(call => call.url.endsWith('/users/@me/channels'));
-      assert.equal(JSON.parse(createDm.options.body).recipient_id, kind === 'backend' ? targetOption.value : actor.id);
-      const dms = calls.filter(call => call.url.endsWith('/channels/77777777777777777/messages'));
-      assert.equal(dms.length, 1);
-      const dm = JSON.parse(dms[0].options.body);
-      assert.ok(dm.content.includes(key)); assert.match(dm.content, /Earlier unused codes are invalid/);
-      assert.equal(dm.nonce, actor.interactionId); assert.equal(dm.enforce_nonce, true);
-      assert.deepEqual(dm.allowed_mentions, { parse: [] });
-      assert.equal(dms[0].options.headers.Authorization, kind === 'backend' ? 'Bot test-only' : 'Bot test-only-user');
-      assert.ok(calls.filter(call => !dms.includes(call)).every(call => !String(call.options.body).includes(key)));
-      assert.ok(!content.includes(key));
-      if (blocked) {
-        assert.match(content, kind === 'backend' ? /reset completed.*DM delivery failed.*reissue:true/s : /code prepared.*DM delivery failed.*registration and transfer allowance are unchanged.*repeat.*hwid reset/s);
-        if (kind === 'backend') assert.match(content, /Do not reset again/);
-      } else {
-        assert.match(content, /fresh activation code was sent/i);
-        if (kind === 'user') {
-          assert.match(content, /Hardware transfer prepared.*current device remains authorized.*only an actual device change uses the seven-day allowance/s);
-          assert.match(dm.content, /current device stays authorized.*Preparing this code does not use your transfer allowance/s);
-          assert.doesNotMatch(content, /Device reset\./);
-        }
-      }
-    }
-    const denied = await responseFor(data, { ok: false, error: kind === 'user' ? 'device_reset_cooldown' : 'admin_required' }, kind);
-    assert.ok(!denied.calls.some(call => call.url.endsWith('/users/@me/channels')));
-    if (kind === 'user') assert.match(denied.content, /actual hardware transfer.*every seven days.*registered device continues working normally/s);
+test('connection and status work without a bot token, license, activation key, loader artifact or hardware registration', async () => {
+  const result = { ok: true, identity: { ...identity, discordId: actor.id }, devices: [{ identifier: device }], activationKey: 'never-show-this-secret' };
+  for (const data of [command(), command('connect', null, [{ name: 'code', type: 3, value: 'ABCD-EFGH-JKLM' }])]) {
+    const response = await responseFor(data, result);
+    assert.match(response.text, /Discord connected/); assert.match(response.text, /ExamplePlayer/);
+    assert.ok(!response.text.includes(device)); assert.ok(!response.text.includes(result.activationKey));
+    assert.ok(!response.text.includes(identity.accountId)); assert.ok(!response.text.includes('hwidResetAt'));
+    assert.deepEqual(response.operations.filter(operation => operation[0] === 'user').map(operation => operation[1]), [actor.id]);
+  }
+  const help = await responseFor(command('help'));
+  assert.match(help.text, /No whitelist, activation key, custom Loader or hardware reset is needed/);
+  assert.match(help.text, /sharing starts enabled.*opt out.*chat and cosmetics/s);
+});
+
+test('admin checks occur before private identity lookups or device disclosure and roles cannot bypass them', async () => {
+  for (const data of [command('account', 'devices', [targetOption]), command('blacklist', 'add', [targetOption, { name: 'reason', type: 3, value: 'review' }])]) {
+    data.member.roles = ['88888888888888888']; data.member.permissions = '8';
+    const response = await responseFor(data, { ok: true, identity, devices: [{ identifier: device }] }, 'backend', { admin: false });
+    assert.deepEqual(response.operations.map(operation => operation[0]), ['isAdmin']);
+    assert.match(response.text, /Only persisted Sky-Myce administrators/); assert.ok(!response.text.includes(device));
   }
 });
 
-test('account summaries distinguish activation and expiry while a registered device needs no reset countdown', async () => {
-  const now = Date.now(), expiresAt = now + 86_400_000, nextReset = now + 7 * 86_400_000;
-  const pending = await responseFor(command(), { ok: true, account: { ...accountSummary, activated: false } }, 'user');
-  assert.match(pending.content, /Status: Pending activation\n/);
-  assert.match(pending.content, /License: Active/);
-  assert.match(pending.content, /DM code.*Confirm and start.*Minecraft opens automatically/);
-  const active = await responseFor(command(), { ok: true, account: { ...accountSummary, licenseExpiresAt: expiresAt, hwidResetAt: now, hwidBoundAt: now, nextHwidChangeAllowedAt: nextReset } }, 'user');
-  assert.match(active.content, /Status: Activated/);
-  assert.ok(active.content.includes(`<t:${Math.floor(expiresAt / 1000)}:R> (<t:${Math.floor(expiresAt / 1000)}:f>)`));
-  assert.match(active.content, /Device: Verified/);
-  assert.match(active.content, /registration is persistent.*restarts, reconnects and updates need no HWID reset/s);
-  assert.ok(!active.content.includes(`<t:${Math.floor(nextReset / 1000)}`));
-  assert.doesNotMatch(active.content, /account-reference|66666666666666666|raw HWID|activationKey/);
-  const expired = await responseFor(command(), { ok: true, account: { ...accountSummary, licenseExpiresAt: now - 1000 } }, 'user');
-  assert.match(expired.content, /License: Expired/);
-  assert.match(expired.content, /admin to review/);
-  const suspended = await responseFor(command(), { ok: true, account: { ...accountSummary, status: 'suspended' } }, 'user');
-  assert.match(suspended.content, /Status: Suspended/);
-  assert.doesNotMatch(suspended.content, /Available now/);
+test('private association reports identify multiple computers/shared accounts without treating observations as restrictions', async () => {
+  const result = { ok: true, identity, devices: [
+    { identifier: device, source: 'hardware_hash', platform: 'linux', firstSeen: 1800000000000, lastSeen: 1800001000000,
+      minecraft: identity.uuids, relatedAccounts: [{ discordId: '99999999999999999', username: 'other', displayName: 'Shared computer member' }] },
+    { identifier: 'e'.repeat(64), source: 'installation_hash', platform: 'windows', firstSeen: 1800000000000, lastSeen: 1800001000000,
+      minecraft: identity.uuids, relatedAccounts: [] },
+  ] };
+  const report = await responseFor(command('account', 'devices', [targetOption]), result, 'backend');
+  assert.ok(report.text.includes(device)); assert.ok(report.text.includes('e'.repeat(64)));
+  assert.match(report.text, /First seen.*Last seen.*ExamplePlayer/s); assert.ok(report.text.includes(mcUuid));
+  assert.match(report.text, /Shared computer member.*99999999999999999/);
+  assert.match(report.text, /never authorize, punish or block/);
+  assert.ok(!report.operations.some(operation => ['prepare', 'confirm', 'user'].includes(operation[0])));
+  const overview = await responseFor(command('account', 'overview', [targetOption]), result, 'backend');
+  assert.match(overview.text, /Example member.*66666666666666666.*UUID.*First seen.*Last seen/s);
+  assert.ok(!overview.text.includes(device));
 });
 
-test('administrative outcomes describe the action and preserve the target and cooldown distinction', async () => {
-  for (const [name, sub, options, expected] of [
-    ['license', 'extend', [{ type: 4, name: 'days', value: 30 }], /License extended by 30 days/],
-    ['account', 'suspend', [], /Account suspended/],
-    ['hwid', 'reset', [], /Device reset.*previous binding and sessions were invalidated.*self-service cooldown is unchanged/s],
-    ['hwid', 'revoke', [], /Device access revoked.*\/hwid reset/s],
-    ['session', 'kick', [], /Sessions invalidated/],
-    ['warning', 'remove', [{ type: 3, name: 'warning-id', value: 'warning-reference' }], /Any matching warning.*inactive/],
-  ]) {
-    const reply = await responseFor(command(name, sub, [targetOption, ...options]), { ok: true, account: accountSummary,
-      ...(name === 'hwid' && sub === 'reset' ? { activationKey: 'test-reset-key', expiresAt: Date.now() + 86400000 } : {}) });
-    assert.match(reply.content, expected);
-    assert.ok(reply.text.includes('<@66666666666666666>'));
+test('blacklist changes require opaque private review and invalidate only the returned affected account sessions', async () => {
+  const data = command('blacklist', 'add', [targetOption, { name: 'reason', type: 3, value: 'Reviewed online abuse' }]);
+  const response = await responseFor(data, { ok: true, invalidatedAccounts: ['affected-account'] }, 'backend', { review: ({ initial, operations }) => {
+    assert.deepEqual(operations.map(operation => operation[0]), ['isAdmin', 'prepare']);
+    assert.match(JSON.stringify(initial), /66666666666666666.*Local mod features.*other users sharing hardware are unaffected/s);
+    assert.ok(initial.components[0].components.every(button => /^sky:(confirm|cancel):[A-Za-z0-9_-]{43}$/.test(button.custom_id)));
+  } });
+  assert.deepEqual(response.invalidated, ['affected-account']); assert.match(response.text, /Identity blacklisted for online services/);
+  const cancel = await responseFor(data, { ok: true }, 'backend', { cancel: true });
+  assert.match(cancel.text, /Cancelled/); assert.deepEqual(cancel.invalidated, []);
+  const stale = await responseFor(data, { ok: true }, 'backend', { confirmError: 'confirmation_stale' });
+  assert.match(stale.text, /changed after review/); assert.deepEqual(stale.invalidated, []);
+});
+
+test('disconnect and unlink are explicit reviewed changes, preserve unrelated features and need no hardware reset', async () => {
+  for (const data of [command('disconnect'), command('account', 'unlink', [{ name: 'uuid', type: 3, value: mcUuid }])]) {
+    const response = await responseFor(data, { ok: true, invalidatedAccounts: ['own-account'] });
+    assert.ok(response.operations.some(operation => operation[0] === 'prepare' && operation[2] === 'user'));
+    assert.deepEqual(response.invalidated, ['own-account']); assert.match(response.text, /retained|unchanged/);
+    assert.ok(!response.calls.some(call => call.options.headers?.Authorization));
   }
 });
 
-test('already authorized never claims completed activation, and errors never echo backend details', async () => {
-  const data = command('authorise', null, [targetOption]);
-  const authorized = await responseFor(data, { ok: false, error: 'already_authorized' });
-  assert.match(authorized.content, /already has a Sky-Myce license/);
-  assert.match(authorized.content, /No new activation code was issued/);
-  assert.match(authorized.content, /account lookup.*whether activation is complete/s);
-  assert.match(authorized.content, /reissue:true.*invalidates earlier unused codes/s);
-  assert.doesNotMatch(authorized.content, /already activated|fully active/);
-  for (const error of ['private-backend-secret', 'toString', '__proto__']) {
-    const reply = await responseFor(command('account', 'lookup', [targetOption]), { ok: false, error });
-    assert.match(reply.content, /could not complete this request/);
-    assert.ok(!reply.content.includes(error));
+test('device history is paginated, bounded to Discord limits and absent from ordinary-user autocomplete', async () => {
+  const long = Array.from({ length: 8 }, (_, index) => ({ identifier: String(index).repeat(64), source: 'hardware_hash', platform: 'windows',
+    firstSeen: 1800000000000, lastSeen: 1800001000000, minecraft: Array.from({ length: 20 }, () => identity.uuids[0]),
+    relatedAccounts: Array.from({ length: 20 }, () => ({ discordId: target, username: 'member', displayName: 'Example member' })) }));
+  const report = await responseFor(command('account', 'devices', [targetOption]), { ok: true, devices: long }, 'backend');
+  const characters = report.reply.embeds.flatMap(embed => [embed.title ?? '', embed.description ?? '', embed.footer?.text ?? '',
+    ...embed.fields.flatMap(field => [field.name, field.value])]).join('').length;
+  assert.ok(characters <= 6000); assert.ok(report.reply.embeds[0].fields.every(field => field.value.length <= 1024));
+  assert.ok(report.reply.components[0].components.some(button => button.custom_id === `sky:page:devices:${target}:2`));
+  const reads = [], env = { ...config, ACCOUNT_STORE: { getByName: () => ({ communityUserCommand: async (caller, action) => {
+    reads.push({ caller: caller.id, action }); return { ok: true, identity: { ...identity, discordId: actor.id } }; } }) } };
+  const data = { ...command('account', 'unlink', [{ name: 'uuid', type: 3, value: 'Example', focused: true }]), type: 4 };
+  assert.deepEqual(await (await handleAccountAutocomplete(data, env, 'user')).json(), { type: 8, data: { choices: [{ name: 'ExamplePlayer', value: mcUuid }] } });
+  assert.deepEqual(reads, [{ caller: actor.id, action: 'status' }]);
+});
+
+test('admin autocomplete reveals no registered account to nonadmins or the User Bot', async () => {
+  let admin = false, reads = 0;
+  const env = { ...config, ACCOUNT_STORE: { getByName: () => ({ isAdmin: async () => admin,
+    communityRead: async () => { reads++; return { ok: true, identities: [identity] }; } }) } };
+  const data = { ...command('skyhawk', 'search', [{ type: 3, name: 'query', value: 'example', focused: true }]), type: 4 };
+  assert.deepEqual(await (await handleAccountAutocomplete(data, env, 'backend')).json(), { type: 8, data: { choices: [] } });
+  assert.deepEqual(await (await handleAccountAutocomplete(data, env, 'user')).json(), { type: 8, data: { choices: [] } });
+  assert.equal(reads, 0); admin = true;
+  const reply = await (await handleAccountAutocomplete(data, env, 'backend')).json();
+  assert.equal(reply.data.choices[0].value, target); assert.equal(reads, 1);
+});
+
+test('blacklist errors explicitly preserve local gameplay and do not expose backend details', async () => {
+  const blocked = await responseFor(command(), { ok: false, error: 'blacklisted' });
+  assert.match(blocked.text, /restricted.*online services.*Local gameplay remains available/s);
+  for (const error of ['private-secret', 'toString', '__proto__']) {
+    const reply = await responseFor(command(), { ok: false, error });
+    assert.ok(!reply.text.includes(error)); assert.match(reply.text, /could not complete this request/);
   }
-  const expired = await responseFor(command('account', 'lookup', [targetOption]), { ok: false, error: 'license_expired' });
-  assert.match(expired.content, /license has expired.*review or extend/s);
 });
 
-test('replacement activation preserves activated wording and sends the expiring code only in its DM', async () => {
-  const key = 'replacement-code-private-test', expiresAt = Date.now() + 86_400_000;
-  const { content, calls } = await responseFor(command('authorise', null, [targetOption, { type: 5, name: 'reissue', value: true }]),
-    { ok: true, activationKey: key, expiresAt, account: accountSummary });
-  const dm = calls.find(call => call.options.body instanceof FormData);
-  const payload = JSON.parse(dm.options.body.get('payload_json'));
-  assert.ok(payload.content.includes(key));
-  assert.match(payload.content, /account has already been activated/);
-  assert.match(payload.content, /replacement code/);
-  assert.match(content, /already been activated.*does not change its current access/s);
-  assert.doesNotMatch(content + payload.content, /pending activation/);
-  assert.ok(content.includes(`<t:${Math.floor(expiresAt / 1000)}:R>`));
-  assert.deepEqual(payload.allowed_mentions, { parse: [] });
-  assert.ok(calls.filter(call => call !== dm).every(call => !String(call.options.body).includes(key)));
-});
-
-test('private audit responses show bounded readable events without raw metadata', async () => {
-  const audit = Array.from({ length: 20 }, (_, index) => ({ id: 100 - index, at: Date.now() - index * 1000,
-    actor: actor.id, action: 'license_revoke', override: index === 0 ? 1 : 0, metadata: '{"private":"do-not-render-metadata"}' }));
-  const { content, text, data } = await responseFor(command('audit', null, [targetOption]), { ok: true, audit });
-  assert.match(content, /8 events/);
-  assert.equal(data.embeds[0].fields.length, 8); assert.match(text, /license revoke.*Admin override/s); assert.match(text, /<t:\d+:R>/);
-  assert.doesNotMatch(text, /Ref 92|do-not-render-metadata|"actor"/);
-  const empty = await responseFor(command('audit', null, [targetOption]), { ok: true, audit: [] });
-  assert.match(empty.content, /No events match/);
-});
-
-test('administrator alerts send bounded useful context only to fixed private recipients and omit credentials', async () => {
-  const originalFetch = globalThis.fetch, calls = [];
-  const alert = { id: 'private-outbox-reference', auditId: 123, recipientId: '978376257534328883', claimToken: 'private-claim-token', repeats: 2, attempts: 0,
-    event: { id: 123, at: Date.now(), actor: actor.id, account_id: 'private-account-reference', action: 'lease_denied', override: 0, severity: 'warning',
-      metadata: { discordId: '66666666666666666', discordName: 'Current Display Name', discordUsername: 'RenamedUser', minecraftName: 'Alice', minecraftUuid: 'a'.repeat(32),
-        buildId: '2.4.2', loaderVersion: '1.0.10', sessionId: 'opaque-session-reference', reason: 'Second-device authorization attempt denied', error: 'HWID_MISMATCH',
-        activationKey: 'never-render-this-key', signature: 'never-render-this-proof', hardwareHash: 'f'.repeat(64), raw: 'never-render-this-raw-value' } } };
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options }); assert.equal(options.redirect, 'manual'); assert.ok(options.signal);
-    return Response.json(url.endsWith('/users/@me/channels') ? { id: '77777777777777777' } : {});
-  };
+test('administrator alerts stay private, redact credentials and retain historical account/audit controls', async () => {
+  const previous = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return Response.json(url.endsWith('/users/@me/channels') ? { id: '77777777777777777' } : {}); };
   try {
-    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'never-render-this-bot-token' }, { ...alert, recipientId: '66666666666666666' }), false);
-    assert.equal(calls.length, 0, 'An arbitrary recipient cannot turn the alert sender into a messaging endpoint');
-    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'never-render-this-bot-token' }, alert), true);
-    assert.equal(JSON.parse(calls[0].options.body).recipient_id, alert.recipientId);
-    const payload = JSON.parse(calls[1].options.body), text = JSON.stringify(payload);
-    assert.ok(payload.embeds?.length); assert.match(text, /Current Display Name|RenamedUser/); assert.match(text, /Alice/); assert.match(text, /2\.4\.2/);
-    assert.match(text, /Second-device/); assert.equal(payload.enforce_nonce, true); assert.deepEqual(payload.allowed_mentions, { parse: [] });
-    assert.ok(text.length < 6000);
-    for (const secret of ['private-claim-token', 'never-render-this-key', 'never-render-this-proof', 'never-render-this-bot-token', 'never-render-this-raw-value', 'f'.repeat(64)]) assert.ok(!text.includes(secret));
-    assert.ok(payload.components.flatMap(row => row.components).every(button => button.custom_id.startsWith('sky:admin:') && button.custom_id.length <= 100));
-    globalThis.fetch = async () => Response.json({}, { status: 403 });
-    assert.equal(await deliverAccountAlert({ DISCORD_BACKEND_BOT_TOKEN: 'test-only' }, alert), false, 'Blocked DMs return an outbox retry outcome');
-  } finally { globalThis.fetch = originalFetch; }
+    await deliverAccountAlert({ BACKEND_BOT_TOKEN: 'test-only' }, { id: 'test-alert', auditId: 1, recipientId: '978376257534328883', claimToken: 'test-claim', repeats: 0,
+      event: { id: 1, at: Date.now(), actor: actor.id, action: 'blacklist_add', severity: 'security', metadata: { discordId: target,
+        discordName: 'Example member', minecraftName: 'ExamplePlayer', minecraftUuid: mcUuid, reason: `token=private-token ${device}` } } });
+    assert.equal(JSON.parse(calls[0].options.body).recipient_id, '978376257534328883');
+    const message = JSON.parse(calls[1].options.body);
+    assert.deepEqual(message.allowed_mentions, { parse: [] }); assert.equal(message.enforce_nonce, true);
+    assert.ok(!JSON.stringify(message).includes('private-token')); assert.ok(!JSON.stringify(message).includes(device));
+    assert.equal(message.components[0].components[0].label, 'View Account');
+    assert.ok(message.components[0].components.every(button => /^sky:admin:(info|audit):\d{17,20}$/.test(button.custom_id)));
+  } finally { globalThis.fetch = previous; }
+});
+
+const leaderboard = { ok: true, available: true, category: 'dungeons', metric: 'dungeon_profit', period: 'weekly',
+  metricLabel: 'Estimated recorded dungeon profit', description: 'Newly recorded chest profits, including losses.', unit: 'coins',
+  source: 'Explicitly shared client observations; estimates', coverage: 'Consenting participants only; each Minecraft identity separately',
+  total: 23, page: 2, limit: 10, hasNext: true, updatedAt: 1800001000000,
+  entries: [{ rank: 1, player: 'Example_Player', value: -123.5, sampleSize: 2, updatedAt: 1800001000000, source: 'client-observation', verification: 'estimated' }],
+  accountId: identity.accountId, discordId: target, hardware: device, token: 'never-show-this-token' };
+
+test('leaderboards use the signed user actor, the shared query and honest sources without disclosing private fields', async () => {
+  const options = [{ name: 'category', type: 3, value: 'dungeons' }, { name: 'metric', type: 3, value: 'dungeon_profit' },
+    { name: 'period', type: 3, value: 'weekly' }, { name: 'page', type: 4, value: 2 }];
+  const reply = await responseFor(command('leaderboard', null, options), leaderboard);
+  assert.deepEqual(reply.operations, [['leaderboard', { ...actor, roles: [] }, { category: 'dungeons', metric: 'dungeon_profit', period: 'weekly', page: 2 }]]);
+  assert.match(reply.text, /UTC week/); assert.match(reply.text, /-123\.5 coins/); assert.match(reply.text, /Example\\\\_Player/);
+  assert.match(reply.text, /each Minecraft identity separately/); assert.match(reply.text, /unverified/);
+  for (const secret of [identity.accountId, target, device, leaderboard.token]) assert.ok(!reply.text.includes(secret));
+  assert.deepEqual(reply.reply.components[0].components.map(button => button.custom_id),
+    ['sky:leaderboard:dungeons:dungeon_profit:weekly:1', 'sky:leaderboard:dungeons:dungeon_profit:weekly:3']);
+  const component = { ...command(), type: 3, data: { component_type: 2, custom_id: 'sky:leaderboard:dungeons:dungeon_profit:weekly:3' } };
+  const paged = await responseFor(component, { ...leaderboard, page: 3 });
+  assert.equal(paged.operations[0][2].page, 3); assert.equal(paged.operations[0][1].id, actor.id);
+  const filtered = await responseFor(command('leaderboard', null, [...options, { name: 'search', type: 3, value: 'Example' }]), { ...leaderboard, search: 'Example' });
+  assert.deepEqual(filtered.reply.components, []); assert.match(filtered.text, /same search and desired page/);
+  const missing = await responseFor(command('leaderboard'), { ...leaderboard, available: false, reason: 'No reliable completed-task publisher exists.', entries: [] });
+  assert.match(missing.text, /No reliable completed-task publisher exists/);
+  const invalid = await responseFor(command('leaderboard'), { ok: false, error: 'invalid_leaderboard' });
+  assert.match(invalid.text, /metric from the selected leaderboard category/);
+});
+
+test('malformed leaderboard selections and wrong guild never reach storage', async () => {
+  const env = { ...config, ACCOUNT_STORE: { getByName() { throw Error('Invalid interaction reached storage'); } } };
+  const valid = { name: 'category', type: 3, value: 'economy' };
+  for (const options of [[valid, valid], [{ name: 'user', type: 6, value: target }], [{ name: 'page', type: 3, value: '2' }],
+    [{ name: 'search', type: 3, value: 'x'.repeat(101) }]]) {
+    const result = handleAccountInteraction(command('leaderboard', null, options), env, { waitUntil() {} }, 'user');
+    assert.equal((await result.json()).type, 4);
+  }
+  const wrongGuild = handleAccountInteraction({ ...command('leaderboard'), guild_id: '99999999999999999' }, env, { waitUntil() {} }, 'user');
+  assert.equal((await wrongGuild.json()).type, 4);
+  assert.equal((await handleAccountInteraction(command('leaderboard'), env, { waitUntil() {} }, 'backend').json()).type, 4);
+});
+
+test('private session reports distinguish ended, expired, refreshable and disconnected sessions', async () => {
+  const now = Date.now(), base = { minecraftUuid: mcUuid, issuedAt: now - 60000, lastSeen: now - 1000, expiresAt: now + 60000, refreshExpiresAt: now + 86400000 };
+  const result = await responseFor(command('account', 'sessions', [targetOption]), { ok: true, identity, sessions: [
+    { ...base, revokedAt: now - 1 }, { ...base, refreshExpiresAt: now - 1 }, { ...base, expiresAt: now - 1 },
+    { ...base, connectedAt: null }, { ...base, connectedAt: now - 60000 },
+  ] }, 'backend');
+  assert.deepEqual(result.reply.embeds[0].fields.map(field => field.value.split('State: ')[1]),
+    ['Ended', 'Expired', 'Access token expired; refresh available', 'No active relay connection observed', 'Connection observed; see last activity']);
 });

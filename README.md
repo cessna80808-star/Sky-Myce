@@ -1,8 +1,8 @@
 # Sky-Myce
 
-Sky-Myce now uses a signed Fabric loader, Discord-linked accounts, installation-bound licenses, and a live Discord IRC bridge. See the [operator and security guide](docs/secure-system.md), [loader lifecycle](docs/LOADER.md), and [Discord bot setup](discord-bots/README.md). The protected mod requires the loader; first activation installs the verified payload for the next Minecraft launch.
+Sky-Myce 2.5.0 is a normal Fabric mod for Minecraft 26.1.2 and Java 25. Local features work without Discord or a custom Loader. Connect Discord in Minecraft for community chat, shared cosmetics and optional shared rankings; signed Fabric updates are optional. See the [community command guide](docs/discord-ux.md), [Discord bot setup](discord-bots/README.md) and [main-machine operator handoff](docs/main-machine-community-rollout.md).
 
-Sky-Hawk is a Fabric mod for Hypixel SkyBlock focused on smoother dungeon runs, cleaner party coordination, and less menu friction.
+Sky-Myce is a Fabric mod for Hypixel SkyBlock focused on smoother dungeon runs, cleaner party coordination, and less menu friction.
 
 Open the config in-game with `/sm` or `/skymyce`.
 
@@ -10,9 +10,11 @@ New to the mod? Read the [player guide](MANUAL.md).
 
 The menu has six destinations: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. Search finds controls across them; Quick Settings, Favorites and Recent retain useful shortcuts. See the [menu and measured performance changes](docs/menu-optimization-2026-10.md) and [settings and Party Finder matcher guide](docs/settings-party-finder.md).
 
-**2.4.28** restores visible historical dungeon totals and direct access to saved loot, XP and reports, fixes Master Mode run completion and dungeon profile continuity, and observes direct inventory reward packets. New measurements remain separate from preserved history. It retains 2.4.27's menu, performance and chat changes. `/sm irc` selects global chat, `/sm irc <message>` sends once, and `/sm chat` returns to normal chat. `/sm pc` fails closed until the backend can verify current party membership; see [party chat availability](docs/party-chat.md) and [tracker cutover](docs/dungeon-tracker-cutover.md).
+**2.5.0** removes license/activation/HWID requirements, adds self-service Discord connection and privacy controls, and keeps local features usable when the community service is unavailable. Cosmetics Studio includes independent name/body controls and preset/uploaded capes. Shared leaderboards and the dedicated Discord RNG feed use real newly collected records with honest estimate and coverage labels; see [metric definitions](docs/community-leaderboards.md). Existing dungeon history remains separate from new measurements. `/sm irc` selects global chat, `/sm irc <message>` sends once, and `/sm chat` returns to normal chat. `/sm pc` fails closed until the backend can verify current party membership; see [party chat availability](docs/party-chat.md) and [tracker cutover](docs/dungeon-tracker-cutover.md).
 
-The persistent User Bot Gateway runs on Cloudflare. A real Minecraft ↔ Discord test passed, including reply context and mention presentation. The [implementation and deployment report](docs/implementation-overhaul-2026-10.md) records exact production versions, measured improvements, checks and remaining live-test limits.
+The [earlier implementation report](docs/implementation-overhaul-2026-10.md) records historical deployments and live tests. It does not verify this new community architecture. The current main-machine handoff distinguishes local checks from the deployment, Discord permission and multiplayer checks still required.
+
+The [2.5.0 implementation and verification report](docs/implementation-community-2026-10.md) records the current changes, automated checks, fullscreen Windows observations and remaining live verification.
 
 ## Highlights
 
@@ -25,8 +27,8 @@ The persistent User Bot Gateway runs on Cloudflare. A real Minecraft ↔ Discord
 ## Quick start
 
 1. Install Fabric for Minecraft 26.1.2 and use Java 25.
-2. Place the authorized `Sky-Myce-Loader.jar` in your `mods` folder.
-3. Launch Minecraft, follow the loader's activation/update steps, then open `/sm`.
+2. Close Minecraft and place the standalone Sky-Myce 2.5.0 JAR in the selected instance's `mods` folder alongside its Fabric dependencies. Remove the old Sky-Myce Loader and old Sky-Myce JAR if migrating; retain unrelated mods and settings.
+3. Launch Minecraft with Fabric, then open `/sm`. Choose Connect Discord only when you want community services.
 4. Enable the features you want in the config.
 
 ### Mods folder
@@ -41,18 +43,21 @@ The persistent User Bot Gateway runs on Cloudflare. A real Minecraft ↔ Discord
 - `/sm dungeon` — dungeon tracker
 - `/sm pf` — dungeon friends / LFG
 - `/sm digest` — daily digest
+- `/sm journal` — persistent personal RNG history and observed trends
+- `/sm leaderboard` — community rankings, metric sources and UTC periods
+- `/sm community` — optional Discord connection, sharing and signed updates
 - `/sm msg <ign> <message>` — private relay message
 - `/sm chat <ign>` — chat relay
 - `/sm irc [message]` — select global chat or send once
 - `/sm pc [message]` — party mode, unavailable until membership is verified
 - `/sm chat` — return to normal chat
-- `/sm cosmetics` — cosmetic settings
+- `/sm cosmetics` — Cosmetics Studio with actual-player preview
 - `/sm m7pb [player]` — local M7 PB lookup
 
 ## Current updates
 
-- 2.4.5 adds the local M7 PB lookup and updated loader flow.
-- The protected mod requires the loader to install and verify signed updates. See [docs/LOADER.md](docs/LOADER.md).
+- Install the standalone mod once; updates are opt-in, signature/hash checked and staged for a safe restart. Expired/unavailable update metadata does not stop the installed mod.
+- Community sharing starts enabled unless a saved explicit preference says otherwise. Configure global/category/name opt-outs independently of chat and cosmetics.
 - Settings are organized into searchable categories with shared theme controls. See [docs/settings-party-finder.md](docs/settings-party-finder.md).
 
 ## Project notes

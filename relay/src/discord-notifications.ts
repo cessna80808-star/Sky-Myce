@@ -12,11 +12,14 @@ const clean = (value: unknown, limit = 200): string => typeof value !== "string"
   .replace(/[\\`*_~<>|]/g, "").slice(0, limit).trim();
 export const auditReason = clean;
 const titles: Record<string, string> = {
+  community_connected: "Discord community connection established", community_uuid_reconnected: "Minecraft association reconnected",
+  community_uuid_unlinked: "Minecraft association removed", community_disconnected: "Community sessions disconnected",
+  blacklist_add: "Online identity blacklisted", blacklist_remove: "Online identity restriction removed",
   authorise: "Account approved", activation_issued: "Activation key issued", minecraft_uuid_added: "Minecraft account linked",
   minecraft_uuid_removed: "Minecraft account removed", license_revoke: "License revoked", license_restore: "License restored",
   account_suspend: "Account suspended", account_unsuspend: "Account restored", admin_added: "Administrator access granted",
   hwid_reset: "Hardware registration reset", hwid_revoke: "Hardware authorization blocked", device_transferred: "Hardware transferred",
-  build_revoke: "Build authorization revoked", build_restore: "Build authorization restored", session_kick: "Account signed out",
+  build_revoke: "Build authorization revoked", build_restore: "Build authorization restored", session_kick: "Community sessions ended",
   activation_replay: "Used activation key presented again", activation_expired: "Expired activation key presented",
   challenge_replay: "Authorization challenge presented again",
   warning_issued: "Account warning recorded",
@@ -69,7 +72,7 @@ function alertMessage(alert: AccountAlert, nonce: string): Record<string, unknow
   return { embeds: [{ title: `Sky-Myce — ${severity[0]}`, description: label, color: severity[1], fields,
     timestamp: new Date(event.at).toISOString(), footer: { text: `Private administrator alert • Audit ${event.id}` } }],
     allowed_mentions: { parse: [] }, nonce, enforce_nonce: true,
-    components: id ? [{ type: 1, components: [{ type: 2, style: 2, label: "View License", custom_id: `sky:admin:info:${id}` },
+    components: id ? [{ type: 1, components: [{ type: 2, style: 2, label: "View Account", custom_id: `sky:admin:info:${id}` },
       { type: 2, style: 2, label: "View Audit", custom_id: `sky:admin:audit:${id}` }] }] : [] };
 }
 

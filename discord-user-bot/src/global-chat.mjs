@@ -107,6 +107,22 @@ export function discordMessageLinks(message) {
   const text = discordBody(message);
   return [...new Set([...text.matchAll(bodyUrl)].map(match => discordMediaKey(textLink(match[0], match.index, text).url)).filter(Boolean))];
 }
+/** MessageCreate does not guarantee the parent is cached, especially after a Gateway restart. */
+export async function resolveDiscordReply(message, guild, channel, timeoutMs = 3000) {
+  const referenceId = message.reference?.messageId;
+  if (message.guildId !== guild || message.channelId !== channel || !snowflake.test(referenceId ?? '') ||
+    (message.reference?.channelId ?? channel) !== channel || message.referencedMessage || message.channel?.messages?.cache?.has(referenceId)) return message;
+  let timer;
+  try {
+    const reference = await Promise.race([Promise.resolve().then(() => message.fetchReference?.()).catch(() => undefined),
+      new Promise(resolve => { timer = setTimeout(resolve, timeoutMs, undefined); })]);
+    if (!reference || reference.id !== referenceId || reference.channelId !== channel || reference.guildId !== guild) return message;
+    // Copy only the fields used by the packet normalizer, without mutating discord.js's shared cache object.
+    return { id: message.id, guildId: message.guildId, channelId: message.channelId, content: message.content, author: message.author,
+      webhookId: message.webhookId, member: message.member, guild: message.guild, client: message.client, embeds: message.embeds,
+      attachments: message.attachments, mentions: message.mentions, reference: message.reference, channel: message.channel, referencedMessage: reference };
+  } finally { clearTimeout(timer); }
+}
 export function globalDiscordPacket(message, guild, channel, ownBotId = message.client?.user?.id, previousLinks = []) {
   if (message.guildId !== guild || message.channelId !== channel || message.webhookId ||
       message.author?.bot && (!snowflake.test(ownBotId ?? '') || message.author.id === ownBotId) ||
@@ -121,7 +137,11 @@ export function globalDiscordPacket(message, guild, channel, ownBotId = message.
   if (snowflake.test(referenceId ?? '') && (message.reference?.channelId ?? message.channelId) === channel) {
     const reference = message.referencedMessage ?? message.channel?.messages?.cache?.get(referenceId);
     if (!reference || reference.channelId === channel) {
-      packet.reply = { message_id: referenceId, from: display(reference?.author, reference?.member), text: reference ? discordBody(reference, 256) : '' };
+      const ownCard = reference?.author?.id === ownBotId && !reference?.webhookId ? values(reference?.embeds)[0]?.data ?? values(reference?.embeds)[0] : null;
+      const cardName = typeof ownCard?.author?.name === 'string' ? bounded(ownCard.author.name.replace(unsafeDisplay, ''), 64) : '';
+      const cardText = typeof ownCard?.description === 'string' ? bounded(ownCard.description.replace(/\\([\\`*_~|>])/gu, '$1').replace(unsafeBody, ''), 256) : '';
+      packet.reply = { message_id: referenceId, from: reference ? cardName || display(reference.author, reference.member) : 'Unavailable message',
+        text: reference ? cardText || discordBody(reference, 256) : 'The original message is no longer available.' };
     }
   }
   return packet;
@@ -231,11 +251,12 @@ export function minecraftCard(packet, scope, room) {
   let description = escape(packet.text);
   const fields = [];
   if (packet.reply && typeof packet.reply.from === 'string' && typeof packet.reply.text === 'string') {
-    fields.push({ name: `Reply to ${bounded(packet.reply.from.replace(unsafeDisplay, ''), 64)}`,
+    fields.push({ name: `↳ Reply to ${bounded(escape(packet.reply.from.replace(unsafeDisplay, '')), 64)}`,
       value: escape(bounded(packet.reply.text.replace(unsafeBody, ''), 256)) || 'Original message unavailable' });
   }
-  const embed = { author, description: bounded(description, 4096), color: 0x3d9df5,
+  const embed = { author, description: bounded(description, 4096), color: 0x655de6,
     footer: { text: scope === 'global' ? 'Minecraft · Sky-Myce Global' : 'Minecraft · Sky-Myce IRC' } };
+  if (Number.isSafeInteger(packet.timestamp) && packet.timestamp > 0) embed.timestamp = new Date(packet.timestamp).toISOString();
   const links = [], seen = new Set();
   for (const item of (Array.isArray(packet.media) ? packet.media : []).slice(0, 4)) {
     const url = safeMediaUrl(item?.url); if (!url || !['image', 'gif', 'video'].includes(item.type)) continue;
@@ -285,8 +306,9 @@ export function discordOperation(event, message, previous, id, guild, channel, o
 
 /** Bounded delivery mappings and receipts; never persist chat bodies or tokens. */
 export class DeliveryReceipts {
-  constructor(path, now = Date.now) {
-    Object.assign(this, { path, now }); this.entries = new Map(); this.sources = new Map(); this.operations = new Map(); this.cards = new Map();
+  constructor(path, now = Date.now, receiptTtlMs = 120000) {
+    if (!Number.isSafeInteger(receiptTtlMs) || receiptTtlMs < 120000 || receiptTtlMs > 900000) throw new Error('Invalid delivery receipt retention');
+    Object.assign(this, { path, now, receiptTtlMs }); this.entries = new Map(); this.sources = new Map(); this.operations = new Map(); this.cards = new Map();
     this.writing = Promise.resolve();
   }
   async load() {
@@ -305,7 +327,7 @@ export class DeliveryReceipts {
     for (const row of data.entries) {
       const rich = data.schema === 2 && row?.length === 4;
       if (!Array.isArray(row) || row.length !== (rich ? 4 : 3) || !packetId.test(row[0]) || !snowflake.test(row[1]) ||
-          !Number.isSafeInteger(row[2]) || row[2] > this.now() + (rich ? 900000 : 120000) || this.entries.has(row[0]) || rich && !this.validMetadata(row[3])) throw new Error('Global chat receipt storage invalid');
+          !Number.isSafeInteger(row[2]) || row[2] > this.now() + (rich ? 900000 : this.receiptTtlMs) || this.entries.has(row[0]) || rich && !this.validMetadata(row[3])) throw new Error('Global chat receipt storage invalid');
       if (row[2] > this.now()) this.entries.set(row[0], { discordId: row[1], expires: row[2], ...(rich ? row[3] : {}) });
     }
     for (const row of data.sources ?? []) {
@@ -343,7 +365,7 @@ export class DeliveryReceipts {
   operation(id) { this.prune(); return this.operations.get(id); }
   async record(id, discordId, metadata) {
     if (!packetId.test(id) || !snowflake.test(discordId) || metadata !== undefined && !this.validMetadata(metadata)) throw new Error('Invalid global chat receipt');
-    return this.persist(maps => maps.entries.set(id, { discordId, expires: this.now() + (metadata ? 900000 : 120000), ...(metadata ? this.cleanMetadata(metadata) : {}) }));
+    return this.persist(maps => maps.entries.set(id, { discordId, expires: this.now() + (metadata ? 900000 : this.receiptTtlMs), ...(metadata ? this.cleanMetadata(metadata) : {}) }));
   }
   cleanMetadata(value) {
     return { room: value.room, channelId: value.channelId, authorId: value.authorId, revision: value.revision ?? 0, ...(value.name ? { name: value.name } : {}) };

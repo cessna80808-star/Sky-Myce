@@ -5,7 +5,10 @@ import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.SliderComponent
 import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.container.ScrollContainer
+import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import io.wispforest.owo.ui.inject.GreedyInputUIComponent
 import io.wispforest.owo.ui.util.FocusHandler
 import io.wispforest.owo.ui.util.UISounds
 import me.mycellium.skymyce.config.misc.ThemeConfig
@@ -48,7 +51,7 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
 /** Existing caller labels remain compatible; their destinations use the shared feature identities. */
 enum class MenuPage(val title: String, val featureId: String) {
     DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
-    DUNGEONS("Dungeons", "dungeon-tracker"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
+    DUNGEONS("Dungeons", "dungeon-tracker"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 
 object MenuTheme {
@@ -379,6 +382,7 @@ internal fun menuTextStyleAt(text: net.minecraft.util.FormattedCharSequence, x: 
 /** Keep owo's popup layout, but give its entries the same font, paint and input as the menus. */
 internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : DropdownComponent(Sizing.fixed(minimumWidth)) {
     private var entryWidth = minimumWidth.coerceAtLeast(32)
+    private val entryViewport = UIContainers.verticalScroll(Sizing.fixed(entryWidth), Sizing.fixed(1), entries)
     private val closingFocus = FocusHandler(this)
     private val appearance = MotionValue(0.0)
     private var painted = MotionPose()
@@ -386,7 +390,17 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     var closing = false
         private set
     val finishedClosing get() = closing && appearance.sample() == 0.0 && !appearance.running
-    init { entries.padding(Insets.of(5)); surface(MenuTheme.panel()); allowOverflow(true) }
+    init {
+        entries.padding(Insets.of(5)); entries.surface(Surface.BLANK)
+        // DropdownComponent.removeChild(entries) dismisses the popup through its parent queue.
+        // This constructor is unmounted; clear the inherited flow's initial child directly.
+        clearChildren(); child(entryViewport)
+        entryViewport.surface(MenuTheme.panel())
+        entryViewport.scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT)))
+        allowOverflow(true)
+    }
+
+    fun fitViewport(space: Size) = fitMenuDropdownScroll(entryViewport, entries, entryWidth, space)
 
     // Owo draws focus highlights through the root, even after this popup is detached for its exit.
     override fun focusHandler(): FocusHandler? = menuDropdownFocus(super.focusHandler(), closing, closingFocus)
@@ -456,14 +470,17 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
                 if (child.parent() === this) removeChild(child)
                 child.beginOpen()
             }
-            child.positioning(Positioning.absolute(entries.width() - 1, row.y() - y()))
-            if (child.parent() !== this) child(child)
             val root = generateSequence(parent()) { it.parent() }.lastOrNull()
-            root?.let {
-                child.positioning(Positioning.absolute(
-                    (child.x() - x()).coerceAtMost(it.x() + it.width() - x() - child.width()).coerceAtLeast(it.x() - x()),
-                    (child.y() - y()).coerceAtMost(it.y() + it.height() - y() - child.height()).coerceAtLeast(it.y() - y())))
-            }
+            val bounds = root ?: this
+            val space = Size.of((bounds.width() - 8).coerceAtLeast(1), (bounds.height() - 8).coerceAtLeast(1))
+            child.fitViewport(space); child.inflate(space)
+            val left = (x() + entries.width() - 1).coerceIn(bounds.x() + 4,
+                (bounds.x() + bounds.width() - child.width() - 4).coerceAtLeast(bounds.x() + 4))
+            val top = row.y().coerceIn(bounds.y() + 4,
+                (bounds.y() + bounds.height() - child.height() - 4).coerceAtLeast(bounds.y() + 4))
+            child.positioning(Positioning.absolute(left - x(), top - y()))
+            if (child.parent() !== this) child(child)
+            child.mount(this, left, top)
         }
         row = entry(text, nested = true) { open(); child.focusFirst() }
         row.mouseEnter().subscribe { queue(open) }
@@ -472,6 +489,7 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     fun focusFirst() {
         if (closing) return
         entries.children().firstOrNull { it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }?.let {
+            entryViewport.scrollTo(it)
             focusHandler()?.focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE)
         }
     }
@@ -487,11 +505,13 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         if (closing) return
         val rows = ArrayList<UIComponent>()
         collectDescendants(rows)
-        rows.removeAll { !it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }
+        rows.removeAll { it !is MenuDropdownEntry || !it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }
         if (rows.isEmpty()) return
         val current = rows.indexOf(focusHandler()?.focused())
         val next = Math.floorMod(current + if (forward) 1 else -1, rows.size)
-        focusHandler()?.focus(rows[next], UIComponent.FocusSource.KEYBOARD_CYCLE)
+        val selected = rows[next]
+        generateSequence(selected.parent()) { it.parent() }.filterIsInstance<ScrollContainer<*>>().firstOrNull()?.scrollTo(selected)
+        focusHandler()?.focus(selected, UIComponent.FocusSource.KEYBOARD_CYCLE)
     }
 }
 
@@ -501,6 +521,19 @@ internal fun menuDropdownFocus(parent: FocusHandler?, closing: Boolean, exit: Fo
 internal fun menuDropdownRowHeight() = MenuCanvas.lineHeight() + 8
 internal fun menuDropdownWidth(text: Component, indicator: Boolean) =
     kotlin.math.ceil(menuTextLines(text, Int.MAX_VALUE).maxOfOrNull { menuTextWidth(it) } ?: 0.0).toInt() + 26 + if (indicator) 22 else 0
+
+/** Measure the actual rows before mounting; a long option list remains reachable through native scrolling. */
+internal fun fitMenuDropdownScroll(viewport: ScrollContainer<FlowLayout>, entries: FlowLayout, wantedWidth: Int, space: Size) {
+    val size = menuDropdownContentSize(entries, wantedWidth, space)
+    viewport.sizing(Sizing.fixed(size.width()), Sizing.fixed(size.height()))
+}
+
+internal fun menuDropdownContentSize(entries: FlowLayout, wantedWidth: Int, space: Size): Size {
+    val width = wantedWidth.coerceIn(1, space.width().coerceAtLeast(1))
+    entries.horizontalSizing(Sizing.fixed(width))
+    entries.inflate(Size.of(width, space.height().coerceAtLeast(1)))
+    return Size.of(width, entries.height().coerceIn(1, space.height().coerceAtLeast(1)))
+}
 
 private class MenuDropdownEntry(value: Component, private val checked: (() -> Boolean)?, private val nested: Boolean, private val delayMillis: Long,
                                 private val action: () -> Unit) : MenuLabel(value) {
@@ -563,11 +596,17 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
 
 /** Mount and hit-test in the custom viewport, never Fabric's native GUI coordinates. */
 internal fun mountMenuDropdown(root: FlowLayout, dropdown: ParentUIComponent, x: Int, y: Int) {
+    val space = Size.of((root.width() - 8).coerceAtLeast(1), (root.height() - 8).coerceAtLeast(1))
+    if (dropdown is MenuDropdown) dropdown.fitViewport(space)
+    dropdown.inflate(space)
     dropdown.positioning(Positioning.absolute(0, 0))
     root.child(dropdown)
-    dropdown.positioning(Positioning.absolute(
-        (x - root.x()).coerceIn(0, (root.width() - dropdown.width()).coerceAtLeast(0)),
-        (y - root.y()).coerceIn(0, (root.height() - dropdown.height()).coerceAtLeast(0))))
+    val left = (x - root.x()).coerceIn(4, (root.width() - dropdown.width() - 4).coerceAtLeast(4))
+    val top = (y - root.y()).coerceIn(4, (root.height() - dropdown.height() - 4).coerceAtLeast(4))
+    dropdown.positioning(Positioning.absolute(left, top))
+    // Mouse dispatch batches the parent's layout events. Mount now so bounds/focus are valid
+    // during this event too, before that deferred layout is flushed.
+    dropdown.mount(root, root.x() + left, root.y() + top)
 }
 
 internal fun dismissMenuDropdownOutside(dropdown: ParentUIComponent, event: MouseButtonEvent): Boolean {
@@ -577,7 +616,17 @@ internal fun dismissMenuDropdownOutside(dropdown: ParentUIComponent, event: Mous
     return true
 }
 
-class MenuSlider : SliderComponent(Sizing.fill()) {
+/** Apply one keyboard step through the native public value setter, independent of Minecraft's edit-mode flag. */
+internal fun adjustMenuSliderKey(input: KeyEvent, active: Boolean, focused: Boolean, current: Double, step: Double,
+                                 apply: (Double) -> Unit): Boolean {
+    if (!active || !focused || input.hasAltDown() || input.hasControlDown() || !current.isFinite() || !step.isFinite() || step <= 0) return false
+    val direction = when (input.key()) { GLFW.GLFW_KEY_LEFT -> -1; GLFW.GLFW_KEY_RIGHT -> 1; else -> return false }
+    val next = (current + direction * step).coerceIn(0.0, 1.0)
+    if (next != current) apply(next)
+    return true
+}
+
+class MenuSlider : SliderComponent(Sizing.fill()), GreedyInputUIComponent {
     private val hoverMotion = MotionValue(0.0)
     private val pressMotion = MotionValue(0.0)
     private val valueMotion = MotionValue(0.0)
@@ -603,6 +652,14 @@ class MenuSlider : SliderComponent(Sizing.fill()) {
     override fun onMouseUp(click: MouseButtonEvent): Boolean {
         if (click.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) releaseDrag()
         return super.onMouseUp(click)
+    }
+    // Let the enclosing menu scroll even after this slider gained focus. Click and drag
+    // retain their native handlers; keyboard changes follow the logical focus below.
+    override fun onMouseScroll(mouseX: Double, mouseY: Double, amount: Double): Boolean = false
+    override fun onKeyPress(input: KeyEvent): Boolean {
+        if (input.key() == GLFW.GLFW_KEY_LEFT || input.key() == GLFW.GLFW_KEY_RIGHT)
+            return adjustMenuSliderKey(input, active, focusHandler()?.focused() === this, value(), scrollStep()) { value(it) }
+        return super.onKeyPress(input)
     }
     private fun releaseDrag() {
         dragging = false

@@ -1,15 +1,22 @@
-# Sky-Hawk Player Guide
+# Sky-Myce Player Guide
 
-Sky-Hawk is a lightweight, player-focused Fabric mod for Hypixel SkyBlock. It helps you spend less time managing menus and more time playing.
+Sky-Myce is a player-focused Fabric mod for Hypixel SkyBlock. It helps you spend less time managing menus and more time playing.
 
 This guide covers the essentials: installation, the most useful features, and the commands you will use most often.
 
 ## 1) Install and open
 
-1. Install Fabric for your Minecraft version.
-2. Put the Sky-Hawk mod jar in your Minecraft `mods` folder.
+1. Install Fabric for Minecraft 26.1.2 and use Java 25.
+2. Close Minecraft, remove an old Sky-Myce Loader/mod if migrating, and put the standalone Sky-Myce 2.5.0 JAR in the selected instance's `mods` folder alongside its Fabric dependencies. Keep unrelated mods and settings.
 3. Launch the game with your Fabric profile.
 4. Open the config with `/sm` or `/skymyce`.
+
+Local features need no Discord connection, approval, license or activation key.
+For community services choose Connect Discord in Minecraft, complete the browser
+flow, or submit its one-time fallback code to the existing User Bot's `/connect`.
+Community Sharing settings offer global/category/name opt-outs without disabling
+chat or cosmetics. Optional signed updates are staged for a restart; canceling
+them or losing service access does not stop the installed mod.
 
 ### Mods folder
 
@@ -75,7 +82,8 @@ See also:
 
 - [README.md](README.md)
 - [docs/settings-party-finder.md](docs/settings-party-finder.md)
-- [docs/LOADER.md](docs/LOADER.md)
+- [community connection and privacy](docs/discord-ux.md)
+- [shared metric definitions](docs/community-leaderboards.md)
 
 ## 6) Tips
 
@@ -90,7 +98,7 @@ If a feature does not work as expected:
 
 - confirm you are on the correct Minecraft/Fabric version
 - check the mod config in `/sm`
-- verify you have the latest signed loader update if applicable
+- check for an optional signed mod update in-game; local features remain available if the update/community service is offline
 - review the project docs for the relevant feature area
 
 Sky-Hawk is meant to be practical, low-noise, and helpful in real gameplay, not a cluttered overlay. If a feature feels noisy, disable it in the config and keep the rest of the toolset active.

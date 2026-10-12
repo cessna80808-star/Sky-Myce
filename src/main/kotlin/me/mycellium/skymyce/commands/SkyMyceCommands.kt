@@ -68,7 +68,6 @@ object SkyMyceCommands : SkyMyceModule() {
 
     fun root(name: String): LiteralArgumentBuilder<FabricClientCommandSource> {
         return literal(name)
-            .requires { me.mycellium.skymyce.loader.LoaderClient.localAllowed }
             .executes {
                 MC.instance.execute {
                     openMenu()
@@ -109,6 +108,15 @@ object SkyMyceCommands : SkyMyceModule() {
             }))
             .then(relayChannelCommand("pc", RelayMessages::selectParty, RelayMessages::sendParty))
             .then(literal("help").executes { RelayMessages.chatHelp(); 1 })
+            .then(literal("community").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.community.CommunityScreen()) }; 1
+            })
+            .then(literal("leaderboard").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.community.LeaderboardScreen()) }; 1
+            })
+            .then(literal("journal").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
+            })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->
                     RelayMessages.recipients(builder.remaining).forEach(builder::suggest)
@@ -131,7 +139,6 @@ object SkyMyceCommands : SkyMyceModule() {
     }
 
     private fun m7PbCommand() = literal("m7pb")
-        .requires { me.mycellium.skymyce.loader.LoaderClient.localAllowed }
         .executes { PersonalBestCommand.lookupM7(); 1 }
         .then(argument("player", StringArgumentType.word()).suggests { _, builder ->
             MC.connection?.onlinePlayers?.map { it.profile.name }

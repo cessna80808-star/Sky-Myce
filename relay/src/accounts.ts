@@ -1,14 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
 import { verifyAccount } from "./auth";
-import { newLinkCode, normalizedCode } from "./cosmetics";
+import { newLinkCode, normalizedCode, PlayerCosmetics, type CosmeticProfile, type DiscordCommand, type CosmeticsConfig } from "./cosmetics";
+import { CosmeticAssets } from "./cosmetic-assets";
 import { ACTIVATION_TTL, DEVICE_RESET_COOLDOWN, licenseDenial, type DeveloperActor, type LicensePolicy } from "./licensing";
 import { AuthorizationError, bootstrapPurpose, createLease, decode64, deny, ensureSigningConfigured, installationKey, installationMessage, installationVersionDenial, randomToken,
   seconds, sha256, validateLaunchInput, validateLease, verifyInstallation, type AuthenticationPurpose, type ClientPlatform, type DrmConfig, type InstallationInput, type LeaseClaims } from "./drm";
 import { PromptJobs, type PromptActor, type PromptConfig } from "./prompts";
 import { deliverAccountAlert } from "./discord-notifications";
 import { ircMentionNames, ircPlainText } from "./irc-model";
+import { CommunityAccounts, type CommunityConfig, type CommunitySessionCheck } from "./community";
+import { CommunitySharingStore, type SharingSession, type SharingCategory } from "./community-sharing";
+import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQuery, type JournalComparisonResult } from "./leaderboards";
+import type { PublicRngEvent } from "./digest";
 
-export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore> };
+export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
   device_hash: string | null; hardware_hash: string | null; hwid_reset_at: number | null; hwid_bound_at: number | null; generation: number; activated_at: number | null; created_at: number; last_seen: number; enrollment_blocked: number; is_admin: number };
 type InstallationRow = { installation_id: string; account_id: string; device_hash: string; hardware_hash: string | null; public_key: string; fingerprint: string; revoked_at: number | null; platform: ClientPlatform | null };
@@ -45,6 +50,11 @@ const failure = (error: unknown): { ok: false; error: string } => ({ ok: false, 
  * ponytail: one SQL coordinator serializes global uniqueness; move to a global SQL service if identity throughput outgrows it. */
 export class AccountStore extends DurableObject<AccountsConfig> {
   private readonly prompts: PromptJobs;
+  private readonly community: CommunityAccounts;
+  private readonly sharing: CommunitySharingStore;
+  private readonly cosmetics: PlayerCosmetics;
+  private readonly cosmeticAssets: CosmeticAssets;
+  private readonly leaderboards: CommunityLeaderboards;
   constructor(ctx: DurableObjectState, env: AccountsConfig) {
     super(ctx, env);
     this.prompts = new PromptJobs(ctx.storage, env);
@@ -150,7 +160,154 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       });
       if (bootstrapped) console.info({ event: "admin_bootstrapped", discordId: bootstrapped });
     }
+    this.community = new CommunityAccounts(ctx.storage.sql, fn => ctx.storage.transactionSync(fn), env, {
+      ensure: id => this.ensureAccount(id), account: id => this.byId(id), isAdmin: actor => this.isAdmin(actor),
+      interaction: actor => this.interaction(actor), limit: (key, count) => this.limit(key, count),
+      audit: (actor, account, action, metadata) => this.audit(actor, account, action, metadata),
+      mergeAccount: (source, target) => this.sharing.mergeAccount(source, target), mergeUuid: (uuid, target) => this.sharing.mergeUuid(uuid, target),
+      detachUuid: (uuid, source) => this.sharing.detachUuid(uuid, source),
+    });
+    this.sharing = new CommunitySharingStore(ctx.storage.sql, {
+      owner: player => { const account = this.getAccountByUuid(player); return account ? { accountId: account.accountId, uuids: account.uuids.map(p => p.uuid) } : null; },
+      session: input => this.community.checkSession(input), blacklisted: player => this.community.blacklistedUuid(player),
+    });
+    this.cosmetics = new PlayerCosmetics(ctx.storage);
+    this.cosmeticAssets = new CosmeticAssets(ctx.storage, this.cosmetics, {
+      token: value => this.community.tokenSession(value), current: session => this.community.checkSession(session),
+      owner: player => this.getAccountByUuid(player)?.accountId ?? null, allowed: player => !this.community.blacklistedUuid(player),
+      limit: (key, count) => this.limit(key, count),
+    });
+    this.leaderboards = new CommunityLeaderboards(ctx.storage.sql, {
+      check: (player, category, at) => this.sharing.check(player, category, at),
+      record: (player, raw, name) => this.sharing.recordContribution(player, raw, name),
+    });
   }
+  communityChallenge(raw: Record<string, unknown>) { return this.community.challenge(raw); }
+  communitySessionForToken(token: string) { return this.community.tokenSession(token); }
+  communityCosmeticOverview(token: string) { return this.cosmeticAssets.overview(token); }
+  communityCosmeticSave(token: string, raw: Record<string, unknown>) { return this.cosmeticAssets.save(token, raw); }
+  async communityCosmeticGrant(token: string, raw: Record<string, unknown>) { const result = await this.cosmeticAssets.grant(token, raw); await this.armCosmeticCleanup(); return result; }
+  communityCosmeticClaim(token: string, grant: string) { return this.cosmeticAssets.claim(token, grant); }
+  communityCosmeticFinish(token: string, assetId: string, digest: string, size: number) { return this.cosmeticAssets.finish(token, assetId, digest, size); }
+  async communityCosmeticFail(assetId: string) { this.cosmeticAssets.fail(assetId); await this.armCosmeticCleanup(); }
+  communityCosmeticActiveAsset(assetId: string, player: string) { return this.cosmeticAssets.active(assetId, player); }
+  communityCosmeticPreviewAsset(token: string, assetId: string, player: string) { return this.cosmeticAssets.preview(token, assetId, player); }
+  async communityCosmeticDelete(token: string, assetId: string, raw: Record<string, unknown>) { const result = await this.cosmeticAssets.remove(token, assetId, raw); await this.armCosmeticCleanup(); return result; }
+  private async armCosmeticCleanup(): Promise<void> {
+    const due = this.cosmeticAssets.nextCleanup(), existing = await this.ctx.storage.getAlarm();
+    if (due !== null && (existing === null || due < existing)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+  }
+  async cleanupCosmeticAssets(): Promise<void> {
+    const keys = this.cosmeticAssets.cleanupKeys();
+    if (keys.length && this.env.COSMETIC_ASSETS) {
+      try { await this.env.COSMETIC_ASSETS.delete(keys); this.cosmeticAssets.cleanupComplete(keys); }
+      catch { console.warn({ event: "cosmetic_asset_cleanup_retry" }); }
+    }
+    await this.armCosmeticCleanup();
+  }
+  communityCosmeticProfiles(players: string[]) { return players.length <= 16 && players.every(player => uuid.test(player)) ? players.map(player => this.cosmeticAssets.publicProfile(player)) : []; }
+  importCommunityCosmetics(room: string, profiles: CosmeticProfile[]) {
+    if (room !== (this.env.DISCORD_INTERACTIONS_ROOM ?? "friends") || profiles.length > 128) return;
+    this.ctx.storage.transactionSync(() => profiles.forEach(profile => this.cosmetics.import(profile)));
+  }
+  communityCosmeticCommand(command: DiscordCommand, config: CosmeticsConfig, player: string): Promise<{response: object; changed?: CosmeticProfile}> {
+    if (this.getAccountByUuid(player)?.discordId !== command.actor || !this.communityIdentityAllowed(command.actor, player)) return Promise.resolve({ response: { type: 4, data: { content: "Connect your Minecraft account first.", flags: 64, allowed_mentions: { parse: [] } } } });
+    return this.cosmetics.command(command, config, Date.now(), { uuid: player });
+  }
+  communityConnectStart(raw: Record<string, unknown>) { return this.community.start(raw); }
+  communityConnectPoll(raw: Record<string, unknown>) { return this.community.poll(raw); }
+  communityConnectCancel(raw: Record<string, unknown>) { return this.community.cancel(raw); }
+  communityRefresh(raw: Record<string, unknown>) { return this.community.refresh(raw); }
+  communityDisconnect(raw: Record<string, unknown>) { return this.community.refresh(raw, true); }
+  communityOAuthPreview(launch: string) { return this.community.oauthPreview(launch); }
+  communityOAuthBegin(launch: string, cookie: string) { return this.community.beginOAuth(launch, cookie); }
+  communityOAuthClaim(state: string, cookie: string) { return this.community.claimOAuth(state, cookie); }
+  communityOAuthFinish(flow: string, user: { id: string; username: string; displayName: string }) { return this.community.finishOAuth(flow, user); }
+  authorizeCommunitySession(input: { uuid: string; token: string; challenge: string; modVersion?: string }) { return this.community.authorize(input); }
+  checkCommunitySession(input: CommunitySessionCheck) { return this.community.checkSession(input); }
+  markCommunitySessionOffline(sessionId: string, connectionId: string) { this.community.markOffline(sessionId, connectionId); }
+  communityUserCommand(actor: DeveloperActor, action: string, options: Record<string, unknown> = {}) { return this.community.user(actor, action, options); }
+  communityRead(actor: DeveloperActor, action: string, target = "", options: Record<string, unknown> = {}) { return this.community.read(actor, action, target, options); }
+  communityManage(actor: DeveloperActor, action: string, target: string, options: Record<string, unknown> = {}) { return this.community.manage(actor, action, target, options); }
+  prepareCommunityManagement(actor: DeveloperActor, kind: string, action: string, target: string, options: Record<string, unknown> = {}) { return this.community.prepare(actor, kind, action, target, options); }
+  confirmCommunityManagement(actor: DeveloperActor, kind: string, token: string, confirm: boolean) { return this.community.confirm(actor, kind, token, confirm); }
+  communityIdentityAllowed(discordId: string, player?: string) { return !this.community.blacklisted(discordId, player); }
+  getSharing(input: SharingSession) { return this.sharing.get(input); }
+  updateSharing(input: SharingSession, revision: number, policy: unknown) { return this.ctx.storage.transactionSync(() => this.sharing.update(input, revision, policy)); }
+  checkSharing(player: string, category: SharingCategory, recordedAt?: number) { return this.sharing.check(player, category, recordedAt); }
+  checkSharingMany(input: { uuid: string; category: SharingCategory; recordedAt?: number }[]) { return this.sharing.checkMany(input); }
+  checkCommunitySharing(session: CommunitySessionCheck, input: { uuid: string; category: SharingCategory; recordedAt?: number }[]) {
+    const current = this.community.checkSession(session);
+    if (!current.ok) return { ok: false, error: current.error, decisions: [] };
+    return { ok: true, decisions: this.sharing.checkMany(input) };
+  }
+  getSharingVerified(player: string) { return this.sharing.getVerified(player); }
+  updateSharingVerified(player: string, revision: number, policy: unknown) { return this.ctx.storage.transactionSync(() => this.sharing.updateVerified(player, revision, policy)); }
+  async communityGetSharing(token: string) {
+    const session = await this.community.tokenSession(token);
+    return session.ok ? this.sharing.get({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! }) : { ok: false, error: session.error };
+  }
+  async communityUpdateSharing(token: string, raw: Record<string, unknown>) {
+    const session = await this.community.tokenSession(token);
+    if (!session.ok) return { ok: false, error: session.error };
+    if (!raw || raw.expectedAccountId !== session.accountId || raw.expectedUuid !== session.uuid) return { ok: false, error: "session_identity_changed" };
+    return this.ctx.storage.transactionSync(() => {
+      const result = this.sharing.update({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! }, Number(raw.revision), raw.policy);
+      if (result.ok && result.suppressedCategories?.includes("rng")) this.leaderboards.suppress(result.affectedUuids ?? []);
+      return result;
+    });
+  }
+  recordCommunityContribution(player: string, raw: unknown, name: string) { return this.ctx.storage.transactionSync(() => this.sharing.recordContribution(player, raw, name)); }
+  recordCommunitySessionContribution(session: CommunitySessionCheck, raw: unknown) {
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.community.checkSession(session); if (!current.ok) return { ok: false, error: current.error };
+      const owner = this.getAccountByUuid(session.uuid); if (!owner || owner.accountId !== session.accountId) return { ok: false, error: "session_identity_changed" };
+      return this.sharing.recordContribution(session.uuid, raw, owner.uuids.find(player => player.uuid === session.uuid)!.name);
+    });
+  }
+  async communityContribute(token: string, raw: Record<string, unknown>) {
+    const session = await this.community.tokenSession(token);
+    if (!session.ok) return { ok: false, error: session.error };
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
+      if (!current.ok) return { ok: false, error: current.error };
+      if (raw.expectedAccountId !== session.accountId || raw.expectedUuid !== session.uuid) return { ok: false, error: "session_identity_changed" };
+      const owner = this.getAccountByUuid(session.uuid!); if (!owner || owner.accountId !== session.accountId) return { ok: false, error: "session_identity_changed" };
+      return this.sharing.recordContribution(session.uuid!, raw.contribution, owner.uuids.find(player => player.uuid === session.uuid)!.name);
+    });
+  }
+  async communityLeaderboard(token: string, query: LeaderboardQuery) {
+    const session = await this.community.tokenSession(token);
+    if (!session.ok) return { ok: false, error: session.error };
+    this.limit(`leaderboards:${session.accountId}`, 60);
+    return this.leaderboards.query(query);
+  }
+  async communityJournalComparison(token: string, query: JournalComparisonQuery): Promise<JournalComparisonResult> {
+    const session = await this.community.tokenSession(token);
+    if (!session.ok) return { ok: false, error: session.error };
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
+      if (!current.ok) return { ok: false, error: current.error };
+      try { this.limit(`journal-comparison:${session.accountId}`, 60); }
+      catch (error) { return { ok: false, error: error instanceof AuthorizationError ? error.code : "comparison_unavailable" }; }
+      return this.leaderboards.journalComparison(session.uuid!, query);
+    });
+  }
+  discordLeaderboard(actor: DeveloperActor, query: LeaderboardQuery) {
+    if (actor.guildId !== this.env.DISCORD_GUILD_ID || !snowflake.test(actor.id) || !snowflake.test(actor.interactionId) || !this.communityIdentityAllowed(actor.id)) return { ok: false, error: "not_authorized" };
+    this.interaction(actor); this.limit(`leaderboards-discord:${actor.id}`, 60);
+    return this.leaderboards.query(query);
+  }
+  recordAcceptedCommunityRng(player: string, event: PublicRngEvent, sourceId: string, expectedAccountId: string) {
+    return this.ctx.storage.transactionSync(() => {
+      if (typeof expectedAccountId !== "string" || this.ctx.storage.sql.exec<{ account_id: string }>("SELECT account_id FROM minecraft_accounts WHERE uuid=?", player).toArray()[0]?.account_id !== expectedAccountId) return { ok: false, error: "stale_author" };
+      return this.leaderboards.acceptRng(player, event, sourceId, this.env.DISCORD_RNG_CHANNEL_ID);
+    });
+  }
+  suppressCommunityRng(players: string[]) { this.ctx.storage.transactionSync(() => this.leaderboards.suppress(players)); }
+  acceptCommunityFeedNonce(nonce: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acceptNonce(nonce)); }
+  claimCommunityRng(channel: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.claim(channel)); }
+  acknowledgeCommunityRng(raw: Record<string, unknown>, channel: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acknowledge(raw, channel)); }
   async promptSubmit(actor: PromptActor, prompt: string, source: Record<string, unknown>) {
     const result = this.prompts.submit(actor, prompt, source); await this.prompts.arm(); return result;
   }
@@ -170,6 +327,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     }));
     const due = this.nextAccountAlertAt(), current = await this.ctx.storage.getAlarm();
     if (due !== null && (current === null || due < current)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+    await this.cleanupCosmeticAssets();
   }
   private byDiscord(discordId: string): AccountRow | undefined {
     return this.ctx.storage.sql.exec<AccountRow>("SELECT * FROM sky_accounts WHERE discord_id=?", discordId).toArray()[0];
@@ -571,7 +729,11 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     if (!snowflake.test(discordId) || this.getAccountByUuid(id)?.discordId !== discordId) deny("minecraft_link_required");
     this.limit(`link:${id}`, 1);
     const code = newLinkCode(), digest = await sha256(normalizedCode(code)!); const expiresAt = Date.now() + 300000;
-    this.ctx.storage.sql.exec("INSERT INTO minecraft_links(hash,uuid,name,expires_at,discord_id) VALUES(?,?,?,?,?) ON CONFLICT(uuid) DO UPDATE SET hash=excluded.hash,name=excluded.name,expires_at=excluded.expires_at,discord_id=excluded.discord_id", digest, id, name, expiresAt, discordId);
+    this.ctx.storage.transactionSync(() => {
+      // Ownership can change while hashing. A stale source cannot mint a code after a verified reconnect.
+      if (this.getAccountByUuid(id)?.discordId !== discordId) deny("minecraft_link_required");
+      this.ctx.storage.sql.exec("INSERT INTO minecraft_links(hash,uuid,name,expires_at,discord_id) VALUES(?,?,?,?,?) ON CONFLICT(uuid) DO UPDATE SET hash=excluded.hash,name=excluded.name,expires_at=excluded.expires_at,discord_id=excluded.discord_id", digest, id, name, expiresAt, discordId);
+    });
     return { code, expiresAt };
   }
   async consumeMinecraftLink(discordId: string, code: string): Promise<AccountResult> {
@@ -593,6 +755,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       const owner = this.getAccountByUuid(id); if (owner?.accountId !== account.account_id) deny("minecraft_link_required");
       const name = owner.uuids.find(player => player.uuid === id)!.name;
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations VALUES('*',?)", id);
+      this.sharing.detachUuid(id, account.account_id);
       this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE uuid=?", id);
       this.invalidate(account.account_id); this.audit(discordId, account.account_id, "minecraft_uuid_removed", { uuid: id, minecraftUuid: id, minecraftName: name });
       return { ok: true, invalidated: account.account_id, account: this.summary(this.byId(account.account_id)!) };
@@ -697,11 +860,13 @@ export class AccountStore extends DurableObject<AccountsConfig> {
             if (!player) deny("minecraft_link_required");
             auditMetadata = { ...auditMetadata, uuid: options.uuid, minecraftUuid: options.uuid, minecraftName: player.name };
             this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations SELECT '*',uuid FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string);
+            this.sharing.detachUuid(options.uuid as string, account.account_id);
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string);
           }
           else {
             auditMetadata = { ...auditMetadata, minecraftAccounts: this.summary(account).uuids };
             this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations SELECT '*',uuid FROM minecraft_accounts WHERE account_id=?", account.account_id);
+            for (const player of this.summary(account).uuids) this.sharing.detachUuid(player.uuid, account.account_id);
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=?", account.account_id);
             this.reset(account, actor.id, true);
             this.ctx.storage.sql.exec("UPDATE sky_accounts SET license_status='inactive',enrollment_blocked=1 WHERE account_id=?", account.account_id);
@@ -958,9 +1123,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     }
   }
   canUseIrc(discordId: string): SessionResult {
-    const account = this.byDiscord(discordId), denial = licenseDenial(account); if (denial) return { ok: false, error: denial };
-    if (!account!.activated_at || !account!.device_hash || !this.ctx.storage.sql.exec("SELECT uuid FROM minecraft_accounts WHERE account_id=? LIMIT 1", account!.account_id).toArray().length) return { ok: false, error: "account_required" };
-    return { ok: true, accountId: account!.account_id, discordId };
+    const account = this.byDiscord(discordId);
+    if (!account || !this.ctx.storage.sql.exec("SELECT uuid FROM minecraft_accounts WHERE account_id=? LIMIT 1", account.account_id).toArray().length) return { ok: false, error: "account_required" };
+    if (this.community.blacklisted(discordId, undefined)) return { ok: false, error: "identity_blacklisted" };
+    return { ok: true, accountId: account.account_id, discordId };
   }
   resolveIrcMentions(text: string): string[] {
     if (!ircPlainText(text, 1024)) return [];

@@ -21,6 +21,7 @@ object Config : ConfigKt("SkyMyce Config") {
         category(PartyFinderConfig)
         category(ThemeConfig)
         category(me.mycellium.skymyce.config.misc.CosmeticsConfig)
+        category(me.mycellium.skymyce.config.misc.CommunitySharingConfig)
     }
 
     var openConfigKey by key(GLFW.GLFW_KEY_RIGHT_SHIFT) {

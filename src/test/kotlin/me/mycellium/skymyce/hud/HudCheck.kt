@@ -1,4 +1,5 @@
 package me.mycellium.skymyce.hud
+import me.mycellium.skymyce.hud.widget.parseWidgetConfig
 
 import com.google.gson.Gson
 import io.wispforest.owo.ui.component.UIComponents
@@ -20,6 +21,16 @@ import me.mycellium.skymyce.ui.menuTextWidth
 
 /** Exercises retained owo layout without a Minecraft window or a test framework. */
 fun main() {
+    for (anchor in Anchor.entries) {
+        for (extent in listOf(0, 80, 640, 900)) for (position in listOf(-100000, 0, 180, 100000)) {
+            val result = me.mycellium.skymyce.hud.widget.hudVisibleAnchor(position, extent, 640, anchor.x)
+            val left = result - (anchor.x * extent).toInt()
+            check(left in 0..(640 - extent).coerceAtLeast(0)) { "A saved HUD position became inaccessible after resolution change" }
+        }
+    }
+    val hiddenLayout = checkNotNull(me.mycellium.skymyce.hud.widget.parseWidgetConfig(com.google.gson.JsonParser.parseString("""{"visible":false,"x":40,"y":60,"scale":1.2}""")))
+    check(!hiddenLayout.visible && hiddenLayout.x == 40)
+    check(me.mycellium.skymyce.hud.widget.parseWidgetConfig(com.google.gson.JsonParser.parseString("{}"))?.visible == true)
     val firstOwned = Any(); val secondOwned = Any(); val laterOwned = Any()
     val released = java.lang.ref.WeakReference(Any()).apply { clear() }
     val owned = mutableListOf(java.lang.ref.WeakReference(firstOwned), released, java.lang.ref.WeakReference(secondOwned))
@@ -123,8 +134,9 @@ fun main() {
     }
 
     val saved = """{"x":480,"y":290,"scale":1.5,"anchor":"BOTTOM_RIGHT"}"""
-    val config = Gson().fromJson(saved, WidgetConfig::class.java)
+    val config = requireNotNull(parseWidgetConfig(com.google.gson.JsonParser.parseString(saved)))
     check(config.x == 480 && config.y == 290 && config.scale == 1.5f && config.anchor == Anchor.BOTTOM_RIGHT)
-    check(Gson().toJsonTree(config).asJsonObject.keySet() == setOf("x", "y", "scale", "anchor"))
+    check(config.visible)
+    check(Gson().toJsonTree(config).asJsonObject.keySet() == setOf("x", "y", "scale", "anchor", "visible"))
     println("HUD checks passed: retained layout, dynamic rows, resizing, and saved config compatibility")
 }

@@ -183,7 +183,11 @@ export async function checkPrompts(script) {
       "Content-Type": "application/json", "X-SkyMyce-Timestamp": time, "X-SkyMyce-Nonce": n, "X-SkyMyce-Signature": signature }, body });
     assert.equal((await request()).status, 200); assert.equal((await request()).status, 409);
     assert.equal((await mf.dispatchFetch("https://example.test/prompt/runner", { method: "POST", body: "{}" })).status, 401);
-    assert.equal((await mf.dispatchFetch("https://example.test/auth/admin", { method: "POST", headers: { Authorization: `Bearer ${bindings.PROMPT_BRIDGE_SECRET}` }, body: "{}" })).status, 404);
+    // All legacy /auth routes are retired. A valid prompt bridge credential must not revive admin authority.
+    const retiredAdmin = await mf.dispatchFetch("https://example.test/auth/admin", { method: "POST", headers: { Authorization: `Bearer ${bindings.PROMPT_BRIDGE_SECRET}` }, body: "{}" });
+    assert.equal(retiredAdmin.status, 410); assert.equal((await retiredAdmin.json()).error, "loader_retired");
+    assert.equal((await mf.dispatchFetch("https://example.test/auth/admin", { method: "POST", body: "{}" })).status, 410);
+    assert.equal((await mf.dispatchFetch("https://example.test/community/admin", { method: "POST", headers: { Authorization: `Bearer ${bindings.PROMPT_BRIDGE_SECRET}` }, body: "{}" })).status, 404);
     await run("finish", { ...fields(nextJob), status: "failed", stopped: true, result: { summary: "Stopped before execution", checks: "Not run", unresolved: "" } });
     await resetCooldown();
     const expiry = await store.promptSubmit(actor(), "Expire queued work", {});

@@ -6,7 +6,7 @@ import com.google.gson.JsonObject
 import me.mycellium.mixin.MinecraftAccountKeyAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
-import me.mycellium.skymyce.loader.LoaderClient
+import me.mycellium.skymyce.community.CommunityClient
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
@@ -196,16 +196,16 @@ object DungeonFriendRelay {
         val url = DungeonFriendsSettings.relayUrl
         val user = MC.instance.user
         val key = "$url|${user.profileId}"
-        if (!LoaderClient.onlineAllowed) {
+        if (!CommunityClient.connected) {
             if (identity.isNotEmpty()) {
-                val retain = retainCosmeticsDuringOutage(LoaderClient.localAllowed, active && url.isNotBlank(), identity, key)
+                val retain = retainCosmeticsDuringOutage(true, active && url.isNotBlank(), identity, key)
                 if (!retain || connected || connecting || socket != null) {
                     disconnect(clearCosmetics = !retain)
                     // Keep the boundary through the outage so reconnect does not clear this same cache.
                     if (retain) identity = key
                 }
             }
-            status = "Sky-Myce online authorization required"; return
+            status = "Connect Discord in Sky-Myce Community settings"; return
         }
         if (!active || url.isBlank()) {
             if (identity.isNotEmpty()) disconnect()
@@ -213,9 +213,9 @@ object DungeonFriendRelay {
             return
         }
         if (key != identity) { disconnect(); identity = key }
-        if (activeLease != LoaderClient.authorization.lease) {
+        if (activeLease != CommunityClient.sessionToken) {
             // Renew the authenticated socket without discarding this same player's bounded public appearance cache.
-            disconnect(clearCosmetics = false); identity = key; activeLease = LoaderClient.authorization.lease
+            disconnect(clearCosmetics = false); identity = key; activeLease = CommunityClient.sessionToken
         }
         val now = DungeonFriends.now()
         if (now >= policyDeadline) policyRequest = null
@@ -297,12 +297,12 @@ object DungeonFriendRelay {
                                                 sign()
                                             }
                                             val base64 = Base64.getEncoder()
-                                            mapOf("type" to "authenticate", "name" to user.name, "uuid" to uuid, "liveUpdates" to true, "userMessages" to true, "globalChat" to true, "cosmetics" to true, "cosmeticsVersion" to 3,
+                                            mapOf("type" to "authenticate", "name" to user.name, "uuid" to uuid, "liveUpdates" to true, "userMessages" to true, "globalChat" to true, "cosmetics" to true, "cosmeticsVersion" to 4, "rngMetadataVersion" to 1,
                                                 "expires" to certificate.expiresAt().toEpochMilli(),
                                                 "publicKey" to base64.encodeToString(certificate.key().encoded),
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
                                                 "proof" to base64.encodeToString(proof),
-                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + LoaderClient.relayAuthorization(serverId)
+                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + CommunityClient.relayAuthorization(serverId)
                                         }.whenComplete { proof, error -> MC.instance.execute {
                                             if (token == generation) {
                                                 if (error != null) {
@@ -373,7 +373,7 @@ object DungeonFriendRelay {
                                     }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
-                                        LoaderClient.deny(reason == "license_revoked", reason); disconnect()
+                                        CommunityClient.onlineDenied(reason); disconnect()
                                     }
                                     "message", "user_message", "ack" -> {
                                         check(connected)
@@ -400,6 +400,13 @@ object DungeonFriendRelay {
                                     "stats_result", "wealth_result" -> { check(connected); statsRequests.remove(json.get("id").asString)?.second?.complete(json) }
                                     "digest_news_result", "rng_result" -> { check(connected); runCatching { digestRequests.remove(json.get("id").asString)?.second?.complete(json) } }
                                     "rng_event" -> { check(connected); runCatching { onDigestEvent?.invoke(json) } }
+                                    "rng_removed" -> { check(connected); runCatching { onDigestEvent?.invoke(json) } }
+                                    "stats_removed", "wealth_removed" -> {
+                                        check(connected)
+                                        val ids = json.getAsJsonArray("uuids")?.map { it.asString }?.take(256)?.filter { it.matches(Regex("[a-f0-9]{32}")) }?.toSet().orEmpty()
+                                        if (json.get("type").asString == "stats_removed") DungeonFriendStatsCache.removeSharedSubjects(ids)
+                                        else FriendWealthCache.removeSharedSubjects(ids)
+                                    }
                                     "cosmetics_result" -> { check(connected && cosmeticsAvailable); cosmeticsRequests.remove(json.get("id").asString)?.second?.complete(json) }
                                     "cosmetics_event" -> { check(connected && cosmeticsAvailable); runCatching { me.mycellium.skymyce.features.social.CosmeticsClient.event(json.getAsJsonObject("record")) } }
                                     "stats_update" -> {
@@ -462,7 +469,7 @@ object DungeonFriendRelay {
                         4004 -> "Minecraft proof rejected; restart Minecraft or update the mod, then use Reconnect in Settings"
                         else -> "Relay closed ($statusCode); reconnecting"
                     }, pause = relayNeedsReconnect(statusCode), graceful = true)
-                    if (statusCode == 4005) LoaderClient.deny(code = "authorization_revoked")
+                    if (statusCode == 4005) CommunityClient.onlineDenied("session_revoked")
                 } }
                 return null
             }
@@ -508,9 +515,9 @@ object DungeonFriendRelay {
         return true
     }
 
-    internal fun currentGlobalSession() = connected && LoaderClient.onlineAllowed &&
+    internal fun currentGlobalSession() = connected && CommunityClient.connected &&
         globalRelaySessionCurrent(identity, activeLease, DungeonFriendsSettings.relayUrl, MC.instance.user.profileId,
-            LoaderClient.authorization.lease)
+            CommunityClient.sessionToken)
 
     fun sendUserMessage(name: String, text: String, received: () -> Unit, failed: (String) -> Unit): Boolean {
         if (!connected || !userMessagesAvailable) return false
@@ -638,13 +645,13 @@ object DungeonFriendRelay {
     }
 
     fun publishStats(name: String, uuid: String, stats: DungeonFriendStats, fetchedAt: Long, upload: String) {
-        if (!sharedStatsAvailable) return
+        if (!sharedStatsAvailable || !me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.DUNGEONS)) return
         packet(mapOf("type" to "stats_put", "id" to UUID.randomUUID().toString().replace("-", ""), "name" to name,
             "uuid" to uuid, "stats" to stats, "fetchedAt" to fetchedAt, "upload" to upload))
     }
 
     fun publishWealth(name: String, wealth: FriendWealth, upload: String) {
-        if (!sharedWealthAvailable || wealth.uuid == null) return
+        if (!sharedWealthAvailable || wealth.uuid == null || !me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.ECONOMY)) return
         packet(mapOf("type" to "wealth_put", "id" to UUID.randomUUID().toString().replace("-", ""), "name" to name,
             "uuid" to wealth.uuid.replace("-", ""), "wealth" to wealth, "fetchedAt" to wealth.fetchedAt, "upload" to upload))
     }

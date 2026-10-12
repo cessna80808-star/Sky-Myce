@@ -51,7 +51,7 @@ export async function checkDigest(script, proof) {
       waiters.push(value => { clearTimeout(timer); resolve(value); });
     });
   }
-  async function connect(name = "Alice", room = "friends") {
+  async function connect(name = "Alice", room = "friends", rngMetadataVersion) {
     const response = await mf.dispatchFetch(`http://localhost/websocket?room=${room}`, {
       headers: { Upgrade: "websocket", "CF-Connecting-IP": `127.1.0.${sockets.length + 1}` },
     });
@@ -59,9 +59,10 @@ export async function checkDigest(script, proof) {
     const ws = response.webSocket, next = inbox(ws);
     sockets.push(ws); ws.accept();
     const challenge = await next();
-    ws.send(JSON.stringify(proof(name, challenge.serverId)));
+    ws.send(JSON.stringify({ ...proof(name, challenge.serverId), ...(rngMetadataVersion === 1 ? { rngMetadataVersion } : {}) }));
     const ready = await next();
     assert.equal(ready.digestNews, true); assert.equal(ready.rngFeed, true);
+    assert.equal(ready.rngMetadataVersion, 1);
     return { ws, next };
   }
   async function request(client, data) {
@@ -117,7 +118,7 @@ export async function checkDigest(script, proof) {
 
     let bob = await connect("Bob");
     const subscribed = await request(bob, { type: "rng_subscribe", enabled: true }); assert.deepEqual(subscribed.events, []);
-    const firstDrop = drop(1);
+    const firstDrop = drop(1);firstDrop.event={...firstDrop.event,rarity:'LEGENDARY',displayName:"Necron's Handle",floor:'F7'};
     assert.equal((await request(alice, firstDrop)).stored, true);
     const pushed = await bob.next();
     assert.equal(pushed.type, "rng_event"); assert.equal(pushed.event.player, "Anonymous"); assert.equal(pushed.event.unverified, true);
@@ -127,10 +128,13 @@ export async function checkDigest(script, proof) {
     assert.equal((await request(alice, firstDrop)).stored, false);
     bob.ws.send("ping"); assert.equal(await bob.next(), "pong"); // Duplicate publish does not fan out.
     isolated.ws.send("ping"); assert.equal(await isolated.next(), "pong"); // Room isolation and opt-out.
+    bob=await connect('Bob','friends',1);
+    const metadataHistory=await request(bob,{type:'rng_subscribe',enabled:true});assert.equal(metadataHistory.events[0].rarity,'LEGENDARY');assert.equal(metadataHistory.events[0].displayName,"Necron's Handle");assert.equal(metadataHistory.events[0].floor,'F7');assert.equal(metadataHistory.events[0].player,'Anonymous');
     await mf.unsafeEvictDurableObject("digest-check", "RelayRoom", { name: "friends", webSockets: "hibernate" });
     assert.equal((await request(alice, drop(2, "WARDEN_HEART", "slayer", true))).stored, true);
     assert.equal((await bob.next()).event.player, "Alice"); // Subscription survives hibernation; identity is server-stamped.
-    assert.equal((await request(alice, drop(3))).stored, true); await bob.next();
+    const detailed=drop(3);detailed.event={...detailed.event,rarity:'MYTHIC',displayName:'Observed Handle',floor:'M7'};
+    assert.equal((await request(alice, detailed)).stored, true);const detailedLive=(await bob.next()).event;assert.equal(detailedLive.rarity,'MYTHIC');assert.equal(detailedLive.floor,'M7');assert.equal(detailedLive.displayName,'Observed Handle');assert.equal(detailedLive.player,'Anonymous');
     alice = await connect();
     assert.equal((await request(alice, drop(4))).error, "rate_limited"); // Account limit survives reconnect.
     assert.equal((await request(alice, firstDrop)).stored, false);
@@ -142,10 +146,11 @@ export async function checkDigest(script, proof) {
       { ...catalog, event: { ...catalog.event, occurredAt: Date.now() + 120000 } },
       { ...catalog, event: { ...catalog.event, activity: "__proto__" } },
       { ...catalog, event: { ...catalog.event, coordinates: [1, 2, 3] } },
+      ...[{rarity:'invented'},{rarity:1},{displayName:''},{displayName:'x'.repeat(121)},{displayName:' not trimmed'},{displayName:'bad\nname'},{displayName:'§6Handle'},{displayName:'bad\u202ename'},{floor:'F8'},{floor:'F7'},{floor:1}].map(metadata=>({...catalog,event:{...catalog.event,...metadata}})),
       { ...catalog, inventory: "must not upload" },
       { ...catalog, showName: "false" },
     ]) {
-      alice = await connect(); assert.equal((await request(alice, invalid)).error, "invalid_event");
+      alice = await connect(); assert.equal((await request(alice, invalid)).error, "invalid_event", JSON.stringify(invalid));
     }
     alice = await connect();
     let limited = false;
@@ -159,6 +164,7 @@ export async function checkDigest(script, proof) {
     assert.equal(history.events.length, 4);
     assert.equal(history.events[0].item, "NECRON_HANDLE");
     assert.ok(history.events.every(event => event.unverified));
+    assert.ok(history.events.every(event=>Object.keys(event).length===6),'Older strict recipients still get the original exact history shape');
     const rateRows = await storage.exec("SELECT reports FROM digest_rng_limits WHERE author = ?", "a".repeat(32));
     assert.equal(JSON.parse(rateRows[0].reports).length, 3);
     const payload = await storage.exec("SELECT event FROM digest_rng ORDER BY id LIMIT 1");

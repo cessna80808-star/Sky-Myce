@@ -249,6 +249,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         { !introductionClaimed || opening.sample() >= .85 })
 
     protected abstract fun buildContent(root: FlowLayout)
+    /** Native player previews cannot be rasterized into MenuCanvas. Paint only on the settled, visible page. */
+    protected open fun extractNativeContent(graphics: GuiGraphicsExtractor, screenScaleX: Float, screenScaleY: Float, partialTicks: Float) {}
 
     final override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
         RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
@@ -299,6 +301,9 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         }
         val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision, canvas.dirtyRegion)
+        if (!closing && dropdown == null && closingDropdown == null && pageProgress >= 1.0 && paintedShell.alpha >= .999 && paintedShell.scale >= .999) {
+            extractNativeContent(g, viewport.screenWidth.toFloat() / width, viewport.screenHeight.toFloat() / height, partialTicks)
+        }
         }
     }
 
@@ -476,6 +481,9 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "dungeon-tracker" -> DungeonScreen()
         "auction-browser" -> AuctionHouseScreen()
         "cosmetics" -> CosmeticsScreen()
+        "community" -> me.mycellium.skymyce.community.CommunityScreen()
+        "leaderboards" -> me.mycellium.skymyce.community.LeaderboardScreen()
+        "rng-journal" -> me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()
         "loans" -> FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)
         "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
         "player-utilities" -> FriendsSocialScreen()

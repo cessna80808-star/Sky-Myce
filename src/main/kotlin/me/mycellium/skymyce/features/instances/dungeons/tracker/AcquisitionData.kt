@@ -4,6 +4,8 @@ import com.google.gson.Gson
 import com.google.gson.JsonElement
 import me.mycellium.skymyce.features.digest.DigestRngParser
 import me.mycellium.skymyce.features.digest.DigestSavedState
+import me.mycellium.skymyce.utils.ObservedItemMetadata
+import me.mycellium.skymyce.utils.validObservedItemMetadata
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -24,8 +26,13 @@ internal fun trackingContext(verified: AcquisitionContext?, observed: Acquisitio
 data class AcquisitionEvent(val id: String, val item: String, val occurredAt: Long, val activity: String,
     val context: AcquisitionContext? = null, val floor: String? = null, val chest: String? = null,
     val quantity: Int = 1, val value: Double? = null, val chestCost: Double? = null, val rerollCost: Double? = null,
-    val run: String? = null, val origin: String = "confirmed", val player: String? = null)
-data class RunLoot(val item: String, val count: Int, val value: Double? = null)
+    val run: String? = null, val origin: String = "confirmed", val player: String? = null,
+    /** Local evaluation time, not a claim about the age or authority of the market cache. */
+    val valuationAt: Long? = null,
+    /** Observed from this newly obtained stack/reward only; historical unknowns are never inferred. */
+    val rarity: String? = null, val displayName: String? = null)
+data class RunLoot(val item: String, val count: Int, val value: Double? = null,
+    val rarity: String? = null, val displayName: String? = null)
 data class ChestReceipt(val id: String, val time: Long, val chest: String, val cost: Double?, val loot: List<RunLoot>)
 data class DungeonRunRecord(val id: String, val session: String, val context: AcquisitionContext?, val floor: String,
     val startedAt: Long? = null, val completedAt: Long? = null, val duration: Long? = null,
@@ -109,6 +116,8 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
         require(it.id.matches(Regex("[a-f0-9]{32}")) && it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.occurredAt > 0 && it.quantity in 1..100000)
         require(it.origin in setOf("confirmed", "legacy-confirmed", "legacy-tracker", "legacy-digest")); text(it.activity, 30); text(it.floor, 8); text(it.chest, 16); text(it.run, 40); text(it.player, 16)
         money(it.value); money(it.chestCost); money(it.rerollCost); context(it.context)
+        require(it.valuationAt == null || it.valuationAt > 0 && it.value != null)
+        require(me.mycellium.skymyce.utils.validObservedItemMetadata(it.rarity, it.displayName))
     }
     state.runs.forEach { run ->
         require(state.version == 1 || run.trackingVersion in 1..2)
@@ -120,7 +129,10 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
         run.chests.forEach { receipt ->
             text(receipt.id, 40); text(receipt.chest, 16); require(receipt.time > 0); money(receipt.cost)
             require(receipt.loot.size <= 64)
-            receipt.loot.forEach { require(it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.count in 1..100000); money(it.value) }
+            receipt.loot.forEach {
+                require(it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.count in 1..100000); money(it.value)
+                require(me.mycellium.skymyce.utils.validObservedItemMetadata(it.rarity, it.displayName))
+            }
         }
     }
     state.pins.forEach { text(it, 220) }
@@ -185,15 +197,27 @@ fun safeAverage(total: Double, count: Long): Double? = if (total.isFinite() && t
 fun canonicalItemId(value: String) = value.removePrefix("!").let { if (it.startsWith("item:", true)) it.substring(5) else it }.uppercase()
 
 fun mergeAcquisition(archive: AcquisitionArchive, event: AcquisitionEvent): AcquisitionArchive {
+    require(me.mycellium.skymyce.utils.validObservedItemMetadata(event.rarity, event.displayName))
     val index = archive.events.indexOfFirst { it.id == event.id }
     if (index < 0) return archive.copy(events = archive.events + event)
     val old = archive.events[index]
-    require(old.item == event.item && old.context == event.context && old.origin == event.origin) { "Conflicting acquisition receipt" }
+    require(old.item == event.item && (old.context == event.context || old.context?.matches(event.context) == true) && old.origin == event.origin) { "Conflicting acquisition receipt" }
     val merged = old.copy(quantity = maxOf(old.quantity, event.quantity), floor = old.floor ?: event.floor, chest = old.chest ?: event.chest,
         value = old.value ?: event.value, chestCost = old.chestCost ?: event.chestCost,
-        rerollCost = old.rerollCost ?: event.rerollCost, run = old.run ?: event.run, player = old.player ?: event.player)
+        rerollCost = old.rerollCost ?: event.rerollCost, run = old.run ?: event.run, player = old.player ?: event.player,
+        valuationAt = if (old.value != null) old.valuationAt else event.valuationAt,
+        rarity = old.rarity ?: event.rarity, displayName = old.displayName ?: event.displayName)
     if (old == merged) return archive
     return archive.copy(events = archive.events.toMutableList().apply { this[index] = merged })
+}
+
+/** Late inventory metadata can enrich a recorded personal receipt, never introduce a new drop. */
+internal fun enrichAcquisitionMetadata(archive: AcquisitionArchive, id: String, item: String,
+    context: AcquisitionContext, metadata: ObservedItemMetadata): AcquisitionArchive {
+    require(validObservedItemMetadata(metadata.rarity, metadata.displayName))
+    val recorded = archive.events.firstOrNull { it.id == id && it.item == item && it.origin == "confirmed" && context.matches(it.context) }
+        ?: return archive
+    return mergeAcquisition(archive, recorded.copy(rarity = metadata.rarity, displayName = metadata.displayName))
 }
 
 fun receivedChestItems(expected: Map<String, Int>, before: Map<String, Int>, after: Map<String, Int>): Set<String> =

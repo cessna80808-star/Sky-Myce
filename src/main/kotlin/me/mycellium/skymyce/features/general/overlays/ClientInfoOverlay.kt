@@ -2,7 +2,7 @@ package me.mycellium.skymyce.features.general.overlays
 
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GeneralConfig
-import me.mycellium.skymyce.hud.hudColumn
+import me.mycellium.skymyce.hud.hudPanel
 import me.mycellium.skymyce.hud.updateTextLines
 import me.mycellium.skymyce.hud.widget.Widget
 import me.mycellium.skymyce.utils.MC
@@ -10,7 +10,7 @@ import me.mycellium.skymyce.utils.ServerUtils
 import kotlin.math.round
 
 object ClientInfoOverlay : SkyMyceModule() {
-    private val content by lazy { hudColumn() }
+    private val content by lazy { hudPanel() }
     private val readings = LongArray(7) { Long.MIN_VALUE }
     private var lines = emptyList<String>()
 

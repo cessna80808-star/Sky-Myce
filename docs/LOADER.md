@@ -1,4 +1,12 @@
-# Sky-Myce Loader and client authorization
+# Sky-Myce Loader and client authorization (historical)
+
+Sky-Myce 2.5.0 uses a standalone Fabric mod. The Loader, activation, license and
+HWID workflow below documents previous releases and is no longer the setup path.
+After closing Minecraft, replace old Sky-Myce Loader/mod JARs with the standalone
+release and keep unrelated mods/settings. See the [current player guide](../MANUAL.md)
+and [main-machine community rollout](main-machine-community-rollout.md). The new
+community Worker retires legacy Loader/auth endpoints; this historical guide
+does not imply their continued availability.
 
 The loader is a separate Fabric mod, `skymyce-loader`, distributed as
 `Sky-Myce-Loader.jar`. The protected `skymyce` JAR depends on it. Minecraft

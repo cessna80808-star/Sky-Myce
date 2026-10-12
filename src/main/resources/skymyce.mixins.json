@@ -6,12 +6,14 @@
     "AbstractContainerScreenMixin"
   ],
   "client": [
+    "MinecraftAccountKeyAccessor",
     "RelayChatPrivacyMixin",
     "ChatPatchesIrcMixin",
     "IrcChatAccessor",
     "IrcChatScreenAccessor",
     "AvatarCosmeticsMixin",
     "AvatarCosmeticStateMixin",
+    "CosmeticNametagMixin",
     "CosmeticFontMixin",
     "CosmeticTooltipMixin",
     "CosmeticEditBoxMixin",

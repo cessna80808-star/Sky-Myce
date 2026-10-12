@@ -81,6 +81,7 @@ internal fun wealthLookupRetryAt(response: JsonObject?, sharedAvailable: Boolean
     if (!sharedAvailable) return 0L
     return runCatching {
         if (response == null) return now + 5000
+        if (response.get("error")?.takeIf { it.isJsonPrimitive }?.asString == "sharing_disabled") return 0L
         val retry = response.get("retryAt")?.asLong ?: 0L
         if (retry > now) return retry.coerceAtMost(now + 120000)
         if (response.has("error")) now + 60000 else 0L
@@ -99,6 +100,12 @@ internal fun hasPublicInventory(member: JsonObject?): Boolean = runCatching {
 
 /** Checks the complete roster in the background, reusing confirmed profile results across sessions. */
 object FriendWealthCache {
+    private val sharedSuppressedAt = mutableMapOf<String, Long>()
+    internal var sharedRemovalGeneration = 0L
+        private set
+    private var ownContributionKey = ""
+    private var nextOwnContribution = 0L
+    private var ownContributionBusy = false
     private val entries = mutableMapOf<String, FriendWealth>()
     private var loading: String? = null
     private var nextRequest = 0L
@@ -119,6 +126,51 @@ object FriendWealthCache {
     val available get() = providerAvailable || DungeonFriendRelay.sharedWealthAvailable
     val busy get() = loading != null
     fun get(name: String) = entries[name.lowercase()]
+
+    /** Reuse the optional existing profile provider, once per day/profile; no friend or fabricated values fill own leaderboards. */
+    fun publishOwnContribution() {
+        val context = me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository.currentContext() ?: return
+        if (!providerAvailable || ownContributionBusy || !me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.ECONOMY) ||
+            !me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.LEADERBOARDS)) return
+        val now = System.currentTimeMillis()
+        if (ownContributionKey == context.key && now < nextOwnContribution) return
+        ownContributionKey = context.key; nextOwnContribution = now + 1800000; ownContributionBusy = true
+        val uuid = MC.instance.user.profileId
+        val generation = me.mycellium.skymyce.community.CommunityClient.sessionGeneration
+        Scheduling.schedule(0.seconds) {
+            val measured = runCatching { fetch(uuid, false).copy(uuid = uuid.toString()) }.getOrNull()
+            MC.instance.execute {
+                ownContributionBusy = false
+                if (context.key != me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository.currentContext()?.key ||
+                    generation != me.mycellium.skymyce.community.CommunityClient.sessionGeneration || measured?.hasProfile != true) return@execute
+                publishMeasuredOwnWealth(measured)
+                nextOwnContribution = System.currentTimeMillis() + FRIEND_WEALTH_TTL
+            }
+        }
+    }
+    private fun publishMeasuredOwnWealth(result: FriendWealth) {
+        mapOf("networth" to result.networth, "purse" to result.purse, "bank" to result.bank).forEach { (metric, value) ->
+            value?.let { me.mycellium.skymyce.community.CommunitySharing.contribute(
+                me.mycellium.skymyce.features.instances.dungeons.tracker.acquisitionId("wealth/$metric/${result.uuid}/${result.fetchedAt}"),
+                metric, it, result.fetchedAt, me.mycellium.skymyce.community.SharingCategory.ECONOMY,
+                source = "public-api-client", verification = "estimated") }
+        }
+    }
+
+    fun removeSharedSubjects(uuids: Set<String>) {
+        if (uuids.isEmpty()) return
+        sharedRemovalGeneration++
+        val now = System.currentTimeMillis()
+        uuids.forEach { sharedSuppressedAt[it] = now }
+        val names = entries.filterValues { it.uuid?.replace("-", "") in uuids }.keys.toSet()
+        names.forEach { entries.remove(it) }
+        if (names.isNotEmpty()) { dirty = true; version++ }
+        // Bounded tombstones reject delayed shared responses, while direct local API calculations remain available.
+        if (sharedSuppressedAt.size > 10000) sharedSuppressedAt.entries.sortedBy { it.value }.take(sharedSuppressedAt.size - 10000).forEach { sharedSuppressedAt.remove(it.key) }
+    }
+    internal fun acceptsSharedResponse(result: FriendWealth, requestGeneration: Long): Boolean =
+        requestGeneration == sharedRemovalGeneration &&
+            sharedSuppressedAt[result.uuid?.replace("-", "")]?.let { result.fetchedAt <= it } != true
     fun isLoading(name: String) = loading == name.lowercase()
     fun isQueued(name: String) = name.lowercase() in manualRefresh
     fun diagnostics(): Map<String, Long> = mapOf("wealth.cached" to entries.size.toLong(), "wealth.apiJob" to if (busy) 1L else 0L,
@@ -230,6 +282,7 @@ object FriendWealthCache {
         val alreadyAbsent = !newlyAdded && get(name) == null && DungeonFriendStatsCache.get(name)?.state == StatsState.NO_PROFILE &&
             !friend.location.contains("SkyBlock", true) && friend.activity != FriendActivity.IN_RUN
         val sharedAvailable = DungeonFriendRelay.sharedWealthAvailable
+        val sharedGeneration = sharedRemovalGeneration
         val sharedLookup = DungeonFriendRelay.lookupWealth(name, knownUuid?.toString()?.replace("-", ""),
             manual || get(name)?.hasProfile == false,
             providerAvailable && now >= DungeonFriendProfileProvider.nextViewerRequest)
@@ -259,7 +312,8 @@ object FriendWealthCache {
                     retryAt = DungeonFriendProfileProvider.nextViewerRequest
                     return@runCatching null
                 }
-                if (sharedAvailable && upload == null) {
+                val sharingDisabled = response?.get("error")?.takeIf { it.isJsonPrimitive }?.asString == "sharing_disabled"
+                if (sharedAvailable && upload == null && !sharingDisabled) {
                     retryAt = System.currentTimeMillis() + 5000
                     return@runCatching null
                 }
@@ -287,6 +341,10 @@ object FriendWealthCache {
                     version++
                     return@execute
                 }
+                if (sharedHit && !acceptsSharedResponse(result, sharedGeneration)) {
+                    version++
+                    return@execute
+                }
                 val previous = entries[name.lowercase()]
                 if (sharedHit && previous?.fetchedAt != result.fetchedAt)
                     SkyMyce.logger.info("[Friend wealth] Received cached relay estimate (age={}s)",
@@ -299,6 +357,9 @@ object FriendWealthCache {
                 if (!sharedHit && upload != null && (result.hasProfile == false ||
                     listOfNotNull(result.networth, result.purse, result.bank, result.wardrobe).isNotEmpty()))
                     DungeonFriendRelay.publishWealth(name, result, upload)
+                if (!sharedHit && result.hasProfile == true && result.uuid?.replace("-", "") == MC.instance.user.profileId.toString().replace("-", "")) {
+                    publishMeasuredOwnWealth(result)
+                }
                 dirty = true
                 version++
             }

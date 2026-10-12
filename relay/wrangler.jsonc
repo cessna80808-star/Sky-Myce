@@ -39,6 +39,10 @@
     {
       "binding": "PRIVATE_ARTIFACTS",
       "bucket_name": "sky-myce-private-artifacts"
+    },
+    {
+      "binding": "COSMETIC_ASSETS",
+      "bucket_name": "sky-myce-cosmetic-assets"
     }
   ],
   "migrations": [
@@ -94,6 +98,10 @@
         {
           "binding": "PRIVATE_ARTIFACTS",
           "bucket_name": "sky-myce-staging-private-artifacts"
+        },
+        {
+          "binding": "COSMETIC_ASSETS",
+          "bucket_name": "sky-myce-staging-cosmetic-assets"
         }
       ]
     },
@@ -155,6 +163,10 @@
         {
           "binding": "PRIVATE_ARTIFACTS",
           "bucket_name": "sky-myce-private-artifacts"
+        },
+        {
+          "binding": "COSMETIC_ASSETS",
+          "bucket_name": "sky-myce-cosmetic-assets"
         }
       ]
     }
@@ -166,7 +178,7 @@
       "invocation_logs": false
     },
     "traces": {
-      "enabled": true,
+      "enabled": false,
       "head_sampling_rate": 0.1
     }
   }

@@ -151,7 +151,34 @@ const rareDrops: Record<string, readonly string[]> = {
   dungeon: ["NECRON_HANDLE", "GIANTS_SWORD", "DARK_CLAYMORE", "SHADOW_FURY", "IMPLOSION_SCROLL", "WITHER_SHIELD_SCROLL", "SHADOW_WARP_SCROLL"],
   slayer: ["WARDEN_HEART", "JUDGEMENT_CORE", "OVERFLUX_CAPACITOR"], kuudra: [], fishing: [],
 };
-export type PublicRngEvent = { id: string; item: string; activity: string; occurredAt: number; player: string; unverified: true };
+const rngRarities = ["COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "DIVINE", "ULTIMATE", "SPECIAL", "VERY_SPECIAL", "ADMIN"] as const;
+export type RngMetadata = { rarity?: typeof rngRarities[number]; displayName?: string; floor?: string | null };
+export type PublicRngEvent = RngMetadata & { id: string; item: string; activity: string; occurredAt: number; player: string; unverified: true };
+const rngEventKeys = ["id", "item", "activity", "occurredAt", "rarity", "displayName", "floor"];
+/** Optional observed item details never infer rarity or floor from the drop catalog. */
+function rngMetadata(event: Record<string, unknown>): RngMetadata | null {
+  const { rarity, displayName, floor } = event;
+  if (rarity !== undefined && rarity !== null && (typeof rarity !== "string" || !rngRarities.includes(rarity as typeof rngRarities[number])) ||
+    displayName !== undefined && displayName !== null && (typeof displayName !== "string" || displayName.length < 1 || displayName.length > 120 || displayName.trim() !== displayName || /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029§]/u.test(displayName)) ||
+    floor !== undefined && floor !== null && (event.activity !== "dungeon" || typeof floor !== "string" || !/^(?:E|[FM][1-7])$/.test(floor))) return null;
+  return { ...(typeof rarity === "string" ? { rarity: rarity as typeof rngRarities[number] } : {}),
+    ...(typeof displayName === "string" ? { displayName } : {}), ...(floor !== undefined ? { floor: floor as string | null } : {}) };
+}
+/** Trusted forwarding still validates its persisted/public boundary and projects only declared fields. */
+export function validatedPublicRngEvent(raw: unknown): PublicRngEvent | null {
+  const event = record(raw), metadata = event && rngMetadata(event);
+  if (!event || !metadata || Object.keys(event).some(key => ![...rngEventKeys, "player", "unverified"].includes(key)) ||
+    typeof event.id !== "string" || !identifier.test(event.id) || typeof event.item !== "string" ||
+    typeof event.activity !== "string" || !Object.hasOwn(rareDrops, event.activity) || !rareDrops[event.activity].includes(event.item) ||
+    !Number.isSafeInteger(event.occurredAt) || Number(event.occurredAt) <= 0 || event.unverified !== true ||
+    typeof event.player !== "string" || !(event.player === "Anonymous" || /^[A-Za-z0-9_]{1,16}$/.test(event.player))) return null;
+  return { id: event.id, item: event.item, activity: event.activity, occurredAt: Number(event.occurredAt), player: event.player, unverified: true, ...metadata };
+}
+/** Existing strict v3 parsers receive their original exact shape unless they negotiate metadata version 1. */
+export function rngPayload(event: PublicRngEvent, metadataVersion?: number): PublicRngEvent {
+  const { id, item, activity, occurredAt, player, unverified } = event;
+  return { id, item, activity, occurredAt, player, unverified, ...(metadataVersion === 1 ? rngMetadata(event) ?? {} : {}) };
+}
 
 export class DigestRng {
   constructor(private sql: SqlStorage) {
@@ -164,16 +191,32 @@ export class DigestRng {
   }
 
   recent(now: number): PublicRngEvent[] {
+    return this.recentRecords(now).map(row => row.event);
+  }
+
+  /** Keep author identifiers internal so the relay can enforce persisted consent before returning public projections. */
+  recentRecords(now: number): { author: string; event: PublicRngEvent; receivedAt: number }[] {
     this.sql.exec("DELETE FROM digest_rng WHERE received_at <= ?", now - 604_800_000);
     this.sql.exec("DELETE FROM digest_rng_limits WHERE updated <= ?", now - 360_000);
-    return this.sql.exec<{ event: string }>("SELECT event FROM digest_rng WHERE received_at > ? ORDER BY id DESC LIMIT 30", now - 604_800_000)
-      .toArray().map(row => JSON.parse(row.event));
+    return this.sql.exec<{ author: string; event: string; received_at: number }>("SELECT author,event,received_at FROM digest_rng WHERE received_at > ? ORDER BY id DESC LIMIT 30", now - 604_800_000)
+      .toArray().map(row => ({ author: row.author, event: JSON.parse(row.event), receivedAt: row.received_at }));
+  }
+
+  deleteAuthors(uuids: string[]): string[] {
+    const ids: string[] = [];
+    for (const uuid of uuids) {
+      this.sql.exec<{ event: string }>("SELECT event FROM digest_rng WHERE author=?", uuid).toArray()
+        .forEach(row => ids.push((JSON.parse(row.event) as PublicRngEvent).id));
+      this.sql.exec("DELETE FROM digest_rng WHERE author=?", uuid);
+      // Retain the short rate-limit window. Privacy changes must not make repeated reports eligible again.
+    }
+    return ids;
   }
 
   publish(author: string, name: string, data: Record<string, unknown>, now: number): { stored: boolean; error?: string; event?: PublicRngEvent } {
-    const event = record(data.event);
+    const event = record(data.event), metadata = event && rngMetadata(event);
     if (Object.keys(data).some(key => !["type", "id", "event", "showName"].includes(key)) || typeof data.showName !== "boolean" || !event ||
-        Object.keys(event).some(key => !["id", "item", "activity", "occurredAt"].includes(key)) ||
+        !metadata || Object.keys(event).some(key => !rngEventKeys.includes(key)) ||
         typeof event.id !== "string" || !identifier.test(event.id) || typeof event.item !== "string" ||
         typeof event.activity !== "string" || !Object.hasOwn(rareDrops, event.activity) || !rareDrops[event.activity].includes(event.item) ||
         typeof event.occurredAt !== "number" || !Number.isSafeInteger(event.occurredAt) ||
@@ -187,7 +230,7 @@ export class DigestRng {
       return { stored: false, error: "rate_limited" };
     }
     const published: PublicRngEvent = { id: crypto.randomUUID().replaceAll("-", ""), item: event.item, activity: event.activity,
-      occurredAt: event.occurredAt, player: data.showName ? name : "Anonymous", unverified: true };
+      occurredAt: event.occurredAt, player: data.showName ? name : "Anonymous", unverified: true, ...metadata };
     this.sql.exec("INSERT INTO digest_rng (author, source_id, received_at, event) VALUES (?, ?, ?, ?)", author, event.id, now, JSON.stringify(published));
     // Keep rate limits independent of the public history cap, so evictions/reconnects cannot reset them.
     this.sql.exec("INSERT OR REPLACE INTO digest_rng_limits VALUES (?, ?, ?)", author, JSON.stringify([...recent, { id: event.id, time: now }]), now);

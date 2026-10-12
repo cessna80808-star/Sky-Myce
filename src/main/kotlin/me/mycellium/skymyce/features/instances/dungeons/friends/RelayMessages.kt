@@ -3,7 +3,7 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
-import me.mycellium.skymyce.loader.LoaderClient
+import me.mycellium.skymyce.community.CommunityClient
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents
 import net.minecraft.client.gui.screens.ChatScreen
@@ -245,7 +245,7 @@ object RelayMessages {
         val account = MC.instance.user.profileId
         val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
         clearRichHistory(ircHistoryBoundary(account, endpoint))
-        val sessionBoundary = "$richBoundary|${LoaderClient.authorization.lease}|${DungeonFriendRelay.sessionGeneration}"
+        val sessionBoundary = "$richBoundary|${CommunityClient.sessionToken}|${DungeonFriendRelay.sessionGeneration}"
         if (richSessionBoundary != sessionBoundary) { richSessionBoundary = sessionBoundary; reset() }
         refreshPartyBoundary()
         val seenBoundary = "$account|$endpoint|$activeParty"
@@ -292,13 +292,13 @@ object RelayMessages {
     private fun currentGlobalResult(action: (String?) -> Unit): (String?) -> Unit {
         val client = MC.instance
         val account = client.user.profileId
-        val lease = LoaderClient.authorization.lease
+        val lease = CommunityClient.sessionToken
         val endpoint = me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl
         val generation = DungeonFriendRelay.sessionGeneration
         return { reason ->
-            if (client.user.profileId == account && LoaderClient.authorization.lease == lease &&
+            if (client.user.profileId == account && CommunityClient.sessionToken == lease &&
                 me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings.relayUrl == endpoint &&
-                DungeonFriendRelay.sessionGeneration == generation && LoaderClient.onlineAllowed &&
+                DungeonFriendRelay.sessionGeneration == generation && CommunityClient.connected &&
                 client.player != null && client.connection != null) action(reason)
         }
     }
@@ -326,7 +326,7 @@ object RelayMessages {
     private fun sendIrc(scope: String, text: String) {
         val problem = ircClientMessageError(scope, text)
         if (problem != null) { notice(problem, true); return }
-        if (!LoaderClient.onlineAllowed) { notice("Online authorization is required for IRC.", true); return }
+        if (!CommunityClient.connected) { notice("Connect Discord in Community settings to use IRC.", true); return }
         if (scope == "global") enableGlobal() else enableParty()
         if (MC.instance.player == null || MC.connection == null || !DungeonFriendRelay.currentGlobalSession()) {
             notice("IRC is unavailable. Reconnect and retry; nothing was sent to normal chat.", true); return

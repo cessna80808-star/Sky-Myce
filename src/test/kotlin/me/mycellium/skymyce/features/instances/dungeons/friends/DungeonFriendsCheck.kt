@@ -21,6 +21,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /** Run with ./gradlew dungeonFriendsCheck; requires no Minecraft client or API credentials. */
 fun main() {
+    me.mycellium.skymyce.community.checkCommunitySharing()
     checkFriendWork()
     me.mycellium.skymyce.features.general.checkPersonalBestCommand()
     me.mycellium.skymyce.features.general.auction.checkAuctions()
@@ -458,6 +459,25 @@ fun main() {
     fun pollCache(time: Long = cacheTime) = DungeonFriendStatsCache.pollShared(time) { name, _ ->
         CompletableFuture<com.google.gson.JsonObject?>().also { sharedReplies[name] = it }
     }
+    // A name-only request can finish before a privacy removal but remain unprocessed until
+    // afterward. A relay clock ahead of this client must not make that stale result look new.
+    DungeonFriendStatsCache.clear()
+    DungeonFriendStatsCache.request("Removed")
+    pollCache(cacheTime)
+    val removedReply = sharedReply("removed").apply {
+        getAsJsonObject("record").addProperty("uuid", "e".repeat(32))
+        getAsJsonObject("record").addProperty("fetchedAt", System.currentTimeMillis() + 50000)
+    }
+    val removedResponse = sharedReplies.getValue("removed")
+    removedResponse.complete(removedReply)
+    DungeonFriendStatsCache.removeSharedSubjects(setOf("e".repeat(32)))
+    pollCache(System.currentTimeMillis() + 1000)
+    check(DungeonFriendStatsCache.get("Removed") == null) {
+        "A queued shared response restored a removed subject after a clock-skewed privacy removal"
+    }
+    check(sharedReplies.getValue("removed") !== removedResponse) // A new authority check can still recover consented data.
+    DungeonFriendStatsCache.clear()
+    sharedReplies.clear()
     // Profile switches retain a forced follow-up and reject old provider responses in either order.
     val inFlightField = DungeonFriendStatsCache::class.java.getDeclaredField("inFlight").apply { isAccessible = true }
     for (oldFirst in listOf(true, false)) {
@@ -830,6 +850,7 @@ private fun checkJoinLookups() {
     check(wealthLookupRetryAt(null, sharedAvailable = false, 1000) == 0L) // Offline relay permits local fallback.
     check(wealthLookupRetryAt(null, sharedAvailable = true, 1000) == 6000L) // A full request queue must not bypass the shared cache.
     check(wealthLookupRetryAt(JsonParser.parseString("""{"error":"rate_limited"}""").asJsonObject, true, 1000) == 61000L)
+    check(wealthLookupRetryAt(JsonParser.parseString("""{"error":"sharing_disabled"}""").asJsonObject, true, 1000) == 0L) // Privacy denial permits independent local calculation, without a publish grant.
     check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":9000}""").asJsonObject, true, 1000) == 9000L)
     check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":9999999}""").asJsonObject, true, 1000) == 121000L)
     check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":"invalid"}""").asJsonObject, true, 1000) == 61000L)

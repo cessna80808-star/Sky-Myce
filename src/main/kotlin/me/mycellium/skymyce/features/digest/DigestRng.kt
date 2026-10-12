@@ -2,12 +2,18 @@ package me.mycellium.skymyce.features.digest
 
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.utils.MC
+import me.mycellium.skymyce.utils.ObservedItemMetadata
+import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.consistentItemMetadata
 import net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket
 import net.minecraft.world.entity.player.Inventory
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.level.PacketReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.PlayerInventoryChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
+import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
+import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
@@ -18,8 +24,11 @@ import kotlin.time.Duration.Companion.milliseconds
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.canonicalItemId
+import me.mycellium.skymyce.features.instances.dungeons.tracker.acquisitionId
 
-data class DetectedRng(val id: String, val item: String, val activity: String, val occurredAt: Long, val confirmation: String? = null)
+data class DetectedRng(val id: String, val item: String, val activity: String, val occurredAt: Long, val confirmation: String? = null,
+    val rarity: String? = null, val displayName: String? = null)
+internal fun confirmedRng(drop: DetectedRng) = drop.confirmation?.let { drop.copy(id = acquisitionId(it)) } ?: drop
 data class DigestRareItem(val name: String, val activity: String)
 
 object DigestRngCatalog {
@@ -46,8 +55,9 @@ object DigestRngParser {
     private val slayer = Regex("(?:CRAZY RARE DROP!|INSANE DROP!|RNGesus INCARNATE DROP!)\\s+(?:\\(([^()]{1,100})\\)|([^()]{1,100}?))(?: \\(\\+[\\d,.]+%? [^\\r\\n]{0,8}Magic Find\\))?[! ]*")
 
     fun detect(text: String, player: String, location: String, now: Long): DetectedRng? {
-        if (text.length !in 1..300 || !Regex("[A-Za-z0-9_]{1,16}").matches(player) || text.any { it == '\n' || it == '\r' || it == '§' }) return null
-        val dungeonMatch = dungeon.matchEntire(text) ?: dungeonDrop.matchEntire(text)
+        val normalized = normalizeRngText(text) ?: return null
+        if (!Regex("[A-Za-z0-9_]{1,16}").matches(player) || now <= 0) return null
+        val dungeonMatch = dungeon.matchEntire(normalized) ?: dungeonDrop.matchEntire(normalized)
         val activity: String
         val name: String
         if (dungeonMatch != null) {
@@ -56,7 +66,7 @@ object DigestRngParser {
             name = dungeonMatch.groupValues[2]
         } else {
             if (location !in setOf("HUB", "SPIDERS_DEN", "THE_PARK", "THE_END", "CRIMSON_ISLE")) return null
-            val match = slayer.matchEntire(text) ?: return null
+            val match = slayer.matchEntire(normalized) ?: return null
             activity = "slayer"
             name = match.groupValues[1].ifEmpty { match.groupValues[2] }
         }
@@ -67,51 +77,87 @@ object DigestRngParser {
     }
 }
 
+/** Strip known Minecraft styling and equivalent spacing, without removing sender prefixes or combining lines. */
+internal fun normalizeRngText(text: String): String? {
+    if (text.length !in 1..600 || text.any { it == '\n' || it == '\r' || it.isISOControl() && it != '\t' }) return null
+    val stripped = text.replace(Regex("§[0-9a-fk-orx]", RegexOption.IGNORE_CASE), "")
+    if ('§' in stripped) return null
+    return stripped.replace('’', '\'').replace('‘', '\'').replace(Regex("[\\s\\u00a0\\u202f]+"), " ").trim().takeIf { it.length in 1..300 }
+}
+
 /** Announcements alone may describe a preview. Require a matching aggregate inventory increase. */
 class DigestDungeonAcquisition {
+    private data class InventoryIncrease(val at: Long, val confirmation: String?, val metadata: ObservedItemMetadata?)
     private var counts: Map<String, Int>? = null
     private val pending = linkedMapOf<String, DetectedRng>()
-    private val increased = mutableMapOf<String, Pair<Long, String?>>()
+    private val increased = mutableMapOf<String, InventoryIncrease>()
+    private val slayerMetadata = linkedMapOf<String, DetectedRng>()
 
-    fun seed(snapshot: Map<String, Int>) { counts = snapshot.toMap(); pending.clear(); increased.clear() }
-    fun clear() { counts = null; pending.clear(); increased.clear() }
+    fun seed(snapshot: Map<String, Int>) { counts = snapshot.toMap(); pending.clear(); increased.clear(); slayerMetadata.clear() }
+    fun clear() { counts = null; pending.clear(); increased.clear(); slayerMetadata.clear() }
 
     fun announce(drop: DetectedRng, now: Long): DetectedRng? {
         if (counts == null || drop.activity != "dungeon") return null
         prune(now)
-        increased.remove(drop.item)?.takeIf { now - it.first in 0..3000 }?.let { return drop.copy(confirmation = it.second) }
+        increased.remove(drop.item)?.takeIf { now - it.at in 0..3000 }?.let {
+            return drop.copy(confirmation = it.confirmation, rarity = it.metadata?.rarity, displayName = it.metadata?.displayName)
+        }
         pending[drop.item] = drop
         return null
     }
 
-    fun inventory(snapshot: Map<String, Int>, now: Long, observation: String? = null): List<DetectedRng> {
+    /** Slayer chat already confirms the personal drop. Correlate only its optional metadata, never an old held item. */
+    fun annotateSlayer(drop: DetectedRng, now: Long): DetectedRng {
+        if (counts == null || drop.activity != "slayer") return drop
+        prune(now)
+        increased.remove(drop.item)?.takeIf { now - it.at in 0..3000 }?.let {
+            return drop.copy(rarity = it.metadata?.rarity, displayName = it.metadata?.displayName)
+        }
+        slayerMetadata.putIfAbsent(drop.item, drop)
+        return drop
+    }
+
+    fun inventory(snapshot: Map<String, Int>, now: Long, observation: String? = null,
+                  metadata: Map<String, ObservedItemMetadata> = emptyMap()): List<DetectedRng> {
         val previous = counts ?: run { seed(snapshot); return emptyList() }
         counts = snapshot.toMap()
         prune(now)
         val found = mutableListOf<DetectedRng>()
         snapshot.forEach { (item, count) ->
-            if (!DigestRngCatalog.valid(item, "dungeon") || count <= (previous[item] ?: 0)) return@forEach
+            if (item !in DigestRngParser.catalog || count <= (previous[item] ?: 0)) return@forEach
+            val observed = metadata[item]?.let { observedItemMetadata(it.rarity, it.displayName) }
+            if (DigestRngCatalog.valid(item, "slayer")) {
+                val drop = slayerMetadata.remove(item)
+                if (drop != null && observed != null) found += drop.copy(rarity = observed.rarity, displayName = observed.displayName)
+                else increased[item] = InventoryIncrease(now, null, observed)
+                return@forEach
+            }
             val drop = pending.remove(item)
             val confirmation = observation?.let { "$it/$item" }
-            if (drop != null) found += drop.copy(confirmation = confirmation) else increased[item] = now to confirmation
+            if (drop != null) found += drop.copy(confirmation = confirmation, rarity = observed?.rarity, displayName = observed?.displayName)
+            else increased[item] = InventoryIncrease(now, confirmation, observed)
         }
         return found
     }
 
     private fun prune(now: Long) {
         pending.entries.removeIf { now - it.value.occurredAt !in 0..15_000 }
-        increased.entries.removeIf { now - it.value.first !in 0..3000 }
+        increased.entries.removeIf { now - it.value.at !in 0..3000 }
+        slayerMetadata.entries.removeIf { now - it.value.occurredAt !in 0..15_000 }
     }
 }
 
 object DigestRng : SkyMyceModule() {
     var detected: ((DetectedRng) -> Unit)? = null
-    var contextReady: () -> Boolean = { false }
+    var contextReady: () -> Boolean = { AcquisitionRepository.currentContext() != null }
     private val recent = linkedMapOf<String, Long>()
+    private val confirmedReceipts = linkedSetOf<String>()
     private val acquisition = DigestDungeonAcquisition()
     private var inventoryCheck: ScheduledFuture<*>? = null
     private var context = 0L
     private var rareSlots = emptySet<Int>()
+    private var inventoryContext: me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext? = null
+    private var inventoryWorld: Any? = null
     fun diagnostics(): Map<String, Long> = mapOf("digest.inventory_task" to if (inventoryCheck?.isDone == false) 1L else 0L,
         "digest.recent_drops" to recent.size.toLong(), "digest.rare_slots" to rareSlots.size.toLong())
 
@@ -119,28 +165,49 @@ object DigestRng : SkyMyceModule() {
         recent.clear()
         acquisition.clear()
         rareSlots = emptySet()
+        inventoryContext = null
+        inventoryWorld = null
         context++
         inventoryCheck?.cancel(false)
         inventoryCheck = null
     }
 
     /** Called once after the account/profile is ready, before accepting any announcements. */
-    fun contextChanged() { clearContext(); if (contextReady()) acquisition.seed(inventoryCounts()) }
+    fun contextChanged() { ensureContext() }
+
+    @Subscription(ProfileChangeEvent::class, ServerDisconnectEvent::class) fun resetAcquisitionContext() { clearContext() }
+    @Subscription(TickEvent::class) fun observeContext() { ensureContext() }
+    private fun ensureContext(): Boolean {
+        val current = AcquisitionRepository.currentContext()
+        val world = MC.instance.level
+        if (current == null || world == null || !contextReady()) {
+            if (!LocationAPI.isOnSkyBlock && inventoryContext != null) clearContext()
+            return false
+        }
+        if (inventoryContext?.matches(current) != true || inventoryWorld !== world) {
+            clearContext()
+            inventoryContext = current
+            inventoryWorld = world
+            acquisition.seed(inventoryCounts())
+        }
+        return true
+    }
 
     @Subscription(receiveCancelled = true)
     fun onChat(event: ChatReceivedEvent.Pre) {
-        if (!LocationAPI.isOnSkyBlock || !contextReady()) return
+        if (!LocationAPI.isOnSkyBlock || !ensureContext()) return
         val now = System.currentTimeMillis()
         val drop = DigestRngParser.detect(event.text, MC.instance.user.name, LocationAPI.island?.name.orEmpty(), now) ?: return
-        if (drop.activity == "dungeon") acquisition.announce(drop, now)?.let(::publish) else publish(drop)
+        if (drop.activity == "dungeon") acquisition.announce(drop, now)?.let(::publish)
+        else publish(acquisition.annotateSlayer(drop, now))
     }
 
     @Subscription fun onInventory(event: PlayerInventoryChangeEvent) {
         if (!LocationAPI.isOnSkyBlock || inventoryCheck != null) return
-        val digestReady = contextReady()
+        val digestReady = ensureContext()
         val trackerWaiting = DungeonTracker.awaitsInventory()
         if (!digestReady && !trackerWaiting) return
-        if (!trackerWaiting && !DigestRngCatalog.valid(canonicalItemId(event.item.getSkyBlockId()?.id.orEmpty()), "dungeon") && event.slotIndex !in rareSlots) return
+        if (!trackerWaiting && canonicalItemId(event.item.getSkyBlockId()?.id.orEmpty()) !in DigestRngParser.catalog && event.inventorySlot.containerSlot !in rareSlots) return
         requestInventoryObservation()
     }
 
@@ -152,42 +219,60 @@ object DigestRng : SkyMyceModule() {
 
     /** Read after packet handling; a matching reward header can also request this once. */
     fun requestInventoryObservation() {
-        if (!LocationAPI.isOnSkyBlock || inventoryCheck != null || !contextReady() && !DungeonTracker.awaitsInventory()) return
+        if (!LocationAPI.isOnSkyBlock || inventoryCheck != null || !ensureContext() && !DungeonTracker.awaitsInventory()) return
         val token = context
         // Coalesce the source/destination updates of item moves before comparing total counts.
         inventoryCheck = Scheduling.schedule(200.milliseconds) { MC.instance.execute {
             if (token == context) inventoryCheck = null
             val digestCurrent = token == context && contextReady()
             if (digestCurrent || DungeonTracker.awaitsInventory()) {
-                val counts = inventoryCounts(); val now = System.currentTimeMillis(); val observation = java.util.UUID.randomUUID().toString()
-                DungeonTracker.inventoryObserved(counts, now, observation)
-                if (digestCurrent) acquisition.inventory(counts, now, observation).forEach(::publish)
+                val snapshot = inventorySnapshot(); val now = System.currentTimeMillis(); val observation = java.util.UUID.randomUUID().toString()
+                DungeonTracker.inventoryObserved(snapshot.counts, now, observation, snapshot.metadata)
+                if (digestCurrent) acquisition.inventory(snapshot.counts, now, observation, snapshot.metadata).forEach {
+                    // Late slayer metadata enriches the same archive ID, without replaying Digest or public publication.
+                    if (it.activity == "slayer") AcquisitionRepository.enrichConfirmed(it) else publish(it)
+                }
             }
         } }
     }
 
-    fun inventoryCounts(): Map<String, Int> {
-        val inventory = MC.instance.player?.inventoryMenu ?: return emptyMap()
+    private data class ObservedInventory(val counts: Map<String, Int>, val metadata: Map<String, ObservedItemMetadata>)
+    fun inventoryCounts(): Map<String, Int> = inventorySnapshot().counts
+    private fun inventorySnapshot(): ObservedInventory {
+        val inventory = MC.instance.player?.inventoryMenu ?: return ObservedInventory(emptyMap(), emptyMap())
         val counts = mutableMapOf<String, Int>()
+        val metadata = mutableMapOf<String, MutableList<ObservedItemMetadata?>>()
         val slots = mutableSetOf<Int>()
         for (slot in inventory.slots) {
             if (slot.container !is Inventory) continue
             val item = slot.item
             val id = item.getSkyBlockId()?.id?.let(::canonicalItemId) ?: continue
             counts[id] = (counts[id] ?: 0) + item.count
-            if (DigestRngCatalog.valid(id, "dungeon")) slots += slot.index
+            // Container-menu indexes shift while a chest is open; the backing player inventory index stays stable.
+            if (id in DigestRngParser.catalog) {
+                slots += slot.containerSlot
+                metadata.getOrPut(id) { mutableListOf() }.add(observedItemMetadata(item))
+            }
         }
         rareSlots = slots
-        return counts
+        return ObservedInventory(counts, metadata.mapNotNull { (id, variants) -> consistentItemMetadata(variants)?.let { id to it } }.toMap())
     }
 
-    private fun publish(drop: DetectedRng) {
+    private fun publish(observed: DetectedRng) {
+        val drop = confirmedRng(observed)
         val now = System.currentTimeMillis()
+        if (drop.confirmation != null) {
+            if (!confirmedReceipts.add(drop.id)) return
+            if (confirmedReceipts.size > 10000) confirmedReceipts.remove(confirmedReceipts.first())
+        }
         recent.entries.removeIf { it.value + 3000 < now }
         val key = drop.confirmation ?: "${drop.activity}|${drop.item}"
         if (key in recent) return
         recent[key] = now
         AcquisitionRepository.confirmed(drop)
+        me.mycellium.skymyce.utils.Utils.displayDevMessage { "RNG acquisition confirmed locally: activity=${drop.activity}, inventoryReceipt=${drop.confirmation != null}" }
         detected?.invoke(drop)
     }
+    /** Trusted in-process complete chest receipt; preview/control events never invoke this boundary. */
+    internal fun receiptConfirmed(drop: DetectedRng) { if (AcquisitionRepository.currentContext() != null) publish(drop) }
 }

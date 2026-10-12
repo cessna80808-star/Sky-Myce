@@ -175,7 +175,7 @@ dependencies {
 
 	// owo lib
 	implementation("io.wispforest:owo-lib:${providers.gradleProperty("owo_version").get()}")
-	include("io.wispforest:owo-sentinel:${providers.gradleProperty("owo_version").get()}")
+	include("io.wispforest:owo-lib:${providers.gradleProperty("owo_version").get()}")
 }
 
 // Keep Loom's module coordinates/capabilities and normal nesting/metadata machinery.
@@ -221,7 +221,7 @@ java {
 }
 
 tasks.jar {
-	exclude("me/mycellium/skymyce/loader/**", "me/mycellium/mixin/MinecraftAccountKeyAccessor.class", "sky-myce-loader.properties")
+	exclude("me/mycellium/skymyce/loader/**", "sky-myce-loader.properties")
 	val projectName = project.name
 	inputs.property("projectName", projectName)
 
@@ -229,6 +229,50 @@ tasks.jar {
 		rename { "${it}_$projectName" }
 	}
 }
+
+val communityResources = layout.buildDirectory.dir("generated/community")
+val generateCommunityResources by tasks.registering {
+    val values = mapOf(
+        "backend" to providers.gradleProperty("skyMyceBackend").get(),
+        "minecraft" to providers.gradleProperty("minecraft_version").get(),
+        "key." + providers.gradleProperty("skyMyceSigningKeyId").get() to providers.gradleProperty("skyMyceSigningPublicKey").get()
+    )
+    inputs.properties(values)
+    outputs.dir(communityResources)
+    doLast {
+        checkLoaderConfiguration(Properties().apply { putAll(values) })
+        val output = communityResources.get().asFile.apply { mkdirs() }
+        output.resolve("sky-myce-community.properties").writer().use { writer ->
+            Properties().apply { putAll(values) }.store(writer, "Public endpoint and update trust roots; no credentials")
+        }
+    }
+}
+tasks.processResources { dependsOn(generateCommunityResources); from(communityResources) }
+
+val communityPackagingCheck by tasks.registering {
+    group = "verification"
+    dependsOn(tasks.jar)
+    doLast {
+        ZipFile(tasks.jar.get().archiveFile.get().asFile).use { jar ->
+            val mod = jar.getInputStream(jar.getEntry("fabric.mod.json")).reader().use { JsonSlurper().parse(it) as Map<*, *> }
+            check(mod["id"] == "skymyce" && !(mod["depends"] as Map<*, *>).containsKey("skymyce-loader"))
+            check(jar.getEntry("me/mycellium/mixin/MinecraftAccountKeyAccessor.class") != null)
+            check(jar.entries().asSequence().none { it.name.startsWith("me/mycellium/skymyce/loader/") || it.name == "sky-myce-loader.properties" })
+            val config = Properties().apply { jar.getInputStream(jar.getEntry("sky-myce-community.properties")).use { load(it) } }
+            checkLoaderConfiguration(config)
+            check(config.stringPropertyNames().all { it in setOf("backend", "minecraft") || it.startsWith("key.") })
+            check(jar.entries().asSequence().any { it.name.startsWith("META-INF/jars/owo-lib-") })
+            logger.lifecycle("Standalone Fabric packaging passed: full UI runtime, Minecraft proof mixin, public configuration, no custom loader")
+        }
+    }
+}
+val communityCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.community.CommunityCheckKt"
+}
+tasks.check { dependsOn(communityPackagingCheck, communityCheck) }
 
 val loaderResources = layout.buildDirectory.dir("generated/loader")
 val generateLoaderResources by tasks.registering {
@@ -277,7 +321,8 @@ val loaderJar by tasks.registering(Jar::class) {
     from({ configurations.runtimeClasspath.get().filter { it.name.startsWith("gson-") }.map { zipTree(it) } }) { exclude("META-INF/**") }
     manifest { attributes["Main-Class"] = "me.mycellium.skymyce.loader.LoaderInstaller" }
 }
-tasks.assemble { dependsOn(loaderJar) }
+// Legacy bootstrap artifacts are available only through the explicit loaderJar task.
+// A normal build distributes the standalone Fabric mod.
 
 val loaderConfigurationCheck by tasks.registering {
     group = "verification"
@@ -452,7 +497,7 @@ val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
         mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt"
     }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, loaderConfigurationCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
 tasks.test { failOnNoDiscoveredTests = false }
 

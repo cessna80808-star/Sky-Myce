@@ -87,7 +87,10 @@ fun main() {
     check(MenuCatalog.settingLocation("Dungeons/dungeonChestProfit").category == MenuCategory.DUNGEONS)
     check(MenuCatalog.settingLocation("General/Stash Helper/stashHelper").category == MenuCategory.ECONOMY)
     val globalPaths = catalog.features.filter { it.category == MenuCategory.SETTINGS }.flatMap { it.settings }.map { it.path }.toSet()
-    check(globalPaths.all { it in setOf("openConfigKey", "gatherData", "devMode") || it.startsWith("Theme & Appearance/") })
+    check(globalPaths.all { it in setOf("openConfigKey", "gatherData", "devMode") || it.startsWith("Theme & Appearance/") || it.startsWith("Community Sharing/") })
+    for (key in listOf("enabled", "dungeons", "economy", "rng", "activity", "leaderboards", "publicName")) {
+        check(catalog.featureForPath("Community Sharing/$key")?.id == "community")
+    }
     check(catalog.featureForPath("Theme & Appearance/graphicsQuality")!!.id == "settings-performance")
     check(catalog.featureForPath("Theme & Appearance/animationMode")!!.id == "settings-appearance")
     check(catalog.featureForPath("openConfigKey")!!.id == "settings-controls")
@@ -165,6 +168,6 @@ fun main() {
     }
     check(catalog.search("API fallback").none { it.settingPath?.endsWith("/hypixelApiKey") == true && it.quickSettingEligible })
     // Category terms can narrow a natural query without adding another feature home.
-    check(catalog.search("economy friends").all { it.category == MenuCategory.ECONOMY })
+    check(catalog.search("economy friends").all { it.category == MenuCategory.ECONOMY || it.settingPath == "Community Sharing/economy" })
     println("Menu catalog checks passed: six categories, ${catalog.features.size} canonical features, ${rows.size} settings and searchable aliases")
 }

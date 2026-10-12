@@ -7,6 +7,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 fun checkTracker() {
+    checkRngJournal()
     checkDungeonTiming()
     checkChestTracking()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)

@@ -4,6 +4,12 @@ import com.google.gson.JsonParser
 import me.mycellium.skymyce.features.instances.dungeons.friends.relayPacketSizeAllowed
 import me.mycellium.skymyce.features.instances.dungeons.friends.retainCosmeticsDuringOutage
 import java.util.UUID
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.security.MessageDigest
+import java.util.HexFormat
+import java.util.zip.CRC32
+import java.util.zip.Deflater
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.ClickEvent
@@ -11,6 +17,7 @@ import net.minecraft.util.FormattedCharSequence
 import net.minecraft.client.StringSplitter
 
 fun checkCosmetics() {
+    studioAsyncWorkChecks()
     fun parse(text: String) = parseCosmeticProfile(JsonParser.parseString(text).asJsonObject)
     val raw = """{"uuid":"${"a".repeat(32)}","name":"Hawk","scale":1.5,"revision":1,"updatedAt":1700000000000}"""
     val profile = requireNotNull(parse(raw))
@@ -84,6 +91,75 @@ fun checkCosmetics() {
     check(parseCosmeticProfile(extended.deepCopy().apply { addProperty("scaleZ", 3) })?.scaleZ == 3f)
     check(parseCosmeticProfile(extended.deepCopy().apply { addProperty("scaleY", "1.5") }) == null)
     check(parseCosmeticProfile(extended.deepCopy().apply { addProperty("name", "Wrong") }) == null)
+    val studio = extended.deepCopy().apply {
+        addProperty("nametagScale", 1.75); addProperty("capePreset", "forest"); add("capeAsset", com.google.gson.JsonNull.INSTANCE)
+    }
+    val live = requireNotNull(parseCosmeticProfile(studio))
+    check(live.nametagScale == 1.75f && live.capePreset == "forest" && live.capeAsset == null)
+    check(live.scaleX == .6f && live.scaleY == 1.5f && live.scaleZ == 2f && live.nameStyle!!.style.isBold)
+    val noCape = requireNotNull(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", "none") }))
+    val bodyTexture = net.minecraft.resources.Identifier.fromNamespaceAndPath("test", "body")
+    val nativeTexture = net.minecraft.resources.Identifier.fromNamespaceAndPath("test", "native_cape")
+    val elytraTexture = net.minecraft.resources.Identifier.fromNamespaceAndPath("test", "elytra")
+    val originalSkin = net.minecraft.world.entity.player.PlayerSkin(
+        net.minecraft.core.ClientAsset.ResourceTexture(bodyTexture, bodyTexture),
+        net.minecraft.core.ClientAsset.ResourceTexture(nativeTexture, nativeTexture),
+        net.minecraft.core.ClientAsset.ResourceTexture(elytraTexture, elytraTexture),
+        net.minecraft.world.entity.player.PlayerModelType.SLIM, true)
+    val hiddenCape = applyCosmeticCape(originalSkin, noCape, nativeTexture)
+    check(noCape.capePreset == "none" && hiddenCape.cape() == null)
+    check(hiddenCape.body() == originalSkin.body() && hiddenCape.elytra() == originalSkin.elytra() &&
+        hiddenCape.model() == originalSkin.model() && hiddenCape.secure() == originalSkin.secure())
+    check(applyCosmeticCape(originalSkin, live.copy(capePreset = null), null) === originalSkin)
+    val customCape = applyCosmeticCape(originalSkin, live, bodyTexture)
+    check(customCape.cape()?.id() == bodyTexture && customCape.elytra() == originalSkin.elytra())
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", true) }) == null)
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", "NONE") }) == null)
+    for (value in listOf(.49, 2.01)) check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("nametagScale", value) }) == null)
+    for (value in listOf(.5, 2.0)) check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("nametagScale", value) })?.nametagScale == value.toFloat())
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("nametagScale", "1.75") }) == null)
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", "https://remote.example/cape.png") }) == null)
+    check(parseCosmeticProfile(studio.deepCopy().apply { remove("capeAsset") }) == null)
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("discordId", "private") }) == null)
+    val pristine = studio.deepCopy().apply {
+        add("name", com.google.gson.JsonNull.INSTANCE); add("nameStyle", com.google.gson.JsonNull.INSTANCE)
+        for (key in listOf("scale", "scaleX", "scaleY", "scaleZ", "nametagScale")) addProperty(key, 1)
+        addProperty("revision", 0); addProperty("updatedAt", 0); add("capePreset", com.google.gson.JsonNull.INSTANCE)
+    }
+    check(parseCosmeticProfile(pristine) != null)
+    check(parseCosmeticProfile(pristine.deepCopy().apply { addProperty("nametagScale", 1.1) }) == null)
+    check(parseCosmeticProfile(pristine.deepCopy().apply { addProperty("capePreset", "forest") }) == null)
+    val png = checkCapeValidation()
+    val descriptor = JsonParser.parseString("""{"id":"${"b".repeat(32)}","sha256":"${HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(png))}","size":${png.size},"width":64,"height":32}""").asJsonObject
+    val asset = parseCapeAsset(descriptor)
+    capePreviewChecks(profile, asset, png)
+    validateCapeDownload(png, asset)
+    check(runCatching { validateCapeDownload(png, asset.copy(size = png.size + 1)) }.isFailure)
+    check(runCatching { validateCapeDownload(png, asset.copy(sha256 = "0".repeat(64))) }.isFailure)
+    val changedBytes = png.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() }
+    check(runCatching { validateCapeDownload(changedBytes, asset) }.isFailure)
+    val changedHash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(changedBytes))
+    check(runCatching { validateCapeDownload(changedBytes, asset.copy(sha256 = changedHash)) }.isFailure) // Correct hash cannot authorize malformed PNG.
+    val uploaded = requireNotNull(parseCosmeticProfile(studio.deepCopy().apply {
+        add("capePreset", com.google.gson.JsonNull.INSTANCE); add("capeAsset", descriptor)
+    }))
+    check(uploaded.capeAsset == asset && uploaded.capePreset == null && uploaded.nameStyle!!.style.isBold)
+    check(parseCosmeticProfile(studio.deepCopy().apply { add("capeAsset", descriptor) }) == null) // Preset and upload are exclusive.
+    check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", "none"); add("capeAsset", descriptor) }) == null)
+    for (invalid in listOf(
+        descriptor.deepCopy().apply { addProperty("width", 64.8) },
+        descriptor.deepCopy().apply { addProperty("height", "32") },
+        descriptor.deepCopy().apply { addProperty("size", png.size + .5) },
+        descriptor.deepCopy().apply { addProperty("size", "${png.size}") },
+        descriptor.deepCopy().apply { addProperty("id", "11111111111111111111111111111111".toBigInteger()) },
+        descriptor.deepCopy().apply { addProperty("sha256", "A".repeat(64)) },
+        descriptor.deepCopy().apply { addProperty("url", "https://remote.example/cape.png") },
+        descriptor.deepCopy().apply { addProperty("size", 262145) }
+    )) check(runCatching { parseCapeAsset(invalid) }.isFailure)
+    check(cosmeticDraftOwnerCurrent(profile, profile.copy(nametagScale = 2f), "a".repeat(32)))
+    check(!cosmeticDraftOwnerCurrent(profile, profile, "b".repeat(32))) // A refreshed identity cannot save an old preview.
+    check(!cosmeticDraftOwnerCurrent(profile, profile.copy(uuid = UUID(0, 2)), "a".repeat(32)))
+    check(!cosmeticDraftOwnerCurrent(profile, profile, profile.uuid.toString())) // HTTP owner IDs use canonical 32-hex UUIDs.
     for (unsafe in listOf("""{"text":"Hawk","clickEvent":{"action":"run_command","command":"/op"}}""", """{"translate":"anything"}""", """{"text":"Hawk","font":"remote:font"}""", """{"text":"Hawk","bold":"true"}""")) {
         check(runCatching { parseCosmeticText(JsonParser.parseString(unsafe)) }.isFailure)
     }
@@ -199,5 +275,49 @@ fun checkCosmetics() {
     check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, UUID(0, 2), true))
     check(!cosmeticLookupCurrent(1, 1, null, profile.uuid, profile.uuid, true))
     check(!cosmeticLookupCurrent(1, 1, profile.uuid, profile.uuid, profile.uuid, false))
-    println("Cosmetic client checks passed: strict public payloads, scale/name limits, snapshot/live ordering, reset tombstones, reconnect freshness, rendered-player retention and bounded offline cache")
+    println("Cosmetic client checks passed: strict v1-v4 profiles, independent scales/style, cape PNG bounds, captured owners, snapshot/live ordering and bounded offline cache")
+}
+
+/** Construct synthetic PNGs so malformed chunks and decompression bounds exercise the actual client validator. */
+private fun checkCapeValidation(): ByteArray {
+    fun chunk(type: String, payload: ByteArray = byteArrayOf()): ByteArray {
+        val bytes = type.toByteArray(Charsets.US_ASCII)
+        return ByteBuffer.allocate(payload.size + 12).putInt(payload.size).put(bytes).put(payload)
+            .putInt(CRC32().run { update(bytes); update(payload); value.toInt() }).array()
+    }
+    fun deflate(raw: ByteArray): ByteArray {
+        val compressor = Deflater(); val output = ByteArrayOutputStream()
+        try {
+            compressor.setInput(raw); compressor.finish(); val buffer = ByteArray(1024)
+            while (!compressor.finished()) output.write(buffer, 0, compressor.deflate(buffer))
+            return output.toByteArray()
+        } finally { compressor.end() }
+    }
+    fun header(width: Int = 64, depth: Int = 8, color: Int = 6, interlace: Int = 0) =
+        ByteBuffer.allocate(13).putInt(width).putInt(32).put(depth.toByte()).put(color.toByte()).put(0.toByte()).put(0.toByte()).put(interlace.toByte()).array()
+    val signature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
+    fun png(raw: ByteArray, h: ByteArray = header(), compressed: ByteArray = deflate(raw), before: ByteArray = byteArrayOf(), after: ByteArray = byteArrayOf()) =
+        signature + chunk("IHDR", h) + before + chunk("IDAT", compressed) + after + chunk("IEND")
+    val raw = ByteArray(32 * 257).apply { repeat(32) { this[it * 257] = (it % 5).toByte() } }
+    val valid = png(raw)
+    validateCapePng(valid)
+    validateCapePng(png(ByteArray(32 * 193), header(color = 2))) // RGB also supported.
+    validateCapePng(png(raw, before = chunk("tEXt", "note\u0000synthetic".toByteArray())))
+    validateCapePng(signature + chunk("IHDR", header()) + chunk("IDAT") + chunk("IDAT", deflate(raw)) + chunk("IEND"))
+    val corrupt = valid.copyOf().apply { this[lastIndex - 1] = (this[lastIndex - 1].toInt() xor 1).toByte() }
+    val invalid = listOf(
+        valid.copyOf(valid.size - 1), valid + byteArrayOf(0), ByteArray(262145), corrupt,
+        valid.copyOf().apply { this[0] = 0 }, png(raw, header(width = 65)), png(raw, header(depth = 16)),
+        png(raw, header(color = 3)), png(raw, header(interlace = 1)),
+        png(raw.copyOf().apply { this[0] = 5 }), png(raw.copyOf(raw.size - 1)), png(raw + byteArrayOf(0)),
+        png(ByteArray(262144)), png(raw, compressed = deflate(raw) + byteArrayOf(0)),
+        signature + chunk("IHDR", header()) + chunk("IDAT", deflate(raw)),
+        png(raw, before = chunk("ABCD")), png(raw, before = chunk("t3Xt")),
+        png(raw, before = chunk("acTL", ByteArray(8))), png(raw, before = chunk("fcTL", ByteArray(26))),
+        png(raw, after = chunk("fdAT", ByteArray(4))),
+        signature + chunk("IHDR", header()) + chunk("IDAT") + chunk("tEXt") + chunk("IDAT", deflate(raw)) + chunk("IEND"),
+        signature + chunk("IHDR", header()) + chunk("IDAT", deflate(raw)) + chunk("tEXt") + chunk("IDAT") + chunk("IEND")
+    )
+    invalid.forEachIndexed { index, bytes -> check(runCatching { validateCapePng(bytes) }.isFailure) { "Unsafe cape PNG case $index was accepted" } }
+    return valid
 }

@@ -41,6 +41,20 @@ export class SharedStats {
     sql.exec("CREATE INDEX IF NOT EXISTS player_stats_age ON player_stats(fetched_at)");
   }
 
+  deleteSubjects(uuids: string[]): string[] {
+    const removed = new Set<string>();
+    for (const uuid of uuids) {
+      this.sql.exec<{ uuid: string }>("SELECT uuid FROM player_stats WHERE uuid=? OR publisher=?", uuid, uuid).toArray().forEach(row => removed.add(row.uuid));
+      this.sql.exec("DELETE FROM player_stats WHERE uuid=? OR publisher=?", uuid, uuid);
+    }
+    return [...removed];
+  }
+
+  /** Private provenance for authoritative consent checks; never include contributor identity in cache DTOs. */
+  publisher(uuid: string): string | null {
+    return this.sql.exec<{ publisher: string }>("SELECT publisher FROM player_stats WHERE uuid=?", uuid).toArray()[0]?.publisher ?? null;
+  }
+
   get(name: string, uuid: string | undefined, now: number): CachedStats | null {
     const row = this.sql.exec<{ uuid: string; name: string; stats: string; fetched_at: number }>(
       "SELECT uuid, name, stats, fetched_at FROM player_stats WHERE name = ? AND fetched_at > ?", name, now - STATS_TTL,

@@ -11,5 +11,7 @@ data class DungeonChestOpenEvent(
     val contents: Map<SkyBlockId, Int>,
     val cost: Long,
     val costKnown: Boolean = true,
-    val observation: String = java.util.UUID.randomUUID().toString()
+    val observation: String = java.util.UUID.randomUUID().toString(),
+    /** Plain observed reward presentation; a preview becomes a record only after acquisition confirmation. */
+    val metadata: Map<SkyBlockId, me.mycellium.skymyce.utils.ObservedItemMetadata> = emptyMap()
 ): CancellableSkyBlockEvent()

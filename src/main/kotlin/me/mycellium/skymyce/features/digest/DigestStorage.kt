@@ -2,6 +2,10 @@ package me.mycellium.skymyce.features.digest
 
 import com.google.gson.Gson
 import com.google.gson.JsonParser
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
+import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.validObservedItemMetadata
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -92,19 +96,27 @@ internal fun validDigestRng(entry: DigestRngEntry, now: Long): Boolean = runCatc
 
 /** Immutable bounded local history; received events never become publishable personal events. */
 class DigestRngHistory {
+    private val removedCommunity = linkedSetOf<String>()
     var entries: List<DigestRngEntry> = emptyList()
         private set
     fun restore(saved: List<DigestRngEntry>, limit: Int, now: Long) {
-        val valid = saved.filter { validDigestRng(it, now) }.distinctBy { it.id }.sortedByDescending { it.occurredAt }
+        val valid = saved.filter { validDigestRng(it, now) && (!it.community || it.id !in removedCommunity) }.distinctBy { it.id }.sortedByDescending { it.occurredAt }
         entries = (valid.filter { !it.community }.take(limit.coerceIn(20, 500)) + valid.filter { it.community }.take(30))
             .sortedByDescending { it.occurredAt }
     }
     fun add(entry: DigestRngEntry, limit: Int, now: Long): Boolean {
-        if (!validDigestRng(entry, now) || entries.any { it.id == entry.id }) return false
+        if (!validDigestRng(entry, now) || entry.community && entry.id in removedCommunity || entries.any { it.id == entry.id }) return false
         restore(entries + entry, limit, now)
         return true
     }
     fun clear() { entries = emptyList() }
+    fun removeCommunity(ids: Set<String>? = null) {
+        if (ids != null) {
+            removedCommunity.addAll(ids)
+            while (removedCommunity.size > 10000) removedCommunity.remove(removedCommunity.first())
+        }
+        entries = entries.filter { !it.community || ids != null && it.id !in ids }
+    }
 }
 
 /** One pending snapshot. submit never waits for disk; flush runs only on a background shutdown thread. */
@@ -149,17 +161,45 @@ class DigestStateWriter(private val store: DigestStateStore, private val schedul
     }
 }
 
-internal fun digestRngSubmission(drop: DetectedRng, sharing: Boolean, showName: Boolean, now: Long): Map<String, Any>? {
+internal fun digestRngSubmission(drop: DetectedRng, sharing: Boolean, showName: Boolean, now: Long,
+    acquisition: AcquisitionEvent? = null, context: AcquisitionContext? = null): Map<String, Any>? {
     if (!sharing || !drop.id.matches(Regex("[a-f0-9]{32}")) || !DigestRngCatalog.valid(drop.item, drop.activity) ||
-        drop.occurredAt <= now - 300000 || drop.occurredAt > now + 60000) return null
-    return mapOf("event" to mapOf("id" to drop.id, "item" to drop.item, "activity" to drop.activity, "occurredAt" to drop.occurredAt), "showName" to showName)
+        drop.occurredAt <= 0 || drop.occurredAt <= now - 300000 || drop.occurredAt > now + 60000) return null
+    // Only this live receipt can supply context. Old history and another profile's matching item are not metadata sources.
+    val confirmed = acquisition?.takeIf { it.id == drop.id && it.item == drop.item && it.activity == drop.activity &&
+        it.origin == "confirmed" && context?.matches(it.context) == true &&
+        kotlin.math.abs(it.occurredAt - drop.occurredAt) <= 15000 }
+    val metadata = observedItemMetadata(confirmed?.rarity ?: drop.rarity, confirmed?.displayName ?: drop.displayName)
+    val floor = confirmed?.floor?.takeIf { drop.activity == "dungeon" && it.matches(Regex("E|[FM][1-7]")) }
+    val event = buildMap<String, Any> {
+        put("id", drop.id); put("item", drop.item); put("activity", drop.activity); put("occurredAt", drop.occurredAt)
+        metadata?.rarity?.let { put("rarity", it) }
+        metadata?.displayName?.let { put("displayName", it) }
+        floor?.let { put("floor", it) }
+    }
+    return mapOf("event" to event, "showName" to showName)
 }
 
 internal fun parseDigestCommunityEvent(json: com.google.gson.JsonObject, now: Long): DigestRngEntry? = runCatching {
     require(json.get("unverified")?.asBoolean == true)
-    require(json.keySet().all { it in setOf("id", "item", "activity", "occurredAt", "player", "unverified") })
+    require(json.keySet().all { it in setOf("id", "item", "activity", "occurredAt", "player", "unverified", "rarity", "displayName", "floor") })
+    fun optionalText(key: String): String? = json[key]?.takeUnless { it.isJsonNull }?.let {
+        require(it.isJsonPrimitive && it.asJsonPrimitive.isString); it.asString
+    }
+    require(validObservedItemMetadata(optionalText("rarity"), optionalText("displayName")))
+    val floor = optionalText("floor")
+    require(floor == null || json["activity"]?.asString == "dungeon" && floor.matches(Regex("E|[FM][1-7]")))
     DigestRngEntry(json.get("id").asString, json.get("item").asString, json.get("activity").asString,
         json.get("occurredAt").asLong, json.get("player").asString, true).also {
         require(it.occurredAt >= now - 7 * 86400000L && validDigestRng(it, now))
     }
 }.getOrNull()
+
+/** A malformed report cannot hide healthy siblings; a malformed or oversized envelope still fails closed. */
+internal fun parseDigestCommunityHistory(json: com.google.gson.JsonElement?, now: Long): List<DigestRngEntry> {
+    require(json?.isJsonArray == true)
+    val events = requireNotNull(json).asJsonArray
+    require(events.size() <= 30)
+    return events.mapNotNull { event -> event.takeIf { it.isJsonObject }?.asJsonObject?.let { parseDigestCommunityEvent(it, now) } }
+        .distinctBy { it.id }
+}

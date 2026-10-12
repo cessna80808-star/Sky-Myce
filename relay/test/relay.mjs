@@ -8,8 +8,11 @@ import { checkCosmetics } from "./cosmetics.mjs";
 import { checkIrc } from "./irc.mjs";
 import { checkGlobalChat } from "./global-chat.mjs";
 import { checkRichIrc } from "./rich-irc.mjs";
-import { checkAccounts } from "./accounts.mjs";
+import { checkCommunity } from "./community.mjs";
+import { checkCommunityCancellation } from "./community-cancel.mjs";
 import { checkStrictCosmetics } from "./cosmetics-strict.mjs";
+import { checkCosmeticStudio } from "./cosmetic-studio.mjs";
+import { checkCommunityPrivacy } from "./community-privacy.mjs";
 import { checkDiscordUx } from "./discord-ux.mjs";
 
 // Replace public trust roots only in this in-memory test bundle. Production has no auth bypass.
@@ -40,6 +43,18 @@ if (process.argv.includes("--rich-only")) {
   await checkRichIrc(script, proof);
   process.exit(0);
 }
+if (process.argv.includes("--community-only")) {
+  await checkCommunity(script, proof);
+  process.exit(0);
+}
+if (process.argv.includes("--cancel-only")) { await checkCommunityCancellation(script, proof); process.exit(0); }
+if (process.argv.includes("--discord-only")) { await checkDiscordUx(script, proof); process.exit(0); }
+if (process.argv.includes("--irc-only")) { await checkIrc(script, proof); process.exit(0); }
+if (process.argv.includes("--global-only")) { await checkGlobalChat(script, proof); process.exit(0); }
+if (process.argv.includes("--cosmetics-only")) { await checkStrictCosmetics(script, proof); process.exit(0); }
+if (process.argv.includes("--studio-only")) { await checkCosmeticStudio(script, proof); process.exit(0); }
+if (process.argv.includes("--privacy-only")) { await checkCommunityPrivacy(script, proof); process.exit(0); }
+if (process.argv.includes("--digest-only")) { await checkDigest(script, proof); process.exit(0); }
 const options = convertV4MiniflareOptions({
   name: "relay-check",
   modules: true, script, compatibilityDate: "2026-09-21",
@@ -408,8 +423,11 @@ try {
 await checkDigest(script, proof);
 await checkSocial(script, proof);
 await checkCosmetics(script, proof);
-await checkAccounts(script, proof);
+await checkCommunity(script, proof);
+await checkCommunityCancellation(script, proof);
+await checkCommunityPrivacy(script, proof);
 await checkStrictCosmetics(script, proof);
+await checkCosmeticStudio(script, proof);
 await checkIrc(script, proof);
 await checkGlobalChat(script, proof);
 await checkRichIrc(script, proof);

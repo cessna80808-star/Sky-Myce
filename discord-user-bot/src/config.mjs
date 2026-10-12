@@ -34,14 +34,17 @@ export function configuration(env) {
       channels.friends && channels.friends === channels.testing || new Set(rooms.map(room => channels[room])).size !== rooms.length) throw new Error('Invalid or shared IRC room/channel configuration');
   const url = env.SKY_MYCE_RELAY_URL ?? env.RELAY_URL;
   const secret = env.SKY_MYCE_RELAY_AUTH_SECRET ?? env.DISCORD_BRIDGE_SECRET;
-  if (rooms.length) {
+  const rngChannel = env.DISCORD_RNG_CHANNEL_ID || undefined;
+  if (rngChannel && (!snowflake.test(rngChannel) || Object.values(channels).includes(rngChannel))) throw new Error('Invalid or shared RNG feed channel');
+  if (rooms.length || rngChannel) {
     let parsed;
     try { parsed = new URL(url); } catch { throw new Error('Missing or invalid SKY_MYCE_RELAY_URL'); }
     if (!['https:', 'wss:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('Invalid SKY_MYCE_RELAY_URL');
     if (!secret || secret.length < 32) throw new Error('Missing or invalid SKY_MYCE_RELAY_AUTH_SECRET');
     if (secret === env.USER_BOT_TOKEN) throw new Error('The relay credential must be separate from USER_BOT_TOKEN');
   }
-  return { app, guild: env.DISCORD_GUILD_ID, token: env.USER_BOT_TOKEN, rooms, channels, url, secret, limits: limits(env),
+  return { app, guild: env.DISCORD_GUILD_ID, token: env.USER_BOT_TOKEN, rooms, channels, url, secret, limits: limits(env), rngChannel,
+    rngReceiptsPath: env.RNG_FEED_RECEIPTS_PATH || '.data/rng-feed-receipts.json',
     receiptsPath: env.GLOBAL_CHAT_RECEIPTS_PATH || '.data/global-chat-receipts.json' };
 }
 

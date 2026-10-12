@@ -7,6 +7,7 @@ import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.UIComponent
 import me.mycellium.skymyce.hud.replaceContent
 import me.mycellium.skymyce.hud.HudTheme
+import me.mycellium.skymyce.hud.HudWidgetGraphics
 import me.mycellium.skymyce.hud.ThemeOverrides
 import me.mycellium.skymyce.hud.widget.WidgetManager.register
 import me.mycellium.skymyce.utils.MC
@@ -31,6 +32,8 @@ class Widget(
     /** Update and return retained owo components; null hides the widget without discarding its UI state. */
     val builder: Widget.() -> UIComponent? = { null }
 ) {
+    var visible = true
+    val defaultLayout = WidgetConfig(x, y, scale, anchor)
     var sinceActive: Long = 0L
     var theme: ThemeOverrides? = null
     private var styledRevision = -1L
@@ -75,7 +78,7 @@ class Widget(
         anchor = newAnchor
     }
 
-    fun toConfig(): WidgetConfig = WidgetConfig(x, y, scale, anchor, theme)
+    fun toConfig(): WidgetConfig = WidgetConfig(x, y, scale, anchor, theme, visible)
 
     fun inBounds(selX: Int, selY: Int): Boolean = selX >= renderX && selX < renderX + width && selY >= renderY && selY < renderY + height
 
@@ -92,14 +95,14 @@ class Widget(
 
     fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float, editor: Boolean = false): Boolean =
         HudTheme.withWidget(theme) {
-            val element = if (editor) editorContent() else builder()
+            val element = if (editor) editorContent() else if (visible) builder() else null
             if (!editor) {
                 isRenderable = element != null
                 if (element != null) sinceActive = System.currentTimeMillis()
             }
             if (element == null) return@withWidget false
             val ui = prepare(element)
-            ui.extractRenderState(graphics, floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
+            ui.extractRenderState(HudWidgetGraphics(graphics, mouseX, mouseY), floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
             true
         }
 
@@ -138,14 +141,18 @@ class Widget(
         if (ui.width() != availableWidth || ui.height() != availableHeight) {
             ui.moveAndResize(0, 0, availableWidth, availableHeight)
         }
+        // Old layouts can reference a larger resolution. Keep the rendered content reachable in gameplay too.
+        x = hudVisibleAnchor(x, width, window.guiScaledWidth, anchor.x)
+        y = hudVisibleAnchor(y, height, window.guiScaledHeight, anchor.y)
 
         return ui
     }
 
     fun drawTooltip(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
         if (!isRenderable || !inBounds(mouseX, mouseY)) return
-        transformed(graphics) {
-            adapter?.drawTooltip(graphics, floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
+        val isolated = HudWidgetGraphics(graphics, mouseX, mouseY)
+        transformed(isolated) {
+            adapter?.drawTooltip(isolated, floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
         }
     }
 
@@ -168,4 +175,9 @@ class Widget(
         isRenderable = false
         sinceActive = 0L
     }
+}
+
+internal fun hudVisibleAnchor(position: Int, extent: Int, viewport: Int, anchor: Float): Int {
+    val edge = (anchor * extent.coerceAtLeast(0)).toInt()
+    return (position.toLong() - edge).coerceIn(0L, (viewport - extent).coerceAtLeast(0).toLong()).toInt() + edge
 }

@@ -108,6 +108,7 @@ fun parseThemeHex(value: String): Int? = value.removePrefix("#").takeIf { it.mat
 fun notifySettingsChanged() {
     PartyFinder.invalidateMatcher()
     DailyDigest.settingsChanged()
+    me.mycellium.skymyce.community.CommunitySharing.settingsChanged()
 }
 internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
     gap(5); verticalAlignment(VerticalAlignment.CENTER)

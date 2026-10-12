@@ -1,9 +1,13 @@
 # Sky-Myce account and chat relay
 
 This TypeScript Worker uses the existing `AccountStore` and `RelayRoom` Durable
-Objects. Minecraft connections prove their Mojang identity and installation
-authorization before protected requests. Account, licensing, loader and Discord
-administration remain owned by their existing handlers.
+Objects. Sky-Myce is a normal Fabric mod; local features work without a custom
+Loader or Discord connection. Online community services verify fresh Minecraft
+identity proof, a Discord-linked community session and deliberate identity
+blacklists. Browser Discord OAuth is the primary connection flow, with an
+expiring one-time code through the existing User Bot as a fallback. Device
+observations are optional private administrator metadata and do not restrict
+access. See [community architecture](../docs/community-architecture.md).
 
 Global chat uses `scope: "global"` on the authenticated Minecraft WebSocket and
 the `global-chat` coordinator. The independently supervised User Bot connects
@@ -35,6 +39,8 @@ and ignored local environment files.
 Production is `sky-myce-backend`, selected with `--env backend`. The default
 Worker name can collide with the older relay, so never deploy without the
 explicit intended environment. Preserve bindings, secrets and persisted state;
-follow [the deployment record](../docs/backend-deployment.md) for reviewed
-deployment, private artifact upload, signed manifest activation and verification.
+follow [the main-machine rollout](../docs/main-machine-community-rollout.md) for
+OAuth configuration, private cape storage, reviewed deployment, standalone Fabric
+release publication and live verification. The [older deployment record](../docs/backend-deployment.md)
+describes the historical license/Loader flow and is not the current rollout guide.
 Deployment and persistent User Bot startup are separate operations.

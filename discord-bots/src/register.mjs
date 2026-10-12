@@ -1,4 +1,4 @@
-import { backendCommands, userCommands } from './backend-bot.mjs';
+import { backendCommands, userCommands, retiredCommands } from './backend-bot.mjs';
 import { operatorConfig, discordApi, verifyApplication } from './discord-api.mjs';
 import { registerCommands } from './registration.mjs';
 const kind = process.argv[2];
@@ -13,7 +13,7 @@ try {
   } else {
     if (!/^\d{17,20}$/.test(app ?? '') || !/^\d{17,20}$/.test(guild ?? '')) throw new Error('Missing or invalid application/guild ID');
     const api = discordApi(token); await verifyApplication(api, app);
-    const result = await registerCommands(api, app, guild, definitions, process.argv.includes('--apply'));
+    const result = await registerCommands(api, app, guild, definitions, process.argv.includes('--apply'), retiredCommands[kind]);
     console.log(JSON.stringify(result, null, 2));
   }
 } catch { console.error('Command registration unavailable. Check application identity, guild membership, credentials and API permissions.'); process.exitCode = 1; }

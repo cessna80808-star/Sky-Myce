@@ -32,6 +32,28 @@ export class SharedWealth {
     sql.exec(`CREATE TABLE IF NOT EXISTS player_wealth (
       id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL COLLATE NOCASE UNIQUE, wealth TEXT NOT NULL, fetched_at INTEGER NOT NULL)`);
+    if (!sql.exec<{ name: string }>("PRAGMA table_info(player_wealth)").toArray().some(row => row.name === "publisher")) {
+      sql.exec("ALTER TABLE player_wealth ADD COLUMN publisher TEXT");
+    }
+  }
+
+  deleteSubjects(uuids: string[]): string[] {
+    const removed = new Set<string>();
+    // Legacy rows had no contributor provenance. Suppressing them is safer than redistributing an unknown contributor's old upload.
+    if (uuids.length) {
+      this.sql.exec<{ uuid: string }>("SELECT uuid FROM player_wealth WHERE publisher IS NULL").toArray().forEach(row => removed.add(row.uuid));
+      this.sql.exec("DELETE FROM player_wealth WHERE publisher IS NULL");
+    }
+    for (const uuid of uuids) {
+      this.sql.exec<{ uuid: string }>("SELECT uuid FROM player_wealth WHERE uuid=? OR publisher=?", uuid, uuid).toArray().forEach(row => removed.add(row.uuid));
+      this.sql.exec("DELETE FROM player_wealth WHERE uuid=? OR publisher=?", uuid, uuid);
+    }
+    return [...removed];
+  }
+
+  /** Private provenance for authoritative consent checks; never include contributor identity in cache DTOs. */
+  publisher(uuid: string): string | null {
+    return this.sql.exec<{ publisher: string | null }>("SELECT publisher FROM player_wealth WHERE uuid=?", uuid).toArray()[0]?.publisher ?? null;
   }
 
   get(name: string, uuid: string | undefined, now: number, refresh: boolean): CachedWealth | null {
@@ -46,7 +68,7 @@ export class SharedWealth {
     return row.fetched_at > now - ttl ? { name: row.name, uuid: row.uuid, wealth, fetchedAt: row.fetched_at } : null;
   }
 
-  put(record: CachedWealth, now: number): boolean {
+  put(record: CachedWealth, now: number, publisher?: string): boolean {
     const existing = this.sql.exec<{ uuid: string; wealth: string; fetched_at: number }>(
       "SELECT uuid, wealth, fetched_at FROM player_wealth WHERE uuid = ? OR name = ?", record.uuid, record.name,
     ).toArray();
@@ -60,8 +82,8 @@ export class SharedWealth {
         !totals.some(key => previous[key] == null && record.wealth[key] != null);
     })) return false;
     this.sql.exec("DELETE FROM player_wealth WHERE uuid = ? OR name = ?", record.uuid, record.name);
-    this.sql.exec("INSERT INTO player_wealth (uuid, name, wealth, fetched_at) VALUES (?, ?, ?, ?)",
-      record.uuid, record.name, JSON.stringify(record.wealth), record.fetchedAt);
+    this.sql.exec("INSERT INTO player_wealth (uuid, name, wealth, fetched_at, publisher) VALUES (?, ?, ?, ?, ?)",
+      record.uuid, record.name, JSON.stringify(record.wealth), record.fetchedAt, publisher ?? null);
     // Bound storage to the latest 10,000 uploads without counting/scanning the whole table per write.
     this.sql.exec("DELETE FROM player_wealth WHERE id <= (SELECT MAX(id) FROM player_wealth) - 10000");
     return true;
