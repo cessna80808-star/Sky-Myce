@@ -64,14 +64,21 @@ export class CommunityFeed {
     if (this.stopped || this.running) return;
     this.running = true; this.timer = undefined;
     try {
-      const result = await this.request({ action: 'claim' });
+      const receipts = this.receipts.pending?.() ?? [];
+      const result = await this.request({ action: 'claim', ...(receipts.length ? { receipts } : {}) });
       if (!Array.isArray(result.deliveries) || result.deliveries.length > 3) throw new Error('Invalid RNG feed response');
+      if (result.acknowledged !== undefined) {
+        if (!Array.isArray(result.acknowledged) || result.acknowledged.length > receipts.length || new Set(result.acknowledged).size !== result.acknowledged.length || result.acknowledged.some(value => typeof value !== 'string' || !id.test(value) || !receipts.some(receipt => receipt.id === value))) throw new Error('Invalid RNG receipt confirmation');
+        for (const value of result.acknowledged) await this.receipts.acknowledge(value);
+      }
       for (const delivery of result.deliveries) {
         if (this.stopped) break;
         if (!id.test(delivery?.id ?? '') || !/^[A-Za-z0-9_-]{43}$/.test(delivery.claim ?? '') || delivery.channelId !== this.channelId) throw new Error('Invalid RNG feed delivery');
         if (delivery.operation === 'delete') {
-          if (!snowflake.test(delivery.messageId ?? '')) throw new Error('Invalid RNG deletion');
-          await this.remove(delivery.messageId);
+          if (delivery.messageId !== undefined && !snowflake.test(delivery.messageId)) throw new Error('Invalid RNG deletion');
+          const messageId = delivery.messageId ?? this.receipts.get?.(delivery.id);
+          if (messageId) await this.remove(messageId);
+          await this.receipts.forget?.(delivery.id);
           await this.request({ action: 'ack', id: delivery.id, claim: delivery.claim, operation: 'delete' });
           continue;
         }
@@ -79,6 +86,7 @@ export class CommunityFeed {
         const card = rngEmbed(delivery.event, this.now()); if (!card) throw new Error('Invalid RNG publication');
         let messageId = this.receipts.get(delivery.id);
         if (!messageId) {
+          this.receipts.assertCapacity?.(delivery.id);
           const message = await this.channel.send(card);
           if (!snowflake.test(message?.id ?? '')) throw new Error('RNG publication returned no message');
           messageId = message.id;
@@ -86,7 +94,8 @@ export class CommunityFeed {
           catch (error) { await this.remove(messageId); throw error; }
         }
         const ack = await this.request({ action: 'ack', id: delivery.id, claim: delivery.claim, operation: 'publish', messageId });
-        if (ack.deleteRequired) await this.remove(messageId); // Consent can change while Discord is processing the send.
+        if (ack.deleteRequired) { await this.remove(messageId); await this.receipts.forget?.(delivery.id); }
+        else await this.receipts.acknowledge?.(delivery.id);
       }
       this.failures = 0;
     } catch { this.failures = Math.min(this.failures + 1, 6); this.onDiagnostic('rng_feed_unavailable'); }
@@ -100,4 +109,4 @@ export class CommunityFeed {
     catch (error) { if (error?.code !== 10008 && error?.status !== 404) throw error; }
   }
 }
-export async function communityFeedReceipts(path) { return await new DeliveryReceipts(path, Date.now, 900000).load(); }
+export async function communityFeedReceipts(path, now = Date.now) { return await new DeliveryReceipts(path, now, 900000, true).load(); }

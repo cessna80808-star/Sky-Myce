@@ -10,7 +10,7 @@ import { deliverAccountAlert } from "./discord-notifications";
 import { ircMentionNames, ircPlainText } from "./irc-model";
 import { CommunityAccounts, type CommunityConfig, type CommunitySessionCheck } from "./community";
 import { CommunitySharingStore, type SharingSession, type SharingCategory } from "./community-sharing";
-import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQuery, type JournalComparisonResult } from "./leaderboards";
+import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQuery, type JournalComparisonResult, type FeedReceipt } from "./leaderboards";
 import type { PublicRngEvent } from "./digest";
 
 export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket };
@@ -306,7 +306,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   }
   suppressCommunityRng(players: string[]) { this.ctx.storage.transactionSync(() => this.leaderboards.suppress(players)); }
   acceptCommunityFeedNonce(nonce: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acceptNonce(nonce)); }
-  claimCommunityRng(channel: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.claim(channel)); }
+  claimCommunityRng(channel: string, receipts?: FeedReceipt[]) { return this.ctx.storage.transactionSync(() => this.leaderboards.claim(channel, receipts)); }
   acknowledgeCommunityRng(raw: Record<string, unknown>, channel: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acknowledge(raw, channel)); }
   async promptSubmit(actor: PromptActor, prompt: string, source: Record<string, unknown>) {
     const result = this.prompts.submit(actor, prompt, source); await this.prompts.arm(); return result;

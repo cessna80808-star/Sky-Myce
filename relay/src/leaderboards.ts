@@ -36,6 +36,7 @@ const coverageDescription = "Consenting Sky-Myce participants only; each Minecra
 type FeedRow = { id: string; author: string; event: string; received_at: number; next_at: number; attempts: number; claim: string | null;
   claim_until: number; channel: string | null; message_id: string | null; suppressed: number };
 export type FeedDelivery = { id: string; claim: string; operation: "publish" | "delete"; event?: PublicRngEvent; channelId?: string; messageId?: string };
+export type FeedReceipt = { id: string; messageId: string };
 type Hooks = { check(uuid: string, category: SharingCategory, at?: number): SharingDecision;
   record(uuid: string, raw: unknown, name: string): { ok: boolean; error?: string }; };
 
@@ -147,8 +148,9 @@ export class CommunityLeaderboards {
   }
   private prune(): void {
     const now = Date.now();
-    // Undelivered items expire, never backfill the seven-day Digest feed as new posts. Delivered receipts persist for consent retraction.
-    this.sql.exec("DELETE FROM community_rng_delivery WHERE message_id IS NULL AND (received_at<? OR suppressed=1) AND claim_until<=?", now - 600000, now);
+    // A lost ACK may hide a posted message: expire publication, but retain attempted deliveries for cancellation.
+    this.sql.exec("UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE message_id IS NULL AND attempts>0 AND received_at<?", now - 600000);
+    this.sql.exec("DELETE FROM community_rng_delivery WHERE message_id IS NULL AND attempts=0 AND (received_at<? OR suppressed=1) AND claim_until<=?", now - 600000, now);
     this.sql.exec("DELETE FROM community_feed_nonces WHERE expires_at<=?", now);
   }
   acceptNonce(nonce: string): boolean {
@@ -168,26 +170,27 @@ export class CommunityLeaderboards {
       if (!decision.allowed || event.player !== "Anonymous" && !decision.publicName) this.sql.exec("UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE id=?", row.id);
     }
   }
-  claim(channel: string): { ok: boolean; deliveries: FeedDelivery[] } {
+  claim(channel: string, receipts: FeedReceipt[] = []): { ok: boolean; deliveries: FeedDelivery[]; acknowledged?: string[] } {
     this.prune(); this.scanDelivered(channel); const now = Date.now(), deliveries: FeedDelivery[] = [];
     const rows = this.sql.exec<FeedRow>("SELECT * FROM community_rng_delivery WHERE channel=? AND claim_until<=? AND (message_id IS NULL AND next_at<=? OR message_id IS NOT NULL AND suppressed=1) ORDER BY CASE WHEN suppressed=1 THEN 0 ELSE 1 END,received_at DESC LIMIT 100", channel, now, now).toArray();
     for (const row of rows) {
       const event = JSON.parse(row.event) as PublicRngEvent, decision = this.hooks.check(row.author, "rng", event.occurredAt);
       const suppressed = row.suppressed === 1 || !decision.allowed || event.player !== "Anonymous" && !decision.publicName;
-      if (suppressed && !row.message_id) { this.sql.exec("DELETE FROM community_rng_delivery WHERE id=?", row.id); continue; }
+      if (suppressed && !row.message_id && row.attempts === 0) { this.sql.exec("DELETE FROM community_rng_delivery WHERE id=?", row.id); continue; }
       if (row.message_id && !suppressed) continue;
       if (deliveries.length >= 3) break;
       const claim = randomToken();
-      this.sql.exec("UPDATE community_rng_delivery SET claim=?,claim_until=?,attempts=attempts+1,next_at=? WHERE id=?", claim, now + 60000, now + Math.min(60000, 1000 * 2 ** Math.min(row.attempts, 6)), row.id);
-      deliveries.push({ id: row.id, claim, operation: row.message_id ? "delete" : "publish", ...(row.message_id ? { channelId: channel, messageId: row.message_id } : { event, channelId: channel }) });
+      this.sql.exec("UPDATE community_rng_delivery SET claim=?,claim_until=?,attempts=attempts+1,next_at=?,suppressed=? WHERE id=?", claim, now + 60000, now + Math.min(60000, 1000 * 2 ** Math.min(row.attempts, 6)), suppressed ? 1 : 0, row.id);
+      deliveries.push({ id: row.id, claim, channelId: channel, operation: suppressed ? "delete" : "publish", ...(suppressed ? (row.message_id ? { messageId: row.message_id } : {}) : { event }) });
     }
-    return { ok: true, deliveries };
+    const acknowledged = receipts.filter(receipt => this.sql.exec("SELECT id FROM community_rng_delivery WHERE id=? AND channel=? AND message_id=?", receipt.id, channel, receipt.messageId).toArray().length > 0).map(receipt => receipt.id);
+    return { ok: true, deliveries, ...(receipts.length ? { acknowledged } : {}) };
   }
   acknowledge(raw: Record<string, unknown>, channel: string): { ok: boolean; error?: string; deleteRequired?: boolean } {
     if (typeof raw.id !== "string" || typeof raw.claim !== "string") return { ok: false, error: "invalid_ack" };
     const row = this.sql.exec<FeedRow>("SELECT * FROM community_rng_delivery WHERE id=? AND claim=? AND channel=?", raw.id, raw.claim, channel).toArray()[0];
     if (!row || row.claim_until < Date.now()) return { ok: false, error: "claim_expired" };
-    if (raw.operation === "delete" && row.message_id) { this.sql.exec("DELETE FROM community_rng_delivery WHERE id=?", row.id); return { ok: true }; }
+    if (raw.operation === "delete" && (row.message_id || row.suppressed === 1)) { this.sql.exec("DELETE FROM community_rng_delivery WHERE id=?", row.id); return { ok: true }; }
     if (raw.operation !== "publish" || typeof raw.messageId !== "string" || !/^\d{17,20}$/.test(raw.messageId)) return { ok: false, error: "invalid_ack" };
     const event = JSON.parse(row.event) as PublicRngEvent, decision = this.hooks.check(row.author, "rng", event.occurredAt);
     const suppressed = row.suppressed === 1 || !decision.allowed || event.player !== "Anonymous" && !decision.publicName;
@@ -230,10 +233,14 @@ export async function handleCommunityFeed(request: Request, env: Config): Promis
   if (!await crypto.subtle.verify("HMAC", key, Uint8Array.from(signature.match(/../g)!, part => parseInt(part, 16)),
     new TextEncoder().encode(`sky-myce-community-feed\nPOST\n${url.pathname}\n${time}\n${nonce}\n${hash}`))) return Response.json({ ok: false, error: "not_authorized" }, { status: 401 });
   let raw: Record<string, unknown>; try { raw = JSON.parse(new TextDecoder().decode(body)); } catch { return Response.json({ ok: false, error: "invalid_request" }, { status: 400 }); }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).some(key => !["action", "channelId", "id", "claim", "operation", "messageId"].includes(key)) || raw.channelId !== env.DISCORD_RNG_CHANNEL_ID) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).some(key => !["action", "channelId", "id", "claim", "operation", "messageId", "receipts"].includes(key)) || raw.channelId !== env.DISCORD_RNG_CHANNEL_ID) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+  if (raw.receipts !== undefined && (raw.action !== "claim" || !Array.isArray(raw.receipts) || raw.receipts.length > 32 || raw.receipts.some(receipt =>
+    !receipt || typeof receipt !== "object" || Array.isArray(receipt) || Object.keys(receipt).some(key => !["id", "messageId"].includes(key)) ||
+    typeof receipt.id !== "string" || !/^[a-f0-9]{32}$/.test(receipt.id) || typeof receipt.messageId !== "string" || !/^\d{17,20}$/.test(receipt.messageId)) ||
+    new Set(raw.receipts.map(receipt => receipt.id)).size !== raw.receipts.length)) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
   const store = env.ACCOUNT_STORE.getByName("global");
   if (!await store.acceptCommunityFeedNonce(nonce)) return Response.json({ ok: false, error: "request_replayed" }, { status: 409 });
-  const result = raw.action === "claim" ? await store.claimCommunityRng(env.DISCORD_RNG_CHANNEL_ID) : raw.action === "ack" ? await store.acknowledgeCommunityRng(raw, env.DISCORD_RNG_CHANNEL_ID) : { ok: false, error: "invalid_request" };
+  const result = raw.action === "claim" ? await store.claimCommunityRng(env.DISCORD_RNG_CHANNEL_ID, raw.receipts as FeedReceipt[] | undefined) : raw.action === "ack" ? await store.acknowledgeCommunityRng(raw, env.DISCORD_RNG_CHANNEL_ID) : { ok: false, error: "invalid_request" };
   return Response.json(result, { status: result.ok ? 200 : 400, headers: { "Cache-Control": "no-store" } });
 }
 
