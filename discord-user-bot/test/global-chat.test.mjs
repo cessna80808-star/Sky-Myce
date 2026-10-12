@@ -89,7 +89,7 @@ test('Discord normalization preserves human text, embeds, attachments, replies a
   assert.equal(globalDiscordPacket({ ...original, reference: { ...original.reference, channelId: author } }, guild, channel).reply, undefined);
   assert.equal(globalDiscordPacket({ ...original, referencedMessage: { channelId: author, content: 'Private cross-channel text' } }, guild, channel).reply, undefined);
   assert.deepEqual(globalDiscordPacket({ ...original, channel: undefined }, guild, channel).reply,
-    { message_id: original.reference.messageId, from: 'Discord user', text: '' });
+    { message_id: original.reference.messageId, from: 'Unavailable message', text: 'The original message is no longer available.' });
   assert.equal(discordBody({ ...message(), embeds: [null, 1, { fields: [null, {}, { name: 'Safe field' }],
     url: 'https://user:password@example.com/private' }], attachments: [null, { url: 'https://token@example.com/private' }] }), 'hello\nSafe field');
   const controls = globalDiscordPacket({ ...message(), content: 'normal\u0085 conversation',
@@ -340,7 +340,7 @@ test('rich cards keep trusted sender identity, compact replies and media in both
   assert.equal(embed.author.iconURL, `https://mc-heads.net/avatar/${'a'.repeat(32)}/64`);
   assert.ok(!JSON.stringify(card).includes('IN-GAME') && !JSON.stringify(card).includes('untrusted.example'));
   assert.equal(embed.description, 'hello');
-  assert.deepEqual(embed.fields[0], { name: 'Reply to Earlier', value: 'A bounded reply' });
+  assert.deepEqual(embed.fields[0], { name: '↳ Reply to Earlier', value: 'A bounded reply' });
   assert.deepEqual(embed.image, { url: 'https://example.com/dance.gif' });
   assert.deepEqual(embed.thumbnail, { url: 'https://example.com/poster.png' });
   assert.deepEqual(card.reply, { messageReference: discordId, failIfNotExists: false });

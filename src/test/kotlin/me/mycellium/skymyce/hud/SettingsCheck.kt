@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.hud
 
+import io.wispforest.owo.ui.core.Sizing
 import me.mycellium.skymyce.config.*
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.digest.DigestEntry
@@ -85,7 +86,13 @@ fun checkSettings() {
     }
     check(categoryPaths.sorted() == commandRows.map { it.path }.sorted()) { "Each setting must appear directly in one category" }
     val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.COSMETICS, "dungeon profit")
-    check(searched.isNotEmpty() && searched.all { it.path.startsWith("Dungeons/") }) { "Search must override the sidebar category" }
+    check(searched.any { it.path.startsWith("Dungeons/") } && searched.any { it.path == "Community Sharing/dungeons" } &&
+        searched.none { it.path.startsWith("Cosmetics/") }) { "Search must override the sidebar category and include matching community privacy controls" }
+    val sharingSettings = settingGroups(rows, "community").values.flatten()
+    check(sharingSettings.filter { it.path.startsWith("Community Sharing/") }.map { it.path.substringAfterLast('/') }.toSet() ==
+        setOf("enabled", "dungeons", "economy", "rng", "activity", "leaderboards", "publicName")) {
+        "Community sharing controls must have one canonical owner and exclude migration metadata"
+    }
     check(commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.DUNGEONS, "text shadow").any { it.path == "Theme & Appearance/shadow" })
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.SOCIAL)
@@ -270,6 +277,79 @@ private fun checkMenuTextMetrics() {
     check(MenuCanvas.lineHeight(16.0) > MenuCanvas.lineHeight()) { "Larger headings do not reserve more space" }
 }
 
+/** Pinned owo static initialization asks Fabric only for its development flag; no game/mixins are started. */
+private fun bootstrapHeadlessOwo() {
+    val launcherType = Class.forName("net.fabricmc.loader.impl.launch.FabricLauncher")
+    val base = Class.forName("net.fabricmc.loader.impl.launch.FabricLauncherBase")
+    if (base.getMethod("getLauncher").invoke(null) != null) return
+    val launcher = java.lang.reflect.Proxy.newProxyInstance(launcherType.classLoader, arrayOf(launcherType)) { proxy, method, args ->
+        when (method.name) {
+            "isDevelopment" -> false
+            "toString" -> "Headless owo static-initialization fixture"
+            "hashCode" -> System.identityHashCode(proxy)
+            "equals" -> proxy === args?.firstOrNull()
+            else -> error("Unexpected Fabric launcher operation in a headless UI check: ${method.name}")
+        }
+    }
+    base.getMethod("setLauncher", launcherType).invoke(null, launcher)
+}
+
+private fun checkNativeMenuDropdown(rowHeight: Int) {
+    bootstrapHeadlessOwo()
+    for (height in listOf(140, 540)) for (count in listOf(13, 45)) {
+        val root = object : io.wispforest.owo.ui.container.FlowLayout(
+            Sizing.fixed(240), Sizing.fixed(height), io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
+            fun duringMouseDispatch(action: () -> Unit) = runAndDeferEvents { action() }
+        }
+        root.inflate(io.wispforest.owo.ui.core.Size.of(240, height)); root.mount(null, 11, 23)
+        // Exercise the actual unmounted constructor, not a replacement layout shell.
+        val popup = me.mycellium.skymyce.ui.MenuDropdown(500) {}
+        check(popup.parent() == null)
+        val viewport = popup.children().single() as io.wispforest.owo.ui.container.ScrollContainer<*>
+        val entries = viewport.children().single() as io.wispforest.owo.ui.container.FlowLayout
+        // Text labels require the real Minecraft font. Native box rows exercise the same
+        // actual entries/scroll/mount lifecycle without manufacturing a Minecraft singleton.
+        repeat(count) { entries.child(io.wispforest.owo.ui.component.UIComponents.box(Sizing.fill(), Sizing.fixed(rowHeight))) }
+        root.duringMouseDispatch {
+            me.mycellium.skymyce.ui.mountMenuDropdown(root, popup, root.x() + root.width() - 2, root.y() + root.height() - 2)
+            check(popup.parent() === root && popup.width() in 1..232 && popup.height() in 1..height - 8)
+            check(popup.x() >= root.x() + 4 && popup.y() >= root.y() + 4)
+            check(popup.x() + popup.width() <= root.x() + root.width() - 4 && popup.y() + popup.height() <= root.y() + root.height() - 4)
+        }
+        check(entries.children().size == count)
+        if (count * rowHeight + 10 > height - 8) {
+            check(entries.height() > viewport.height())
+            check(viewport.onMouseScroll(10.0, 10.0, -5.0)) { "The actual dropdown could not scroll its retained choices" }
+            check(entries.children().last().parent() === entries)
+        }
+        root.focusHandler()?.focus(null, io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
+        root.removeChild(popup)
+    }
+}
+
+private fun checkMenuSliderKeys() {
+    check(io.wispforest.owo.ui.inject.GreedyInputUIComponent::class.java.isAssignableFrom(me.mycellium.skymyce.ui.MenuSlider::class.java))
+    var value = .5
+    var changes = 0
+    fun key(code: Int, modifiers: Int = 0, active: Boolean = true, focused: Boolean = true) =
+        me.mycellium.skymyce.ui.adjustMenuSliderKey(net.minecraft.client.input.KeyEvent(code, 0, modifiers), active, focused, value, .05) {
+            value = it; changes++
+        }
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT) && kotlin.math.abs(value - .55) < 1e-9 && changes == 1)
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT) && kotlin.math.abs(value - .5) < 1e-9 && changes == 2)
+    check(!key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT, active = false))
+    check(!key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT, focused = false))
+    check(!key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT, org.lwjgl.glfw.GLFW.GLFW_MOD_ALT))
+    check(!key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT, org.lwjgl.glfw.GLFW.GLFW_MOD_CONTROL))
+    check(!key(org.lwjgl.glfw.GLFW.GLFW_KEY_TAB) && value == .5 && changes == 2)
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT, org.lwjgl.glfw.GLFW.GLFW_MOD_SHIFT) && changes == 3)
+    value = .99
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT) && value == 1.0 && changes == 4)
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT) && changes == 4) { "An endpoint keyboard press emitted another value change" }
+    value = .01
+    check(key(org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT) && value == 0.0 && changes == 5)
+}
+
 internal fun checkMenuDropdownInput() {
     val text = net.minecraft.network.chat.Component.literal("Clear (show all)").withStyle(net.minecraft.ChatFormatting.BOLD)
     val popupWidth = me.mycellium.skymyce.ui.menuDropdownWidth(text, false)
@@ -277,6 +357,43 @@ internal fun checkMenuDropdownInput() {
     val line = menuTextLines(text, Int.MAX_VALUE).single()
     check(popupWidth >= kotlin.math.ceil(menuTextWidth(line)).toInt() + 16)
     check(rowHeight >= MenuCanvas.lineHeight() + 8)
+    checkNativeMenuDropdown(rowHeight)
+    checkMenuSliderKeys()
+    for (height in listOf(140, 540)) for (count in listOf(13, 45)) {
+        val root = object : io.wispforest.owo.ui.container.FlowLayout(
+            Sizing.fixed(240), Sizing.fixed(height), io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
+            fun duringMouseDispatch(action: () -> Unit) = runAndDeferEvents { action() }
+        }
+        root.inflate(io.wispforest.owo.ui.core.Size.of(240, height)); root.mount(null, 11, 23)
+        val entries = io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fixed(500), Sizing.content()).apply {
+            padding(io.wispforest.owo.ui.core.Insets.of(5))
+        }
+        repeat(count) { entries.child(io.wispforest.owo.ui.component.UIComponents.box(Sizing.fill(), Sizing.fixed(rowHeight))) }
+        // Native ScrollContainer initializes Fabric. Exercise its actual shared measurement
+        // and deferred mount with a retained layout shell in this headless process.
+        val popupSize = me.mycellium.skymyce.ui.menuDropdownContentSize(entries, 500,
+            io.wispforest.owo.ui.core.Size.of(root.width() - 8, root.height() - 8))
+        val viewport = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
+            Sizing.fixed(popupSize.width()), Sizing.fixed(popupSize.height())).child(entries)
+        val popup = io.wispforest.owo.ui.container.UIContainers.horizontalFlow(Sizing.content(), Sizing.content()).child(viewport)
+        root.duringMouseDispatch {
+            me.mycellium.skymyce.ui.mountMenuDropdown(root, popup, root.x() + root.width() - 2, root.y() + root.height() - 2)
+            check(popup.width() > 0 && popup.height() > 0 && popup.parent() === root) {
+                "Deferred mouse-event layout left an opened dropdown unmeasured or unmounted"
+            }
+            check(popup.x() >= root.x() + 4 && popup.y() >= root.y() + 4)
+            check(popup.x() + popup.width() <= root.x() + root.width() - 4 &&
+                popup.y() + popup.height() <= root.y() + root.height() - 4) {
+                "A $count-option dropdown overflowed a $height-pixel viewport before deferred layout finished"
+            }
+        }
+        check(entries.children().size == count && viewport.height() <= root.height() - 8)
+        if (count * rowHeight + 10 > height - 8) {
+            check(entries.height() > viewport.height())
+            check(entries.children().last().parent() === entries) { "Bounding a dropdown discarded its last option" }
+        }
+        root.removeChild(popup)
+    }
     for (scale in 1..4) {
         val viewport = MenuViewport.fit(1920, 1080, 1920 / scale, 1080 / scale)
         val root = io.wispforest.owo.ui.container.UIContainers.verticalFlow(

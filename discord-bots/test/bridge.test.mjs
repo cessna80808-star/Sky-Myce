@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { bridgeHeaders, discordPacket, minecraftContent, validText, RelayBridge } from '../src/relay.mjs';
-import { backendCommands, promptCommands, userCommands } from '../src/backend-bot.mjs';
+import { backendCommands, promptCommands, userCommands, retiredCommands } from '../src/backend-bot.mjs';
 import { registerCommands, registrationPlan } from '../src/registration.mjs';
 
 test('bridge handshake signs room, timestamp and nonce independently of the Discord bot token', () => {
@@ -35,42 +35,42 @@ test('Minecraft display cannot mention anyone or loop Discord messages back into
 });
 test('backend commands are disabled by default and cannot leak into the user command registry', () => {
   assert.ok(backendCommands.every(command => command.default_member_permissions === '0' && command.contexts.length === 1 && command.contexts[0] === 0));
-  for (const command of backendCommands.find(command => command.name === 'hwid').options) {
-    const reason = command.options.find(option => option.name === 'reason');
-    assert.equal(reason.type, 3); assert.equal(reason.required, false); assert.equal(reason.max_length, 500);
-  }
-  assert.deepEqual(userCommands.map(command => command.name), ['status', 'key', 'loader', 'help', 'account', 'hwid', 'cosmetics']);
-  assert.ok(userCommands.find(command => command.name === 'account').options.some(command => command.name === 'approve'));
-  assert.ok(userCommands.find(command => command.name === 'hwid').options.every(command => !command.options.some(option => option.name === 'reason')));
+  assert.deepEqual(userCommands.map(command => command.name), ['leaderboard', 'status', 'disconnect', 'help', 'connect', 'account', 'cosmetics']);
+  assert.ok(!userCommands.some(command => ['admin', 'blacklist', 'license', 'hwid', 'key', 'loader'].includes(command.name)));
+  assert.ok(!userCommands.find(command => command.name === 'account').options.some(command => ['approve', 'reset'].includes(command.name)));
 });
 
-test('licensing UX schemas use native users, scoped account autocomplete and useful bounded descriptions', () => {
-  const license = backendCommands.find(command => command.name === 'license');
-  for (const name of ['whitelist', 'key', 'info', 'debug', 'revoke', 'restore', 'extend', 'reset-hardware', 'force-logout', 'uuids', 'uuid-remove', 'audit', 'sessions']) {
-    const sub = license.options.find(option => option.name === name);
-    assert.ok(sub, `Missing /license ${name}`);
+test('community schemas use native identities, private reports, self-service linking and bounded descriptions', () => {
+  const account = backendCommands.find(command => command.name === 'account');
+  for (const name of ['overview', 'devices', 'sessions', 'audit']) {
+    const sub = account.options.find(option => option.name === name);
+    assert.ok(sub, `Missing /account ${name}`);
     const user = sub.options.find(option => option.name === 'user');
-    assert.equal(user.type, 6); assert.equal(user.required, true, `/license ${name} selects its target through Discord`);
+    assert.equal(user.type, 6); assert.equal(user.required, true);
   }
-  const account = license.options.find(option => option.name === 'uuid-remove').options.find(option => option.name === 'account');
-  assert.equal(account.type, 3); assert.equal(account.required, true); assert.equal(account.autocomplete, true);
-  assert.equal(account.max_length, 32);
-  for (const name of ['revoke', 'reset-hardware', 'force-logout', 'uuid-remove']) {
-    assert.ok(!license.options.find(option => option.name === name).options.some(option => option.name === 'confirm'), 'The native confirmation UI handles destructive approval');
+  const unlink = userCommands.find(command => command.name === 'account').options.find(option => option.name === 'unlink');
+  assert.equal(unlink.options[0].name, 'uuid'); assert.equal(unlink.options[0].autocomplete, true);
+  assert.equal(unlink.options[0].min_length, 32); assert.equal(unlink.options[0].max_length, 32);
+  for (const name of ['add', 'remove']) {
+    const entry = backendCommands.find(command => command.name === 'blacklist').options.find(option => option.name === name);
+    assert.equal(entry.options[0].name, 'reason'); assert.equal(entry.options[0].required, true);
+    assert.equal(entry.options[0].max_length, 500);
+    assert.equal(entry.options.find(option => option.name === 'user').type, 6);
+    assert.equal(entry.options.find(option => option.name === 'uuid').max_length, 32);
+    assert.ok(!entry.options.some(option => ['confirm', 'device', 'hwid'].includes(option.name)));
   }
   const management = backendCommands.find(command => command.name === 'skyhawk');
   assert.ok(management.options.some(option => option.name === 'overview'));
-  const eventId = management.options.find(option => option.name === 'event').options.find(option => option.name === 'id');
-  assert.equal(eventId.type, 4); assert.equal(eventId.required, true); assert.equal(eventId.min_value, 1);
   assert.equal(management.options.find(option => option.name === 'search').options.find(option => option.name === 'query').autocomplete, true);
   const fallback = management.options.find(option => option.name === 'lookup').options.find(option => option.name === 'discord-id');
   assert.equal(fallback.type, 3); assert.equal(fallback.max_length, 20); assert.equal(fallback.min_length, 17);
-  const builds = backendCommands.find(command => command.name === 'build');
-  for (const name of ['revoke', 'restore']) assert.equal(builds.options.find(option => option.name === name).options.find(option => option.name === 'build').autocomplete, true);
-  for (const name of ['status', 'key', 'loader', 'help']) {
+  for (const name of ['status', 'disconnect', 'help']) {
     const user = userCommands.find(command => command.name === name);
     assert.ok(user); assert.ok(!user.options?.length); assert.equal(user.default_member_permissions, undefined);
   }
+  const connect = userCommands.find(command => command.name === 'connect');
+  assert.equal(connect.options[0].name, 'code'); assert.equal(connect.options[0].required, true);
+  assert.equal(connect.options[0].max_length, 14);
   const descriptions = entries => { for (const entry of entries) {
     if (entry.description !== undefined) assert.ok(entry.description.trim().length > 0 && entry.description.length <= 100);
     if (entry.options) descriptions(entry.options);
@@ -120,13 +120,35 @@ test('admin add targets a Discord user and preserves existing backend registrati
   assert.deepEqual(plan.find(item => item.command.name === 'other').command, current.find(command => command.name === 'other'));
 });
 
-test('authorise remains the only authorization command and never enters the User Bot registry', () => {
-  const command = backendCommands.find(command => command.name === 'authorise');
-  assert.equal(command.default_member_permissions, '0');
-  assert.ok(!backendCommands.some(command => command.name === 'authenticate'));
-  assert.deepEqual(command.options.map(({ name, type, required }) => ({ name, type, required })),
-    [{ name: 'user', type: 6, required: true }, { name: 'reissue', type: 5, required: false }]);
-  assert.ok(!userCommands.some(command => ['authenticate', 'authorise'].includes(command.name)));
+test('obsolete approval, license and hardware workflows are explicitly retired', async () => {
+  assert.ok(!backendCommands.some(command => ['authenticate', 'authorise', 'hwid', 'license'].includes(command.name)));
+  for (const kind of ['backend', 'user']) {
+    const desired = kind === 'backend' ? backendCommands : userCommands;
+    const current = desired.map((command, index) => ({ ...structuredClone(command), id: String(index) }));
+    const oldName = kind === 'backend' ? 'authorise' : 'hwid';
+    current.push({ type: 1, id: 'obsolete', name: oldName, description: 'Old locking workflow' });
+    current.push({ type: 3, id: 'message-command', name: oldName });
+    current.push({ type: 1, id: 'extension', name: 'unrelated', description: 'Keep this command' });
+    const oldSub = retiredCommands[kind].subcommands.account[0];
+    current.find(command => command.name === 'account').options.push({ type: 1, name: oldSub, description: 'Old account workflow' },
+      { type: 1, name: 'extension', description: 'Keep this subcommand' });
+    let live = structuredClone(current); const writes = [];
+    const api = async (path, method = 'GET', body) => {
+      if (method !== 'GET') writes.push({ path, method, body });
+      if (method === 'DELETE') live = live.filter(command => command.id !== path.split('/').at(-1));
+      if (method === 'PATCH') live = live.map(command => command.id === path.split('/').at(-1) ? { ...body, id: command.id } : command);
+      return structuredClone(live);
+    };
+    const preview = await registerCommands(api, kind, 'guild', desired, false, retiredCommands[kind]);
+    assert.equal(writes.length, 0); assert.ok(preview.intentionallyRemoved.some(item => item.id === 'obsolete'));
+    const applied = await registerCommands(api, kind, 'guild', desired, true, retiredCommands[kind]);
+    assert.equal(applied.bulkOverwrite, false);
+    assert.deepEqual(writes.filter(item => item.method === 'DELETE').map(item => item.path), [`/applications/${kind}/guilds/guild/commands/obsolete`]);
+    assert.ok(live.some(command => command.id === 'message-command')); assert.ok(live.some(command => command.id === 'extension'));
+    const account = live.find(command => command.name === 'account');
+    assert.ok(!account.options.some(option => option.name === oldSub)); assert.ok(account.options.some(option => option.name === 'extension'));
+    assert.ok(registrationPlan(live, desired, retiredCommands[kind]).every(item => item.state === 'unchanged'));
+  }
 });
 test('frontend cosmetics preserve existing syntax and targeted registration preserves unrelated commands', async () => {
   const cosmetics = userCommands.find(command => command.name === 'cosmetics');

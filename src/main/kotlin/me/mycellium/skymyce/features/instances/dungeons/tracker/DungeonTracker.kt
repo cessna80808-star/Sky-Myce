@@ -11,6 +11,8 @@ import me.mycellium.skymyce.features.digest.DigestRng
 import me.mycellium.skymyce.features.digest.DigestRngCatalog
 import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.MC
+import me.mycellium.skymyce.utils.ObservedItemMetadata
+import me.mycellium.skymyce.utils.observedItemMetadata
 import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
@@ -76,7 +78,7 @@ object DungeonTracker : SkyMyceModule() {
     var currentFloor: DungeonFloor? = null
         private set
     private data class PendingChest(val event: DungeonChestOpenEvent, val record: DungeonRunRecord,
-        val world: Any, val state: PendingChestObservation)
+        val world: Any, val state: PendingChestObservation, val metadata: Map<String, ObservedItemMetadata> = emptyMap())
     private data class PendingReroll(val id: String, val record: DungeonRunRecord, val context: AcquisitionContext,
         val world: Any, val count: Int, val started: Long, val price: Double?, val closed: Long? = null)
     private var pendingChest: PendingChest? = null
@@ -139,6 +141,8 @@ object DungeonTracker : SkyMyceModule() {
             runStarted = null
             run = active.copy(completedAt = now, duration = duration)
             AcquisitionRepository.run(run!!)
+            me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-count/${active.id}"), "dungeon_runs", 1.0, now,
+                me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
         }
         xpRegex.matchEntire(event.text)?.let { match ->
             val amount = match.groupValues[1].replace(",", "").toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1e12 } ?: return
@@ -195,7 +199,7 @@ object DungeonTracker : SkyMyceModule() {
         return pendingChest != null || pendingReroll != null
     }
     /** Called by the Digest's existing coalesced inventory observer, before its rare-drop detector. */
-    fun inventoryObserved(counts: Map<String, Int>, now: Long, observation: String) {
+    fun inventoryObserved(counts: Map<String, Int>, now: Long, observation: String, metadata: Map<String, ObservedItemMetadata> = emptyMap()) {
         if (!awaitsInventory()) return
         pendingReroll?.takeIf { rerollInventoryConfirmed(it.count, counts["KISMET_FEATHER"] ?: 0) }?.let { pending ->
             pendingReroll = null
@@ -205,8 +209,14 @@ object DungeonTracker : SkyMyceModule() {
                 if (pending.price == null || current.rerolls > 0 && current.rerollCost == null) null else (current.rerollCost ?: 0.0) + pending.price)
             if (run?.id == updated.id) run = updated
             AcquisitionRepository.run(updated)
+            pending.price?.let { price -> me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("reroll-profit/${pending.id}"),
+                "dungeon_profit", -price, now, me.mycellium.skymyce.community.SharingCategory.DUNGEONS, verification = "estimated") }
         }
-        pendingChest?.let { pendingChest = it.copy(state = it.state.inventory(counts, observation)) }
+        pendingChest?.let {
+            val observed = it.state.inventory(counts, observation)
+            val arrived = observed.received.keys - it.state.received.keys
+            pendingChest = it.copy(state = observed, metadata = it.metadata + metadata.filterKeys(arrived::contains))
+        }
         confirmChest(now)
     }
     private fun confirmChest(now: Long) {
@@ -218,20 +228,33 @@ object DungeonTracker : SkyMyceModule() {
         val receiptId = acquisitionId("chest/${event.observation}")
         if (current.chests.any { it.id == receiptId } || current.chests.size >= 20) return
         val cost = event.cost.takeIf { event.costKnown }?.toDouble()
-        val loot = event.contents.map { (id, count) -> RunLoot(canonicalItemId(id.id), count, price(id)?.times(count)) }
+        val loot = event.contents.map { (id, count) ->
+            val itemId = canonicalItemId(id.id)
+            val metadata = event.metadata[id]?.let { observedItemMetadata(it.rarity, it.displayName) }
+                ?: pending.metadata[itemId]?.let { observedItemMetadata(it.rarity, it.displayName) }
+            RunLoot(itemId, count, price(id)?.times(count), metadata?.rarity, metadata?.displayName)
+        }
         val updated = current.copy(chests = current.chests + ChestReceipt(receiptId, now, event.chest.name, cost, loot))
         if (run?.id == updated.id) run = updated
         AcquisitionRepository.run(updated)
+        if (cost != null && loot.none { it.value == null } && (current.rerolls == 0 || current.rerollCost != null))
+            me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("chest-profit/$receiptId"), "dungeon_profit",
+                loot.sumOf { it.value!! } - cost, now, me.mycellium.skymyce.community.SharingCategory.DUNGEONS, verification = "estimated")
         loot.filter { DigestRngCatalog.valid(it.item, "dungeon") }.forEach { item ->
             val confirmation = pending.state.received[item.item] ?: "chest/${event.observation}/${item.item}"
             AcquisitionRepository.record(AcquisitionEvent(acquisitionId(confirmation), item.item, now, "dungeon",
                 pending.state.context, event.floor.name, event.chest.name, quantity = item.count,
-                value = item.value, chestCost = cost, run = current.id, player = MC.instance.user.name))
+                value = item.value, chestCost = cost, run = current.id, player = MC.instance.user.name,
+                valuationAt = now.takeIf { item.value != null }, rarity = item.rarity, displayName = item.displayName))
+            // The complete server-header/inventory receipt is sufficient even when Hypixel omits a rare announcement.
+            DigestRng.receiptConfirmed(me.mycellium.skymyce.features.digest.DetectedRng(acquisitionId(confirmation), item.item, "dungeon", now, confirmation,
+                item.rarity, item.displayName))
         }
         displayDevMessage { "Dungeon chest receipt confirmed: tier=${event.chest.name}, rewardKinds=${loot.size}, costKnown=${cost != null}" }
     }
     private fun latestRun(record: DungeonRunRecord): DungeonRunRecord = run?.takeIf { it.id == record.id }
         ?: AcquisitionRepository.state.runs.firstOrNull { it.id == record.id } ?: record
+    internal fun observedRun(context: AcquisitionContext): DungeonRunRecord? = run?.takeIf { it.context?.matches(context) == true }
     private fun receiptRun(floor: DungeonFloor, context: AcquisitionContext): DungeonRunRecord = run?.takeIf {
         LocationAPI.island == SkyBlockIsland.THE_CATACOMBS && it.floor == floor.name && it.context?.matches(context) == true
     } ?: DungeonRunRecord(UUID.randomUUID().toString(), session, context, floor.name)

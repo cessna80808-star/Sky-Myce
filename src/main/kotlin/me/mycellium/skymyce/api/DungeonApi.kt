@@ -7,6 +7,9 @@ import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
 import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
+import me.mycellium.skymyce.utils.ObservedItemMetadata
+import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.consistentItemMetadata
 import net.minecraft.ChatFormatting
 import net.minecraft.core.component.DataComponents
 import net.minecraft.resources.Identifier
@@ -67,6 +70,7 @@ object DungeonApi : SkyMyceModule() {
     private var chestFloor: DungeonFloor? = null
     private var chestType: DungeonChest? = null
     private var chestContents: Map<SkyBlockId, Int> = emptyMap()
+    private var chestMetadata: Map<SkyBlockId, ObservedItemMetadata> = emptyMap()
     private var chestSlots: List<Slot> = emptyList()
     private var chestScreen: AbstractContainerScreen<*>? = null
     private var observation = UUID.randomUUID().toString()
@@ -75,6 +79,7 @@ object DungeonApi : SkyMyceModule() {
         if (forgetFloor) chestFloor = null
         chestType = null
         chestContents = emptyMap()
+        chestMetadata = emptyMap()
         chestSlots = emptyList()
         chestScreen = null
         observation = UUID.randomUUID().toString()
@@ -143,7 +148,8 @@ object DungeonApi : SkyMyceModule() {
                         chestContents,
                         cost ?: 0,
                         costKnown = cost != null,
-                        observation = observation
+                        observation = observation,
+                        metadata = chestMetadata
                     ).post(SkyBlockAPI.eventBus)
                 ) event.cancel()
             }
@@ -171,6 +177,7 @@ object DungeonApi : SkyMyceModule() {
 
     private fun refreshRewards(slots: List<Slot>) {
         val previous = chestContents
+        val metadata = mutableMapOf<SkyBlockId, MutableList<ObservedItemMetadata?>>()
         val parsed = runCatching {
             require(slots.size <= 90)
             chestSlots = slots.filter { it.container !is Inventory && !it.item.isEmpty && !it.item.isSkyblockFiller() && dungeonChestControl(it.item.hoverName.stripped) == null }
@@ -183,6 +190,7 @@ object DungeonApi : SkyMyceModule() {
                     val total = (get(id) ?: 0).toLong() + count
                     require(total <= 100000 && (id in this || size < 64))
                     put(id, total.toInt())
+                    metadata.getOrPut(id) { mutableListOf() }.add(observedItemMetadata(item))
                 }
             }
         }
@@ -190,6 +198,9 @@ object DungeonApi : SkyMyceModule() {
             displayDevMessage { "Dungeon chest preview rejected: invalid reward bounds" }
             emptyMap()
         }
+        chestMetadata = if (parsed.isSuccess) metadata.mapNotNull { (id, variants) ->
+            consistentItemMetadata(variants)?.let { id to it }
+        }.toMap() else emptyMap()
         if (previous != chestContents) observation = UUID.randomUUID().toString()
     }
 }

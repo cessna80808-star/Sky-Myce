@@ -18,8 +18,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class AvatarCosmeticsMixin {
     @Inject(method = "extractRenderState(Lnet/minecraft/world/entity/Avatar;Lnet/minecraft/client/renderer/entity/state/AvatarRenderState;F)V", at = @At("TAIL"))
     private void skymyce$visualCosmetics(Avatar avatar, AvatarRenderState state, float tickDelta, CallbackInfo ci) {
+        ((CosmeticAvatarState)state).skymyce$setPreview(false);
         CosmeticProfile profile = avatar instanceof Player player ? CosmeticsClient.rendering(player.getUUID()) : null;
         ((CosmeticAvatarState)state).skymyce$setCosmetics(profile);
+        if (profile != null) {
+            state.skin = me.mycellium.skymyce.features.social.CapeTextures.apply(state.skin, profile);
+            if (CosmeticsConfig.INSTANCE.getNames() && profile.getNameStyle() != null && state.nameTag != null) state.nameTag = profile.getNameStyle();
+        }
         if (profile != null && CosmeticsConfig.INSTANCE.getScaling()) {
             state.eyeHeight *= profile.getScaleY();
             if (state.nameTagAttachment != null) state.nameTagAttachment = state.nameTagAttachment.multiply(profile.getScaleX(), profile.getScaleY(), profile.getScaleZ());
@@ -30,6 +35,6 @@ public abstract class AvatarCosmeticsMixin {
     private void skymyce$axes(AvatarRenderState state, PoseStack pose, CallbackInfo ci) {
         CosmeticProfile profile = ((CosmeticAvatarState)state).skymyce$getCosmetics();
         // Vanilla owns push/pop and applies this pose to the player and attached layers. No entity mutation.
-        if (profile != null && CosmeticsConfig.INSTANCE.getScaling()) pose.scale(profile.getScaleX(), profile.getScaleY(), profile.getScaleZ());
+        if (profile != null && (CosmeticsConfig.INSTANCE.getScaling() || ((CosmeticAvatarState)state).skymyce$isPreview())) pose.scale(profile.getScaleX(), profile.getScaleY(), profile.getScaleZ());
     }
 }

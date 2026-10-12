@@ -1,0 +1,149 @@
+package me.mycellium.skymyce.community
+
+import com.google.gson.JsonObject
+import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.container.UIContainers
+import io.wispforest.owo.ui.core.*
+import me.mycellium.skymyce.ui.*
+import me.mycellium.skymyce.utils.MC
+import net.minecraft.network.chat.Component
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.Executors
+
+data class LeaderboardRow(val rank: Int, val player: String, val value: Double, val samples: Long, val updatedAt: Long)
+data class LeaderboardResult(val label: String, val description: String, val unit: String, val source: String, val coverage: String,
+    val start: Long?, val end: Long, val updatedAt: Long, val total: Int, val entries: List<LeaderboardRow>, val hasNext: Boolean, val unavailable: String?)
+
+fun parseLeaderboard(json: JsonObject): LeaderboardResult {
+    require(json["ok"].asBoolean && json["version"].asInt == 1)
+    fun text(key: String, max: Int) = json[key].asString.also { require(it.length <= max && it.none { c -> c == '\u0000' }) }
+    val rows = json.getAsJsonArray("entries").also { require(it.size() <= 25) }.map {
+        val row = it.asJsonObject
+        val rank = row["rank"].asInt.also { value -> require(value > 0) }
+        val player = row["player"].asString.also { value -> require(value.length in 1..100 && value.none { c -> c < ' ' }) }
+        val value = row["value"].asDouble.also { value -> require(value.isFinite()) }
+        val samples = row["sampleSize"].asLong.also { value -> require(value >= 0) }
+        LeaderboardRow(rank, player, value, samples, row["updatedAt"].asLong.also { value -> require(value >= 0) })
+    }
+    require(rows.zipWithNext().all { (a, b) -> a.rank <= b.rank })
+    return LeaderboardResult(text("metricLabel", 100), text("description", 1500), text("unit", 30), text("source", 1000), text("coverage", 1000),
+        json["startAt"].takeUnless { it.isJsonNull }?.asLong, json["endAt"].asLong, json["updatedAt"].asLong,
+        json["total"].asInt.also { require(it >= 0) }, rows, json["hasNext"].asBoolean,
+        json["available"]?.takeIf { !it.asBoolean }?.let { text("reason", 1000) })
+}
+
+/** The in-game and Discord views query the same consent-filtered persisted ranking service. */
+class LeaderboardScreen : MenuScreen(Component.literal("Community Leaderboards")) {
+    override val canonicalFeatureId get() = "leaderboards"
+    override val menuCategory get() = MenuCategory.UTILS
+    private var category = "economy"
+    private var metric = "networth"
+    private var period = "all-time"
+    private var page = 1
+    private var query = ""
+    private var nextQuery = 0L
+    private var generation = -1L
+    @Volatile private var epoch = 0L
+    @Volatile private var closed = false
+    private var busy = false
+    private var result: LeaderboardResult? = null
+    private var status = "Connect Discord to view community leaderboards"
+    private lateinit var rows: FlowLayout
+    private lateinit var metricButton: MenuButton
+    private lateinit var periodButton: MenuButton
+    private companion object {
+        val worker = LatestCommunityRequestWorker(Executors.newSingleThreadExecutor {
+            Thread(it, "Sky-Myce leaderboards").apply { isDaemon = true }
+        })
+    }
+    private val metrics = linkedMapOf("networth" to "Net worth", "purse" to "Purse", "bank" to "Bank", "dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
+    private val periods = linkedMapOf("all-time" to "All time", "weekly" to "This week • UTC", "monthly" to "This month • UTC")
+    private fun categoryMetrics() = when (category) { "economy" -> listOf("networth", "purse", "bank"); "dungeons" -> listOf("dungeon_runs", "dungeon_profit"); "rng" -> listOf("rng_drops"); else -> listOf("completed_tasks") }
+    override fun init() { closed = false; super.init() }
+    override fun buildContent(root: FlowLayout) {
+        root.surface(Surface.BLANK).padding(Insets.of(10)); root.gap(8)
+        root.child(label("COMMUNITY LEADERBOARDS", MenuTheme.ACCENT))
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6)
+            listOf("economy" to "Economy", "dungeons" to "Dungeons", "rng" to "RNG", "other" to "Other").forEach { (id, title) ->
+                child(button(title) { category = id; metric = categoryMetrics().first(); page = 1; metricButton.message = Component.literal(metrics[metric]!!); request() }.apply { horizontalSizing(Sizing.fill(23)); selected = { category == id } })
+            }
+        })
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6)
+            metricButton = button(metrics[metric]!!) { openMenuDropdown(metricButton) { popup -> categoryMetrics().forEach { id -> popup.button(Component.literal(metrics[id]!!)) { metric = id; metricButton.message = Component.literal(metrics[id]!!); page = 1; request() } } } }.apply { horizontalSizing(Sizing.fill(35)) }; child(metricButton)
+            periodButton = button(periods.getValue(period)) { openMenuDropdown(periodButton) { popup -> periods.forEach { (id, title) -> popup.button(Component.literal(title)) { period = id; periodButton.message = Component.literal(title); page = 1; request() } } } }.apply { horizontalSizing(Sizing.fill(35)) }; child(periodButton)
+            child(button("Refresh") { request() }.horizontalSizing(Sizing.fixed(85)))
+        })
+        root.child(MenuTextBox(Sizing.fill()).apply {
+            setMaxLength(100); setHint(Component.literal("Search shared display names…")); text(query)
+            onChanged().subscribe {
+                query = it; page = 1; nextQuery = System.currentTimeMillis() + 350
+                epoch++; worker.cancel(this@LeaderboardScreen); busy = false; result = null
+            }
+        })
+        rows = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(8)) }
+        root.child(menuScroll(Sizing.fill(), Sizing.expand(), rows).apply { scrollbarThiccness(2); scrollStep(20) })
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); child(button("Previous") { if (page > 1 && !busy) { page--; request() } }.horizontalSizing(Sizing.fill(31)))
+            child(button("Next") { if (result?.hasNext == true && !busy) { page++; request() } }.horizontalSizing(Sizing.fill(31)))
+            child(button("Connect Discord") { navigateMenu(CommunityScreen()) }.horizontalSizing(Sizing.fill(31)))
+        })
+        paint(); request()
+    }
+    override fun tick() {
+        super.tick(); if (menuClosing) return
+        if (generation != CommunityClient.sessionGeneration) { generation = CommunityClient.sessionGeneration; epoch++; busy = false; result = null; request() }
+        if (nextQuery != 0L && System.currentTimeMillis() >= nextQuery) { nextQuery = 0; request() }
+    }
+    private fun request() {
+        if (!::rows.isInitialized || closed || menuClosing) return
+        val token = CommunityClient.sessionToken; val identity = CommunityClient.identity?.deepCopy()
+        if (!CommunityClient.connected || token == null || identity == null) {
+            epoch++; worker.cancel(this); busy = false; result = null
+            status = "Connect Discord to view shared rankings. Your local journal remains available."; paint(); return
+        }
+        val minecraftOwner = MC.instance.user.profileId.toString().replace("-", "")
+        if (identity["uuid"]?.asString != minecraftOwner) {
+            epoch++; worker.cancel(this); busy = false; result = null
+            status = "Reconnect the selected Minecraft account to view its community rankings."; paint(); return
+        }
+        val current = ++epoch; val ownerGeneration = CommunityClient.sessionGeneration
+        val path = "/community/leaderboard?category=$category&metric=$metric&period=$period&page=$page&limit=10&search=${URLEncoder.encode(query, StandardCharsets.UTF_8)}"
+        busy = true; result = null; status = "Loading ${metrics[metric]}…"; paint()
+        fun currentOwner() = !closed && CommunityClient.connected && current == epoch && token == CommunityClient.sessionToken &&
+            minecraftOwner == MC.instance.user.profileId.toString().replace("-", "") &&
+            ownerGeneration == CommunityClient.sessionGeneration && identity == CommunityClient.identity
+        worker.submit(this, ::currentOwner, { parseLeaderboard(CommunityClient.exchange(path, null, "GET", token)) }) { loaded ->
+            MC.instance.execute {
+                if (!currentOwner() || menuClosing) return@execute
+                busy = false
+                loaded.fold({ result = it; status = "${it.label} • page $page • ${it.total} participants" }, { status = "Rankings unavailable. Refresh after reconnecting; local features keep working." })
+                paint()
+            }
+        }
+    }
+    private fun paint() {
+        rows.clearChildren(); rows.child(label(status, MenuTheme.SECONDARY))
+        val data = result ?: return
+        rows.child(label(data.description, MenuTheme.MUTED))
+        rows.child(label("${data.start?.let(::utc) ?: "All recorded time"} → ${utc(data.end)} • updated ${if (data.updatedAt > 0) utc(data.updatedAt) else "no samples"}", MenuTheme.MUTED))
+        data.unavailable?.let { rows.child(label(it, MenuTheme.YELLOW)); return }
+        if (data.entries.isEmpty()) rows.child(label("No consenting participants match this period and search.", MenuTheme.MUTED))
+        data.entries.forEach { entry -> rows.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(8); padding(Insets.of(7)); surface(MenuTheme.panel())
+            child(label("#${entry.rank}", MenuTheme.ACCENT).horizontalSizing(Sizing.fixed(38)))
+            child(label(entry.player).horizontalSizing(Sizing.expand()))
+            child(label("${java.text.NumberFormat.getNumberInstance(java.util.Locale.ROOT).format(entry.value)} ${data.unit}").horizontalSizing(Sizing.content()))
+        }); rows.child(label("${entry.samples} samples • ${utc(entry.updatedAt)}", MenuTheme.MUTED)) }
+        rows.child(label("Source: ${data.source}", MenuTheme.MUTED)); rows.child(label(data.coverage, MenuTheme.MUTED))
+    }
+    private fun utc(time: Long) = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC).format(Instant.ofEpochMilli(time))
+    override fun removed() { closed = true; epoch++; worker.cancel(this); busy = false; nextQuery = 0; super.removed() }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
+    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
+}

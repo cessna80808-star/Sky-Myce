@@ -9,7 +9,6 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.formatDungeonTim
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils.sendModMessage
 import me.mycellium.skymyce.utils.Utils.displayModMessage
-import me.mycellium.skymyce.loader.LoaderClient
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
@@ -46,7 +45,7 @@ object PersonalBestCommand {
 
     fun lookupM7(name: String = MC.instance.user.name) {
         val connection = MC.connection ?: return
-        if (!LoaderClient.localAllowed || MC.instance.player == null) return
+        if (MC.instance.player == null) return
         if (!name.matches(Regex("[A-Za-z0-9_]{1,16}"))) {
             displayModMessage("Use /m7pb [Minecraft name] (1–16 letters, numbers or underscores).")
             return

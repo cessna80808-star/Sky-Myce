@@ -1,111 +1,180 @@
 package me.mycellium.skymyce.features.social
 
-import me.mycellium.skymyce.ui.*
-import io.wispforest.owo.ui.component.UIComponents
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.community.CommunityClient
+import me.mycellium.skymyce.community.CommunityScreen
 import me.mycellium.skymyce.config.misc.CosmeticsConfig
-import me.mycellium.skymyce.hud.HudTheme
-import me.mycellium.skymyce.hud.themed
-import me.mycellium.skymyce.hud.wrappedTooltip
+import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.MC
+import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.renderer.entity.state.AvatarRenderState
 import net.minecraft.network.chat.Component
-import tech.thatgravyboat.skyblockapi.utils.Scheduling
-import kotlin.time.Duration.Companion.milliseconds
+import net.minecraft.network.chat.FormattedText
+import org.joml.Quaternionf
+import org.joml.Vector3f
+import java.util.Optional
+import kotlin.math.roundToInt
 
-class CosmeticsScreen(private val link: Boolean = false, focusPath: String? = null) : MenuScreen(Component.literal("Sky-Hawk Cosmetics"), MenuPage.COSMETICS) {
-    private lateinit var content: FlowLayout
-    private lateinit var settingsScroll: MenuScroll<FlowLayout>
-    private val settingControls = HashMap<String, MenuButton>()
-    private var pendingSetting = focusPath
+/** Preview paints a separate render state; Save alone changes the public profile. */
+class CosmeticsScreen(private val link: Boolean = false, private val focusPath: String? = null) : MenuScreen(Component.literal("Cosmetics Studio"), MenuPage.COSMETICS) {
     override val menuCategory get() = MenuCategory.COSMETICS
-    private var started = false
+    private val studio = CosmeticsStudio()
+    private var draft = CosmeticProfile(MC.instance.user.profileId, null, 1f, 0, 0)
+    private var nameJson: com.google.gson.JsonElement? = null
     private var seen = -1L
-    private var status = ""
-    private var lastSecond = -1L
-    private var dirty = false
-    private var expiry: io.wispforest.owo.ui.component.LabelComponent? = null
-    private lateinit var statusLabel: io.wispforest.owo.ui.component.LabelComponent
+    private var loadedRevision = -1L
+    private var rotation = 180f
+    private var color = MenuTheme.ACCENT
+    private var bold = false
+    private var dirtyPreferences = false
+    private lateinit var preview: FlowLayout
+    private lateinit var controls: FlowLayout
+    private lateinit var status: MenuLabel
+    private lateinit var save: MenuButton
+    private lateinit var cape: MenuButton
+    private lateinit var nameInput: MenuTextBox
+    private lateinit var rotationSlider: MenuSlider
+    private val sliders = mutableMapOf<String, MenuSlider>()
     override fun isPauseScreen() = false
+
     override fun buildContent(root: FlowLayout) {
-        root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
-        content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(MenuTheme.PADDING + 3)) }
-        settingsScroll = menuScroll(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), content).apply {
-            surface(MenuTheme.panel()); scrollbarThiccness(2); scrollStep(20)
-        }
-        root.child(settingsScroll)
-        update()
-        if (!started) { started = true; CosmeticsClient.refreshOwn(); if (link) CosmeticsClient.requestLink() }
+        root.surface(Surface.BLANK).padding(Insets.of(10)); root.gap(8)
+        root.child(label("COSMETICS STUDIO", MenuTheme.ACCENT))
+        status = label(studio.status, MenuTheme.MUTED); root.child(status)
+        val row = UIContainers.horizontalFlow(Sizing.fill(), Sizing.expand()).apply { gap(10) }
+        val left = UIContainers.verticalFlow(Sizing.fixed((menuWidth * .34).toInt().coerceAtLeast(135)), Sizing.fill()).apply { gap(8) }
+        preview = UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()).apply { surface(MenuTheme.panel()); padding(Insets.of(8)) }
+        preview.child(label("LIVE PREVIEW", MenuTheme.SECONDARY))
+        preview.child(label("${MC.instance.user.name} • actual skin", MenuTheme.MUTED))
+        if (MC.instance.player == null) preview.child(label("Join a world to preview your player model.", MenuTheme.MUTED))
+        left.child(preview)
+        left.child(label("Rotate to inspect your cape", MenuTheme.MUTED))
+        rotationSlider = MenuSlider().apply { value(rotation / 360.0); onChanged().subscribe { rotation = (it * 360).toFloat() } }
+        left.child(rotationSlider)
+        left.child(button("Front / back") {
+            rotation = if (rotation < 90 || rotation > 270) 180f else 0f
+            rotationSlider.value(rotation / 360.0)
+        })
+        left.child(label("Preview only. Gameplay identity, movement and hitboxes stay the same.", MenuTheme.MUTED))
+        controls = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(8)) }
+        row.child(left); row.child(menuScroll(Sizing.expand(), Sizing.fill(), controls).apply { scrollStep(20); scrollbarThiccness(2) })
+        root.child(row); populate(); studio.refresh()
     }
-    override fun tick() {
-        super.tick()
-        if (menuClosing) return
-        val second = System.currentTimeMillis() / 1000
-        if (seen != CosmeticsClient.revision) update(animate = false)
-        else if (status != CosmeticsClient.status) {
-            status = CosmeticsClient.status
-            statusLabel.text(Component.literal(status).withColor(MenuTheme.MUTED))
-        }
-        if (second != lastSecond) {
-            lastSecond = second
-            expiry?.text(Component.literal(expiryText()).withColor(MenuTheme.MUTED))
-        }
-        pendingSetting?.let { path ->
-            val control = settingControls[path] ?: return@let
-            val handler = control.focusHandler() ?: return@let
-            settingsScroll.scrollTo(control); settingsScroll.scrollBy(0.0, true, false)
-            handler.focus(control, UIComponent.FocusSource.KEYBOARD_CYCLE)
-            pendingSetting = null
-        }
+    private fun populate() {
+        controls.clearChildren(); sliders.clear()
+        controls.child(label("DISPLAY NAME", MenuTheme.SECONDARY))
+        nameInput = MenuTextBox(Sizing.fill()).apply {
+            setMaxLength(32); text(draft.name.orEmpty()); setHint(Component.literal("Blank uses real Minecraft name"))
+            onChanged().subscribe { rename(it) }
+        }; controls.child(nameInput)
+        controls.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(5); verticalAlignment(VerticalAlignment.CENTER)
+            child(button("Cyan") { color = 0x62D7F1; rename(nameInput.value) }.horizontalSizing(Sizing.fill(31)))
+            child(button("Violet") { color = 0xB593F5; rename(nameInput.value) }.horizontalSizing(Sizing.fill(31)))
+            child(button("Bold") { bold = !bold; rename(nameInput.value) }.apply { selected = { bold }; horizontalSizing(Sizing.fill(31)) })
+        })
+        controls.child(label("NAMETAG", MenuTheme.SECONDARY))
+        scale("Nametag", .5f, 2f, { draft.nametagScale }) { draft = draft.copy(nametagScale = it) }
+        controls.child(label("BODY SCALE", MenuTheme.SECONDARY))
+        scale("Width X", .1f, 3f, { draft.scaleX }) { draft = draft.copy(scaleX = it) }
+        scale("Height Y", .1f, 3f, { draft.scaleY }) { draft = draft.copy(scale = it, scaleY = it) }
+        scale("Depth Z", .1f, 3f, { draft.scaleZ }) { draft = draft.copy(scaleZ = it) }
+        controls.child(button("Reset body scale") { draft = draft.copy(scale = 1f, scaleX = 1f, scaleY = 1f, scaleZ = 1f); refreshSliders() })
+        controls.child(label("CAPE", MenuTheme.SECONDARY))
+        cape = button(capeLabel()) { openMenuDropdown(cape) { popup ->
+            popup.button(Component.literal("Minecraft cape")) { draft = draft.copy(capePreset = null, capeAsset = null); updateCapeLabel() }
+            popup.button(Component.literal("No cape")) { draft = draft.copy(capePreset = "none", capeAsset = null); updateCapeLabel() }
+            CapeTextures.presets.forEach { (id, title) -> popup.button(Component.literal(title)) { draft = draft.copy(capePreset = id, capeAsset = null); updateCapeLabel() } }
+            studio.assets.forEach { asset -> popup.button(Component.literal("Upload ${asset.id.take(8)}")) { draft = draft.copy(capePreset = null, capeAsset = asset); updateCapeLabel() } }
+        } }; controls.child(cape)
+        controls.child(label("64 × 32 RGB/RGBA PNG • 256 KiB • 8 uploads", MenuTheme.MUTED))
+        val path = MenuTextBox(Sizing.fill()).apply { setMaxLength(2048); setHint(Component.literal("Local path to cape.png")) }; controls.child(path)
+        controls.child(button("Browse PNG…") { studio.chooseFile { path.text(it) } })
+        controls.child(button("Upload PNG from this path") { studio.upload(path.value) })
+        controls.child(button("Delete selected upload") { draft.capeAsset?.let(studio::delete) })
+        controls.child(label("LOCAL DISPLAY", MenuTheme.SECONDARY))
+        preference("Show cosmetic names", { CosmeticsConfig.names }) { CosmeticsConfig.names = !CosmeticsConfig.names }
+        preference("Show body scaling", { CosmeticsConfig.scaling }) { CosmeticsConfig.scaling = !CosmeticsConfig.scaling }
+        preference("Original tooltip names", { CosmeticsConfig.originalTooltips }) { CosmeticsConfig.originalTooltips = !CosmeticsConfig.originalTooltips }
+        save = button("Save public cosmetics") { studio.save(draft, nameJson) }; controls.child(save)
+        controls.child(button("Refresh saved profile") { studio.refresh() })
+        controls.child(button("Connect Discord") { navigateMenu(CommunityScreen()) })
     }
-    private fun update(animate: Boolean = true) {
-        if (!::content.isInitialized) return
-        if (animate) contentChanged()
-        seen = CosmeticsClient.revision; status = CosmeticsClient.status
-        content.clearChildren()
-        settingControls.clear()
-        expiry = null
-        content.child(label("SKY-HAWK / COSMETICS", MenuTheme.ACCENT))
-        content.child(label("Real identity: ${MC.instance.user.name}", MenuTheme.TEXT))
-        val own = CosmeticsClient.own()
-        content.child(label("Server name: ${own?.name ?: if (own == null) "Not synchronized" else "Real IGN"}"))
-        content.child(label("Size X: ${own?.scaleX ?: "?"} • Y: ${own?.scaleY ?: "?"} • Z: ${own?.scaleZ ?: "?"}"))
-        content.child(label("Revision: ${own?.revision ?: "—"}", MenuTheme.MUTED))
-        statusLabel = label(status, MenuTheme.MUTED)
-        content.child(statusLabel)
-        content.child(button("Refresh my settings") { CosmeticsClient.refreshOwn() }.wrappedTooltip(Component.literal("Read your public settings through the authenticated relay. Does not query friends or Hypixel APIs.")))
-        content.child(toggle("Cosmetics/names", "Show Cosmetic Names", { CosmeticsConfig.names }) { CosmeticsConfig.names = !CosmeticsConfig.names; preferenceChanged("Cosmetic names", CosmeticsConfig.names) })
-        content.child(toggle("Cosmetics/originalTooltips", "Original tooltip names", { CosmeticsConfig.originalTooltips }) { CosmeticsConfig.originalTooltips = !CosmeticsConfig.originalTooltips; preferenceChanged("Original tooltip names", CosmeticsConfig.originalTooltips) })
-        content.child(toggle("Cosmetics/scaling", "Player scaling", { CosmeticsConfig.scaling }) { CosmeticsConfig.scaling = !CosmeticsConfig.scaling; preferenceChanged("Player scaling", CosmeticsConfig.scaling) })
-        content.child(label("Names replace complete known usernames only in displayed text. Commands and gameplay use real identities. Size is a third-person visual effect only.", MenuTheme.MUTED))
-        content.child(button("Link my Discord account") { CosmeticsClient.requestLink() }.wrappedTooltip(Component.literal("Request a single-use code tied to your authenticated Minecraft UUID. Codes expire in five minutes.")))
-        CosmeticsClient.linkCode?.let { code ->
-            content.child(label("Link code: $code", MenuTheme.SECONDARY))
-            expiry = label(expiryText(), MenuTheme.MUTED); content.child(expiry!!)
-            content.child(button("Copy Discord link command") { MC.instance.keyboardHandler.clipboard = "/cosmetics link code:$code" }
-                .wrappedTooltip(Component.literal("Use in bot-commands, channel 1552057526969835612. Keep this one-time ownership code private.")))
-        }
-        content.child(label("After linking, use /cosmetics set, /cosmetics show or /cosmetics reset in Discord. The relay owns these settings; changing a local file cannot change another player's profile.", MenuTheme.MUTED))
-        content.child(button("Done") { onClose() })
+    private fun rename(value: String) {
+        val json = value.takeIf { it.isNotBlank() }?.let { JsonObject().apply { addProperty("text", it); addProperty("color", "#%06x".format(color)); addProperty("bold", bold) } }
+        val component = runCatching { json?.let(::parseCosmeticText) }.getOrElse { status.text(Component.literal("Name contains unsupported characters").withColor(MenuTheme.RED)); return }
+        nameJson = json; draft = draft.copy(name = component?.string, nameStyle = component)
     }
-    override fun removed() {
-        if (dirty) Scheduling.schedule(0.milliseconds) { runCatching { SkyMyce.config.save() }.onFailure { SkyMyce.logger.warn("Could not save cosmetic preferences") } }
-        super.removed()
+    private fun scale(title: String, minimum: Float, maximum: Float, get: () -> Float, set: (Float) -> Unit) {
+        val caption = label("$title  ${"%.2f".format(java.util.Locale.ROOT, get())}×")
+        val slider = MenuSlider().apply {
+            value(((get() - minimum) / (maximum - minimum)).toDouble())
+            onChanged().subscribe { set((minimum + (maximum - minimum) * it).toFloat()); caption.text(Component.literal("$title  ${"%.2f".format(java.util.Locale.ROOT, get())}×")) }
+        }; sliders[title] = slider; controls.child(caption); controls.child(slider)
     }
-    private fun preferenceChanged(name: String, enabled: Boolean) {
-        dirty = true; showMenuToast("$name ${if (enabled) "enabled" else "disabled"}", MenuToastKind.SUCCESS)
+    private fun refreshSliders() {
+        sliders.forEach { (title, slider) -> val value = when (title) { "Nametag" -> draft.nametagScale; "Width X" -> draft.scaleX; "Height Y" -> draft.scaleY; else -> draft.scaleZ }
+            slider.value(((value - if (title == "Nametag") .5f else .1f) / if (title == "Nametag") 1.5f else 2.9f).toDouble()) }
     }
-    private fun expiryText() = "Expires in ${((CosmeticsClient.linkExpires - System.currentTimeMillis()) / 1000).coerceAtLeast(0)} seconds"
-    private fun toggle(path: String, text: String, state: () -> Boolean, action: () -> Unit) = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-        gap(8); verticalAlignment(VerticalAlignment.CENTER)
-        child(label(text).horizontalSizing(Sizing.expand()))
-        child(MenuButton(Component.literal(text)) { action() }.apply {
-            toggled = state; sizing(Sizing.fixed(32), Sizing.fixed(22)); wrappedTooltip(Component.literal(text))
-            settingControls[path] = this
+    private fun preference(title: String, get: () -> Boolean, action: () -> Unit) {
+        controls.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(5); verticalAlignment(VerticalAlignment.CENTER)
+            child(label(title).horizontalSizing(Sizing.expand()))
+            child(button(title) { action(); dirtyPreferences = true }.apply {
+                toggled = get; sizing(Sizing.fixed(28), Sizing.fixed(22)); tooltip(Component.literal(title))
+            })
         })
     }
-    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(CosmeticNames.original(Component.literal(text).withColor(color))).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
-    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.themed().apply { sizing(Sizing.fill(), Sizing.fixed(20)) }
+    private fun capeLabel() = if (draft.capePreset == "none") "No cape" else
+        draft.capePreset?.let(CapeTextures.presets::get) ?: draft.capeAsset?.let { "Upload ${it.id.take(8)}" } ?: "Minecraft cape"
+    private fun updateCapeLabel() { cape.message = Component.literal(capeLabel()) }
+    override fun tick() {
+        super.tick(); if (!::status.isInitialized || menuClosing) return
+        if (studio.observeOwner()) { draft = CosmeticProfile(MC.instance.user.profileId, null, 1f, 0, 0); nameJson = null; loadedRevision = -1; populate(); if (CommunityClient.connected) studio.refresh() }
+        save.active = CommunityClient.connected && studio.profile != null && !studio.busy
+        if (seen == studio.revision) return
+        seen = studio.revision; status.text(Component.literal(studio.status).withColor(MenuTheme.MUTED))
+        studio.profile?.takeIf { it.revision != loadedRevision }?.let {
+            loadedRevision = it.revision; draft = it; nameJson = it.nameStyle?.let(::cosmeticTextJson)
+            color = it.nameStyle?.style?.color?.value ?: MenuTheme.ACCENT; bold = it.nameStyle?.style?.isBold ?: false
+            populate()
+        }
+    }
+    override fun extractNativeContent(g: GuiGraphicsExtractor, sx: Float, sy: Float, partialTicks: Float) {
+        val player = MC.instance.player ?: return; if (!::preview.isInitialized) return
+        val left = ((preview.x() + 8) * sx).roundToInt(); val top = ((preview.y() + 45) * sy).roundToInt()
+        val right = ((preview.x() + preview.width() - 8) * sx).roundToInt(); val bottom = ((preview.y() + preview.height() - 8) * sy).roundToInt()
+        if (bottom - top < 50) return
+        val state = MC.instance.entityRenderDispatcher.getPlayerRenderer(player).createRenderState(player, partialTicks)
+        (state as CosmeticAvatarState).`skymyce$setCosmetics`(draft)
+        state.`skymyce$setPreview`(true)
+        state.skin = CapeTextures.applyPreview(player.skin, draft); state.nameTag = null; state.showCape = true
+        state.bodyRot = 0f; state.yRot = 0f; state.xRot = 0f; state.walkAnimationSpeed = 0f
+        val scale = minOf((bottom - top) / 3.8f, (right - left) / 2.5f, (bottom - top - 15) / (player.bbHeight * draft.scaleY), (right - left) / (1.1f * draft.scaleX))
+        g.entity(state, scale, Vector3f(0f, .9f * draft.scaleY, 0f), Quaternionf().rotateZ(Math.PI.toFloat()).rotateY(Math.toRadians(rotation.toDouble()).toFloat()), null, left, top, right, bottom)
+        val tag = draft.nameStyle ?: Component.literal(MC.instance.user.name); val tagScale = sy * draft.nametagScale
+        g.enableScissor(left, top - 15, right, bottom); g.pose().pushMatrix()
+        try { g.pose().translate((left + right) / 2f, top.toFloat()); g.pose().scale(tagScale); g.text(MC.font, tag, -MC.font.width(tag) / 2, 0, 0xffffffff.toInt(), true) }
+        finally { g.pose().popMatrix(); g.disableScissor() }
+    }
+    override fun removed() { studio.close(); CapeTextures.clearPreviews(); if (dirtyPreferences) java.util.concurrent.CompletableFuture.runAsync { runCatching { SkyMyce.config.save() } }; super.removed() }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
+    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
+}
+
+/** Preserve the inert styled name when only body/cape settings change. */
+fun cosmeticTextJson(component: Component): JsonObject {
+    val parts = JsonArray()
+    component.visit(FormattedText.StyledContentConsumer<Unit> { style, value ->
+        if (value.isNotEmpty()) parts.add(JsonObject().apply {
+            addProperty("text", value); style.color?.let { addProperty("color", "#%06x".format(it.value)) }
+            addProperty("bold", style.isBold); addProperty("italic", style.isItalic); addProperty("underlined", style.isUnderlined); addProperty("strikethrough", style.isStrikethrough)
+        }); Optional.empty()
+    }, net.minecraft.network.chat.Style.EMPTY)
+    return JsonObject().apply { addProperty("text", ""); add("extra", parts) }
 }

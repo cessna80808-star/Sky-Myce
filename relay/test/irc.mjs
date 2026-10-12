@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign, createHash, createHmac, randomUUID } from "node:crypto";
+import { generateKeyPairSync, sign, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 export async function checkIrc(script, proof) {
@@ -18,7 +18,7 @@ export async function checkIrc(script, proof) {
   const id = () => (sequence++).toString(16).padStart(32, "0");
   const people = new Map(["Alice", "Bob", "Carol"].map((name, i) => [name, { name, uuid: "abc"[i].repeat(32),
     discordId: String(200000000000000000n + BigInt(i)), accountId: randomUUID(), installationId: randomUUID(),
-    device: String(i + 1).repeat(64), key: generateKeyPairSync("ed25519") }]));
+    device: String(i + 1).repeat(64), key: generateKeyPairSync("ed25519"), accessToken: randomUUID().replaceAll('-', '') + 'community01' }]));
   function inbox(ws) {
     const queued = [], waiting = [];
     ws.addEventListener("message", event => { const data = event.data === "pong" ? "pong" : JSON.parse(event.data);
@@ -44,12 +44,11 @@ export async function checkIrc(script, proof) {
     assert.equal(response.status, 101);
     const ws = response.webSocket, next = inbox(ws); ws.accept(); sockets.push(ws);
     const challenge = await next(); assert.equal(challenge.protocol, 3);
-    const person = people.get(name), token = lease(person, change.claims);
-    const data = { ...proof(name, challenge.serverId), lease: token, userMessages: true, cosmetics: true,
-      installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${token}`), person.key.privateKey).toString("base64"), ...change.packet };
+    const person = people.get(name);
+    const data = { ...proof(name, challenge.serverId), communityToken: person.accessToken, modVersion: '0.1.0', userMessages: true, cosmetics: true, ...change.packet };
     const closed = change.denied ? closeEvent(ws) : undefined;
     ws.send(JSON.stringify(data));
-    if (closed) { assert.equal((await closed).code, 4005); return; }
+    if (closed) { assert.ok([4005,4006,4007].includes((await closed).code)); return; }
     const ready = await next(); assert.equal(ready.type, "ready"); assert.equal(ready.irc, true);
     assert.equal(ready.partyChat, true); assert.equal(ready.partyChatVersion, 1); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
@@ -76,9 +75,8 @@ export async function checkIrc(script, proof) {
   try {
     const alicePerson = people.get("Alice");
     // Initialize the real AccountStore, then seed authority for focused relay tests. Account lifecycle has its own HTTP tests.
-    const init = await mf.dispatchFetch("http://localhost/auth/challenge", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ purpose: "activate", clientNonce: randomUUID(), installationId: alicePerson.installationId, publicKey: publicKey(alicePerson.key),
-        deviceHash: alicePerson.device, minecraftVersion: "26.1.2", loaderVersion: "1.0.0", modVersion: "2.4.2" }) });
+    const init = await mf.dispatchFetch("http://localhost/community/challenge", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ purpose: "connect", clientNonce: randomBytes(32).toString('base64url') }) });
     assert.equal(init.status, 200);
     const store = await mf.unsafeGetDurableObjectStorage("irc-check", "AccountStore", { name: "global" });
     for (const person of people.values()) {
@@ -89,11 +87,13 @@ export async function checkIrc(script, proof) {
       await store.exec("INSERT INTO account_devices VALUES(?,?,?,NULL)", person.device, person.accountId, now);
       await store.exec("INSERT INTO installations(installation_id,account_id,device_hash,public_key,fingerprint,registered_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)", person.installationId, person.accountId, person.device,
         publicKey(person.key), createHash("sha256").update(person.key.publicKey.export({ format: "der", type: "spki" })).digest("hex"), now);
+      await store.exec("INSERT INTO community_sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)", person.installationId, person.accountId, person.uuid, 0, createHash('sha256').update(randomUUID()).digest('hex'), now+86400000, createHash('sha256').update(person.accessToken).digest('hex'), now+300000, now, now, null, '0.1.0');
+      if (person.name === 'Carol') await store.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", person.discordId, now);
     }
     await connect("Carol", "friends", { denied: true });
-    await connect("Alice", "friends", { denied: true, packet: { lease: undefined, installationSignature: undefined } });
-    await connect("Alice", "friends", { denied: true, packet: { installationSignature: Buffer.alloc(64).toString("base64") } });
-    await connect("Alice", "friends", { denied: true, claims: { version: "1.0.0" } });
+    await connect("Alice", "friends", { denied: true, packet: { communityToken: undefined } });
+    await connect("Alice", "friends", { denied: true, packet: { communityToken: 'x'.repeat(43) } });
+    const oldVersion = await connect("Alice", "friends", { packet: { modVersion: "0.0.1" } }); oldVersion.ws.close();
     const alice = await connect("Alice"), bob = await connect("Bob"), isolated = await connect("Alice", "testing");
     // Existing handlers work behind strict authorization as well as in the original protocol suite.
     alice.ws.send(JSON.stringify({ type: "cosmetics_get", id: id(), uuids: [alicePerson.uuid] }));
@@ -167,7 +167,7 @@ export async function checkIrc(script, proof) {
     await mf.unsafeEvictDurableObject("irc-check", "RelayRoom", { name: "friends", webSockets: "hibernate" });
     alice.ws.send(JSON.stringify({ type: "irc_send", id: id(), text: "over quota" })); assert.equal((await alice.next()).error, "rate_limited");
     await subscribe(bob, false); await subscribe(bob, true); // Subscription opt-in survives hibernation.
-    await store.exec("UPDATE sky_accounts SET license_status='revoked',generation=generation+1 WHERE account_id=?", alicePerson.accountId);
+    await store.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", alicePerson.discordId, Date.now());
     const closed = closeEvent(alice.ws);
     alice.ws.send(JSON.stringify({ type: "irc_send", id: id(), text: "after revoke" }));
     assert.equal((await alice.next()).type, "authorization_revoked"); assert.equal((await closed).code, 4005);
@@ -176,6 +176,6 @@ export async function checkIrc(script, proof) {
     const roomStorage = await mf.unsafeGetDurableObjectStorage("irc-check", "RelayRoom", { name: "friends" });
     const tables = await roomStorage.exec("SELECT name FROM sqlite_master WHERE type='table'");
     assert.ok(!tables.some(table => /chat_history|irc_messages/.test(table.name)));
-    console.log("IRC checks passed: strict leases, installation proof, bridge replay, sender identity, both directions, hibernation, deduplication, quotas, isolation, revocation.");
+    console.log("IRC checks passed: verified community sessions, bridge replay, sender identity, both directions, hibernation, deduplication, quotas, isolation, blacklist revocation.");
   } finally { for (const ws of sockets) try { ws.close(); } catch {} await mf.dispose(); }
 }

@@ -43,6 +43,7 @@ object WidgetManager : SkyMyceModule() {
                             y = if (current.y != before.y) current.y else stored.y,
                             scale = if (current.scale != before.scale) current.scale else stored.scale,
                             anchor = if (current.anchor != before.anchor) current.anchor else stored.anchor,
+                            visible = if (current.visible != before.visible) current.visible else stored.visible,
                             theme = if (current.theme != before.theme) current.theme else stored.theme).applyConfig(widget)
                     }
                 }
@@ -116,6 +117,7 @@ data class WidgetConfig(
     val scale: Float = 1f,
     val anchor: Anchor = Anchor.TOP_LEFT,
     val theme: ThemeOverrides? = null,
+    val visible: Boolean = true,
 ) {
     fun applyConfig(widget: Widget) {
         widget.x = x
@@ -123,6 +125,7 @@ data class WidgetConfig(
         widget.scale = scale
         widget.anchor = anchor
         widget.theme = theme
+        widget.visible = visible
     }
 }
 
@@ -134,5 +137,6 @@ internal fun parseWidgetConfig(json: JsonElement?): WidgetConfig? = runCatching 
     val theme = runCatching { row.get("theme")?.takeUnless { it.isJsonNull }?.let {
         parseThemeDocument("""{"version":1,"overrides":$it}""").overrides
     } }.getOrNull()
-    WidgetConfig(position("x"), position("y"), scale, anchor, theme)
+    val visible = runCatching { row.get("visible")?.asBoolean }.getOrNull() ?: true
+    WidgetConfig(position("x"), position("y"), scale, anchor, theme, visible)
 }.getOrNull()

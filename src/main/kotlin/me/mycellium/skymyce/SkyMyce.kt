@@ -30,6 +30,7 @@ import me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRout
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTrackerWidget
+import me.mycellium.skymyce.features.instances.dungeons.tracker.RecentRngWidget
 import me.mycellium.skymyce.features.mining.MiningFeatures
 import me.mycellium.skymyce.features.troll.CheesePizza
 import me.mycellium.skymyce.features.troll.Plane
@@ -43,7 +44,7 @@ import net.minecraft.resources.Identifier
 import org.slf4j.LoggerFactory
 import tech.thatgravyboat.skyblockapi.api.SkyBlockAPI
 import java.nio.file.Path
-import me.mycellium.skymyce.loader.LoaderClient
+import me.mycellium.skymyce.community.CommunityClient
 
 
 object SkyMyce : ClientModInitializer {
@@ -63,30 +64,20 @@ object SkyMyce : ClientModInitializer {
         config.save()
         me.mycellium.skymyce.ui.MenuShortcuts.initialize()
 
-        // Fabric key mappings must register before GameOptions exists. Execution is gated below.
         initializeModules()
         ClientLifecycleEvents.CLIENT_STOPPING.register { RuntimeProfiler.shutdown() }
-        LoaderClient.observe { allowed ->
-            ModuleManager.modules.forEach {
-                if (allowed) { SkyBlockAPI.eventBus.unregister(it); SkyBlockAPI.eventBus.register(it); it.enable() }
-                else { SkyBlockAPI.eventBus.unregister(it); it.disable() }
-            }
-            if (!allowed && modulesInitialized) {
-                me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay.disconnect()
-            }
-        }
+        ModuleManager.modules.forEach { SkyBlockAPI.eventBus.register(it); it.enable() }
+        CommunityClient.initialize()
     }
 
-    private var modulesInitialized = false
     private fun initializeModules() {
-        modulesInitialized = true
         ModuleManager.loadModules(
             CheesePizza,
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
-            MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, StarredClearRouting,
+            MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient
         )
 

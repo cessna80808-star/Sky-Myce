@@ -78,6 +78,14 @@ private fun checkStableCardEdges(layout: MenuLayout) {
 fun main() {
     measureNavigationGeometry()
     check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
+    for (index in MenuCategory.entries.indices) for (width in listOf(110, 140, 220, 400)) {
+        val descriptions = menuNavigationDescription(index, width)
+        check(descriptions.size in 1..2 && descriptions.all { MenuCanvas.textWidth(it, size = 9.0) <= width }) {
+            "A home category description was clipped instead of wrapping at width $width"
+        }
+        check(menuNavigationDescription(index, width) === descriptions) { "Settled home cards repeatedly rewrapped descriptions" }
+        if (width == 400) check(descriptions.joinToString(" ") == MenuCategory.entries[index].description)
+    }
     val actionSets = listOf(listOf(90, 24, 24, 60), listOf(98, 105), listOf(94, 54), listOf(76, 76))
     for (available in listOf(80, 139, 163, 240, 400)) for (widths in actionSets) {
         val rows = menuActionRows(widths, available)

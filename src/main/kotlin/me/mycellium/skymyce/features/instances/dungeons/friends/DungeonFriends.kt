@@ -9,7 +9,6 @@ import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsConfig
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
 import me.mycellium.skymyce.config.instances.dungeons.PartyListing
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
-import me.mycellium.skymyce.loader.LoaderClient
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils.sendCommand
 import me.mycellium.skymyce.utils.Utils.displayTitle
@@ -172,7 +171,7 @@ object DungeonFriends : SkyMyceModule() {
         DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
             global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
         RelayMessages.globalTick()
-        if ((isEnabled() || GlobalChatConfig.partyEnabled && LoaderClient.localAllowed) && LocationAPI.onHypixel && MC.instance.player != null &&
+        if ((isEnabled() || GlobalChatConfig.partyEnabled) && LocationAPI.onHypixel && MC.instance.player != null &&
             partyInfoRequestDue(now(), nextPartyRequest, partyRequestAllowedAt)) {
             val requestAt = now()
             val sent = HypixelModAPI.getInstance().sendPacket(ServerboundPartyInfoPacket())

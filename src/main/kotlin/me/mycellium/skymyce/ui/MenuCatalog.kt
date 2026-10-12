@@ -77,6 +77,9 @@ class MenuCatalog(rows: List<SettingRow>) {
 
     companion object {
         val definitions = listOf(
+            MenuFeature("community", "Discord & Community", "Connect Discord, control statistics sharing and choose updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
+            MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.UTILS, "Progress", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
+            MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.UTILS, "Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
@@ -144,6 +147,7 @@ class MenuCatalog(rows: List<SettingRow>) {
         fun settingLocation(path: String): MenuSettingLocation {
             val key = path.substringAfterLast('/')
             val feature = when {
+                path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"

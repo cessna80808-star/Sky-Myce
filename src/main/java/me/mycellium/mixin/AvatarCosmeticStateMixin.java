@@ -9,6 +9,9 @@ import org.spongepowered.asm.mixin.Unique;
 @Mixin(AvatarRenderState.class)
 public class AvatarCosmeticStateMixin implements CosmeticAvatarState {
     @Unique private CosmeticProfile skymyce$cosmetics;
+    @Unique private boolean skymyce$preview;
     public CosmeticProfile skymyce$getCosmetics() { return skymyce$cosmetics; }
     public void skymyce$setCosmetics(CosmeticProfile profile) { skymyce$cosmetics = profile; }
+    public boolean skymyce$isPreview() { return skymyce$preview; }
+    public void skymyce$setPreview(boolean preview) { skymyce$preview = preview; }
 }

@@ -1,26 +1,23 @@
 import assert from 'node:assert/strict';
-import { createHash, createHmac, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 export async function checkRichIrc(script, proof) {
-  const signing = generateKeyPairSync('ed25519'), secret = 'rich-irc-test-only-bridge-secret-32bytes';
-  const publicKey = key => key.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+  const secret = 'rich-irc-test-only-bridge-secret-32bytes';
   const people = ['Alice', 'Bob', 'Carol'].map((name, i) => ({ name, uuid: 'abc'[i].repeat(32),
-    discordId: String(200000000000000000n + BigInt(i)), accountId: randomUUID(), installationId: randomUUID(),
-    device: String(i + 1).repeat(64), key: generateKeyPairSync('ed25519') }));
+    discordId: String(200000000000000000n + BigInt(i)), accountId: randomUUID(), sessionId: randomUUID(),
+    accessToken: randomBytes(32).toString('base64url') }));
   const channels = { friends: '100000000000000001', testing: '100000000000000002', 'global-chat': '100000000000000003' };
   const options = convertV4MiniflareOptions({ name: 'rich-irc-check', modules: true, script, compatibilityDate: '2026-09-27',
     bindings: { ROOMS: 'friends,testing', SKYMYCE_ENVIRONMENT: 'staging', DISCORD_BRIDGE_SECRET: secret,
       GLOBAL_CHAT_CHANNEL_ID: channels['global-chat'], DISCORD_IRC_CHANNEL_ID: channels.friends, DISCORD_IRC_TEST_CHANNEL_ID: channels.testing,
-      GLOBAL_CHAT_MIN_INTERVAL_MS: '0', GLOBAL_CHAT_BURST: '20', IRC_BURST: '12',
-      DRM_KEY_ID: 'test', DRM_PUBLIC_KEYS: JSON.stringify({ test: publicKey(signing) }) },
+      GLOBAL_CHAT_MIN_INTERVAL_MS: '0', GLOBAL_CHAT_BURST: '20', IRC_BURST: '12' },
     durableObjects: { RELAY_ROOMS: { className: 'RelayRoom', useSQLite: true }, ACCOUNT_STORE: { className: 'AccountStore', useSQLite: true } },
     outboundService: () => { throw new Error('Rich IRC fixtures never contact real external services'); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112033', simple: { limit: 1000, period: 60 } };
   const mf = new Miniflare(options), sockets = []; let sequence = 1, ip = 1, discordSequence = 900000000000000001n;
   const id = () => (sequence++).toString(16).padStart(32, '0');
-  const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   function inbox(ws) {
     const queued = [], waiting = [];
     ws.addEventListener('message', event => {
@@ -36,16 +33,8 @@ export async function checkRichIrc(script, proof) {
     const response = await mf.dispatchFetch(`http://localhost/websocket?room=${room}`, { headers: { Upgrade: 'websocket', 'CF-Connecting-IP': `rich-mc-${ip++}` } });
     assert.equal(response.status, 101);
     const ws = response.webSocket, next = inbox(ws); ws.accept(); sockets.push(ws);
-    const challenge = await next(), now = Date.now();
-    const claims = { product: 'sky-myce', protocol: 3, accountId: person.accountId, discordId: person.discordId,
-      uuid: person.uuid, installationId: person.installationId, deviceHash: person.device,
-      keyFingerprint: createHash('sha256').update(person.key.publicKey.export({ format: 'der', type: 'spki' })).digest('hex'),
-      version: '2.4.2', loaderVersion: '1.0.0', minecraft: '26.1.2', iat: now, exp: now + 300000, offlineUntil: now + 1200000,
-      generation: 0, jti: randomUUID(), challengeId: randomUUID(), clientNonce: randomUUID(), features: ['relay', 'irc'] };
-    const body = `${b64({ alg: 'EdDSA', typ: 'JWT', kid: 'test' })}.${b64(claims)}`;
-    const lease = `${body}.${sign(null, Buffer.from(body), signing.privateKey).toString('base64url')}`;
-    ws.send(JSON.stringify({ ...proof(person.name, challenge.serverId), lease,
-      installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${lease}`), person.key.privateKey).toString('base64') }));
+    const challenge = await next();
+    ws.send(JSON.stringify({ ...proof(person.name, challenge.serverId), communityToken: person.accessToken, modVersion: '2.5.0' }));
     const ready = await next(); assert.equal(ready.richChatVersion, 1); assert.equal(ready.partyChat, true); assert.equal(ready.partyChatVersion, 1);
     return { ws, next, person, room, rich };
   }
@@ -75,17 +64,16 @@ export async function checkRichIrc(script, proof) {
   }
   try {
     const p = people[0];
-    assert.equal((await mf.dispatchFetch('http://localhost/auth/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-      purpose: 'activate', clientNonce: randomUUID(), installationId: p.installationId, publicKey: publicKey(p.key), deviceHash: p.device,
-      minecraftVersion: '26.1.2', loaderVersion: '1.0.0', modVersion: '2.4.2' }) })).status, 200);
+    assert.equal((await mf.dispatchFetch('http://localhost/community/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ purpose: 'connect', clientNonce: randomBytes(32).toString('base64url') }) })).status, 200);
     const authority = await mf.unsafeGetDurableObjectStorage('rich-irc-check', 'AccountStore', { name: 'global' });
     for (const person of people) {
       const now = Date.now();
-      await authority.exec('INSERT INTO sky_accounts(account_id,discord_id,license_status,device_hash,activated_at,created_at,last_seen) VALUES(?,?,?,?,?,?,?)', person.accountId, person.discordId, 'active', person.device, now, now, now);
+      await authority.exec('INSERT INTO sky_accounts(account_id,discord_id,created_at,last_seen) VALUES(?,?,?,?)', person.accountId, person.discordId, now, now);
       await authority.exec('INSERT INTO minecraft_accounts VALUES(?,?,?,?,?)', person.uuid, person.accountId, person.name, now, now);
-      await authority.exec('INSERT INTO account_devices VALUES(?,?,?,NULL)', person.device, person.accountId, now);
-      await authority.exec('INSERT INTO installations(installation_id,account_id,device_hash,public_key,fingerprint,registered_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)', person.installationId, person.accountId, person.device, publicKey(person.key),
-        createHash('sha256').update(person.key.publicKey.export({ format: 'der', type: 'spki' })).digest('hex'), now);
+      await authority.exec('INSERT INTO community_sessions VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,NULL,NULL)', person.sessionId, person.accountId, person.uuid, 0,
+        createHash('sha256').update(randomBytes(32)).digest('hex'), now + 90 * 86400000,
+        createHash('sha256').update(person.accessToken).digest('hex'), now + 300000, now, now, '2.5.0');
     }
     const alice = await connect(people[0], 'friends'), bob = await connect(people[1], 'friends'), isolated = await connect(people[1], 'testing'), legacy = await connect(people[2], 'testing', false);
     const roomBot = await bridge('friends'), globalBot = await bridge('global-chat');
@@ -242,7 +230,7 @@ export async function checkRichIrc(script, proof) {
     assert.equal((await alice.next()).error, undefined); await acknowledge(globalBot, await globalBot.next());
     assert.equal((await globalSql.exec('SELECT id FROM irc_metadata WHERE id=?', retained.id)).length, 0);
     const record = JSON.parse((await globalSql.exec('SELECT record FROM irc_metadata LIMIT 1'))[0].record);
-    assert.ok(record.preview.length <= 256); for (const key of ['accountId', 'installationId', 'lease', 'authorization', 'text']) assert.equal(record[key], undefined);
+    assert.ok(record.preview.length <= 256); for (const key of ['accountId', 'installationId', 'lease', 'authorization', 'communityToken', 'communitySessionId', 'text']) assert.equal(record[key], undefined);
     console.log('Rich IRC checks passed: Global/room/Party isolation, roster consent changes, verified cosmetics, media, replies, ownership, native lifecycle, reactions, dedup, tombstones, eviction and bounded expiry.');
   } finally { for (const ws of sockets) try { ws.close(1000, 'rich IRC tests complete'); } catch {} await mf.dispose(); }
 }

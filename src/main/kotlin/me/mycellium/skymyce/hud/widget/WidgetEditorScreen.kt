@@ -47,7 +47,7 @@ internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
 }
 
 internal fun hudEditorHelp(screenWidth: Int) = menuTextLines(Component.literal(
-    "Drag: move | Scroll: scale | Right click: theme\nCtrl: anchor | Shift: snap | H: hide controls"), screenWidth - 16)
+    "Drag: move | Scroll: scale | Right click: theme\nCtrl: anchor | Shift: snap | V: visibility | R: reset hovered | H: hide controls"), screenWidth - 16)
 
 /** Keep the exact opening screen, including its selected settings tab and draft state. */
 class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instance, MC.font, Component.literal("Widget Editor")) {
@@ -87,15 +87,12 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         val toolbar = hudEditorToolbar(width, height)
         val resetButton = MenuButton(Component.literal("Reset positions")) {
             screenWidgets.forEach { widget ->
-                widget.x = width / 2
-                widget.y = height / 2
-                widget.scale = 1f
-                widget.anchor = Anchor.CENTER
+                widget.defaultLayout.copy(theme = widget.theme).applyConfig(widget)
             }
         }.apply {
             themed()
             sizing(Sizing.expand(), Sizing.fill())
-            tooltip(Component.literal("Center the visible widgets and reset their scales."))
+            tooltip(Component.literal("Restore each widget's default position, scale and visibility. Theme overrides are retained."))
         }
 
         toolbar.child(resetButton)
@@ -147,7 +144,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
                 graphics.outline(widget.renderX, widget.renderY, widget.width, widget.height, outlineColor)
                 if (selectedWidget == widget || clickedWidget == widget) {
                     val labelY = (widget.renderY + widget.height + 4).coerceAtMost(height - MenuCanvas.lineHeight()).coerceAtLeast(0)
-                    graphics.text(MC.font, "${widget.title} | X: ${widget.x} Y: ${widget.y} Scale: ${widget.scale}",
+                    graphics.text(MC.font, "${widget.title}${if (widget.visible) "" else " [hidden in gameplay]"} | X: ${widget.x} Y: ${widget.y} Scale: ${widget.scale}",
                         widget.renderX.coerceAtLeast(0), labelY, outlineColor, false)
                 }
             }
@@ -258,6 +255,11 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             controlsVisible = !controlsVisible
             if (!controlsVisible) { setFocused(null); ui?.cursorAdapter?.applyStyle(CursorStyle.NONE) }
             return true
+        }
+        if (controlsVisible && !input.hasControlDown() && !input.hasAltDown()) {
+            val widget = selectedWidget
+            if (widget != null && input.key == GLFW.GLFW_KEY_V) { widget.visible = !widget.visible; WidgetManager.save(); return true }
+            if (widget != null && input.key == GLFW.GLFW_KEY_R) { widget.defaultLayout.copy(theme = widget.theme).applyConfig(widget); WidgetManager.save(); return true }
         }
         snapPosition = input.hasShiftDown()
         anchorSelect = input.hasControlDown()

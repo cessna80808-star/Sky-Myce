@@ -23,6 +23,7 @@ object DungeonFriendStatsCache {
     private val liveClasses = mutableMapOf<String, Pair<String, DungeonClass>>()
     private val revisions = mutableMapOf<String, Long>()
     private val invalidProfiles = mutableMapOf<String, Long>()
+    private val sharedSuppressedAt = mutableMapOf<String, Long>()
     private val pending = linkedMapOf<String, Request>()
     private val sharedLookups = mutableMapOf<String, SharedLookup>()
     private var relayCredits = 20.0 // Leave room below the relay's 30-message burst limit for uploads.
@@ -82,6 +83,18 @@ object DungeonFriendStatsCache {
     }
 
     fun forgetLiveClass(name: String) { liveClasses.remove(name.lowercase()) }
+
+    fun removeSharedSubjects(uuids: Set<String>) {
+        if (uuids.isEmpty()) return
+        val now = System.currentTimeMillis()
+        uuids.forEach { sharedSuppressedAt[it] = now }
+        // A name-only lookup may already hold a removed UUID's result. Drop every outstanding
+        // shared response so server/client clock differences cannot restore it after removal.
+        sharedLookups.clear()
+        val names = cache.filterValues { it.uuid in uuids }.keys.toSet() + pending.filterValues { it.uuid?.toString()?.replace("-", "") in uuids }.keys
+        names.forEach { name -> invalidateProfile(name); pending.remove(name) }
+        if (sharedSuppressedAt.size > 10000) sharedSuppressedAt.entries.sortedBy { it.value }.take(sharedSuppressedAt.size - 10000).forEach { sharedSuppressedAt.remove(it.key) }
+    }
 
     fun invalidateProfile(name: String, now: Long = System.currentTimeMillis()) {
         val key = name.lowercase()
@@ -191,6 +204,7 @@ object DungeonFriendStatsCache {
         if (!key.matches(Regex("[a-z0-9_]{1,16}"))) return false
         val previous = cache[key]
         val record = sharedDungeonFriend(json, name, uuid ?: previous?.uuid, now)?.let { withLiveClass(key, it) } ?: return false
+        if (sharedSuppressedAt[record.uuid]?.let { record.verifiedUntil - 600000 <= it } == true) return false
         if (!afterProfileChange(key, record)) return false
         if (previous != null && previous.verifiedUntil >= record.verifiedUntil) return false
         cache[key] = record
@@ -242,6 +256,7 @@ object DungeonFriendStatsCache {
             val uuid = request.uuid?.toString()?.replace("-", "") ?: cache[name]?.uuid
             val record = response.get("record")?.takeIf { it.isJsonObject }?.asJsonObject
                 ?.let { sharedDungeonFriend(it, name, uuid, now) }?.let { withLiveClass(name, it) } ?: continue
+            if (sharedSuppressedAt[record.uuid]?.let { record.verifiedUntil - 600000 <= it } == true) continue
             if (!afterProfileChange(name, record)) continue
             val previous = cache[name]
             // Refresh clears expires. A valid hit must restore it even if the report is unchanged.

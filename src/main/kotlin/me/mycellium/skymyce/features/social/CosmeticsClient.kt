@@ -19,11 +19,14 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 
 data class CosmeticProfile(val uuid: UUID, val name: String?, val scale: Float, val revision: Long, val updatedAt: Long,
-    val nameStyle: Component? = name?.let(Component::literal), val scaleX: Float = scale, val scaleY: Float = scale, val scaleZ: Float = scale)
+    val nameStyle: Component? = name?.let(Component::literal), val scaleX: Float = scale, val scaleY: Float = scale, val scaleZ: Float = scale,
+    val nametagScale: Float = 1f, val capePreset: String? = null, val capeAsset: CapeAsset? = null)
+data class CapeAsset(val id: String, val sha256: String, val size: Int, val width: Int = 64, val height: Int = 32)
 fun parseCosmeticProfile(json: JsonObject): CosmeticProfile? = runCatching {
     val legacy = setOf("uuid", "name", "scale", "revision", "updatedAt")
     val extended = json.has("scaleX")
-    require(json.keySet() == if (extended) legacy + setOf("nameStyle", "scaleX", "scaleY", "scaleZ") else legacy)
+    val studio = json.has("nametagScale")
+    require(json.keySet() == if (studio) legacy + setOf("nameStyle", "scaleX", "scaleY", "scaleZ", "nametagScale", "capePreset", "capeAsset") else if (extended) legacy + setOf("nameStyle", "scaleX", "scaleY", "scaleZ") else legacy)
     val id = json.get("uuid").also { require(it.asJsonPrimitive.isString) }.asString.also { require(it.matches(Regex("[a-f0-9]{32}"))) }
     val uuid = UUID.fromString("${id.take(8)}-${id.substring(8, 12)}-${id.substring(12, 16)}-${id.substring(16, 20)}-${id.substring(20)}")
     val name = json.get("name").takeUnless { it.isJsonNull }?.also { require(it.asJsonPrimitive.isString) }?.asString?.also {
@@ -40,8 +43,25 @@ fun parseCosmeticProfile(json: JsonObject): CosmeticProfile? = runCatching {
     require(style?.string == name)
     val x = axis("scaleX"); val y = axis("scaleY"); val z = axis("scaleZ")
     require(scale == y && (revision != 0L || x == 1f && y == 1f && z == 1f))
-    CosmeticProfile(uuid, name, scale, revision, time, style, x, y, z)
+    val tag = if (studio) json["nametagScale"].also { require(it.asJsonPrimitive.isNumber) }.asDouble.also { require(it.isFinite() && it in .5..2.0) }.toFloat() else 1f
+    val preset = if (studio) json["capePreset"].takeUnless { it.isJsonNull }?.also { require(it.isJsonPrimitive && it.asJsonPrimitive.isString) }
+        ?.asString?.also { require(it == "none" || it in CapeTextures.presets) } else null
+    val asset = if (studio) json["capeAsset"].takeUnless { it.isJsonNull }?.let { parseCapeAsset(it.asJsonObject) } else null
+    require(preset == null || asset == null)
+    require(revision != 0L || tag == 1f && preset == null && asset == null)
+    CosmeticProfile(uuid, name, scale, revision, time, style, x, y, z, tag, preset, asset)
 }.getOrNull()
+
+fun parseCapeAsset(json: JsonObject): CapeAsset {
+    require(json.keySet() == setOf("id", "sha256", "size", "width", "height"))
+    fun string(key: String) = json[key].also { require(it.isJsonPrimitive && it.asJsonPrimitive.isString) }.asString
+    fun integer(key: String) = json[key].also { require(it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString.matches(Regex("[0-9]{1,9}"))) }.asInt
+    val id = string("id").also { require(it.matches(Regex("[a-f0-9]{32}"))) }
+    val hash = string("sha256").also { require(it.matches(Regex("[a-f0-9]{64}"))) }
+    val size = integer("size").also { require(it in 1..262144) }
+    require(integer("width") == 64 && integer("height") == 32)
+    return CapeAsset(id, hash, size)
+}
 
 /** A reset remains a revisioned record. Reads are O(1), including in render-state extraction. */
 class CosmeticCache(private val maximum: Int = 512) {
@@ -158,7 +178,7 @@ object CosmeticsClient : SkyMyceModule() {
     var linkExpires = 0L
         private set
 
-    override fun init() { ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
+    override fun init() { CapeTextures.initialize(); ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
     override fun tick() {
         if (!isEnabled()) { if (enabled || identity != null) clear(); return }
         val now = System.currentTimeMillis()
@@ -232,7 +252,7 @@ object CosmeticsClient : SkyMyceModule() {
     @Subscription
     fun onPlayerMessage(event: PlayerMessageEvent) { observe(event.player, null) }
     fun observe(name: String, uuid: UUID?) {
-        if (!me.mycellium.skymyce.loader.LoaderClient.localAllowed || !LocationAPI.onHypixel || !enabled || identity != MC.instance.user.profileId) return
+        if (!LocationAPI.onHypixel || !enabled || identity != MC.instance.user.profileId) return
         identities.observe(name, uuid, System.currentTimeMillis(), priority = true)
     }
     fun ready() { generation++; lookup?.cancel(false); lookup = null; checked.clear(); identities.reconnect(); nextTick = 0; revision++ }
@@ -254,6 +274,10 @@ object CosmeticsClient : SkyMyceModule() {
         if (cache.apply(record, System.currentTimeMillis())) { revision++; updateNames(System.currentTimeMillis()) }
     }
     fun own() = cache.get(MC.instance.user.profileId, System.currentTimeMillis())
+    fun acceptOwn(profile: CosmeticProfile) {
+        if (profile.uuid != MC.instance.user.profileId) return
+        if (cache.apply(profile, System.currentTimeMillis())) { checked[profile.uuid] = System.currentTimeMillis(); revision++; updateNames(System.currentTimeMillis()) }
+    }
     fun refreshOwn() { checked.remove(MC.instance.user.profileId); forceOwn = true; nextTick = 0 }
     fun requestLink() {
         linkCode = null

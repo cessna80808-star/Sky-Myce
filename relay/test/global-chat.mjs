@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, createHmac, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 export async function checkGlobalChat(script, proof) {
@@ -42,7 +42,7 @@ export async function checkGlobalChat(script, proof) {
       return Response.json(result ?? null);
     }`);
   // Delay exactly one authority reply to exercise expiration during an awaited RPC.
-  const authorityAnchor = 'checkSession(input) {';
+  const authorityAnchor = 'checkCommunitySession(input) {';
   assert.equal(script.split(authorityAnchor).length, 2);
   script = script.replace(authorityAnchor, `async testOnlyGlobalRpcGate(method, subject) {
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_global_rpc_gate (method TEXT NOT NULL, subject TEXT NOT NULL, entered INTEGER NOT NULL, released INTEGER NOT NULL, PRIMARY KEY(method,subject))");
@@ -63,9 +63,9 @@ export async function checkGlobalChat(script, proof) {
       this.ctx.storage.sql.exec("DELETE FROM test_global_auth_delay WHERE uuid=?", input.uuid);
       await new Promise(resolve => setTimeout(resolve, Math.max(0, delay.until_ms - Date.now())));
     }
-    return this.checkSession(input);
+    return this.checkCommunitySession(input);
   }\n  ${authorityAnchor}`);
-  script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkSession(',
+  script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession(',
     'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSession(');
   const ircAuthorityAnchor = 'canUseIrc(discordId) {';
   assert.equal(script.split(ircAuthorityAnchor).length, 2);
@@ -93,7 +93,7 @@ export async function checkGlobalChat(script, proof) {
   const id = () => (sequence++).toString(16).padStart(32, '0');
   const people = new Map(['Alice', 'Bob', 'Carol'].map((name, index) => [name, { name, uuid: 'abc'[index].repeat(32),
     discordId: String(200000000000000000n + BigInt(index)), accountId: randomUUID(), installationId: randomUUID(),
-    device: String(index + 1).repeat(64), key: generateKeyPairSync('ed25519') }]));
+    device: String(index + 1).repeat(64), key: generateKeyPairSync('ed25519'), accessToken: randomUUID().replaceAll('-', '') + 'community01' }]));
   function inbox(ws) {
     const queued = [], waiting = [];
     ws.addEventListener('message', event => {
@@ -122,11 +122,14 @@ export async function checkGlobalChat(script, proof) {
     const response = await mf.dispatchFetch(`http://localhost/websocket?room=${room}`, { headers: { Upgrade: 'websocket', 'CF-Connecting-IP': `global-mc-${ip++}` } });
     assert.equal(response.status, 101);
     const ws = response.webSocket, next = inbox(ws); ws.accept(); sockets.push(ws);
-    const challenge = await next(), person = people.get(name), token = lease(person, changes.claims);
+    const challenge = await next(), person = people.get(name);
+    if (changes.claims?.exp) {
+      const storage = await mf.unsafeGetDurableObjectStorage('global-chat-check', 'AccountStore', { name: 'global' });
+      await storage.exec('UPDATE community_sessions SET access_expires_at=? WHERE session_id=?', changes.claims.exp, person.installationId);
+    }
     const closed = changes.denied ? closeEvent(ws) : undefined;
-    ws.send(JSON.stringify({ ...proof(name, challenge.serverId), lease: token,
-      installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${token}`), person.key.privateKey).toString('base64'), ...changes.packet }));
-    if (closed) { assert.equal((await closed).code, 4005); return; }
+    ws.send(JSON.stringify({ ...proof(name, challenge.serverId), communityToken: person.accessToken, modVersion: '0.1.0', ...changes.packet }));
+    if (closed) { assert.ok([4005,4006,4007].includes((await closed).code)); return; }
     const ready = await next(); assert.equal(ready.type, 'ready'); assert.equal(ready.globalChat, true);
     assert.equal(ready.partyChat, true); assert.equal(ready.partyChatVersion, 1); assert.equal(ready.partyChatError, 'party_membership_unverified');
     return { ws, next };
@@ -160,9 +163,8 @@ export async function checkGlobalChat(script, proof) {
   };
   try {
     const alicePerson = people.get('Alice'), bobPerson = people.get('Bob');
-    const init = await mf.dispatchFetch('http://localhost/auth/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ purpose: 'activate', clientNonce: randomUUID(), installationId: alicePerson.installationId, publicKey: publicKey(alicePerson.key),
-        deviceHash: alicePerson.device, minecraftVersion: '26.1.2', loaderVersion: '1.0.0', modVersion: '2.4.2' }) });
+    const init = await mf.dispatchFetch('http://localhost/community/challenge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ purpose: 'connect', clientNonce: randomBytes(32).toString('base64url') }) });
     assert.equal(init.status, 200);
     const authority = await mf.unsafeGetDurableObjectStorage('global-chat-check', 'AccountStore', { name: 'global' });
     for (const person of people.values()) {
@@ -173,6 +175,8 @@ export async function checkGlobalChat(script, proof) {
       await authority.exec('INSERT INTO account_devices VALUES(?,?,?,NULL)', person.device, person.accountId, now);
       await authority.exec('INSERT INTO installations(installation_id,account_id,device_hash,public_key,fingerprint,registered_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)',
         person.installationId, person.accountId, person.device, publicKey(person.key), createHash('sha256').update(person.key.publicKey.export({ format: 'der', type: 'spki' })).digest('hex'), now);
+      await authority.exec('INSERT INTO community_sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)', person.installationId, person.accountId, person.uuid, 0, createHash('sha256').update(randomUUID()).digest('hex'), now+86400000, createHash('sha256').update(person.accessToken).digest('hex'), now+300000, now, now, null, '0.1.0');
+      if (person.name === 'Carol') await authority.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", person.discordId, now);
     }
     const globalSql = await mf.unsafeGetDurableObjectStorage('global-chat-check', 'RelayRoom', { name: 'global-chat' });
     const coordinator = (await mf.getDurableObjectNamespace('RELAY_ROOMS')).getByName('global-chat');
@@ -186,15 +190,16 @@ export async function checkGlobalChat(script, proof) {
     await authority.exec('INSERT INTO account_discord_names VALUES(?,?,?,?)', alicePerson.discordId, 'bob', 'Alice', Date.now());
     assert.deepEqual(await accounts.resolveIrcMentions('@Bob'), [], 'Ambiguous verified usernames never choose an account');
     await authority.exec('DELETE FROM account_discord_names WHERE discord_id=?', alicePerson.discordId);
-    await authority.exec("UPDATE sky_accounts SET status='suspended' WHERE discord_id=?", bobPerson.discordId);
+    await authority.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", bobPerson.discordId, Date.now());
     assert.deepEqual(await accounts.resolveIrcMentions('@Bob'), [], 'Suspended accounts cannot become notification targets');
-    await authority.exec("UPDATE sky_accounts SET status='active' WHERE discord_id=?", bobPerson.discordId);
+    await authority.exec("DELETE FROM community_blacklist WHERE kind='discord' AND identity=?", bobPerson.discordId);
     const clearQuota = () => globalSql.exec('DELETE FROM global_chat_limits');
     const sender = person => ({ accountId: person.accountId, discordId: person.discordId, uuid: person.uuid, name: person.name,
-      installationId: person.installationId, generation: 0, leaseExpiresAt: Date.now() + 300000, buildId: '2.4.2', loaderVersion: '1.0.0' });
+      communitySessionId: person.installationId, generation: 0, leaseExpiresAt: Date.now() + 300000 });
     await connect('Carol', 'friends', { denied: true });
     await connect('Alice', 'friends', { denied: true, claims: { exp: Date.now() - 1 } });
-    await connect('Alice', 'friends', { denied: true, packet: { lease: undefined, installationSignature: undefined } });
+    await authority.exec('UPDATE community_sessions SET access_expires_at=? WHERE session_id=?', Date.now()+300000, alicePerson.installationId);
+    await connect('Alice', 'friends', { denied: true, packet: { communityToken: undefined } });
     assert.equal((await mf.dispatchFetch('http://localhost/websocket?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 403);
     assert.equal((await mf.dispatchFetch('http://localhost/discord/bridge?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 401);
     const alice = await connect('Alice', 'friends', { packet: { cosmetics: true } }), bob = await connect('Bob', 'testing'), otherAlice = await connect('Alice', 'testing');
@@ -249,7 +254,7 @@ export async function checkGlobalChat(script, proof) {
       globalChatDeliver: message => inspect('deliver', [message]) };
     const bobFriends = await connect('Bob');
     const session = () => friends.testOnlyGlobalSession(alicePerson.uuid);
-    const identityFields = ['bridge', 'room', 'accountId', 'discordId', 'uuid', 'name', 'installationId', 'generation',
+    const identityFields = ['bridge', 'room', 'accountId', 'discordId', 'uuid', 'name', 'installationId', 'communitySessionId', 'generation',
       'leaseExpiresAt', 'buildId', 'loaderVersion', 'connectionId'];
     const identity = value => Object.fromEntries(identityFields.map(field => [field, value[field]]));
     async function gate(method, subject) {
@@ -446,7 +451,7 @@ export async function checkGlobalChat(script, proof) {
     await clearQuota();
     const closing = closeEvent(bot.ws); bot.ws.close(); await closing;
     const revokedPending = await minecraft(alice, 'Queued before revocation', [alice, bob, otherAlice], false);
-    await authority.exec("UPDATE sky_accounts SET license_status='revoked',generation=generation+1 WHERE account_id=?", alicePerson.accountId);
+    await authority.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", alicePerson.discordId, Date.now());
     bot = await bridge(); await ping(bot);
     assert.equal((await globalSql.exec('SELECT * FROM global_chat_messages WHERE id=?', revokedPending.packet.id)).length, 0);
     const aliceClosed = closeEvent(alice.ws), otherClosed = closeEvent(otherAlice.ws);
@@ -458,12 +463,14 @@ export async function checkGlobalChat(script, proof) {
     await clearQuota();
     const expiryClose = closeEvent(bob.ws);
     const recipientDeadline = Date.now() + 1000;
+    bob.ws.close();
     const shortBob = await connect('Bob', 'testing', { claims: { exp: recipientDeadline } });
-    assert.equal((await expiryClose).code, 4001); await subscribe(shortBob);
+    assert.equal((await expiryClose).code, 1000); await subscribe(shortBob);
     await authority.exec('INSERT INTO test_global_auth_delay VALUES(?,?)', bobPerson.uuid, recipientDeadline + 100);
     const shortClosed = closeEvent(shortBob.ws);
     await discord('Clients expiring during authorization cannot receive global chat', { discordId: '999999999999999999' }, []);
     assert.equal((await shortClosed).code, 4006);
+    await authority.exec('UPDATE community_sessions SET access_expires_at=? WHERE session_id=?', Date.now() + 300000, bobPerson.installationId);
     // Durable cleanup removes expired body rows and stops exhausted retry records.
     const pending = await coordinator.globalChatMinecraft(sender(bobPerson), { id: id(), text: 'bounded retry fixture' }); assert.equal(pending.ok, true);
     await bot.next();

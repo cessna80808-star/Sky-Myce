@@ -22,6 +22,24 @@ internal val menuSectionTitles = MenuCategory.entries.map { it.title }
 private val menuSectionPreviews = MenuCategory.entries.map { category ->
     MenuCatalog.definitions.filter { it.category == category }.map { it.subcategory }.distinct().take(3).joinToString(" · ")
 }
+private val descriptionLines = arrayOfNulls<Pair<Int, List<String>>>(MenuCategory.entries.size)
+
+/** Card descriptions use measured text advances and a bounded second line, including during the home-to-sidebar morph. */
+internal fun menuNavigationDescription(index: Int, width: Int): List<String> {
+    val available = width.coerceAtLeast(1)
+    descriptionLines[index]?.takeIf { it.first == available }?.let { return it.second }
+    val wrapped = menuTextLines(Component.literal(MenuCategory.entries[index].description), available, 9.0).map { line ->
+        buildString { line.accept { _, _, codepoint -> appendCodePoint(codepoint); true } }
+    }
+    val lines = wrapped.take(2).toMutableList()
+    if (wrapped.size > 2 && lines.isNotEmpty()) {
+        var last = lines.last().trimEnd()
+        while (last.isNotEmpty() && MenuCanvas.textWidth("$last…", size = 9.0) > available)
+            last = last.dropLast(Character.charCount(last.codePointBefore(last.length))).trimEnd()
+        lines[lines.lastIndex] = if (MenuCanvas.textWidth("$last…", size = 9.0) <= available) "$last…" else ""
+    }
+    return lines.also { descriptionLines[index] = available to it }
+}
 
 /** The same surfaces travel between these two arrangements; content never changes their geometry. */
 internal fun menuNavigationRect(layout: MenuLayout, index: Int, progress: Double): MenuRect {
@@ -123,7 +141,9 @@ internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: 
         val textClip = MenuCanvas.Clip(left.toInt(), rect.y.toInt(), (rect.x + rect.width - left - 10).toInt().coerceAtLeast(0), rect.height.toInt())
         canvas.clip = oldClip?.let { intersectMenuClip(it, textClip) } ?: textClip
         canvas.text(listOf(MenuCanvas.Run(menuSectionTitles[index], MenuTheme.alpha(MenuTheme.TEXT), bold = true)), left, titleTop, if (roomy) 13.0 else 11.0)
-        if (roomy && homeRect.height > 95) canvas.text(listOf(MenuCanvas.Run(MenuCategory.entries[index].description, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 22, 9.0)
+        if (roomy && homeRect.height > 95) menuNavigationDescription(index, (homeRect.width - 25).toInt()).forEachIndexed { line, text ->
+            canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 22 + line * MenuCanvas.lineHeight(9.0), 9.0)
+        }
         if (roomy && homeRect.height > 140) canvas.text(listOf(MenuCanvas.Run(menuSectionPreviews[index], MenuTheme.alpha(MenuTheme.ACCENT))),
             left, rect.y + rect.height - 26, 9.0)
         canvas.clip = oldClip; canvas.opacity = opacity

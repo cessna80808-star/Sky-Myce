@@ -8,8 +8,8 @@ Backend access comes from persisted administrator accounts in the account Worker
 
 Prompt commands are a separate capability: only Discord users `1250627753191931914` and `978376257534328883` in the configured guild can submit or manage prompt jobs. Account administrators and Discord roles do not bypass that check. The [staged prompt runner guide](../prompt-bridge/README.md) records the approved release baseline, disabled execution, runtime blockers, and local checks.
 
-- src/backend-bot.mjs: backend and user command definitions, preserving existing names.
-- src/register.mjs and src/registration.mjs: inventory, diff, targeted POST/PATCH; no bulk overwrite or implicit deletion.
+- src/backend-bot.mjs: community user/admin command definitions and the explicit legacy-workflow retirement manifest.
+- src/register.mjs and src/registration.mjs: inventory, diff and targeted POST/PATCH/DELETE; no bulk overwrite or deletion of unrelated commands.
 - src/provision.mjs and src/provisioning.mjs: discover/reuse roles/channels and apply reviewed overwrites.
 - src/discord-api.mjs: bounded Discord API requests and operator-only configuration loading.
 - test/bridge.test.mjs: bridge and command boundary regressions, also run by the new package.
@@ -17,3 +17,19 @@ Prompt commands are a separate capability: only Discord users `12506277531919319
 The local Bot Documentation.md is an ignored operator credential file. Never commit, print, or load it into the User Bot process. Shared account operations continue to use the existing signed Worker endpoints, not an invented bot-authenticated admin API.
 
 See [the precise implementation report](../docs/discord-implementation-report.md) for live registrations, infrastructure changes, local tests, migration status and remaining deployment dependencies.
+
+The current source replaces license approval, activation keys, Loader delivery and
+HWID-reset workflows with self-service Discord connection, private account/device
+association reports and Discord/Minecraft identity blacklist management. Hardware
+identifiers are informational metadata, never blacklist targets or permission to
+use the mod. The new `/connect`, `/account` and `/blacklist` schemas require their
+matching community Worker implementation before live registration. Historical
+deployment reports describe the earlier deployment; local changes do not update
+that live service. See [current command and migration instructions](../docs/discord-ux.md).
+
+The same targeted User registration adds one `/leaderboard` command with category,
+metric, UTC period, search and page options. RNG posts run in the existing User Bot
+Gateway through a dedicated signed outbox, rather than another application or
+command family. The [main-machine handoff](../docs/main-machine-community-rollout.md)
+lists required permissions, OAuth variables, dedicated feed channel, cape bucket
+bindings and release/deployment order; it does not claim these live steps ran here.

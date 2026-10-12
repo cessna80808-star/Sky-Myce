@@ -20,6 +20,7 @@ import net.minecraft.resources.Identifier
 
 object HudRenderer : SkyMyceModule() {
     private var pressedWidget: Widget? = null
+    private val failedWidgets = mutableMapOf<String, Long>()
     private val interactive get() = isEnabled() && MC.screen is ChatScreen && !MC.instance.options.hideGui && MC.instance.player != null
 
     override fun init() {
@@ -74,12 +75,26 @@ object HudRenderer : SkyMyceModule() {
         val window = MC.instance.window
         val mouseX = if (interactive) (MC.instance.mouseHandler.xpos() * window.guiScaledWidth / window.screenWidth).toInt() else -1000000
         val mouseY = if (interactive) (MC.instance.mouseHandler.ypos() * window.guiScaledHeight / window.screenHeight).toInt() else -1000000
-        WidgetManager.forEachWidget { it.render(context, mouseX, mouseY, partialTicks) }
+        val now = System.currentTimeMillis()
+        WidgetManager.forEachWidget { widget ->
+            if ((failedWidgets[widget.id] ?: 0) > now) return@forEachWidget
+            try {
+                widget.render(context, mouseX, mouseY, partialTicks)
+                failedWidgets.remove(widget.id)
+            } catch (error: Exception) {
+                // The widget transform/theme scopes unwind before this boundary. A bad retained layout cannot stop its peers.
+                val firstFailure = widget.id !in failedWidgets
+                failedWidgets[widget.id] = now + 5000
+                try { widget.dispose() } catch (_: Exception) { /* Rebuild on the next bounded retry. */ }
+                if (firstFailure) SkyMyce.logger.warn("HUD widget {} failed; rebuilding after five seconds", widget.id, error)
+            }
+        }
         }
     }
 
     private fun dispose() {
         pressedWidget = null
+        failedWidgets.clear()
         WidgetManager.forEachWidget { it.dispose() }
     }
 }

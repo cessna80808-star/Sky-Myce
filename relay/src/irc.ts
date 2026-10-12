@@ -31,12 +31,12 @@ export type IrcConfig = {
 };
 export type IrcSession = {
   bridge?: boolean; room?: string; ircSubscribed?: boolean; globalChatSubscribed?: boolean; accountId?: string; discordId?: string;
-  uuid?: string; name?: string; installationId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
+  uuid?: string; name?: string; installationId?: string; communitySessionId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
   richChatVersion?: number;
   partySubscribed?: boolean; partyId?: string; partySubscribeRevision?: number; partyConsentExpiresAt?: number;
 };
 type SubscriptionIntent = { field: "ircSubscribed" | "globalChatSubscribed" | "partySubscribed"; token: symbol; revision?: number };
-const identityFields = ["bridge", "room", "accountId", "discordId", "uuid", "name", "installationId", "generation",
+const identityFields = ["bridge", "room", "accountId", "discordId", "uuid", "name", "installationId", "communitySessionId", "generation",
   "leaseExpiresAt", "buildId", "loaderVersion", "connectionId"] as const;
 
 /** External authorization may yield to other feature messages. Keep their current attachment fields. */
@@ -59,7 +59,7 @@ export const globalChatChannel = (env: IrcConfig): string | undefined => {
   const channel = env.GLOBAL_CHAT_CHANNEL_ID ?? env.DISCORD_IRC_CHANNEL_ID;
   return channel && snowflake.test(channel) ? channel : undefined;
 };
-export type GlobalChatSender = Pick<IrcSession, "accountId" | "discordId" | "uuid" | "name" | "installationId" | "generation" | "leaseExpiresAt" | "buildId" | "loaderVersion" | "connectionId">;
+export type GlobalChatSender = Pick<IrcSession, "accountId" | "discordId" | "uuid" | "name" | "installationId" | "communitySessionId" | "generation" | "leaseExpiresAt" | "buildId" | "loaderVersion" | "connectionId">;
 export type GlobalChatSend = { id: string; text: string; replyTo?: string };
 export type GlobalChatResult = { ok: boolean; error?: string; id?: string; room?: string; expiresAt?: number };
 export type PartyChatIdentity = GlobalChatSender & { room: string; revision: number };
@@ -282,7 +282,7 @@ export class RoomIrc {
   }
   private sender(session: IrcSession): GlobalChatSender {
     return { accountId: session.accountId, discordId: session.discordId, uuid: session.uuid, name: session.name,
-      installationId: session.installationId, generation: session.generation, leaseExpiresAt: session.leaseExpiresAt, buildId: session.buildId, loaderVersion: session.loaderVersion, connectionId: session.connectionId };
+      installationId: session.installationId, communitySessionId: session.communitySessionId, generation: session.generation, leaseExpiresAt: session.leaseExpiresAt, buildId: session.buildId, loaderVersion: session.loaderVersion, connectionId: session.connectionId };
   }
   private async publicSender(sender: Pick<IrcSession, "uuid" | "name" | "discordId">): Promise<IrcPublicSender> {
     const identity: IrcPublicSender = { name: displayName(sender.name), discordId: sender.discordId! };
@@ -307,12 +307,12 @@ export class RoomIrc {
   private textLimit(discord: boolean): number { return Math.floor(discord ? bounded(this.env.GLOBAL_CHAT_DISCORD_MAX_LENGTH, 4096, 1, 4096) : bounded(this.env.GLOBAL_CHAT_MC_MAX_LENGTH, 1024, 1, 1024)); }
 
   private async validSender(sender: GlobalChatSender): Promise<boolean> {
-    if (!sender.accountId || !sender.installationId || !sender.uuid || !packetId.test(sender.uuid) ||
+    if (!sender.accountId || !sender.communitySessionId || !sender.uuid || !packetId.test(sender.uuid) ||
         !sender.name || !/^[A-Za-z0-9_]{1,16}$/.test(sender.name) || !sender.discordId || !snowflake.test(sender.discordId) ||
-        !Number.isSafeInteger(sender.generation) || !sender.buildId || !sender.loaderVersion ||
+        !Number.isSafeInteger(sender.generation) ||
         !Number.isSafeInteger(sender.leaseExpiresAt) || sender.leaseExpiresAt! <= Date.now()) return false;
-    const state = await this.env.ACCOUNT_STORE.getByName("global").checkSession({ accountId: sender.accountId,
-      uuid: sender.uuid, installationId: sender.installationId, generation: sender.generation!, buildId: sender.buildId, loaderVersion: sender.loaderVersion });
+    const state = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession({ accountId: sender.accountId,
+      uuid: sender.uuid, sessionId: sender.communitySessionId, generation: sender.generation! });
     return state.ok && state.discordId === sender.discordId && sender.leaseExpiresAt! > Date.now();
   }
 

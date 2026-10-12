@@ -2,20 +2,26 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyAccount } from "./auth";
 import { classes, SharedStats, STATS_TTL, validateStats, type StatsGrant } from "./stats";
 import { SharedWealth, WEALTH_TTL, validateWealth } from "./wealth";
-import { DigestNews, DigestRng, type DigestConfig } from "./digest";
-import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand } from "./cosmetics";
+import { DigestNews, DigestRng, rngPayload, type DigestConfig } from "./digest";
+import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand, type CosmeticProfile } from "./cosmetics";
+import { handleCosmeticAssets } from "./cosmetic-assets";
+import { handleLeaderboardsRequest, handleCommunityFeed } from "./leaderboards";
+import { RngForwardQueue } from "./rng-forwarding";
 import { verifiedInteraction, discordCommand } from "./discord";
 import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, type DiscordAccountsConfig } from "./discord-accounts";
-import { handleDrmRequest, type DrmConfig } from "./drm";
-import type { AccountsConfig } from "./accounts";
-import { handleLoaderDownload } from "./discord-download";
+import type { DrmConfig } from "./drm";
+import { handleCommunityRequest } from "./community";
+import { handleCommunityRelease } from "./community-release";
+import type { AccountsConfig, AccountStore } from "./accounts";
 import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, PARTY_CHAT_UNAVAILABLE, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage, type PartyChatIdentity, type PartyChatMessage } from "./irc";
 import type { IrcUpdate } from "./irc-model";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
+import type { SharingState, SharingDecision, SharingCategory } from "./community-sharing";
 export { AccountStore } from "./accounts";
 
-type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
-  SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string;
+type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
+  SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string; COSMETIC_ASSETS?: R2Bucket;
+  ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; RELAY_ROOMS: DurableObjectNamespace<RelayRoom>;
 };
 const legacyRelay = (env: RelayEnv) => env.SKYMYCE_ENVIRONMENT === "development" && env.ALLOW_LEGACY_RELAY === "true";
 const discordEnvironment = (env: RelayEnv): RelayEnv => ({ ...env,
@@ -55,6 +61,7 @@ type Session = IrcSession & {
   partyCredits?: number;
   partyUpdated?: number;
   rngSubscribed?: boolean;
+  rngMetadataVersion?: number;
   digestCredits?: number;
   digestUpdated?: number;
 };
@@ -70,14 +77,18 @@ export default {
       if (!(await env.CONNECT_LIMIT.limit({ key: `prompt-runner:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
       return await handlePromptRunner(request, env);
     }
-    if (url.pathname === "/discord/loader") {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `download:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
-      return await handleLoaderDownload(request, env);
+    if (url.pathname.startsWith("/community/")) {
+      if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      try { return await handleCommunityRelease(request, env) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
-    if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/")) {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `auth:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
-      try { return await handleDrmRequest(request, env) ?? new Response("Not found", { status: 404 }); }
-      catch { console.error({ event: "authorization_unavailable" }); return Response.json({ error: "temporarily_unavailable" }, { status: 503 }); }
+    if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/") || url.pathname === "/discord/loader") {
+      return Response.json({ error: "loader_retired", message: "Install Sky-Myce normally with Fabric. Connect Discord from the mod." }, { status: 410 });
+    }
+    if (url.pathname === "/discord/community-feed") {
+      if (!(await env.CONNECT_LIMIT.limit({ key: `community-feed:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      try { return await handleCommunityFeed(request, env) ?? new Response("Not found", { status: 404 }); }
+      catch { return Response.json({ ok: false, error: "feed_unavailable" }, { status: 503 }); }
     }
     if (url.pathname === "/discord/interactions" || url.pathname === "/discord/backend/interactions") {
       const backend = url.pathname === "/discord/backend/interactions";
@@ -130,6 +141,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly wealth: SharedWealth;
   private readonly news: DigestNews;
   private readonly rng: DigestRng;
+  private readonly rngForward: RngForwardQueue;
+  private rngCapacityDiagnosticAt = 0;
   private readonly cosmetics: PlayerCosmetics;
   private readonly irc: RoomIrc;
   constructor(ctx: DurableObjectState, env: RelayEnv) {
@@ -140,12 +153,23 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.wealth = new SharedWealth(ctx.storage.sql);
     this.news = new DigestNews(ctx.storage.sql, env);
     this.rng = new DigestRng(ctx.storage.sql);
+    this.rngForward = new RngForwardQueue(ctx.storage, {
+      deliver: record => this.env.ACCOUNT_STORE.getByName("global").recordAcceptedCommunityRng(record.uuid, record.event, record.sourceId, record.accountId),
+      diagnostic: kind => {
+        if (Date.now() - this.rngCapacityDiagnosticAt < 60000) return;
+        this.rngCapacityDiagnosticAt = Date.now();
+        console.warn({ event: kind === "capacity" ? "community_rng_capacity_reached" : "community_rng_forwarding_unavailable" });
+      },
+    });
+    ctx.waitUntil(this.rngForward.arm());
     this.cosmetics = new PlayerCosmetics(ctx.storage);
     this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session), uuid => this.cosmetics.get(uuid).name);
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS account_migration_state (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS cosmetic_migration_state (id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL,done INTEGER NOT NULL)");
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS mod_users (
       uuid TEXT PRIMARY KEY, name TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)`);
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS mod_users_name ON mod_users(name COLLATE NOCASE)");
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS room_sharing_cutoffs(uuid TEXT NOT NULL,category TEXT NOT NULL,not_before INTEGER NOT NULL,PRIMARY KEY(uuid,category))");
     // Register already-authenticated sockets on the first wake after upgrading the relay.
     for (const ws of ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
@@ -171,27 +195,40 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           return reply(linked.ok ? "Minecraft account linked to your Sky-Myce account." : "The account link could not be completed. Request a fresh code in Minecraft.");
         }
         const account = await store.getAccountByDiscordId(command.actor);
-        if (!account || account.status !== "active" || account.licenseStatus !== "active" ||
-            (account.licenseExpiresAt !== null && account.licenseExpiresAt <= Date.now())) return reply("Your Sky-Myce account is not currently authorized.");
+        if (!account || !await store.communityIdentityAllowed(command.actor)) return reply("This identity cannot use community services.");
         // Keep the previous cosmetic target when it still belongs to the global account.
         const oldTarget = this.ctx.storage.sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
         const target = account.uuids.find(value => value.uuid === oldTarget)?.uuid ?? account.uuids[0]?.uuid;
-        if (!target) return reply("Link a Minecraft account through the Sky-Myce Loader first.");
+        if (!target) return reply("Connect Discord from Sky-Myce in Minecraft first.");
+        if (!await store.communityIdentityAllowed(command.actor, target)) return reply("This Minecraft identity cannot use community services.");
         if (command.action === "unlink") return reply("Use /account unlink to remove a Minecraft account from Sky-Myce. Use /cosmetics reset to clear its appearance.");
         authority = { uuid: target };
       } catch { return reply("Sky-Myce account services are temporarily unavailable."); }
     }
-    const result = await this.cosmetics.command(command, this.env, Date.now(), authority);
+    const result = authority ? await this.env.ACCOUNT_STORE.getByName("global").communityCosmeticCommand(command, { COSMETICS_COMMAND_CHANNEL: this.env.COSMETICS_COMMAND_CHANNEL }, authority.uuid) : await this.cosmetics.command(command, this.env, Date.now());
     if (result.changed) {
+      if (!legacyRelay(this.env)) await Promise.allSettled(this.env.ROOMS.split(",").map(room => this.env.RELAY_ROOMS.getByName(room).cosmeticChanged([result.changed!])));
+      else await this.cosmeticChanged([result.changed]);
+    }
+    return result.response;
+  }
+  async cosmeticChanged(profiles: CosmeticProfile[]): Promise<void> {
+    if (profiles.length > 128) return;
+    for (const profile of profiles) {
+      // The room replica supplies synchronous IRC presentation only; edits/reads remain globally authoritative.
+      const latest = legacyRelay(this.env) ? this.cosmetics.get(profile.uuid) : (await this.env.ACCOUNT_STORE.getByName("global").communityCosmeticProfiles([profile.uuid]))[0];
+      if (!legacyRelay(this.env)) this.cosmetics.replicate(latest);
       for (const ws of this.ctx.getWebSockets()) {
         const session = ws.deserializeAttachment() as Session;
-        if (ws.readyState === WebSocket.OPEN && session.name && session.cosmetics && watchesCosmetic(session.cosmeticWatching, result.changed.uuid)) {
+        if (ws.readyState === WebSocket.OPEN && session.name && session.cosmetics && watchesCosmetic(session.cosmeticWatching, profile.uuid)) {
           if (!await this.authorized(ws, session)) continue;
-          try { ws.send(JSON.stringify({ type: "cosmetics_event", record: cosmeticPayload(result.changed, session.cosmeticsVersion) })); } catch { /* Reconnect lookup restores the newest revision. */ }
+          // A later save may interleave with peer authentication. Always publish the authoritative latest revision.
+          const current = legacyRelay(this.env) ? this.cosmetics.get(profile.uuid) : (await this.env.ACCOUNT_STORE.getByName("global").communityCosmeticProfiles([profile.uuid]))[0];
+          if (!await this.authorized(ws, session)) continue;
+          try { ws.send(JSON.stringify({ type: "cosmetics_event", record: cosmeticPayload(current, session.cosmeticsVersion) })); } catch { /* Reconnect lookup restores the newest revision. */ }
         }
       }
     }
-    return result.response;
   }
 
   private registerUser(id: string, name: string): void {
@@ -269,23 +306,23 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         }
         if (ws.readyState !== WebSocket.OPEN) return;
         if (!legacyRelay(this.env)) {
-          if (typeof data.lease !== "string" || typeof data.installationSignature !== "string") { ws.close(4005, "Authorization required"); return; }
-          const authorization = await this.env.ACCOUNT_STORE.getByName("global").authorizeSession({ uuid: profile.id,
-            lease: data.lease, challenge: session.challenge, signature: data.installationSignature });
+          if (typeof data.communityToken !== "string") { ws.close(4007, "Connect Discord in Sky-Myce"); return; }
+          const authorization = await this.env.ACCOUNT_STORE.getByName("global").authorizeCommunitySession({ uuid: profile.id,
+            token: data.communityToken, challenge: session.challenge, modVersion: typeof data.modVersion === "string" ? data.modVersion : undefined });
           if (!authorization.ok) {
             if (authorization.error?.endsWith("unavailable")) ws.close(1013, "Authorization service unavailable");
-            else ws.close(authorization.error === "authorization_renewal_required" ? 4006 : 4005, authorization.error ?? "not_authorized");
+            else ws.close(authorization.error === "session_expired" ? 4006 : 4005, authorization.error ?? "not_authorized");
             return;
           }
           Object.assign(session, { accountId: authorization.accountId, discordId: authorization.discordId,
-            installationId: authorization.installationId, generation: authorization.generation, leaseExpiresAt: authorization.expiresAt,
-            buildId: authorization.buildId, loaderVersion: authorization.loaderVersion, connectionId: authorization.connectionId });
+            communitySessionId: authorization.sessionId, generation: authorization.generation, leaseExpiresAt: authorization.expiresAt,
+            buildId: typeof data.modVersion === "string" ? data.modVersion : undefined, connectionId: authorization.connectionId });
         }
         if (ws.readyState !== WebSocket.OPEN) return;
         this.registerUser(profile.id, profile.name);
         for (const other of this.ctx.getWebSockets()) {
           const previous = other.deserializeAttachment() as Session;
-          if (other !== ws && (previous.uuid === profile.id || previous.name?.toLowerCase() === profile.name.toLowerCase())) {
+          if (legacyRelay(this.env) && other !== ws && (previous.uuid === profile.id || previous.name?.toLowerCase() === profile.name.toLowerCase())) {
             other.close(4001, "Account connected elsewhere");
           }
         }
@@ -295,10 +332,11 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.liveUpdates = data.liveUpdates === true;
         session.userMessages = data.userMessages === true;
         session.cosmetics = data.cosmetics === true;
-        session.cosmeticsVersion = data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
+        session.cosmeticsVersion = data.cosmeticsVersion === 4 ? 4 : data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
+        session.rngMetadataVersion = data.rngMetadataVersion === 1 ? 1 : undefined;
         session.challenge = "";
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, userMessages: true, cosmetics: true, cosmeticsVersion: 3, cosmeticsNames: true,
+        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 4, cosmeticsNames: true,
           irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
           account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
@@ -312,6 +350,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     if (!current) return;
     session = current;
     if (!session.name) return;
+    if (data.type === "community_contribution") {
+      if (encoder.encode(raw).length > 2048 || typeof data.id !== "string" || !uuid.test(data.id)) { ws.close(1008, "Invalid contribution"); return; }
+      const result = await this.env.ACCOUNT_STORE.getByName("global").recordCommunitySessionContribution({ sessionId: session.communitySessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! }, data.contribution);
+      if (await this.authorized(ws, session)) ws.send(JSON.stringify({ type: "community_contribution_result", id: data.id, ...result }));
+      return;
+    }
     if (data.type === "irc_send" || data.type === "irc_subscribe" || data.type === "irc_operation") {
       if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" || data.scope === "party" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}) })); return; }
       try { await this.irc.message(ws, session, data, subscription); }
@@ -357,7 +401,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       });
       const ids = [...new Set([...(requestedIds as string[]), ...identities.map(value => value.uuid)])];
       session.cosmeticWatching = watchCosmetics(session.cosmeticWatching, ids); ws.serializeAttachment(session);
-      ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, records: ids.map(id => cosmeticPayload(this.cosmetics.get(id), session.cosmeticsVersion)),
+      const profiles = legacyRelay(this.env) ? ids.map(id => this.cosmetics.get(id)) : await this.env.ACCOUNT_STORE.getByName("global").communityCosmeticProfiles(ids);
+      if (!await this.authorized(ws, session)) return;
+      ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, records: profiles.map(profile => cosmeticPayload(profile, session.cosmeticsVersion)),
         ...(data.names === undefined ? {} : { identities }) }));
       return;
     }
@@ -384,16 +430,33 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         if (typeof data.enabled !== "boolean") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_subscription" })); return; }
         session.rngSubscribed = data.enabled;
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type, id: data.id, events: data.enabled ? this.rng.recent(now) : [] }));
+        const rows = data.enabled ? this.rng.recentRecords(now) : [];
+        const policies = await this.sharingPermissions(ws, session, rows.map(row => ({ uuid: row.author, category: "rng", recordedAt: row.event.occurredAt })));
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type, id: data.id, events: rows.flatMap((row, index) => this.sharingCurrent(row.author, "rng", policies[index]) ? [{ ...rngPayload(row.event, session.rngMetadataVersion), player: policies[index].publicName ? row.event.player : "Anonymous" }] : []) }));
       } else {
-        const result = this.rng.publish(session.uuid!, session.name, data, now);
-        ws.send(JSON.stringify({ type, id: data.id, stored: result.stored, ...(result.error ? { error: result.error } : {}) }));
+        const occurredAt = (data.event as { occurredAt?: unknown } | undefined)?.occurredAt;
+        const consent = (await this.sharingPermissions(ws, session, [{ uuid: session.uuid!, category: "rng", recordedAt: typeof occurredAt === "number" ? occurredAt : undefined }]))[0];
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (!consent.allowed) { ws.send(JSON.stringify({ type, id: data.id, stored: false, error: "sharing_disabled" })); return; }
+        if (!this.sharingCurrent(session.uuid!, "rng", consent)) return;
+        // Privacy projection must not coerce malformed caller input into a valid report.
+        const showName = typeof data.showName === "boolean" ? data.showName && consent.publicName : data.showName;
+        const { result, forwarding } = this.ctx.storage.transactionSync(() => {
+          const result = this.rng.publish(session.uuid!, session.name!, { ...data, showName }, now);
+          const forwarding = result.event && !legacyRelay(this.env) ? this.rngForward.enqueue({ uuid: session.uuid!, accountId: session.accountId!, sourceId: (data.event as { id: string }).id, event: result.event }, now) : null;
+          return { result, forwarding };
+        });
+        if (forwarding?.ok) await this.rngForward.arm();
+        ws.send(JSON.stringify({ type, id: data.id, stored: result.stored, ...(result.error || forwarding?.error ? { error: result.error ?? forwarding?.error } : {}),
+          ...(forwarding?.ok ? { delivery: "queued" } : {}) }));
+        if (forwarding?.ok) this.ctx.waitUntil(this.rngForward.drain());
         if (result.event) {
-          const packet = JSON.stringify({ type: "rng_event", event: result.event });
           for (const peer of this.ctx.getWebSockets()) {
             const recipient = peer.deserializeAttachment() as Session;
             if (peer !== ws && peer.readyState === WebSocket.OPEN && recipient.name && recipient.rngSubscribed) {
-              if (await this.authorized(peer, recipient)) try { peer.send(packet); } catch { /* Recipient disconnected during delivery. */ }
+              const current = (await this.sharingPermissions(peer, recipient, [{ uuid: session.uuid!, category: "rng", recordedAt: result.event.occurredAt }]))[0];
+              if (peer.readyState === WebSocket.OPEN && this.sharingCurrent(session.uuid!, "rng", current)) try { peer.send(JSON.stringify({ type: "rng_event", event: { ...rngPayload(result.event, recipient.rngMetadataVersion), player: current.publicName ? result.event.player : "Anonymous" } })); } catch { /* Recipient disconnected during delivery. */ }
             }
           }
         }
@@ -408,6 +471,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.partyCredits < 1) { ws.send(JSON.stringify({ type: "party_result", id: data.id, error: "rate_limited" })); return; }
       session.partyCredits--;
       if (data.type === "party_set") {
+        const consent = (await this.sharingPermissions(ws, session, [{ uuid: session.uuid!, category: "dungeons" }]))[0];
+        if (ws.readyState !== WebSocket.OPEN) return;
         const limit = data.maxPbMillis ?? null;
         const selectedClass = data.selectedClass ?? undefined;
         if (typeof data.floor !== "string" || !/^[FM][1-7]$/.test(data.floor) || typeof data.open !== "boolean" ||
@@ -416,14 +481,14 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           ws.close(1008, "Invalid party policy"); return;
         }
         // A policy belongs to the authenticated socket, never to a client-supplied name.
-        const party = { floor: data.floor, maxPbMillis: limit, open: data.open, selectedClass: selectedClass as string | undefined };
+        const party = { floor: data.floor, maxPbMillis: limit, open: data.open, selectedClass: this.sharingCurrent(session.uuid!, "dungeons", consent) ? selectedClass as string | undefined : undefined };
         const changed = JSON.stringify(session.party) !== JSON.stringify(party);
         if (party.selectedClass && party.selectedClass !== session.party?.selectedClass) {
           this.stats.selectClass(session.name, session.uuid!, party.selectedClass);
         }
         session.party = party;
         ws.serializeAttachment(session);
-        if (changed) await this.broadcast(ws, { type: "party_update", name: session.name, uuid: session.uuid, ...party });
+        if (changed) await this.broadcast(ws, { type: "party_update", name: session.name, uuid: session.uuid, ...party }, party.selectedClass ? [{ uuid: session.uuid!, category: "dungeons" }] : undefined);
         return;
       }
       if (typeof data.id !== "string" || !uuid.test(data.id) || !Array.isArray(data.names) || data.names.length > 32 ||
@@ -439,11 +504,16 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         const name = peer.name?.toLowerCase();
         if (name && Object.hasOwn(parties, name) && peer.party && peer.uuid) parties[name] = { ...peer.party, uuid: peer.uuid };
       }
+      const listed = Object.values(parties).filter((party): party is JoinPolicy & { uuid: string } => party !== null);
+      const policies = await this.sharingPermissions(ws, session, listed.map(party => ({ uuid: party.uuid, category: "dungeons" })));
+      if (ws.readyState !== WebSocket.OPEN) return;
+      listed.forEach((party, index) => { if (!this.sharingCurrent(party.uuid, "dungeons", policies[index])) delete party.selectedClass; });
       ws.send(JSON.stringify({ type: "party_result", id: data.id, parties }));
       return;
     }
 
     if (data.type === "wealth_get" || data.type === "wealth_put") {
+      let permissions: { uuid: string; decision: SharingDecision }[] = [];
       const now = Date.now();
       if (encoder.encode(raw).length > 2048 || typeof data.id !== "string" || !uuid.test(data.id) ||
           typeof data.name !== "string" || !username.test(data.name) ||
@@ -458,8 +528,15 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (allowed) session.wealthCredits--;
       ws.serializeAttachment(session);
       if (!allowed) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "rate_limited", retryAt: now + 5000 })); return; }
+      if (!legacyRelay(this.env)) {
+        const requests = [{ uuid: session.uuid!, category: "economy" as const }, ...(typeof data.uuid === "string" ? [{ uuid: data.uuid, category: "economy" as const, ...(data.type === "wealth_put" && typeof data.fetchedAt === "number" ? { recordedAt: data.fetchedAt } : {}) }] : [])];
+        const decisions = await this.sharingPermissions(ws, session, requests); if (ws.readyState !== WebSocket.OPEN) return;
+        permissions = requests.map((request, index) => ({ uuid: request.uuid, decision: decisions[index] }));
+        if (data.type === "wealth_put" && permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, stored: false, error: "sharing_disabled" })); return; }
+      }
       if (data.type === "wealth_get") {
         const record = this.wealth.get(data.name, data.uuid as string | undefined, now, data.refresh === true && data.canFetch !== false);
+        if (record && !await this.visibleRecord(ws, session, record, "economy", this.wealth.publisher(record.uuid))) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, error: "sharing_disabled" })); return; }
         const matches = (grant: StatsGrant) => grant.name === (data.name as string).toLowerCase() ||
           (data.uuid !== undefined && grant.uuid === data.uuid);
         // Cache-only viewers and clients in provider backoff must not reserve work they cannot perform.
@@ -469,6 +546,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return;
         }
         if (record) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return; }
+        if (permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, error: "sharing_disabled" })); return; }
         const own = session.wealthUploads.find(grant => matches(grant) &&
           (!grant.uuid || grant.uuid === data.uuid));
         if (own) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, upload: own.token })); return; }
@@ -493,7 +571,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         }
         session.wealthUploads = session.wealthUploads.filter(it => it !== grant);
         ws.serializeAttachment(session);
-        const stored = this.wealth.put({ name: data.name, uuid: data.uuid, wealth, fetchedAt: Math.min(data.fetchedAt as number, now) }, now);
+        if (permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, stored: false, error: "sharing_disabled" })); return; }
+        const stored = this.wealth.put({ name: data.name, uuid: data.uuid, wealth, fetchedAt: Math.min(data.fetchedAt as number, now) }, now, session.uuid);
         // Only the requesting client receives totals; avoid broadcasting a wealth update to the entire room.
         ws.send(JSON.stringify({ type: "wealth_result", id: data.id, stored }));
       }
@@ -501,6 +580,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     }
 
     if (data.type === "stats_get" || data.type === "stats_put") {
+      let permissions: { uuid: string; decision: SharingDecision }[] = [];
       const now = Date.now();
       session.cacheCredits = Math.min(30, (session.cacheCredits ?? 30) + (now - (session.cacheUpdated ?? now)) / 1000);
       session.cacheUpdated = now;
@@ -510,14 +590,21 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       ws.serializeAttachment(session);
       if (typeof data.id !== "string" || !uuid.test(data.id) || typeof data.name !== "string" || !username.test(data.name) ||
           (data.uuid !== undefined && (typeof data.uuid !== "string" || !uuid.test(data.uuid)))) { ws.close(1008, "Invalid stats request"); return; }
+      if (!legacyRelay(this.env)) {
+        const requests = [{ uuid: session.uuid!, category: "dungeons" as const }, ...(typeof data.uuid === "string" ? [{ uuid: data.uuid, category: "dungeons" as const, ...(data.type === "stats_put" && typeof data.fetchedAt === "number" ? { recordedAt: data.fetchedAt } : {}) }] : [])];
+        const decisions = await this.sharingPermissions(ws, session, requests); if (ws.readyState !== WebSocket.OPEN) return;
+        permissions = requests.map((request, index) => ({ uuid: request.uuid, decision: decisions[index] }));
+        if (data.type === "stats_put" && permissions.some(value => !this.sharingCurrent(value.uuid, "dungeons", value.decision))) { ws.send(JSON.stringify({ type: "stats_result", id: data.id, record: null, stored: false, error: "sharing_disabled" })); return; }
+      }
       if (data.type === "stats_get") {
         const record = this.stats.get(data.name, data.uuid as string | undefined, now);
+        if (record && !await this.visibleRecord(ws, session, record, "dungeons", this.stats.publisher(record.uuid))) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "stats_result", id: data.id, record: null, error: "sharing_disabled" })); return; }
         const ownRefresh = session.liveUpdates && data.name.toLowerCase() === session.name.toLowerCase() && data.uuid === session.uuid;
-        const grant: StatsGrant | undefined = record && !ownRefresh ? undefined : { name: data.name.toLowerCase(), uuid: data.uuid as string | undefined,
+        const grant: StatsGrant | undefined = record && !ownRefresh || permissions.some(value => !this.sharingCurrent(value.uuid, "dungeons", value.decision)) ? undefined : { name: data.name.toLowerCase(), uuid: data.uuid as string | undefined,
           token: crypto.randomUUID().replaceAll("-", ""), expires: now + 120_000 };
         if (grant) session.uploads = [...session.uploads.filter(it => it.name !== grant.name).slice(-3), grant];
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type: "stats_result", id: data.id, record, upload: grant?.token }));
+        ws.send(JSON.stringify({ type: "stats_result", id: data.id, record, upload: grant?.token, ...(!record && !grant ? { error: "sharing_disabled" } : {}) }));
       } else {
         const grant = session.uploads.find(it => it.name === (data.name as string).toLowerCase() && it.token === data.upload && (!it.uuid || it.uuid === data.uuid));
         const stats = validateStats(data.stats);
@@ -534,9 +621,10 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           record.stats.selectedClass = live.party.selectedClass;
         }
         const ownRefresh = session.liveUpdates === true && data.uuid === session.uuid && data.name.toLowerCase() === session.name.toLowerCase();
+        if (permissions.some(value => !this.sharingCurrent(value.uuid, "dungeons", value.decision))) { ws.send(JSON.stringify({ type: "stats_result", id: data.id, stored: false, error: "sharing_disabled" })); return; }
         const stored = this.stats.put(record, session.uuid!, now, ownRefresh);
         ws.send(JSON.stringify({ type: "stats_result", id: data.id, stored }));
-        if (stored) await this.broadcast(ws, { type: "stats_update", record });
+        if (stored) await this.broadcast(ws, { type: "stats_update", record }, [{ uuid: session.uuid!, category: "dungeons", recordedAt: record.fetchedAt }, { uuid: record.uuid, category: "dungeons", recordedAt: record.fetchedAt }]);
       }
       return;
     }
@@ -607,6 +695,13 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   private async migrateLegacyAccounts(room: string): Promise<boolean> {
     const sql = this.ctx.storage.sql;
+    const cosmetics = sql.exec<{cursor: string; done: number}>("SELECT cursor,done FROM cosmetic_migration_state WHERE id=1").toArray()[0];
+    if (!cosmetics?.done) {
+      const players = sql.exec<{uuid: string}>("SELECT uuid FROM cosmetics_public WHERE uuid>? ORDER BY uuid LIMIT 128", cosmetics?.cursor ?? "").toArray();
+      await this.env.ACCOUNT_STORE.getByName("global").importCommunityCosmetics(room, players.map(player => this.cosmetics.get(player.uuid)));
+      sql.exec("INSERT INTO cosmetic_migration_state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET cursor=MAX(cursor,excluded.cursor),done=MAX(done,excluded.done)", players.at(-1)?.uuid ?? cosmetics?.cursor ?? "", players.length < 128 ? 1 : 0);
+      if (players.length === 128) return false;
+    }
     const previous = sql.exec<{ cursor: string; done: number }>("SELECT cursor,done FROM account_migration_state WHERE id=1").toArray()[0];
     if (previous?.done) return true;
     const rows = sql.exec<{ discord: string; uuid: string; linked_at: number }>(
@@ -626,23 +721,19 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     if (legacyRelay(this.env)) return true;
     if (ws.readyState !== WebSocket.OPEN) return false;
     try {
-      if (!session.accountId || !session.uuid || !session.installationId || session.generation === undefined) {
-        ws.close(4005, "Authorization required"); return false;
+      if (!session.accountId || !session.uuid || !session.communitySessionId || session.generation === undefined) {
+        ws.close(4007, "Connect Discord in Sky-Myce"); return false;
       }
       if (!Number.isSafeInteger(session.leaseExpiresAt) || session.leaseExpiresAt! <= Date.now()) {
         ws.close(4006, "Authorization renewal required"); return false;
       }
-      if (!session.buildId || !session.loaderVersion) {
-        ws.close(4006, "Authorization renewal required"); return false;
-      }
-      const state = await this.env.ACCOUNT_STORE.getByName("global").checkSession({ accountId: session.accountId,
-        uuid: session.uuid, installationId: session.installationId, generation: session.generation,
-        buildId: session.buildId, loaderVersion: session.loaderVersion, heartbeat,
+      const state = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession({ accountId: session.accountId,
+        uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation,
         heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId });
       if (!state.ok) {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error === "license_revoked" ? "license_revoked" : "not_authorized" }));
-          ws.close(4005, "Sky-Myce authorization denied. Contact the owners.");
+          ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error ?? "session_expired" }));
+          ws.close(state.error === "identity_blacklisted" ? 4005 : 4006, state.error ?? "session_expired");
         }
         return false;
       }
@@ -665,6 +756,55 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.accountId === accountId && ws.readyState === WebSocket.OPEN) await this.authorized(ws, session);
     }
   }
+  private sharingCurrent(player: string, category: SharingCategory, decision: Pick<SharingDecision, "allowed"> & Partial<SharingDecision>): boolean {
+    if (!decision?.allowed) return false;
+    const cutoff = this.ctx.storage.sql.exec<{ not_before: number }>("SELECT not_before FROM room_sharing_cutoffs WHERE uuid=? AND category=?", player, category).toArray()[0]?.not_before ?? 0;
+    return cutoff <= (decision.notBefore ?? 0);
+  }
+  private async sharingPermissions(ws: WebSocket, session: Session, requests: {uuid: string; category: SharingCategory; recordedAt?: number}[]): Promise<SharingDecision[]> {
+    if (legacyRelay(this.env)) return requests.map(() => ({ allowed: true, publicName: true, revision: 0, notBefore: 0 }));
+    const denied = () => requests.map(() => ({ allowed: false, publicName: false, revision: 0, notBefore: 0 }));
+    if (!session.accountId || !session.communitySessionId || !session.uuid || session.generation === undefined || !session.leaseExpiresAt || session.leaseExpiresAt <= Date.now()) { if (ws.readyState === WebSocket.OPEN) ws.close(4006, "Community renewal required"); return denied(); }
+    try {
+      // One authority snapshot checks the recipient's current session and all subject/contributor policies.
+      const result = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySharing({ sessionId: session.communitySessionId, accountId: session.accountId, uuid: session.uuid, generation: session.generation }, requests);
+      if (!result.ok) { if (ws.readyState === WebSocket.OPEN) ws.close(result.error === "session_expired" ? 4006 : 4005, "Community authorization required"); return denied(); }
+      return result.decisions;
+    } catch { if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Community service unavailable"); return denied(); }
+  }
+  private async visibleRecord(ws: WebSocket, session: Session, record: { uuid: string; fetchedAt: number }, category: SharingCategory, publisher: string | null): Promise<boolean> {
+    if (legacyRelay(this.env)) return true;
+    const players = [...new Set([record.uuid, ...(publisher ? [publisher] : [])])];
+    const policies = await this.sharingPermissions(ws, session, players.map(player => ({ uuid: player, category, recordedAt: record.fetchedAt })));
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    return players.every((player, index) => this.sharingCurrent(player, category, policies[index]));
+  }
+  async applySharing(players: string[], policy: SharingState, suppressed: string[]): Promise<void> {
+    if (players.length > 256 || players.some(player => !uuid.test(player))) return;
+    for (const player of players) for (const category of ["dungeons", "economy", "rng", "activity", "leaderboards"] as const) {
+      this.ctx.storage.sql.exec("INSERT INTO room_sharing_cutoffs VALUES(?,?,?) ON CONFLICT(uuid,category) DO UPDATE SET not_before=MAX(not_before,excluded.not_before)", player, category, policy.notBefore[category]);
+    }
+    await this.suppressSharing(players, suppressed);
+  }
+  /** Privacy changes remove persisted contributions and outstanding uploads across every room. */
+  async suppressSharing(players: string[], categories: string[]): Promise<void> {
+    if (players.length > 256 || players.some(player => !uuid.test(player))) return;
+    if (categories.includes("rng")) this.rngForward.suppress(players);
+    const rng = categories.includes("rng") ? this.rng.deleteAuthors(players) : [];
+    const stats = categories.includes("dungeons") ? this.stats.deleteSubjects(players) : [];
+    const wealth = categories.includes("economy") ? this.wealth.deleteSubjects(players) : [];
+    for (const ws of this.ctx.getWebSockets()) {
+      const session = ws.deserializeAttachment() as Session;
+      if (categories.includes("dungeons") && players.includes(session.uuid ?? "") && session.party) delete session.party.selectedClass;
+      if (categories.includes("dungeons")) session.uploads = players.includes(session.uuid ?? "") ? [] : session.uploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
+      if (categories.includes("economy")) session.wealthUploads = players.includes(session.uuid ?? "") ? [] : session.wealthUploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
+      ws.serializeAttachment(session);
+      if (ws.readyState !== WebSocket.OPEN || !session.name || !await this.authorized(ws, session)) continue;
+      for (let index = 0; index < rng.length; index += 128) ws.send(JSON.stringify({ type: "rng_removed", ids: rng.slice(index, index + 128) }));
+      for (let index = 0; index < stats.length; index += 128) ws.send(JSON.stringify({ type: "stats_removed", uuids: stats.slice(index, index + 128) }));
+      for (let index = 0; index < wealth.length; index += 128) ws.send(JSON.stringify({ type: "wealth_removed", uuids: wealth.slice(index, index + 128) }));
+    }
+  }
 
   /** Binding-only global coordination; public socket handlers supply the verified sender. */
   async globalChatMinecraft(sender: GlobalChatSender, input: GlobalChatSend): Promise<GlobalChatResult> {
@@ -681,13 +821,16 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   /** Internal lookup only; chat identity always retains the independently verified Minecraft name. */
   ircCosmeticName(uuid: string): string | null { return /^[a-f0-9]{32}$/.test(uuid) ? this.cosmetics.get(uuid).name : null; }
 
-  private async broadcast(sender: WebSocket, packet: object): Promise<void> {
+  private async broadcast(sender: WebSocket, packet: object, privacy?: {uuid: string; category: SharingCategory; recordedAt?: number}[]): Promise<void> {
     const text = JSON.stringify(packet);
     for (const peer of this.ctx.getWebSockets()) {
       const session = peer.deserializeAttachment() as Session;
       // Older clients reject unknown packet types. Opt-in survives hibernation with the socket.
       if (peer !== sender && peer.readyState === WebSocket.OPEN && session.name && session.liveUpdates) {
-        if (!await this.authorized(peer, session)) continue;
+        if (privacy) {
+          const policies = await this.sharingPermissions(peer, session, privacy);
+          if (peer.readyState !== WebSocket.OPEN || privacy.some((request, index) => !this.sharingCurrent(request.uuid, request.category, policies[index]))) continue;
+        } else if (!await this.authorized(peer, session)) continue;
         try { peer.send(text); } catch { /* The recipient disconnected during delivery. */ }
       }
     }
@@ -695,6 +838,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   async alarm(): Promise<void> {
     await this.irc.flushGlobal();
+    await this.rngForward.drain();
     let next = Infinity;
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
@@ -710,6 +854,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       else next = Math.min(next, session.expires);
     }
     next = Math.min(next, this.irc.nextGlobalAlarm() ?? Infinity);
+    next = Math.min(next, this.rngForward.nextAlarm() ?? Infinity);
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }
 
@@ -727,9 +872,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     ws.close(1011, "Connection error");
   }
   private recordDisconnect(session: Session): void {
-    if (session.accountId && session.uuid && session.installationId && session.generation !== undefined && session.connectionId) {
-      this.ctx.waitUntil(this.env.ACCOUNT_STORE.getByName("global").markSessionOffline(session.accountId, session.uuid,
-        session.installationId, session.generation, session.connectionId).catch(() => {}));
+    if (session.communitySessionId && session.connectionId) {
+      this.ctx.waitUntil(this.env.ACCOUNT_STORE.getByName("global").markCommunitySessionOffline(session.communitySessionId, session.connectionId).catch(() => {}));
     }
   }
 }

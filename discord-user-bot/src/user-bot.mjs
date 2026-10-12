@@ -1,8 +1,9 @@
 import { Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { configuration, RateLimit, unavailable } from './config.mjs';
 import { RelayBridge, discordPacket } from './relay.mjs';
-import { DeliveryReceipts, GLOBAL_ROOM, globalEmbedPacket } from './global-chat.mjs';
+import { DeliveryReceipts, GLOBAL_ROOM, globalEmbedPacket, resolveDiscordReply } from './global-chat.mjs';
 import { applyDiscordOperation, descriptionFingerprint, discordEventId, gatewayMessage, messageSnapshot, nativeDiscordOperation } from './chat-operations.mjs';
+import { CommunityFeed, communityFeedReceipts } from './community-feed.mjs';
 
 let config;
 try { config = configuration(process.env); }
@@ -24,9 +25,10 @@ function result(id, error) {
   if (!item) return;
   pending.delete(id); clearTimeout(item.timer);
   item.resolve?.(!error);
-  if (error) void notice(item.message, error === 'not_authorized' ? 'This message could not be bridged. Use /account status to check your Sky-Myce access.' : unavailable);
+  if (error) void notice(item.message, error === 'not_authorized' ? 'This message could not be bridged. Use /status to review your Discord connection and online-service restrictions.' : unavailable);
 }
 let starting = false;
+let rngFeed;
 async function startBridges() {
   if (starting || bridges.size || !client.isReady()) return;
   starting = true;
@@ -49,11 +51,22 @@ async function startBridges() {
           } }) });
       bridges.set(room, bridge); bridge.connect();
     }
+    if (config.rngChannel) {
+      try {
+        const channel = await client.channels.fetch(config.rngChannel);
+        if (!channel?.isSendable() || channel.guildId !== config.guild || !channel.permissionsFor(client.user)?.has([
+          PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory])) throw new Error('RNG channel unavailable');
+        rngFeed = new CommunityFeed({ url: config.url.replace(/^wss:/, 'https:'), secret: config.secret, channelId: config.rngChannel, channel,
+          receipts: await communityFeedReceipts(config.rngReceiptsPath), onDiagnostic: event => console.warn(JSON.stringify({ event })) });
+        rngFeed.start();
+      } catch { console.warn(JSON.stringify({ event: 'rng_feed_configuration_unavailable' })); }
+    }
     console.info(JSON.stringify({ event: 'discord_connected', name: 'Sky-Myce User Bot', applicationId: config.app,
       guildId: config.guild, transport: 'Gateway messages; signed HTTP account interactions', rooms: config.rooms, relayConfigured: !!config.url }));
   } finally { starting = false; }
 }
 function shutdown() {
+  rngFeed?.stop(); rngFeed = undefined;
   for (const bridge of bridges.values()) bridge.close();
   bridges.clear();
   for (const item of pending.values()) { clearTimeout(item.timer); item.resolve?.(false); }
@@ -85,7 +98,8 @@ client.on(Events.MessageCreate, message => {
     if (pending.has(message.id) || nativeTasks.has(message.id)) return;
     if (pending.size >= 128 || !nativeTask(message.id, async () => {
       if (!await bridge.whenCapabilitiesReady()) { await notice(message); return; }
-      const packet = discordPacket(message, config.guild, config.channels[room], room, config.limits.outboundLength, bridge.richChatVersion === 1);
+      const withReply = await resolveDiscordReply(message, config.guild, config.channels[room]);
+      const packet = discordPacket(withReply, config.guild, config.channels[room], room, config.limits.outboundLength, bridge.richChatVersion === 1);
       if (!packet) {
         if (room !== GLOBAL_ROOM) await notice(message, `Bridge messages must be plain text of 1–${config.limits.outboundLength} characters without control/formatting codes.`);
         return;

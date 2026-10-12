@@ -5,6 +5,7 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.network.chat.Component
@@ -66,11 +67,14 @@ object DailyDigest : SkyMyceModule() {
             runCatching { writer.flush() }.onFailure { SkyMyce.logger.warn("[Daily Digest] Final local state could not be saved") }
         }, "Sky-Hawk-Digest-Save"))
         DigestActivities.contextReady = ::contextReady
-        DigestRng.contextReady = ::contextReady
         DigestActivities.changed = { changed() }
         DigestRng.detected = ::recordDrop
         DungeonFriendRelay.onDigestEvent = { json ->
-            if (DailyDigestConfig.receiveRng && contextReady() && subscribed)
+            if (json.get("type")?.asString == "rng_removed") {
+                val ids = json.getAsJsonArray("ids")?.mapNotNull { it.takeIf { value -> value.isJsonPrimitive }?.asString }
+                    ?.filter { it.matches(Regex("[a-f0-9]{32}")) }?.take(256)?.toSet().orEmpty()
+                removeCommunityReports(ids)
+            } else if (DailyDigestConfig.receiveRng && contextReady() && subscribed)
                 receiveEvents(listOfNotNull(json.get("event")?.takeIf { it.isJsonObject }?.asJsonObject))
         }
         DungeonFriendRelay.onDigestClosed = {
@@ -79,6 +83,7 @@ object DailyDigest : SkyMyceModule() {
             rebuildView()
         }
         DungeonFriendRelay.onDigestReady = {
+            removeCommunityReports()
             subscribed = false
             rngRetryAt = 0
             if (LocationAPI.isOnSkyBlock) {
@@ -95,7 +100,8 @@ object DailyDigest : SkyMyceModule() {
             val saved = store!!.load()
             MC.instance.execute {
                 saved.lastOpened.forEach { (account, date) -> gate.opened(account, java.time.LocalDate.parse(date)) }
-                profiles.putAll(saved.profiles)
+                // Community history is revalidated by the authoritative feed on each connection; personal history stays local.
+                profiles.putAll(saved.profiles.mapValues { (_, profile) -> profile.copy(history = profile.history.filter { !it.community }) })
                 saved.news.forEach { (source, state) -> NewsSource.entries.find { it.wire == source }?.let { news.restore(it, state) } }
                 savedGlobal = saved.global
                 saved.global?.let(DigestActivities::restoreGlobal)
@@ -153,10 +159,10 @@ object DailyDigest : SkyMyceModule() {
     }
 
     private fun contextReady(): Boolean = isEnabled() && loaded && LocationAPI.isOnSkyBlock && MC.instance.player != null &&
-        ProfileAPI.isLoaded && currentProfileKey() == profileKey && profileKey != null
+        currentProfileKey() == profileKey && profileKey != null
 
-    private fun currentProfileKey(): String? = ProfileAPI.profileName?.takeIf { it.isNotBlank() && ProfileAPI.isLoaded && LocationAPI.isOnSkyBlock }
-        ?.let { DigestDailyGate.profileKey(MC.instance.user.profileId.toString(), it, LocationAPI.onAlpha) }
+    private fun currentProfileKey(): String? = me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository.currentContext()
+        ?.let { verified -> verified.profileName?.let { DigestDailyGate.profileKey(verified.account, it, verified.server == "alpha") } }
 
     private fun synchronizeContext() {
         if (!loaded) return
@@ -270,10 +276,10 @@ object DailyDigest : SkyMyceModule() {
             pendingSubscription = null
             runCatching {
                 require(response != null && !response.has("error"))
-                val events = response.getAsJsonArray("events")
-                require(events.size() <= 30)
-                receiveEvents(events.map { it.asJsonObject })
-                rngStatus = "Live · community reports are unverified"
+                val events = parseDigestCommunityHistory(response.get("events"), System.currentTimeMillis())
+                removeCommunityReports()
+                receiveEntries(events)
+                rngStatus = if (events.isEmpty()) "Live · no recent community reports" else "Live · community reports are unverified"
             }.onFailure {
                 DungeonFriendRelay.disableRngFeed()
                 subscribed = false
@@ -294,12 +300,22 @@ object DailyDigest : SkyMyceModule() {
     }
 
     private fun receiveEvents(events: List<JsonObject>) {
+        receiveEntries(events.take(30).mapNotNull { parseDigestCommunityEvent(it, System.currentTimeMillis()) })
+    }
+
+    private fun receiveEntries(events: List<DigestRngEntry>) {
         if (!DailyDigestConfig.receiveRng || !contextReady()) return
         var added = false
-        events.take(30).forEach { json -> parseDigestCommunityEvent(json, System.currentTimeMillis())?.let { entry ->
+        events.take(30).forEach { entry ->
             added = history.add(entry, DailyDigestConfig.retainedRngEvents, System.currentTimeMillis()) || added
-        } }
-        if (added) changed()
+        }
+        if (added) { rngStatus = "Live · community reports are unverified"; changed() }
+    }
+
+    private fun removeCommunityReports(ids: Set<String>? = null) {
+        history.removeCommunity(ids)
+        profiles.replaceAll { _, profile -> profile.copy(history = profile.history.filter { !it.community || ids != null && it.id !in ids }) }
+        if (loaded) changed()
     }
 
     private fun recordDrop(drop: DetectedRng) {
@@ -308,7 +324,9 @@ object DailyDigest : SkyMyceModule() {
         if (!history.add(entry, DailyDigestConfig.retainedRngEvents, System.currentTimeMillis())) return
         changed()
         // Only the live detected event is eligible. Enabling sharing never uploads saved history.
-        val submission = digestRngSubmission(drop, DailyDigestConfig.shareRng, DailyDigestConfig.publicRngName, System.currentTimeMillis()) ?: return
+        val submission = digestRngSubmission(drop, me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.RNG),
+            me.mycellium.skymyce.community.CommunitySharing.showPublicName(), System.currentTimeMillis(),
+            AcquisitionRepository.state.events.firstOrNull { it.id == drop.id }, AcquisitionRepository.currentContext()) ?: return
         val request = DungeonFriendRelay.digestRequest("rng_publish", submission)
         if (request == null) { rngStatus = "Drop saved locally; sharing is unavailable"; rebuildView() }
         else {
@@ -420,8 +438,8 @@ object DailyDigest : SkyMyceModule() {
     private fun rngCard(): DigestCardState {
         val entries = history.entries.filter { !it.community || DailyDigestConfig.receiveRng }.map { entry ->
             DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
-                if (entry.community) "Community-reported, unverified. Only drop, activity, time and optional public name are transmitted."
-                else "Detected locally from a supported game confirmation. Sharing is ${if (DailyDigestConfig.shareRng) "enabled for new drops" else "off"}.",
+                if (entry.community) "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name."
+                else "Detected locally from a supported game confirmation. Sharing is ${if (me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.RNG)) "enabled for new drops" else "off or waiting for preference synchronization"}.",
                 DigestTone.SPECIAL, if (entry.community) "Community · unverified" else "Your drop", entry.occurredAt,
                 community = entry.community, activity = entry.activity)
         }

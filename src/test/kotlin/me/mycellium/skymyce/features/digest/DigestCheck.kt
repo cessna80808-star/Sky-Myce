@@ -2,6 +2,8 @@ package me.mycellium.skymyce.features.digest
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
 import java.nio.file.Files
 import java.time.Instant
 import java.time.LocalDate
@@ -124,11 +126,86 @@ fun checkDigestLifecycleAndNews() {
     check((privateReport["event"] as Map<*, *>).keys == setOf("id", "item", "activity", "occurredAt"))
     check(digestRngSubmission(drop.copy(item = "DIRT"), true, true, now) == null)
     check(digestRngSubmission(drop.copy(occurredAt = now - 300001), true, true, now) == null)
+    val observedContext = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
+    val receipt = AcquisitionEvent(drop.id, drop.item, now - 5000, "dungeon", observedContext,
+        floor = "M7", rarity = "MYTHIC", displayName = "Ancient Necron's Handle")
+    fun report(detected: DetectedRng = drop, record: AcquisitionEvent? = receipt, context: AcquisitionContext? = observedContext) =
+        checkNotNull(digestRngSubmission(detected, true, false, now, record, context))["event"] as Map<*, *>
+    val enrichedReport = report()
+    check(enrichedReport.keys == setOf("id", "item", "activity", "occurredAt", "rarity", "displayName", "floor"))
+    check(enrichedReport["rarity"] == "MYTHIC" && enrichedReport["displayName"] == receipt.displayName && enrichedReport["floor"] == "M7")
+    check(enrichedReport["id"] == drop.id && enrichedReport["occurredAt"] == now) // Enrichment never changes the published receipt identity/time.
+    for (mismatch in listOf(receipt.copy(id = "c".repeat(32)), receipt.copy(item = "GIANTS_SWORD"),
+        receipt.copy(activity = "slayer"), receipt.copy(origin = "legacy-confirmed"), receipt.copy(occurredAt = now - 15001),
+        receipt.copy(context = observedContext.copy(profileId = "c".repeat(32), profileName = "Pear")))) {
+        check(report(record = mismatch).keys == setOf("id", "item", "activity", "occurredAt"))
+    }
+    check(report(context = null).keys == setOf("id", "item", "activity", "occurredAt"))
+    val directlyObserved = drop.copy(rarity = "LEGENDARY", displayName = "Necron's Handle")
+    check(report(directlyObserved, null)["rarity"] == "LEGENDARY" && report(directlyObserved, null)["floor"] == null)
+    check(report(record = receipt.copy(floor = "FAKE"))["floor"] == null)
+    check(report(record = receipt.copy(rarity = null, displayName = null)).keys == setOf("id", "item", "activity", "occurredAt", "floor"))
+    for (unsafeName in listOf("hidden\u200Bname", "bidi\u202Ename", "bad\uD83Dname", "bad\uDE00name", "line\u2028name", "paragraph\u2029name")) {
+        val safeReport = report(directlyObserved.copy(displayName = unsafeName), null)
+        check(safeReport["rarity"] == "LEGENDARY" && "displayName" !in safeReport && safeReport["id"] == drop.id)
+    }
+    check(report(directlyObserved.copy(displayName = "Necron's Handle \uD83D\uDE00"), null)["displayName"] == "Necron's Handle \uD83D\uDE00")
+    check(digestRngSubmission(directlyObserved, false, false, now, receipt, observedContext) == null)
+    check(digestRngSubmission(directlyObserved.copy(occurredAt = now - 300001), true, false, now, receipt, observedContext) == null)
+    val slayerDrop = drop.copy(item = "WARDEN_HEART", activity = "slayer", rarity = "LEGENDARY", displayName = "Warden Heart")
+    check(report(slayerDrop, receipt.copy(item = slayerDrop.item, activity = "slayer"))["floor"] == null)
     val community = JsonParser.parseString("""{"id":"${"b".repeat(32)}","item":"WARDEN_HEART","activity":"slayer","occurredAt":$now,"player":"Anonymous","unverified":true}""").asJsonObject
     check(parseDigestCommunityEvent(community, now)?.community == true)
     check(parseDigestCommunityEvent(community.deepCopy().apply { addProperty("inventory", "private") }, now) == null)
     check(parseDigestCommunityEvent(community.deepCopy().apply { addProperty("unverified", false) }, now) == null)
     check(parseDigestCommunityEvent(community.deepCopy().apply { addProperty("player", "x".repeat(17)) }, now) == null)
+    val enrichedCommunity = community.deepCopy().apply {
+        addProperty("rarity", "LEGENDARY"); addProperty("displayName", "Warden Heart")
+    }
+    check(parseDigestCommunityEvent(enrichedCommunity, now)?.community == true)
+    val dungeonCommunity = enrichedCommunity.deepCopy().apply {
+        addProperty("item", "NECRON_HANDLE"); addProperty("activity", "dungeon"); addProperty("floor", "F7")
+        addProperty("displayName", "Ancient Necron's Handle")
+    }
+    for (rarity in listOf("COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "DIVINE", "ULTIMATE", "SPECIAL", "VERY_SPECIAL", "ADMIN")) {
+        check(parseDigestCommunityEvent(dungeonCommunity.deepCopy().apply { addProperty("rarity", rarity) }, now) != null)
+    }
+    for (floor in listOf("E", "F1", "F7", "M1", "M7")) {
+        check(parseDigestCommunityEvent(dungeonCommunity.deepCopy().apply { addProperty("floor", floor) }, now) != null)
+    }
+    for (malformed in listOf(dungeonCommunity.deepCopy().apply { addProperty("rarity", "FAKE") },
+        dungeonCommunity.deepCopy().apply { addProperty("rarity", 2) },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "x".repeat(121)) },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "§6Styled") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "bad\nname") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "hidden\u200Bname") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "bidi\u202Ename") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "bad\uD83Dname") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "bad\uDE00name") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "line\u2028name") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", "paragraph\u2029name") },
+        dungeonCommunity.deepCopy().apply { addProperty("displayName", " untrimmed ") },
+        dungeonCommunity.deepCopy().apply { addProperty("floor", "F8") },
+        dungeonCommunity.deepCopy().apply { addProperty("floor", "ENTRANCE") },
+        dungeonCommunity.deepCopy().apply { addProperty("floor", 7) },
+        enrichedCommunity.deepCopy().apply { addProperty("floor", "F7") })) {
+        check(parseDigestCommunityEvent(malformed, now) == null)
+    }
+    val nullableMetadata = community.deepCopy().apply {
+        add("rarity", com.google.gson.JsonNull.INSTANCE); add("displayName", com.google.gson.JsonNull.INSTANCE); add("floor", com.google.gson.JsonNull.INSTANCE)
+    }
+    check(parseDigestCommunityEvent(nullableMetadata, now) != null)
+    check(parseDigestCommunityEvent(dungeonCommunity.deepCopy().apply { addProperty("displayName", "Necron's Handle \uD83D\uDE00") }, now) != null)
+    val metadataHistory = com.google.gson.JsonArray().apply { add(dungeonCommunity); add(enrichedCommunity) }
+    check(parseDigestCommunityHistory(metadataHistory, now).size == 1) // Extra metadata does not create a second ID.
+    val mixedFeed = com.google.gson.JsonArray().apply {
+        add(community); add(12); add(com.google.gson.JsonNull.INSTANCE)
+        add(community.deepCopy().apply { addProperty("item", "DIRT") }); add(community)
+    }
+    check(parseDigestCommunityHistory(mixedFeed, now).single().id == community.get("id").asString)
+    check(parseDigestCommunityHistory(com.google.gson.JsonArray(), now).isEmpty())
+    check(runCatching { parseDigestCommunityHistory(community, now) }.isFailure)
+    check(runCatching { parseDigestCommunityHistory(com.google.gson.JsonArray().apply { repeat(31) { add(community) } }, now) }.isFailure)
 
     val directory = Files.createTempDirectory("daily-digest-check")
     try {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 /** Production variable names and real account/installation proofs, not the legacy cosmetics fixture. */
@@ -64,19 +64,15 @@ export async function checkStrictCosmetics(script, minecraftProof) {
   try {
     const store = (await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');
     const admin = action => store.developerCommand({ id: env.ADMIN_BOOTSTRAP_USER_ID, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, action, actor, {});
-    const issued = await admin('authorise'); assert.equal(issued.ok, true);
-    const input = { purpose: 'activate', installationId: randomUUID(), publicKey: publicKey(installation), deviceHash: 'd'.repeat(64),
-      minecraftVersion: '26.1.2', loaderVersion: '1.0.0', modVersion: '2.4.2', clientNonce: randomUUID() };
-    const challenge = await post('/auth/challenge', input);
-    assert.equal((await store.userCommand({ id: actor, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, 'approve', { code: challenge.approvalCode })).ok, true);
-    const signature = sign(null, Buffer.from(`Sky-Myce installation v1\nactivate\n${challenge.nonce}\n${input.installationId}\n${input.deviceHash}\n26.1.2\n1.0.0\n2.4.2\n${input.clientNonce}`), installation.privateKey).toString('base64');
-    const { lease } = await post('/auth/activate', { challengeId: challenge.challengeId, signature, activationKey: issued.activationKey, minecraftProof: minecraftProof('Alice', challenge.nonce) });
+    const challenge = await post('/community/challenge', { purpose: 'connect', clientNonce: randomBytes(32).toString('base64url') });
+    const pollSecret = 'x'.repeat(43), flow = await post('/community/connect/start', { challengeId: challenge.challengeId, minecraftProof: minecraftProof('Alice', challenge.nonce), pollSecret, modVersion: '0.1.0' });
+    assert.equal((await store.communityUserCommand({ id: actor, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, 'connect', { code: flow.fallbackCode })).ok, true);
+    const { credentials } = await post('/community/connect/poll', { flowId: flow.flowId, pollSecret });
     async function connect(room) {
       const response = await mf.dispatchFetch(`https://example.test/websocket?room=${room}`, { headers: { Upgrade: 'websocket' } });
       assert.equal(response.status, 101); const ws = response.webSocket, next = inbox(ws); sockets.push(ws); ws.accept();
       const challenge = await next(); assert.equal(challenge.protocol, 3);
-      ws.send(JSON.stringify({ ...minecraftProof('Alice', challenge.serverId), lease,
-        installationSignature: sign(null, Buffer.from(`Sky-Myce relay v3\n${challenge.serverId}\n${lease}`), installation.privateKey).toString('base64'),
+      ws.send(JSON.stringify({ ...minecraftProof('Alice', challenge.serverId), communityToken: credentials.accessToken,
         cosmetics: true, cosmeticsVersion: 3 }));
       const ready = await next(); assert.equal(ready.cosmetics, true); assert.equal(ready.cosmeticsNames, true); return { ws, next };
     }
@@ -88,9 +84,10 @@ export async function checkStrictCosmetics(script, minecraftProof) {
     const event = await friends.next(); assert.equal(event.type, 'cosmetics_event'); assert.equal(event.record.name, 'Aster');
     assert.deepEqual([event.record.scaleX, event.record.scaleY, event.record.scaleZ], [1.25, 1.5, 0.75]);
     assert.equal(event.record.nameStyle.color, 'gold');
-    assert.equal((await packet(testing, { type: 'cosmetics_get', uuids: [id] })).records[0].revision, 0, 'Production change stays out of testing');
+    const shared = await testing.next(); assert.equal(shared.type, 'cosmetics_event'); assert.equal(shared.record.revision, event.record.revision);
+    assert.equal((await packet(testing, { type: 'cosmetics_get', uuids: [id] })).records[0].revision, 1, 'All rooms in one deployment share one cosmetic authority');
     assert.match(await interaction('show'), /Aster/);
-    assert.match(await interaction('set', { name: 'Stolen' }, stranger), /not currently authorized/);
+    assert.match(await interaction('set', { name: 'Stolen' }, stranger), /cannot use community services/);
     await interaction('set', { name: 'WrongGuild' }, actor, { guild_id: '99999999999999999' });
     const link = await packet(friends, { type: 'cosmetics_link', uuid: 'b'.repeat(32) });
     assert.match(link.code, /^[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){2}$/, 'Canonical USER_BOT_* works inside the Durable Object');
@@ -104,17 +101,16 @@ export async function checkStrictCosmetics(script, minecraftProof) {
     const expired = await packet(friends, { type: 'cosmetics_link' }); await sql.exec('UPDATE minecraft_links SET expires_at=0');
     assert.match(await interaction('link', { code: expired.code }), /could not be completed/);
     assert.match(await interaction('unlink', { confirm: true }), /Use \/account unlink/);
-    assert.equal((await admin('license_revoke')).ok, true);
-    assert.match(await interaction('set', { name: 'Revoked' }), /not currently authorized/);
+    await sql.exec("INSERT INTO community_blacklist VALUES('discord',?,'Synthetic abuse fixture','test',?,NULL,1)", actor, Date.now());
+    assert.match(await interaction('set', { name: 'Revoked' }), /cannot use community services/);
     const revoked = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(Error('Revoked name lookup was not rejected')), 3000);
       friends.ws.addEventListener('close', event => { clearTimeout(timer); resolve(event); }, { once: true });
     });
     friends.ws.send(JSON.stringify({ type: 'cosmetics_get', id: nextId().padStart(32, '0'), names: ['Alice'] }));
     assert.equal((await revoked).code, 4005, 'Name lookup cannot bypass revoked account authorization');
-    const room = await mf.unsafeGetDurableObjectStorage('strict-cosmetics-check', 'RelayRoom', { name: 'friends' });
-    assert.equal((await room.exec('SELECT display_name FROM cosmetics_public WHERE uuid=?', id))[0].display_name, 'Aster');
+    assert.equal((await sql.exec('SELECT display_name FROM cosmetics_public WHERE uuid=?', id))[0].display_name, 'Aster');
     assert.ok(edits.length >= 9);
-    console.log('Strict cosmetics checks passed: canonical configuration, deferred private responses, real account proofs, appearance events, ownership, replay, expiry, license revocation and room isolation.');
+    console.log('Strict cosmetics checks passed: canonical configuration, private responses, community proofs, cross-room authoritative appearance, ownership, replay, expiry and identity blacklist.');
   } finally { for (const ws of sockets) { try { ws.close(); } catch {} } await mf.dispose(); }
 }
