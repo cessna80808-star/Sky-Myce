@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        directory: [relay, discord-bots, discord-user-bot]
+        directory: [relay]
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
@@ -42,9 +42,6 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - if: matrix.directory == 'discord-bots'
-        run: npm ci --prefix ../discord-user-bot
       - run: npm ci
       - run: npm test
-      - if: matrix.directory != 'discord-bots'
-        run: npm run check
+      - run: npm run check

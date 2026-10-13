@@ -83,7 +83,7 @@ try {
     assert.ok(verify(null, bytes, createPublicKey(key), signature)); bytes[0] ^= 1;
     assert.equal(verify(null, bytes, createPublicKey(key), signature), false);
     console.log("Sky-Myce release signing check passed.");
-  } else fail("Commands: keygen, sign-community, sign (legacy), sign-loader (legacy), check. See docs/community-architecture.md for operator setup.");
+  } else fail("Commands: keygen, sign-community, sign (legacy), sign-loader (legacy), check.");
 } catch (error) {
   // Crypto/fs exceptions can contain local private-key paths. Never print key material or raw runtime errors.
   console.error(error instanceof assert.AssertionError ? "Release signing self-check failed." : "Sky-Myce release command failed. Check arguments, versions, file permissions, and existing output files.");

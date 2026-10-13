@@ -1,6 +1,6 @@
 # Sky-Myce
 
-Sky-Myce 2.5.0 is a normal Fabric mod for Minecraft 26.1.2 and Java 25. Local features work without Discord or a custom Loader. Connect Discord in Minecraft for community chat, shared cosmetics and optional shared rankings; signed Fabric updates are optional. See the [community command guide](docs/discord-ux.md), [Discord bot setup](discord-bots/README.md) and [main-machine operator handoff](docs/main-machine-community-rollout.md).
+Sky-Myce 2.5.0 is a normal Fabric mod for Minecraft 26.1.2 and Java 25. Local features work without Discord or a custom Loader. Connect Discord in Minecraft for community chat, shared cosmetics and optional shared rankings; signed Fabric updates are optional.
 
 Sky-Myce is a Fabric mod for Hypixel SkyBlock focused on smoother dungeon runs, cleaner party coordination, and less menu friction.
 
@@ -8,13 +8,9 @@ Open the config in-game with `/sm` or `/skymyce`.
 
 New to the mod? Read the [player guide](MANUAL.md).
 
-The menu has six destinations: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. Search finds controls across them; Quick Settings, Favorites and Recent retain useful shortcuts. See the [menu and measured performance changes](docs/menu-optimization-2026-10.md) and [settings and Party Finder matcher guide](docs/settings-party-finder.md).
+The menu has six destinations: Dungeons, Combat, Economy, Cosmetics, Utils and Settings. Search finds controls across them; Quick Settings, Favorites and Recent retain useful shortcuts.
 
-**2.5.0** removes license/activation/HWID requirements, adds self-service Discord connection and privacy controls, and keeps local features usable when the community service is unavailable. Cosmetics Studio includes independent name/body controls and preset/uploaded capes. Shared leaderboards and the dedicated Discord RNG feed use real newly collected records with honest estimate and coverage labels; see [metric definitions](docs/community-leaderboards.md). Existing dungeon history remains separate from new measurements. `/sm irc` selects global chat, `/sm irc <message>` sends once, and `/sm chat` returns to normal chat. `/sm pc` fails closed until the backend can verify current party membership; see [party chat availability](docs/party-chat.md) and [tracker cutover](docs/dungeon-tracker-cutover.md).
-
-The [earlier implementation report](docs/implementation-overhaul-2026-10.md) records historical deployments and live tests. It does not verify this new community architecture. The current main-machine handoff distinguishes local checks from the deployment, Discord permission and multiplayer checks still required.
-
-The [2.5.0 implementation and verification report](docs/implementation-community-2026-10.md) records the current changes, automated checks, fullscreen Windows observations and remaining live verification.
+**2.5.0** removes license/activation/HWID requirements, adds self-service Discord connection and privacy controls, and keeps local features usable when the community service is unavailable. Cosmetics Studio includes independent name/body controls and preset/uploaded capes. Shared leaderboards and the dedicated Discord RNG feed use real newly collected records with honest estimate and coverage labels. Existing dungeon history remains separate from new measurements. `/sm irc` selects global chat, `/sm irc <message>` sends once, and `/sm chat` returns to normal chat. `/sm pc` fails closed until the backend can verify current party membership.
 
 ## Highlights
 
@@ -58,7 +54,7 @@ The [2.5.0 implementation and verification report](docs/implementation-community
 
 - Install the standalone mod once; updates are opt-in, signature/hash checked and staged for a safe restart. Expired/unavailable update metadata does not stop the installed mod.
 - Community sharing starts enabled unless a saved explicit preference says otherwise. Configure global/category/name opt-outs independently of chat and cosmetics.
-- Settings are organized into searchable categories with shared theme controls. See [docs/settings-party-finder.md](docs/settings-party-finder.md).
+- Settings are organized into searchable categories with shared theme controls.
 
 ## Project notes
 

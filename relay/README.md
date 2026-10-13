@@ -7,21 +7,19 @@ identity proof, a Discord-linked community session and deliberate identity
 blacklists. Browser Discord OAuth is the primary connection flow, with an
 expiring one-time code through the existing User Bot as a fallback. Device
 observations are optional private administrator metadata and do not restrict
-access. See [community architecture](../docs/community-architecture.md).
+access.
 
 Global chat uses `scope: "global"` on the authenticated Minecraft WebSocket and
 the `global-chat` coordinator. The independently supervised User Bot connects
 through the signed `/discord/bridge?room=global-chat` endpoint; only the
-configured global channel belongs to this bridge. See
-[global chat](../docs/global-chat.md) and the
-[User Bot guide](../discord-user-bot/README.md).
+configured global channel belongs to this bridge. Discord bot projects and
+operator documentation are maintained locally outside Git tracking.
 
 Current Hypixel party membership cannot be verified by this backend. Readiness
 therefore advertises `partyChat: false` and
 `partyChatError: "party_membership_unverified"`. Party chat requests receive an
 explicit party-scoped rejection, never legacy room or global delivery. Existing
-Party Finder `party_set`/`party_get` policies do not establish membership. See
-[the party protocol and precise blocker](../docs/party-chat.md).
+Party Finder `party_set`/`party_get` policies do not establish membership.
 
 From this directory, run the locked dependencies and existing checks:
 
@@ -38,9 +36,7 @@ and ignored local environment files.
 
 Production is `sky-myce-backend`, selected with `--env backend`. The default
 Worker name can collide with the older relay, so never deploy without the
-explicit intended environment. Preserve bindings, secrets and persisted state;
-follow [the main-machine rollout](../docs/main-machine-community-rollout.md) for
-OAuth configuration, private cape storage, reviewed deployment, standalone Fabric
-release publication and live verification. The [older deployment record](../docs/backend-deployment.md)
-describes the historical license/Loader flow and is not the current rollout guide.
+explicit intended environment. Preserve bindings, secrets and persisted state.
+Upload the standalone Fabric JAR privately before publishing its signed manifest,
+then verify the live signature and artifact hash. Retain previous releases.
 Deployment and persistent User Bot startup are separate operations.
