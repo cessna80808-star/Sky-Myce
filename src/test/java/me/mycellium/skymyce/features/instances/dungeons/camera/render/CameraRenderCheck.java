@@ -3,9 +3,87 @@ package me.mycellium.skymyce.features.instances.dungeons.camera.render;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 
 public final class CameraRenderCheck {
     public static void main(String[] args) {
+        int[] overlayCalls = {0};
+        Object[] overlays = {
+            (LevelRenderEvents.AfterBlockOutlineExtraction) (context, hit) -> overlayCalls[0]++,
+            (LevelRenderEvents.EndExtraction) context -> overlayCalls[0]++,
+            (LevelRenderEvents.StartMain) context -> overlayCalls[0]++,
+            (LevelRenderEvents.AfterOpaqueTerrain) context -> overlayCalls[0]++,
+            (LevelRenderEvents.CollectSubmits) context -> overlayCalls[0]++,
+            (LevelRenderEvents.AfterSolidFeatures) context -> overlayCalls[0]++,
+            (LevelRenderEvents.AfterTranslucentFeatures) context -> overlayCalls[0]++,
+            (LevelRenderEvents.BeforeBlockOutline) (context, outline) -> { overlayCalls[0]++; return false; },
+            (LevelRenderEvents.BeforeGizmos) context -> overlayCalls[0]++,
+            (LevelRenderEvents.BeforeTranslucentTerrain) context -> overlayCalls[0]++,
+            (LevelRenderEvents.AfterTranslucentTerrain) context -> overlayCalls[0]++,
+            (LevelRenderEvents.EndMain) context -> overlayCalls[0]++
+        };
+        for (Object overlay : overlays) {
+            require(SecondaryWorldCamera.eventInvoker(overlay) == overlay, "main-view overlay callbacks are unchanged");
+            invokeOverlay(overlay.getClass().getInterfaces()[0], overlay);
+        }
+        SecondaryWorldCamera.withRenderDistance(3, () -> {
+            for (Object overlay : overlays) {
+                Object isolated = SecondaryWorldCamera.eventInvoker(overlay);
+                require(isolated != overlay, "secondary passes isolate every world-render lifecycle event");
+                invokeOverlay(overlay.getClass().getInterfaces()[0], isolated);
+            }
+            Runnable unrelated = () -> { };
+            require(SecondaryWorldCamera.eventInvoker(unrelated) == unrelated, "unrelated Fabric events are preserved");
+        });
+        require(overlayCalls[0] == overlays.length, "third-party overlays run only for the main view");
+        require(SecondaryWorldCamera.eventInvoker(overlays[0]) == overlays[0], "main-view callbacks resume after preview");
+        require(SecondaryWorldCamera.effectiveRenderDistance(12) == 12, "main view retains its distance");
+        SecondaryWorldCamera.withRenderDistance(3, () -> {
+            require(SecondaryWorldCamera.effectiveRenderDistance(12) == 3, "secondary view bounds either renderer");
+            SecondaryWorldCamera.withRenderDistance(2, () ->
+                require(SecondaryWorldCamera.effectiveRenderDistance(12) == 2, "nested secondary distance"));
+            require(SecondaryWorldCamera.effectiveRenderDistance(12) == 3, "nested scope restores its caller");
+            var workerDistance = new java.util.concurrent.atomic.AtomicInteger();
+            Thread worker = Thread.startVirtualThread(() ->
+                workerDistance.set(SecondaryWorldCamera.effectiveRenderDistance(12)));
+            try { worker.join(); } catch (InterruptedException error) { throw new AssertionError(error); }
+            require(workerDistance.get() == 12, "secondary settings do not leak into background work");
+        });
+        var failure = new IllegalStateException("secondary renderer failed");
+        try {
+            SecondaryWorldCamera.withRenderDistance(4, () -> { throw failure; });
+            throw new AssertionError("Renderer failure was swallowed");
+        } catch (IllegalStateException error) {
+            require(error == failure, "renderer failure is preserved");
+        }
+        require(SecondaryWorldCamera.effectiveRenderDistance(12) == 12, "failed secondary view restores main settings");
+        Matrix4f mainProjection = CameraMath.projection(90, 3840, 2160, 512, false);
+        Matrix4f cameraProjection = CameraMath.projection(60, 640, 360, 48, false);
+        Matrix4f retainedProjection = new Matrix4f(mainProjection);
+        require(SecondaryWorldCamera.projectionMatrix(mainProjection) == mainProjection, "main terrain retains its projection");
+        SecondaryWorldCamera.withProjection(cameraProjection, () -> {
+            require(SecondaryWorldCamera.projectionMatrix(mainProjection) == cameraProjection, "Sodium terrain and entities use the same camera projection");
+            for (Vector3f point : new Vector3f[] {new Vector3f(0, -1.62f, -6), new Vector3f(0, .18f, -6), new Vector3f(1, 0, -40)}) {
+                Vector4f terrain = SecondaryWorldCamera.projectionMatrix(mainProjection).transform(new Vector4f(point, 1));
+                Vector4f entity = cameraProjection.transform(new Vector4f(point, 1));
+                require(terrain.equals(entity), "terrain and player share both screen position and depth");
+            }
+            SecondaryWorldCamera.withProjection(retainedProjection, () ->
+                require(SecondaryWorldCamera.projectionMatrix(mainProjection) == retainedProjection, "nested projection scope"));
+            require(SecondaryWorldCamera.projectionMatrix(mainProjection) == cameraProjection, "nested projection restores camera");
+            var workerProjection = new java.util.concurrent.atomic.AtomicReference<org.joml.Matrix4fc>();
+            Thread worker = Thread.startVirtualThread(() -> workerProjection.set(SecondaryWorldCamera.projectionMatrix(mainProjection)));
+            try { worker.join(); } catch (InterruptedException error) { throw new AssertionError(error); }
+            require(workerProjection.get() == mainProjection, "camera projection is local to its render thread");
+        });
+        try {
+            SecondaryWorldCamera.withProjection(cameraProjection, () -> { throw failure; });
+            throw new AssertionError("Projection failure was swallowed");
+        } catch (IllegalStateException error) {
+            require(error == failure, "projection failure is preserved");
+        }
+        require(SecondaryWorldCamera.projectionMatrix(mainProjection) == mainProjection && mainProjection.equals(retainedProjection),
+            "camera restores the original unmodified projection after drawing or failure");
         // Vanilla's RGB sky and alpha-zero fog clear must not reveal a different main-camera silhouette.
         for (int source : new int[] {0x0078A7FF, 0x00101018, 0x774488AA, 0xFF123456}) {
             int frame = CameraMath.opaqueColor(source);
@@ -58,7 +136,13 @@ public final class CameraRenderCheck {
         reject(() -> CameraMath.projection(70, 0, 360, 64, false));
         reject(() -> CameraMath.projection(70, 640, 360, Float.NaN, false));
         reject(() -> CameraMath.targetSize(100, 100, Double.POSITIVE_INFINITY));
-        System.out.println("Camera rendering checks passed: independent rotations, Minecraft yaw/pitch, both depth conventions, aspect, target bounds, and invalid views.");
+        System.out.println("Camera rendering checks passed: scoped render distance and terrain projection, independent rotations, Minecraft yaw/pitch, both depth conventions, aspect, target bounds, and invalid views.");
+    }
+
+    private static void invokeOverlay(Class<?> event, Object invoker) {
+        var method = event.getDeclaredMethods()[0];
+        try { method.invoke(invoker, new Object[method.getParameterCount()]); }
+        catch (ReflectiveOperationException error) { throw new AssertionError(error); }
     }
 
     private static void reject(Runnable work) {

@@ -18,6 +18,8 @@
     "SecondaryCameraChunkOutputMixin",
     "SecondaryCameraGameRendererMixin",
     "SecondaryCameraLevelRendererMixin",
+    "SecondaryCameraOptionsMixin",
+    "SecondaryCameraEventMixin",
     "RelayChatPrivacyMixin",
     "ChatPatchesIrcMixin",
     "IrcChatAccessor",
