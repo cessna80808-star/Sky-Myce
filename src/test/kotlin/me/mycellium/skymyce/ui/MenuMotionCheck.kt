@@ -191,8 +191,24 @@ fun main() {
     checkMotionScroll()
     checkRevealCardPointer()
     checkMotionClipping()
+    checkRegionalMotion()
     checkLivingMotion()
     println("Menu motion checks passed: 30/60/120/240 FPS, reversal/stagger/cancellation, Reduced/Off, clock/input safety, isolated snapshots/constant-opacity blends, transformed input, retained rendering, scroll retarget/drag/clamp and bounded toast lifetimes")
+}
+
+/** Constructor-free only because the atlas manager is unavailable in this headless fixture. */
+private fun headlessMenuGraphics(canvas: MenuCanvas, width: Int, height: Int): MenuGraphics {
+    val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null) as sun.misc.Unsafe
+    val graphics = unsafe.allocateInstance(MenuGraphics::class.java) as MenuGraphics
+    fun field(owner: Class<*>, name: String, value: Any) = owner.getDeclaredField(name).apply { isAccessible = true }.set(graphics, value)
+    val extractor = net.minecraft.client.gui.GuiGraphicsExtractor::class.java
+    val scissors = extractor.declaredClasses.single { it.simpleName == "ScissorStack" }
+        .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+    field(extractor, "pose", org.joml.Matrix3x2fStack(16)); field(extractor, "scissorStack", scissors)
+    field(extractor, "guiRenderState", net.minecraft.client.renderer.state.gui.GuiRenderState())
+    field(MenuGraphics::class.java, "canvas", canvas)
+    field(MenuGraphics::class.java, "menuWidth", width); field(MenuGraphics::class.java, "menuHeight", height)
+    return graphics
 }
 
 /** Run the actual owo child scissors: cards and buttons move, while scroll viewports remain bounded. */
@@ -223,24 +239,9 @@ private fun checkMotionClipping() {
     val root = UIContainers.verticalFlow(Sizing.fixed(150), Sizing.fixed(100)).child(scroll)
     root.inflate(Size.of(150, 100)); root.mount(null, 20, 20)
     val canvas = MenuCanvas()
-    // The production constructor loads Minecraft atlases. This fixture needs only its real matrix,
-    // scissor stack and canvas; owo/Minecraft clipping and component drawing run unchanged below.
-    val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null) as sun.misc.Unsafe
-    fun graphics(): MenuGraphics {
-        val graphics = unsafe.allocateInstance(MenuGraphics::class.java) as MenuGraphics
-        fun field(owner: Class<*>, name: String, value: Any) = owner.getDeclaredField(name).apply { isAccessible = true }.set(graphics, value)
-        val extractor = net.minecraft.client.gui.GuiGraphicsExtractor::class.java
-        val scissors = extractor.declaredClasses.single { it.simpleName == "ScissorStack" }
-            .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-        field(extractor, "pose", org.joml.Matrix3x2fStack(16)); field(extractor, "scissorStack", scissors)
-        field(extractor, "guiRenderState", net.minecraft.client.renderer.state.gui.GuiRenderState())
-        field(MenuGraphics::class.java, "canvas", canvas)
-        field(MenuGraphics::class.java, "menuWidth", 210); field(MenuGraphics::class.java, "menuHeight", 150)
-        return graphics
-    }
     fun paint(): BufferedImage {
         canvas.begin()
-        root.draw(graphics(), -1, -1, 0f, 0f)
+        root.draw(headlessMenuGraphics(canvas, 210, 150), -1, -1, 0f, 0f)
         return canvas.finish(210, 150, 1.0)
     }
     // These samples are outside the rows' original bounds but inside the stationary scroll viewport.
@@ -323,6 +324,141 @@ private fun checkMotionClipping() {
             "Indented search actions extend past their card at width $width"
         }
     }
+}
+
+/** Draw real retained regions through both painters; only results may change during a tab swap. */
+private fun checkRegionalMotion() {
+    me.mycellium.skymyce.hud.bootstrapHeadlessOwo()
+    val theme = me.mycellium.skymyce.config.misc.ThemeConfig
+    val savedMode = theme.animationMode
+    val painter = SkijaMenuPainter
+    val width = 230; val height = 160
+    fun samePixels(actual: IntArray, expected: IntArray, message: String) {
+        check(actual.size == expected.size && actual.indices.all { index ->
+            (0..24 step 8).all { shift -> abs((actual[index] ushr shift and 255) - (expected[index] ushr shift and 255)) <= 1 }
+        }) { message }
+    }
+    try {
+        for (native in listOf(false, true)) {
+            theme.animationMode = GuiMotion.MEDIUM
+            val clock = MotionClock()
+            val canvas = MenuCanvas()
+            fun panel(w: Int, h: Int, color: Int, overflow: Int = 0) =
+                UIContainers.verticalFlow(Sizing.fixed(w), Sizing.fixed(h)).surface(Surface { graphics, component ->
+                    graphics.fill(component.x() - overflow, component.y() - overflow,
+                        component.x() + component.width() + overflow, component.y() + component.height() + overflow, color)
+                })
+            val header = panel(200, 22, 0xFF00FFFF.toInt())
+            val filters = panel(200, 20, 0xFF00FF00.toInt())
+            var result = panel(200, 70, 0xFFFF0000.toInt(), 12)
+            val swap = MenuSwap("fixture/results", Sizing.fixed(200), Sizing.fixed(70)) { clock.nanos }
+            swap.child(result)
+            val root = UIContainers.verticalFlow(Sizing.fixed(200), Sizing.fixed(124)).gap(6).children(listOf(header, filters, swap))
+            fun mount() {
+                root.inflate(Size.of(200, 124)); root.mount(null, 10, 10); allowMenuMotionOverflow(root)
+            }
+            mount()
+            fun finish(): IntArray {
+                if (!native) return canvas.finish(width, height, 1.0).getRGB(0, 0, width, height, null, 0, width)
+                val frame = canvas.finishFrame(width, height, 1.0)
+                return io.github.humbleui.skija.Surface.makeRasterN32Premul(width, height).use { surface ->
+                    painter.draw(surface.canvas, frame)
+                    val pixels = surface.makeImageSnapshot().use { image -> io.github.humbleui.skija.Bitmap.makeFromImage(image).use { bitmap ->
+                        IntArray(width * height) { bitmap.getColor(it % width, it / width) }
+                    } }
+                    painter.releaseRetired()
+                    pixels
+                }
+            }
+            fun paint(): IntArray {
+                // Match MenuScreen: an active regional fade keeps the shared AWT blend buffers.
+                if (!menuSwapTransitionActive(root)) canvas.releaseTransition()
+                canvas.begin(); canvas.group = "content"
+                val graphics = headlessMenuGraphics(canvas, width, height)
+                graphics.layer(alpha = .5) { root.draw(graphics, -1, -1, 0f, 0f) }
+                return finish()
+            }
+            fun replace(color: Int) {
+                val old = result
+                swap.change(); swap.clearChildren(); result = panel(200, 70, color, 12); swap.child(result)
+                mount()
+                check(!menuComponentAttached(root, old) && menuComponentAttached(root, result)) { "Regional fade kept outgoing input attached" }
+                check(root.children()[0] === header && root.children()[1] === filters) { "Regional fade replaced its shared header or filters" }
+                check(root.childAt(result.x() + 5, result.y() + 5) === result) { "Current regional controls lost their logical hit bounds" }
+            }
+            fun outsideUnchanged(pixels: IntArray, baseline: IntArray) {
+                check(pixels.indices.all { index ->
+                    val x = index % width; val y = index / width
+                    x in swap.x() until swap.x() + swap.width() && y in swap.y() until swap.y() + swap.height() || pixels[index] == baseline[index]
+                }) { "Regional transition changed shared header/filter pixels or escaped its fixed bounds ($native)" }
+                check(abs((pixels[(swap.y() + 20) * width + swap.x() + 20] ushr 24) - 128) <= 1) {
+                    "Regional transition compounded the page's translucent opacity ($native)"
+                }
+            }
+            try {
+                val baseline = paint()
+                check(!menuSwapTransitionActive(root))
+                replace(0xFF0000FF.toInt())
+                check(menuSwapTransitionActive(root))
+                samePixels(paint(), baseline, "Regional fade snapped on its first frame ($native)")
+                clock.millis(50)
+                var displayed = paint()
+                outsideUnchanged(displayed, baseline)
+                val center = displayed[(swap.y() + 20) * width + swap.x() + 20]
+                check((center ushr 16 and 255) in 1..254 && (center and 255) in 1..254) { "Regional results did not crossfade ($native)" }
+                if (!native) check(canvas.cacheSizes().getValue("transitionBytes") == 200L * 70 * 12) { "Regional raster blend allocated full-page buffers" }
+                repeat(20) { index ->
+                    replace(if (index % 2 == 0) 0xFFFF0000.toInt() else 0xFF0000FF.toInt())
+                    samePixels(paint(), displayed, "Interrupted regional fade jumped to an old tab ($native/$index)")
+                    clock.millis(70L + index * 20)
+                    displayed = paint(); outsideUnchanged(displayed, baseline)
+                    if (native) check(painter.cacheSizes().let { it.getValue("snapshots.live") <= 1 && it.getValue("snapshots.pending") == 0L }) {
+                        "Interrupted regional fade retained older native snapshots"
+                    }
+                }
+                // Navigation captures the region's last mixture before the old live controls disappear.
+                val page = checkNotNull(canvas.snapshot("content"))
+                swap.releaseMotion(); root.removeChild(swap)
+                check(!menuSwapTransitionActive(root) && !menuComponentAttached(root, result))
+                canvas.begin(); canvas.group = "content"; canvas.replay(page)
+                samePixels(finish(), displayed, "Page navigation lost an active regional capture after teardown ($native)")
+                page.close(); painter.releaseRetired()
+                root.child(swap); mount(); paint()
+                replace(0xFFFF0000.toInt()); paint()
+                clock.millis(1000); paint()
+                check(!menuSwapTransitionActive(root)) { "Settled region retained its outgoing snapshot" }
+                val settled = paint()
+                if (!native) check(canvas.cacheSizes().getValue("transitionBytes") == 0L) { "Settled region retained raster blend buffers" }
+                theme.animationMode = GuiMotion.OFF; replace(0xFF0000FF.toInt())
+                check(!menuSwapTransitionActive(root)) { "Off mode captured an outgoing region" }
+                val immediate = paint()
+                check(!immediate.contentEquals(settled)) { "Off mode failed to show the new results immediately" }
+                // Page-specific search/filter rows consume space inside the fixed swap, not above it.
+                theme.animationMode = GuiMotion.MEDIUM
+                val oldResult = result
+                swap.change(); swap.clearChildren()
+                val conditionalSearch = panel(200, 16, 0xFFFFFF00.toInt())
+                result = panel(200, 48, 0xFFFF00FF.toInt())
+                swap.children(listOf(conditionalSearch, result)); mount()
+                check(swap.height() == 70 && result.height() == 48 && !menuComponentAttached(root, oldResult))
+                samePixels(paint(), immediate, "Conditional search/filter rows cancelled the fixed regional fade ($native)")
+                check(menuSwapTransitionActive(root)) { "Changing children height cancelled a fixed regional fade ($native)" }
+                clock.millis(1050)
+                outsideUnchanged(paint(), baseline)
+                theme.animationMode = GuiMotion.MEDIUM; replace(0xFFFF0000.toInt()); paint()
+                swap.verticalSizing(Sizing.fixed(60)); mount(); paint()
+                check(!menuSwapTransitionActive(root)) { "Resized region replayed a stale-sized capture" }
+                replace(0xFF0000FF.toInt()); paint(); swap.dismount(io.wispforest.owo.ui.core.UIComponent.DismountReason.REMOVED)
+                check(!menuSwapTransitionActive(swap)) { "Removed region retained its animation" }
+            } finally {
+                swap.releaseMotion(); canvas.close(); painter.releaseRetired()
+            }
+            if (native) check(painter.cacheSizes().getValue("snapshots.live") == 0L) { "Regional lifecycle leaked native snapshots" }
+        }
+    } finally {
+        theme.animationMode = savedMode; painter.close()
+    }
+    println("Regional motion checks passed: retained headers/filters/input, bounded AWT/native fades, interruption, page capture, resize/Off/removal and resource cleanup")
 }
 
 private fun checkRevealCardPointer() {

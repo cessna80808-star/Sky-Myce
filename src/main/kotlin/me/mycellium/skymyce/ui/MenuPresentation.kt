@@ -26,6 +26,72 @@ internal fun allowMenuMotionOverflow(component: UIComponent) {
     }
 }
 
+/** A retained results region fades independently of its header, tabs and filter controls. */
+internal class MenuSwap(key: String, horizontal: Sizing, vertical: Sizing,
+                        clock: () -> Long = System::nanoTime) : FlowLayout(horizontal, vertical, Algorithm.VERTICAL) {
+    private val groupKey = "swap:$key:${System.identityHashCode(this)}"
+    private val progress = MotionValue(1.0, clock)
+    private var outgoing: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
+    private var lastCanvas: MenuCanvas? = null
+    private var lastGroup: String? = null
+    private var paintedWidth = 0
+    private var paintedHeight = 0
+    internal val transitioning get() = outgoing != null
+
+    /** Call before replacing results. An interrupted fade captures its last displayed mixture. */
+    fun change() {
+        outgoing = if (ThemeConfig.animationMode == GuiMotion.OFF) null else lastGroup?.let { lastCanvas?.snapshot(it) }
+        progress.snap(if (outgoing == null) 1.0 else 0.0)
+        if (outgoing != null) progress.animateTo(1.0, 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+    }
+
+    internal fun releaseMotion() {
+        outgoing = null; progress.snap(1.0); lastCanvas = null; lastGroup = null
+    }
+
+    override fun dismount(reason: UIComponent.DismountReason) {
+        if (reason == UIComponent.DismountReason.REMOVED) releaseMotion()
+        super.dismount(reason)
+    }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        if (outgoing != null && (width() != paintedWidth || height() != paintedHeight)) releaseMotion()
+        progress.animateTo(1.0, 180, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val amount = progress.sample().coerceIn(0.0, 1.0)
+        if (amount >= 1.0) outgoing = null
+        val previousGroup = g.canvas.group
+        val tag = "${previousGroup ?: "ui"}/$groupKey"
+        g.canvas.group = tag
+        // This boundary stays stationary even when menu layout rows allow hover-motion overflow.
+        g.enableScissor(x(), y(), x() + width(), y() + height())
+        try {
+            val boundary = g.canvasClip
+            val snapshot = outgoing
+            if (snapshot == null || boundary == null) super.draw(graphics, mouseX, mouseY, partialTicks, delta)
+            else g.canvas.transition(snapshot, amount, boundary) {
+                super.draw(graphics, mouseX, mouseY, partialTicks, delta)
+            }
+            lastCanvas = g.canvas; lastGroup = tag
+            paintedWidth = width(); paintedHeight = height()
+        } finally {
+            g.disableScissor(); g.canvas.group = previousGroup
+        }
+    }
+}
+
+/** Keep the canvas's reusable raster blend buffers until the final regional fade has settled. */
+internal fun menuSwapTransitionActive(component: UIComponent): Boolean {
+    if (component is MenuSwap && component.transitioning) return true
+    if (component is ParentUIComponent) {
+        val children = component.children()
+        var index = 0
+        while (index < children.size) if (menuSwapTransitionActive(children[index++])) return true
+    }
+    return false
+}
+
 /** First viewport reveal and elevation share one pose, without changing retained layout. */
 internal class MenuRevealCard(private val key: String, horizontal: Sizing, vertical: Sizing,
                               algorithm: FlowLayout.Algorithm = FlowLayout.Algorithm.VERTICAL) : FlowLayout(horizontal, vertical, algorithm) {

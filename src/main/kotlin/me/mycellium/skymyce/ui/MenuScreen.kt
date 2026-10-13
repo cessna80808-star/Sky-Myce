@@ -97,7 +97,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         contentChanged(direction)
         closeMenuDropdown()
         constructing = true
-        try { body.clearChildren(); buildContent(body); uiAdapter.inflateAndMount() }
+        try { releaseContentMotion(body); body.clearChildren(); buildContent(body); uiAdapter.inflateAndMount() }
         finally { constructing = false }
     }
     protected fun showMenuToast(message: String, kind: MenuToastKind = MenuToastKind.INFO) = toasts.show(message, kind)
@@ -292,7 +292,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             menuIntroduction.complete(); introductionClaimed = false
         }
         if (pageProgress >= 1.0) outgoing = null
-        if (outgoing == null) canvas.releaseTransition()
+        if (outgoing == null && !menuSwapTransitionActive(uiAdapter.rootComponent)) canvas.releaseTransition()
         paintedContent = contentPose(pageProgress)
         val point = pointer(mouseX.toDouble(), mouseY.toDouble())
         val mx = point.first.toInt(); val my = point.second.toInt()
@@ -415,9 +415,10 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     // The adapter tooltip is already painted into the same canvas above the content.
     final override fun drawComponentTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {}
-    private fun releaseCollapsibleMotion(component: UIComponent) {
+    private fun releaseContentMotion(component: UIComponent) {
         if (component is MenuCollapsible) component.releaseMotion()
-        if (component is ParentUIComponent) component.children().forEach(::releaseCollapsibleMotion)
+        if (component is MenuSwap) component.releaseMotion()
+        if (component is ParentUIComponent) component.children().forEach(::releaseContentMotion)
     }
     /** Retain editable controls and scroll state while discarding paint tied to the failed GPU. */
     private fun recoverRenderer() {
@@ -425,7 +426,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         val root = uiAdapter.rootComponent
         val focused = root.focusHandler()?.focused()
         outgoing = null; modalUnderlay = null; closingContent = null; outgoingSize = null
-        tooltip.clear(); releaseCollapsibleMotion(root); canvas.close()
+        tooltip.clear(); releaseContentMotion(root); canvas.close()
         opening.snap(if (closing) 0.0 else 1.0)
         sidebarOpening.snap(if (closing) 0.0 else 1.0)
         pageOpening.snap(if (closing) 0.0 else 1.0)
@@ -438,7 +439,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     override fun removed() {
         dropdown?.parent()?.removeChild(dropdown); dropdown = null; closingDropdown = null; dropdownAnchor = null
-        uiAdapter?.rootComponent?.let(::releaseCollapsibleMotion)
+        uiAdapter?.rootComponent?.let(::releaseContentMotion)
         outgoing = null; modalUnderlay = null; navigationMotion = emptyMap()
         closingContent = null; contentExit.cancel()
         opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); navigationProgress.cancel(); navigationSelection.cancel(); tooltip.clear(); toasts.clear()

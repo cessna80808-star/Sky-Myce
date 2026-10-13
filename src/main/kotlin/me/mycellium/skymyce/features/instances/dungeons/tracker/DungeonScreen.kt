@@ -40,9 +40,22 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private var seenContext: AcquisitionContext? = null
     private var seenTheme = HudTheme.revision
     private var preferencesEdited = false
-    private lateinit var results: ScrollContainer<FlowLayout>
+    private lateinit var resultSwap: MenuSwap
+    private lateinit var results: MenuScroll<FlowLayout>
     private lateinit var status: LabelComponent
     private lateinit var pageLabel: LabelComponent
+    private lateinit var tabs: FlowLayout
+    private var tabRows = emptyList<FlowLayout>()
+    private lateinit var floorButton: ButtonComponent
+    private lateinit var modeButton: ButtonComponent
+    private lateinit var historyButton: ButtonComponent
+    private lateinit var moreButton: ButtonComponent
+    private lateinit var filterActions: FlowLayout
+    private lateinit var narrowActions: FlowLayout
+    private lateinit var oldestButton: ButtonComponent
+    private lateinit var searchHost: FlowLayout
+    private lateinit var search: MenuTextBox
+    private lateinit var filterHost: FlowLayout
     private val panelWidth get() = menuWidth
     private val bodyWidth get() = panelWidth - 24
     private val history get() = filter.page == TrackerPage.TIMELINE || filter.page == TrackerPage.MUSEUM
@@ -58,53 +71,79 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 child(button("Close", 42) { onClose() })
             })
             val perRow = if (panelWidth < 420) 2 else 4
-            if (!more || height >= 340) TrackerPage.entries.chunked(perRow).forEach { tabs -> child(row().apply { tabs.forEach { tab ->
+            tabRows = TrackerPage.entries.chunked(perRow).map { pages -> row().apply { pages.forEach { tab ->
                 child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) {
                     if (filter.page == tab) return@button
-                    val direction = if (tab.ordinal < filter.page.ordinal) -1 else 1
-                    change(filter.copy(page = tab)); rebuildMenu(direction)
+                    change(filter.copy(page = tab)); rebuild(resetScroll = true)
                 }
                     .apply { navigation = true; selected = { filter.page == tab } }
                     .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
-            } }) }
+            } } }
+            tabs = column(); child(tabs)
             child(row().apply {
-                child(button(filter.floor ?: "All tracked floors", minOf(113, bodyWidth - 84)) { b -> menu(b) { d ->
+                floorButton = button(filter.floor ?: "All tracked floors", minOf(113, bodyWidth - 84)) { b -> menu(b) { d ->
                     d.button(Component.literal("All tracked floors")) { change(filter.copy(floor = null)); rebuild() }
                     DungeonFloor.entries.forEach { floor -> d.button(Component.literal(floor.name)) { change(filter.copy(floor = floor.name, mode = null)); rebuild() } }
-                } }.wrappedTooltip(Component.literal("Select a viewing floor. This never changes an ongoing run's recording floor.")))
-                child(button(when (filter.mode) { "F" -> "Normal"; "M" -> "Master"; else -> "Both modes" }, 80) {
+                } }.wrappedTooltip(Component.literal("Select a viewing floor. This never changes an ongoing run's recording floor.")); child(floorButton)
+                modeButton = button(when (filter.mode) { "F" -> "Normal"; "M" -> "Master"; else -> "Both modes" }, 80) {
                     change(filter.copy(mode = when (filter.mode) { null -> "F"; "F" -> "M"; else -> null }, floor = null)); rebuild()
-                })
+                }; child(modeButton)
             })
             child(row().apply {
-                child(button(if (history) { if (filter.legacyTotals) "Hide historical reports" else "Show all saved reports" }
+                historyButton = button(if (history) { if (filter.legacyTotals) "Hide historical reports" else "Show all saved reports" }
                     else if (filter.legacyTotals && !filter.needsRecords) "Show new tracking" else "Show historical totals", minOf(180, bodyWidth)) {
                     change(filter.copy(legacyTotals = !filter.legacyTotals, from = "", until = "", session = null,
                         scope = if (history && !filter.legacyTotals) TrackerScope.ALL_LOCAL_PROFILES else filter.scope)); rebuild()
-                }.wrappedTooltip(Component.literal("Your previous runs, loot and XP remain saved. Historical totals are separate from newly confirmed measurements; inherited profit is always included in lifetime profit.")))
+                }.wrappedTooltip(Component.literal("Your previous runs, loot and XP remain saved. Historical totals are separate from newly confirmed measurements; inherited profit is always included in lifetime profit.")); child(historyButton)
             })
-            child(row().apply {
-                child(button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() })
+            filterActions = row().apply {
+                moreButton = button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() }; child(moreButton)
                 child(button("Clear all", 65) { change(TrackerFilter(page = filter.page)); rebuild() })
-                if (filter.page == TrackerPage.TIMELINE && bodyWidth >= 220) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
-            })
-            if (filter.page == TrackerPage.TIMELINE && bodyWidth < 220) child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() })
-            if (filter.page != TrackerPage.OVERVIEW && (!more || height >= 340)) child(MenuTextBox(Sizing.fill()).apply {
+            }; child(filterActions)
+            oldestButton = button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() }
+            search = MenuTextBox(Sizing.fill()).apply {
                 setMaxLength(100); text(this@DungeonScreen.filter.query); setHint(Component.literal("Search item name or ID…"))
                 onChanged().subscribe { change(this@DungeonScreen.filter.copy(query = it)) }
-            })
-            if (more && height >= 340) child(menuScroll(Sizing.fill(), Sizing.fixed(if (height < 400) 58 else 100), filters()).apply { scrollStep(20); scrollbarThiccness(2) })
-            status = label("Loading saved records…", MenuTheme.MUTED); child(status)
-            results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
-                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
-            }; child(results)
+            }
+            resultSwap = MenuSwap("dungeon-tracker-results", Sizing.fill(), Sizing.expand()).apply {
+                gap(5)
+                narrowActions = column(); child(narrowActions)
+                searchHost = column(); child(searchHost)
+                filterHost = column(); child(filterHost)
+                status = label("Loading saved records…", MenuTheme.MUTED); child(status)
+                results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
+                    scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
+                }; child(results)
+            }; child(resultSwap)
             child(row().apply {
-                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView(-1) })
+                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView() })
                 pageLabel = label("").apply { horizontalSizing(Sizing.expand()) }; child(pageLabel)
                 child(button("›", 28) { page++; renderView() })
             })
         })
-        renderView()
+        refreshControls()
+        renderView(animate = false)
+    }
+
+    private fun refreshControls() {
+        floorButton.message = Component.literal(filter.floor ?: "All tracked floors")
+        modeButton.message = Component.literal(when (filter.mode) { "F" -> "Normal"; "M" -> "Master"; else -> "Both modes" })
+        historyButton.message = Component.literal(if (history) { if (filter.legacyTotals) "Hide historical reports" else "Show all saved reports" }
+            else if (filter.legacyTotals && !filter.needsRecords) "Show new tracking" else "Show historical totals")
+        moreButton.message = Component.literal(if (more) "Filters −" else "Filters +")
+        oldestButton.message = Component.literal(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓")
+        if (more && height < 340) tabs.clearChildren()
+        else if (tabs.children().isEmpty()) tabRows.forEach { tabs.child(it) }
+        val sortHost = if (bodyWidth >= 220) filterActions else narrowActions
+        if (filter.page == TrackerPage.TIMELINE) {
+            if (oldestButton.parent() !== sortHost) sortHost.child(oldestButton)
+        } else oldestButton.parent()?.removeChild(oldestButton)
+        if (search.value != filter.query) search.text(filter.query)
+        if (filter.page != TrackerPage.OVERVIEW && (!more || height >= 340)) {
+            if (search.parent() !== searchHost) searchHost.child(search)
+        } else searchHost.clearChildren()
+        filterHost.clearChildren()
+        if (more && height >= 340) filterHost.child(menuScroll(Sizing.fill(), Sizing.fixed(if (height < 400) 58 else 100), filters()).apply { scrollStep(20); scrollbarThiccness(2) })
     }
 
     private fun filters() = column().apply {
@@ -148,7 +187,10 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             } else status.text(Component.literal("Use a valid YYYY-MM-DD date").withColor(MenuTheme.YELLOW))
         }
     }
-    private fun change(next: TrackerFilter) { preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis(); AcquisitionRepository.remember(filter) }
+    private fun change(next: TrackerFilter) {
+        if (next == filter) return
+        preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis(); AcquisitionRepository.remember(filter)
+    }
     override fun tick() {
         super.tick()
         if (menuClosing) return
@@ -160,7 +202,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         if (seenArchive != AcquisitionRepository.revision || seenLegacy != DungeonTracker.revision || seenContext != context) {
             seenArchive = AcquisitionRepository.revision; seenLegacy = DungeonTracker.revision; seenContext = context; generation++
         }
-        if (seenTheme != HudTheme.revision) { seenTheme = HudTheme.revision; rebuild() }
+        if (seenTheme != HudTheme.revision) { seenTheme = HudTheme.revision; rebuildMenu() }
         if (!busy && requested != generation && System.currentTimeMillis() - changedAt >= 120) {
             val token = generation; requested = token; busy = true
             val archive = AcquisitionRepository.state; val legacy = legacyTrackerView(); val query = filter
@@ -173,8 +215,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             }
         }
     }
-    private fun renderView(direction: Int = 1, animate: Boolean = true) {
-        if (animate) contentChanged(direction)
+    private fun renderView(animate: Boolean = true) {
+        if (animate) resultSwap.change()
         val filters = listOfNotNull(filter.floor, filter.mode?.let { if (it == "M") "Master" else "Normal" }, filter.chest,
             filter.from.takeIf(String::isNotEmpty)?.let { "From $it" }, filter.until.takeIf(String::isNotEmpty)?.let { "To $it" },
             filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
@@ -292,7 +334,11 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun duration(value: Long) = "${value / 3600000}h ${value / 60000 % 60}m ${value / 1000 % 60}s"
     private fun date(value: Long) = Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     private fun menu(button: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(button, options)
-    private fun rebuild() { rebuildMenu() }
+    private fun rebuild(resetScroll: Boolean = false) {
+        resultSwap.change()
+        if (resetScroll) results.scrollBy(-results.scrollTarget, true, false)
+        refreshControls(); renderView(animate = false)
+    }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
