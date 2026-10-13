@@ -201,12 +201,9 @@ public final class SecondaryWorldCamera {
             level = client.level;
             try {
             SecondaryEntityDispatcherAccessor assets = (SecondaryEntityDispatcherAccessor) client.getEntityRenderDispatcher();
-            EntityRenderDispatcher entities = new EntityRenderDispatcher(client, client.getTextureManager(),
-                assets.skyMyce$blockModels(), assets.skyMyce$itemModels(), assets.skyMyce$maps(), client.getAtlasManager(),
-                client.font, client.options, assets.skyMyce$models(), assets.skyMyce$equipment(), assets.skyMyce$skins());
-            BlockEntityRenderDispatcher blocks = new BlockEntityRenderDispatcher(client.font, assets.skyMyce$models(),
-                assets.skyMyce$blockModels(), assets.skyMyce$itemModels(), entities,
-                ((SecondaryBlockEntityDispatcherAccessor) client.getBlockEntityRenderDispatcher()).skyMyce$sprites(), assets.skyMyce$skins());
+            EntityRenderDispatcher entities = new SecondaryEntityRenderDispatcher(client, assets);
+            BlockEntityRenderDispatcher blocks = new SecondaryBlockEntityRenderDispatcher(client, assets, entities,
+                ((SecondaryBlockEntityDispatcherAccessor) client.getBlockEntityRenderDispatcher()).skyMyce$sprites());
             entities.onResourceManagerReload(client.getResourceManager());
             blocks.onResourceManagerReload(client.getResourceManager());
             features = new FeatureRenderDispatcher(submits, client.getModelManager(), buffers.bufferSource(), client.getAtlasManager(),
