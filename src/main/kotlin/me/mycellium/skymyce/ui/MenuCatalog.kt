@@ -11,7 +11,7 @@ enum class MenuCategory(val title: String, val description: String, val iconId: 
     ECONOMY("Economy", "Auctions, item values, loans and player wealth", 5),
     COSMETICS("Cosmetics", "Player names, visual scaling and cosmetic selection", 6),
     UTILS("Utils", "Daily progress, social tools and general helpers", 1),
-    SETTINGS("Settings", "Configure controls, graphics, HUD and appearance", 8),
+    SETTINGS("General Settings", "Configure controls, graphics, HUD and appearance", 8),
 }
 
 data class MenuFeature(

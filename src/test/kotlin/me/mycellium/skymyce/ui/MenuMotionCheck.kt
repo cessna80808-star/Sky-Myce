@@ -12,6 +12,10 @@ import io.wispforest.owo.ui.component.UIComponents
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.Size
 import io.wispforest.owo.ui.core.Sizing
+import io.wispforest.owo.ui.core.Insets
+import io.wispforest.owo.ui.core.Surface
+import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.core.OwoUIGraphics
 
 private class MotionClock {
     var nanos = 0L
@@ -186,8 +190,139 @@ fun main() {
     checkMotionToasts()
     checkMotionScroll()
     checkRevealCardPointer()
+    checkMotionClipping()
     checkLivingMotion()
     println("Menu motion checks passed: 30/60/120/240 FPS, reversal/stagger/cancellation, Reduced/Off, clock/input safety, isolated snapshots/constant-opacity blends, transformed input, retained rendering, scroll retarget/drag/clamp and bounded toast lifetimes")
+}
+
+/** Run the actual owo child scissors: cards and buttons move, while scroll viewports remain bounded. */
+private fun checkMotionClipping() {
+    me.mycellium.skymyce.hud.bootstrapHeadlessOwo()
+    fun moving(width: Int, height: Int, color: Int, lift: Double, scale: Double = 1.0) =
+        object : FlowLayout(Sizing.fixed(width), Sizing.fixed(height), Algorithm.VERTICAL) {
+            init { surface(Surface { graphics, component ->
+                graphics.fill(component.x(), component.y(), component.x() + component.width(), component.y() + component.height(), color)
+            }) }
+            override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+                (graphics as MenuGraphics).layer(y = -lift, scale = scale,
+                    pivotX = x() + width() / 2.0, pivotY = y() + height() / 2.0) {
+                    super.draw(graphics, mouseX, mouseY, partialTicks, delta)
+                }
+            }
+        }
+    val button = moving(40, 16, 0xFFFF0000.toInt(), 2.0)
+    val buttonRow = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).child(button)
+    val card = moving(110, 44, 0xFFFFFFFF.toInt(), 6.0, 1.009).apply {
+        padding(Insets.of(8)); child(buttonRow)
+    }
+    val row = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).child(card)
+    val list = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+        padding(Insets.of(18, 26, 18, 22)); child(row)
+    }
+    val scroll = menuScroll(Sizing.fixed(150), Sizing.fixed(100), list)
+    val root = UIContainers.verticalFlow(Sizing.fixed(150), Sizing.fixed(100)).child(scroll)
+    root.inflate(Size.of(150, 100)); root.mount(null, 20, 20)
+    val canvas = MenuCanvas()
+    // The production constructor loads Minecraft atlases. This fixture needs only its real matrix,
+    // scissor stack and canvas; owo/Minecraft clipping and component drawing run unchanged below.
+    val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null) as sun.misc.Unsafe
+    fun graphics(): MenuGraphics {
+        val graphics = unsafe.allocateInstance(MenuGraphics::class.java) as MenuGraphics
+        fun field(owner: Class<*>, name: String, value: Any) = owner.getDeclaredField(name).apply { isAccessible = true }.set(graphics, value)
+        val extractor = net.minecraft.client.gui.GuiGraphicsExtractor::class.java
+        val scissors = extractor.declaredClasses.single { it.simpleName == "ScissorStack" }
+            .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+        field(extractor, "pose", org.joml.Matrix3x2fStack(16)); field(extractor, "scissorStack", scissors)
+        field(extractor, "guiRenderState", net.minecraft.client.renderer.state.gui.GuiRenderState())
+        field(MenuGraphics::class.java, "canvas", canvas)
+        field(MenuGraphics::class.java, "menuWidth", 210); field(MenuGraphics::class.java, "menuHeight", 150)
+        return graphics
+    }
+    fun paint(): BufferedImage {
+        canvas.begin()
+        root.draw(graphics(), -1, -1, 0f, 0f)
+        return canvas.finish(210, 150, 1.0)
+    }
+    // These samples are outside the rows' original bounds but inside the stationary scroll viewport.
+    val cardX = card.x() + 3; val cardY = card.y() - 4
+    val buttonX = button.x() + 4; val buttonY = button.y() - 8
+    val clipped = paint()
+    check(clipped.getRGB(cardX, cardY) ushr 24 == 0) { "Fixture did not reproduce the card row's top clipping" }
+    check(clipped.getRGB(buttonX, buttonY) != 0xFFFF0000.toInt()) { "Fixture did not reproduce the button row's top clipping" }
+    allowMenuMotionOverflow(root)
+    val visible = paint()
+    check(visible.getRGB(cardX, cardY) == 0xFFFFFFFF.toInt()) { "Lifted card is still clipped to its original row" }
+    check(visible.getRGB(buttonX, buttonY) == 0xFFFF0000.toInt()) { "Lifted button is still clipped by a padded card/action row" }
+    check(!scroll.allowOverflow()) { "Motion overflow disabled the scroll viewport clip" }
+    // Crossing a viewport edge must remain clipped even after every layout row allows motion.
+    list.padding(Insets.none()); root.inflate(Size.of(150, 100)); root.mount(null, 20, 20)
+    val edge = paint()
+    check(edge.getRGB(card.x() + 3, scroll.y() - 1) ushr 24 == 0) { "Animated card escaped its scroll viewport" }
+    check(root.childAt(card.x() + 3, scroll.y() - 1) == null) { "Overflow paint expanded input outside the scroll viewport" }
+    // Later search/filter population creates fresh rows after build; the same prepaint pass handles them.
+    val replacement = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).child(moving(40, 16, 0xFF00FF00.toInt(), 2.0))
+    list.clearChildren(); list.child(replacement); allowMenuMotionOverflow(root)
+    check(replacement.allowOverflow() && !scroll.allowOverflow()) { "Dynamically populated controls reverted to row clipping" }
+    canvas.close()
+    for (width in listOf(191, 240, 320, 680, 960, 1280)) {
+        val available = menuDirectoryContentWidth(width)
+        val columns = menuFeatureColumns(available)
+        val cardWidth = (available - (columns - 1) * 8) / columns
+        check(cardWidth * columns + (columns - 1) * 8 <= available)
+        val scaleExpansion = cardWidth * GuiMotion.HEAVY.profile.hoverScale * 1.04 / 2
+        check(scaleExpansion + 12 < 18) { "Heavy card scale/shadow exhausts its scroll gutter at width $width" }
+        val header = UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(22))
+        val section = UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(12))
+        val directoryCard = MenuRevealCard("directory/alignment/$width", Sizing.fixed(cardWidth), Sizing.fixed(144))
+        val cards = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(8); child(directoryCard)
+            if (columns == 2) child(MenuRevealCard("directory/alignment/$width/right", Sizing.fixed(cardWidth), Sizing.fixed(144)))
+        }
+        val directoryList = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+            padding(Insets.of(18, 26, 18, 22)); gap(8); child(section); child(cards)
+        }
+        val indentedSetting = MenuRevealCard("directory/search/$width", Sizing.fill(), Sizing.content()).apply {
+            margins(Insets.left(14)); padding(Insets.of(10))
+        }
+        val settingActions = listOf(94, 54).map { it.coerceAtMost((available - 14 - 20).coerceAtLeast(1)) }
+        val actionComponents = settingActions.map { UIContainers.verticalFlow(Sizing.fixed(it), Sizing.fixed(22)) }
+        menuActionRows(settingActions, available - 14 - 20).forEach { indices ->
+            indentedSetting.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+                gap(6); indices.forEach { child(actionComponents[it]) }
+            })
+        }
+        directoryList.child(indentedSetting)
+        val viewport = menuDirectoryScroll(directoryList)
+        val directoryRoot = UIContainers.verticalFlow(Sizing.fixed(width), Sizing.fixed(180)).apply {
+            padding(Insets.of(14, 14, 18, 18)); gap(9); child(header); child(viewport)
+        }
+        directoryRoot.inflate(Size.of(width, 180)); directoryRoot.mount(null, 20, 20)
+        allowMenuMotionOverflow(directoryRoot)
+        check(header.x() == section.x() && header.x() == directoryCard.x()) { "Directory sections/cards are indented beyond their header at width $width" }
+        check(directoryList.width() - directoryList.padding().get().horizontal() == available) {
+            "Directory action/card widths disagree with the mounted padded viewport at width $width"
+        }
+        check(directoryCard.x() - scaleExpansion - 12 > viewport.x() &&
+            cards.x() + cards.width() + scaleExpansion + 12 < viewport.x() + viewport.width()) {
+            "Header alignment removed the Heavy card's horizontal motion/shadow gutters at width $width"
+        }
+        check(!viewport.allowOverflow()) { "Aligned directory lost its stationary scroll clip" }
+        check(viewport.x() == directoryRoot.x() && viewport.x() + viewport.width() == directoryRoot.x() + directoryRoot.width()) {
+            "Aligned directory viewport/scrollbar extends outside its body input bounds"
+        }
+        check(directoryRoot.childAt(viewport.x() + viewport.width() - 1, viewport.y() + 2) === viewport) {
+            "Aligned directory scrollbar edge cannot receive input"
+        }
+        check(directoryRoot.childAt(viewport.x() - 1, directoryCard.y() + 2) == null) {
+            "Aligned directory expanded input outside the scroll viewport"
+        }
+        check(indentedSetting.x() == directoryCard.x() + 14 && indentedSetting.width() == available - 14) {
+            "Matching search settings lost their nested indent or width at width $width"
+        }
+        check(actionComponents.all { it.x() + it.width() <= indentedSetting.x() + indentedSetting.width() - 10 }) {
+            "Indented search actions extend past their card at width $width"
+        }
+    }
 }
 
 private fun checkRevealCardPointer() {

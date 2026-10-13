@@ -181,6 +181,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     var selected: () -> Boolean = { false }
     var navigation = false
     var background = true
+    var trailingChevron = false
     var toggled: (() -> Boolean)? = null
     private val hoverMotion = MotionValue(0.0)
     private val selectionMotion = MotionValue(0.0)
@@ -225,7 +226,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         pressed = false
         pressMotion.animateTo(0.0, 155, MotionEasing.SETTLE, ThemeConfig.animationMode)
     }
-    /** Match retained sidebar rows by their stable label when a screen changes. */
+    /** Carry retained navigation feedback across the Home-to-sidebar morph. */
     internal fun inheritMotion(previous: MenuButton) {
         hoverMotion.snap(previous.hoverMotion.sample())
         selectionMotion.snap(previous.selectionMotion.sample())
@@ -236,6 +237,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
 
     override fun extractContents(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
+        if (isHovered && !menuHoverAllowed(this, mouseX, mouseY)) isHovered = false
         hoverMotion.animateTo(if (active && (isHovered || isFocused)) 1.0 else 0.0, 110, ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
         val selection = if (selected()) 1.0 else 0.0
         // Rebuilt navigation keeps its selected state; only subsequent selections animate.
@@ -306,7 +308,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             }
             if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
         }
-        val available = (width - 12).coerceAtLeast(1)
+        val contentWidth = width - if (trailingChevron) 12 else 0
+        val available = (contentWidth - 12).coerceAtLeast(1)
         val language = net.minecraft.locale.Language.getInstance()
         if (message != wrappedMessage || available != wrappedWidth || navigation != wrappedNavigation || language !== wrappedLanguage ||
             wrappedNativeMetrics != SkijaMenuFonts.active) {
@@ -325,14 +328,19 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             lineRuns = lines.map { menuTextRuns(it, color) }; runColor = color
         }
         val lineHeight = MenuCanvas.lineHeight()
-        graphics.enableScissor(x + 3, y + 1, x + width - 3, y + height - 1)
+        graphics.enableScissor(x + 3, y + 1, x + contentWidth - 3, y + height - 1)
         lines.forEachIndexed { index, _ ->
-            val left = if (navigation) x + 8 else x + (width - lineWidths[index]) / 2
+            val left = if (navigation) x + 8 else x + (contentWidth - lineWidths[index]) / 2
             val shift = if (navigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
             graphics.styledText(lineRuns[index], left + shift,
                 (y + (height - lines.size * lineHeight) / 2 + index * lineHeight).toDouble())
         }
         graphics.disableScissor()
+        if (trailingChevron) {
+            val tipX = x + width - 10; val tipY = y + height / 2 + 2
+            graphics.drawLine(tipX - 3, tipY - 3, tipX, tipY, 1.25, Color.ofArgb(color))
+            graphics.drawLine(tipX, tipY, tipX + 3, tipY - 3, 1.25, Color.ofArgb(color))
+        }
     }
     // Focus is painted with the button/card, so owo must not add a second rectangle after it.
     override fun drawFocusHighlight(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {}
@@ -435,7 +443,13 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         // DropdownComponent.removeChild(entries) dismisses the popup through its parent queue.
         // This constructor is unmounted; clear the inherited flow's initial child directly.
         clearChildren(); child(entryViewport)
-        entryViewport.surface(MenuTheme.panel())
+        entryViewport.surface(Surface { g, c ->
+            MenuTheme.shadow(g, c.x(), c.y(), c.width(), c.height())
+            MenuTheme.rounded(g, c.x(), c.y(), c.width(), c.height(),
+                MenuTheme.alpha(MenuTheme.blend(MenuTheme.PANEL, 0, 22)), 6)
+            if (MenuTheme.BORDERS) (g as MenuGraphics).roundedBorder(c.x(), c.y(), c.width(), c.height(),
+                if (MenuTheme.ROUNDED) 6.0 else 0.0, 1.0, MenuTheme.alpha(MenuTheme.BORDER))
+        })
         entryViewport.scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT)))
         allowOverflow(true)
     }
@@ -541,6 +555,13 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     }
     override fun isInBoundingBox(x: Double, y: Double): Boolean = !closing && (super.isInBoundingBox(x, y) ||
         children().filterIsInstance<MenuDropdown>().any { it.isInBoundingBox(x, y) })
+    fun hoverOwner(x: Int, y: Int): MenuDropdown? {
+        if (closing) return null
+        for (index in children().indices.reversed()) {
+            (children()[index] as? MenuDropdown)?.hoverOwner(x, y)?.let { return it }
+        }
+        return if (super.isInBoundingBox(x.toDouble(), y.toDouble())) this else null
+    }
     fun cycleFocus(forward: Boolean) {
         if (closing) return
         val rows = ArrayList<UIComponent>()
@@ -556,6 +577,18 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
 }
 
 internal fun menuDropdownFocus(parent: FocusHandler?, local: FocusHandler): FocusHandler = parent ?: local
+
+/** Owo updates every overlapping child; pointer emphasis belongs to the uppermost popup. */
+internal fun menuHoverAllowed(component: UIComponent, mouseX: Int, mouseY: Int): Boolean {
+    var root = component
+    while (true) root = root.parent() ?: break
+    if (root !is ParentUIComponent) return true
+    for (index in root.children().indices.reversed()) {
+        val owner = (root.children()[index] as? MenuDropdown)?.hoverOwner(mouseX, mouseY) ?: continue
+        return menuComponentAttached(owner, component)
+    }
+    return true
+}
 
 internal fun menuDropdownRowHeight() = MenuCanvas.lineHeight() + 8
 internal fun menuDropdownWidth(text: Component, indicator: Boolean) =
@@ -604,7 +637,8 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
             appeared = true
             appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis)
         } else appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis)
-        val hover = interactive && (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) || focusHandler()?.focused() === this)
+        val hover = interactive && (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY) ||
+            focusHandler()?.focused() === this)
         hoverMotion.animateTo(if (hover) 1.0 else 0.0, 100, MotionEasing.QUICK, ThemeConfig.animationMode)
         val emphasis = hoverMotion.sample().coerceIn(0.0, 1.0)
         if (ThemeConfig.animationMode == GuiMotion.OFF) pressMotion.snap(0.0)
@@ -706,6 +740,7 @@ class MenuSlider : SliderComponent(Sizing.fill()), GreedyInputUIComponent {
     }
     override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
         val graphics = g as MenuGraphics
+        if (isHovered && !menuHoverAllowed(this, mouseX, mouseY)) isHovered = false
         if (!active && dragging) releaseDrag()
         if (!thumbInitialized || dragging) { thumbMotion.snap(value()); thumbInitialized = true }
         else thumbMotion.animateTo(value(), 90, MotionEasing.QUICK, ThemeConfig.animationMode)

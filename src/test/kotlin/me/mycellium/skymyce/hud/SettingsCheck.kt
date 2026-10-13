@@ -1,6 +1,9 @@
 package me.mycellium.skymyce.hud
 
 import io.wispforest.owo.ui.core.Sizing
+import io.wispforest.owo.ui.core.Insets
+import io.wispforest.owo.ui.core.Size
+import io.wispforest.owo.ui.container.UIContainers
 import me.mycellium.skymyce.config.*
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.digest.DigestEntry
@@ -133,6 +136,11 @@ fun checkSettings() {
     val pin = focusableControl()
     focusRow.child(control); focusRow.child(pin)
     check(settingsFocusTarget(focusRow) === control) { "Search must focus the actual control before its Pin shortcut" }
+    check(settingsFocusPath(null, null) == null) { "Opening feature settings must not focus its first toggle" }
+    check(settingsFocusPath("Dungeons/Starred Clear Routing/routeThroughMobs", null) == "Dungeons/Starred Clear Routing/routeThroughMobs")
+    check(settingsFocusPath(null, "MisterKrister") == "friend/MisterKrister")
+    check(settingsFocusPath("devMode", "MisterKrister") == "devMode") { "A direct setting link lost priority over friend preferences" }
+    checkSettingsCardLayout()
     val devMode = rows.single { it.path == "devMode" }
     check(devMode.title == "Dev Mode" && settingsTab(devMode.path) == SettingsTab.GENERAL)
     val previousDevMode = Config.devMode
@@ -172,6 +180,60 @@ fun checkSettings() {
     checkMenuDamage()
     checkMenuSkullArt()
     println("Settings checks passed: sidebar bounds, searchable feature coverage, font resources, config paths, themes and safe share drafts")
+}
+
+private fun checkSettingsCardLayout() {
+    bootstrapHeadlessOwo()
+    for (width in listOf(191, 240, 320, 680, 960, 1280)) {
+        fun placeholder(height: Int) = UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(height))
+        val search = placeholder(22)
+        val heading = placeholder(20)
+        val section = placeholder(12)
+        val firstCard = me.mycellium.skymyce.ui.MenuRevealCard("settings/layout/$width/first", Sizing.fill(), Sizing.fixed(80)).apply {
+            padding(Insets.of(10))
+        }
+        val control = object : io.wispforest.owo.ui.container.FlowLayout(Sizing.fill(), Sizing.fixed(20),
+            io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
+            override fun canFocus(source: io.wispforest.owo.ui.core.UIComponent.FocusSource) = true
+        }
+        firstCard.child(control)
+        val lastCard = me.mycellium.skymyce.ui.MenuRevealCard("settings/layout/$width/last", Sizing.fill(), Sizing.fixed(80))
+        val body = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); child(section); child(firstCard); child(lastCard)
+        }
+        val scroll = settingsScroll(body)
+        val page = settingsPage(search, heading, scroll, placeholder(24)).apply {
+            sizing(Sizing.fixed(width), Sizing.fixed(220))
+        }
+        page.inflate(Size.of(width, 220)); page.mount(null, 20, 20)
+        me.mycellium.skymyce.ui.allowMenuMotionOverflow(page)
+        check(search.x() == heading.x() && heading.x() == section.x() && firstCard.x() == heading.x()) {
+            "Settings cards and section headings do not align with their header at width $width"
+        }
+        check(firstCard.width() == me.mycellium.skymyce.ui.menuDirectoryContentWidth(width) &&
+            control.width() == firstCard.width() - 20) {
+            "Settings controls exceed the card interior at width $width"
+        }
+        val expansion = firstCard.width() * me.mycellium.skymyce.ui.GuiMotion.HEAVY.profile.hoverScale * 1.04 / 2
+        check(firstCard.x() - expansion - 12 > scroll.x() &&
+            firstCard.x() + firstCard.width() + expansion + 12 < scroll.x() + scroll.width()) {
+            "Settings lost horizontal hover/shadow space at width $width"
+        }
+        check(section.y() - scroll.y() >= 18 && body.y() + body.height() - lastCard.y() - lastCard.height() >= 26) {
+            "Settings lost its first/last content motion gutters"
+        }
+        check(scroll.x() == page.x() && scroll.x() + scroll.width() == page.x() + page.width() && !scroll.allowOverflow()) {
+            "Settings viewport extends beyond the body or lost its stationary scroll clip"
+        }
+        check(page.childAt(scroll.x() - 1, scroll.y() + 2) == null &&
+            page.childAt(scroll.x() + scroll.width() - 1, scroll.y() + 2) === scroll) {
+            "Settings viewport clips/input no longer agree at width $width"
+        }
+        val focus = checkNotNull(page.focusHandler())
+        check(focus.focused() == null) { "Mounting a settings page auto-focused its first control" }
+        focus.focus(settingsFocusTarget(firstCard), io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
+        check(focus.focused() === control) { "A direct setting link cannot focus its actual control" }
+    }
 }
 
 private fun checkMenuTextureAndRuns() {
@@ -283,7 +345,7 @@ private fun checkMenuTextMetrics() {
 }
 
 /** Pinned owo static initialization asks Fabric only for its development flag; no game/mixins are started. */
-private fun bootstrapHeadlessOwo() {
+internal fun bootstrapHeadlessOwo() {
     val launcherType = Class.forName("net.fabricmc.loader.impl.launch.FabricLauncher")
     val base = Class.forName("net.fabricmc.loader.impl.launch.FabricLauncherBase")
     if (base.getMethod("getLauncher").invoke(null) != null) return
@@ -307,6 +369,10 @@ private fun checkNativeMenuDropdown(rowHeight: Int) {
             fun duringMouseDispatch(action: () -> Unit) = runAndDeferEvents { action() }
         }
         root.inflate(io.wispforest.owo.ui.core.Size.of(240, height)); root.mount(null, 11, 23)
+        val background = io.wispforest.owo.ui.component.UIComponents.box(Sizing.fill(), Sizing.fill()).apply {
+            positioning(io.wispforest.owo.ui.core.Positioning.absolute(0, 0))
+        }
+        root.child(background)
         // Exercise the actual unmounted constructor, not a replacement layout shell.
         val popup = me.mycellium.skymyce.ui.MenuDropdown(500) {}
         check(popup.parent() == null)
@@ -322,6 +388,26 @@ private fun checkNativeMenuDropdown(rowHeight: Int) {
             check(popup.x() + popup.width() <= root.x() + root.width() - 4 && popup.y() + popup.height() <= root.y() + root.height() - 4)
         }
         check(entries.children().size == count)
+        val hoverX = popup.x() + 6; val hoverY = popup.y() + 6
+        check(popup.hoverOwner(hoverX, hoverY) === popup)
+        check(!me.mycellium.skymyce.ui.menuHoverAllowed(background, hoverX, hoverY)) { "A covered background control still receives dropdown hover" }
+        check(me.mycellium.skymyce.ui.menuHoverAllowed(entries, hoverX, hoverY)) { "An open dropdown lost hover on its own choices" }
+        check(me.mycellium.skymyce.ui.menuHoverAllowed(background, root.x() - 1, root.y() - 1)) { "Popup capture leaked outside its bounds" }
+        val nested = me.mycellium.skymyce.ui.MenuDropdown(84) {}
+        val nestedEntries = (nested.children().single() as io.wispforest.owo.ui.container.ScrollContainer<*>).children().single()
+            as io.wispforest.owo.ui.container.FlowLayout
+        nestedEntries.child(io.wispforest.owo.ui.component.UIComponents.box(Sizing.fill(), Sizing.fixed(rowHeight)))
+        nested.fitViewport(io.wispforest.owo.ui.core.Size.of(root.width() - 8, root.height() - 8))
+        nested.inflate(io.wispforest.owo.ui.core.Size.of(root.width() - 8, root.height() - 8))
+        nested.positioning(io.wispforest.owo.ui.core.Positioning.absolute(6, 6)); popup.child(nested)
+        nested.mount(popup, popup.x() + 6, popup.y() + 6)
+        val nestedX = nested.x() + 6; val nestedY = nested.y() + 6
+        check(popup.hoverOwner(nestedX, nestedY) === nested)
+        check(!me.mycellium.skymyce.ui.menuHoverAllowed(entries, nestedX, nestedY)) { "A nested dropdown highlights the covered parent choices" }
+        check(me.mycellium.skymyce.ui.menuHoverAllowed(nestedEntries, nestedX, nestedY))
+        nested.beginClose()
+        check(popup.hoverOwner(nestedX, nestedY) === popup) { "A closing nested dropdown still captures hover" }
+        popup.removeChild(nested)
         if (count * rowHeight + 10 > height - 8) {
             check(entries.height() > viewport.height())
             check(viewport.onMouseScroll(10.0, 10.0, -5.0)) { "The actual dropdown could not scroll its retained choices" }
@@ -329,6 +415,7 @@ private fun checkNativeMenuDropdown(rowHeight: Int) {
         }
         root.focusHandler()?.focus(null, io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
         root.removeChild(popup)
+        check(me.mycellium.skymyce.ui.menuHoverAllowed(background, hoverX, hoverY)) { "Dismissed dropdown retained background hover capture" }
         val detachedFocus = popup.focusHandler()
         check(viewport.focusHandler() === detachedFocus && entries.focusHandler() === detachedFocus) {
             "A graphics dropdown detached before its closing flag lost owo's required paint focus context"

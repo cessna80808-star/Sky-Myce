@@ -1,15 +1,16 @@
 package me.mycellium.skymyce.ui
 
-/** A destination has one structural parent. Screen-opening order is deliberately irrelevant. */
+/** Tools opened from Home return there; other entries keep their category parent. */
 internal sealed interface MenuBackTarget {
     data object Game : MenuBackTarget
     data object Home : MenuBackTarget
     data class Category(val category: MenuCategory) : MenuBackTarget
 }
 
-internal fun menuBackTarget(category: MenuCategory?, home: Boolean = false, categoryRoot: Boolean = false): MenuBackTarget = when {
+internal fun menuBackTarget(category: MenuCategory?, home: Boolean = false, categoryRoot: Boolean = false,
+                            openedFromHome: Boolean = false): MenuBackTarget = when {
     home -> MenuBackTarget.Game
-    categoryRoot || category == null -> MenuBackTarget.Home
+    openedFromHome || categoryRoot || category == null -> MenuBackTarget.Home
     else -> MenuBackTarget.Category(category)
 }
 

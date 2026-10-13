@@ -20,7 +20,7 @@ class MenuColorPicker : ColorPickerComponent() {
         pointerX = mouseX - x()
         val left = renderX(); val top = renderY(); val w = colorAreaWidth(); val h = renderHeight()
         if (w <= 0 || h <= 0 || selectorWidth() <= 0) return
-        hoverMotion.animateTo(if (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) || focusHandler()?.focused() === this) 1.0 else 0.0,
+        hoverMotion.animateTo(if (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY) || focusHandler()?.focused() === this) 1.0 else 0.0,
             110, MotionEasing.QUICK, ThemeConfig.animationMode)
         val emphasis = hoverMotion.sample().coerceIn(0.0, 1.0)
         val hueColor = java.awt.Color.HSBtoRGB(hue, 1f, 1f)

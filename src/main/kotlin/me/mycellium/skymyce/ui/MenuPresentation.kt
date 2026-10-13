@@ -16,6 +16,16 @@ internal val menuIntroduction = MenuIntroduction({ ThemeConfig.menuIntroPlayed }
 })
 internal val menuReveals = MenuRevealState()
 
+/** Layout rows reserve logical space; only scroll viewports should clip moving menu controls. */
+internal fun allowMenuMotionOverflow(component: UIComponent) {
+    if (component is FlowLayout) component.allowOverflow(true)
+    if (component is ParentUIComponent) {
+        val children = component.children()
+        var index = 0
+        while (index < children.size) allowMenuMotionOverflow(children[index++])
+    }
+}
+
 /** First viewport reveal and elevation share one pose, without changing retained layout. */
 internal class MenuRevealCard(private val key: String, horizontal: Sizing, vertical: Sizing,
                               algorithm: FlowLayout.Algorithm = FlowLayout.Algorithm.VERTICAL) : FlowLayout(horizontal, vertical, algorithm) {

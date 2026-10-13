@@ -41,7 +41,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open val settingsCategory: SettingsTab? get() = null
     protected open fun selectSettings(tab: SettingsTab) {}
     protected open val menuParent: net.minecraft.client.gui.screens.Screen?
-        get() = if (modal) null else menuBackScreen(menuBackTarget(menuCategory, home = home))
+        get() = if (modal) null else menuBackScreen(menuBackTarget(menuCategory, home = home, openedFromHome = openedFromHome))
+    private var openedFromHome = false
     private var builtLayout: MenuLayout? = null
     private var builtTheme = -1L
     private var canvas = MenuCanvas()
@@ -70,7 +71,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         set(value) { if (field !== value) field?.close(); field = value }
     private var closingShellAlpha = 1.0
     private val contentExit = MotionValue(1.0)
-    private var navigationMotion = emptyMap<String, MenuButton>()
+    private var navigationMotion = emptyMap<Int, MenuButton>()
     private var closing = false
     protected val menuClosing get() = closing
     private var closeDestination: net.minecraft.client.gui.screens.Screen? = null
@@ -117,6 +118,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     override fun onClose() = closeMenuTo(menuParent)
 
     internal fun prepareNavigation(destination: MenuScreen) {
+        if (home && !destination.home) destination.openedFromHome = true
         destination.outgoing = if (modal || destination.modal) null else canvas.snapshot("content")
         destination.modalUnderlay = if (destination.modal) modalUnderlay?.retain() ?: canvas.snapshot() else null
         destination.outgoingSize = width to height
@@ -131,7 +133,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             destination.navigationSelection = navigationSelection; navigationSelection = indicator
             destination.introductionChecked = true
             destination.introductionClaimed = introductionClaimed; introductionClaimed = false
-            destination.navigationMotion = navigationButtons().associateBy { it.message.string }
+            // Home tool labels and sidebar category labels differ; slots retain their feedback through the morph.
+            destination.navigationMotion = navigationButtons().withIndex().associate { it.index to it.value }
         } else {
             destination.opening.snap(if (destination.modal) 0.0 else 1.0)
             destination.sidebarOpening.snap(if (destination.modal) 0.0 else 1.0)
@@ -207,7 +210,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         if (!invalid && (builtLayout != menuLayout || builtTheme != me.mycellium.skymyce.hud.HudTheme.revision)) {
             uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount()
         }
-        navigationButtons().forEach { button -> navigationMotion[button.message.string]?.let(button::inheritMotion) }
+        navigationButtons().forEachIndexed { index, button -> navigationMotion[index]?.let(button::inheritMotion) }
         navigationMotion = emptyMap()
         if (rendererChanged && !invalid) recoverRenderer()
     }
@@ -248,11 +251,12 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
         { if (home) -1 else menuCategory?.ordinal ?: -1 }, navigationSelection,
-        { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
+        { index -> if (index == null) openMenu() else if (home) openMenuFeature(menuHomeFeature(index, MenuShortcuts.homeTools).id)
+            else openMenuCategory(MenuCategory.entries[index]) },
         { navigateMenu(MenuDirectoryScreen()) },
         { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
         { if (introductionClaimed) ThemeConfig.animationMode else GuiMotion.OFF },
-        { !introductionClaimed || opening.sample() >= .85 })
+        { !introductionClaimed || opening.sample() >= .85 }, home, MenuShortcuts.homeTools)
 
     protected abstract fun buildContent(root: FlowLayout)
     /** Native player previews cannot be rasterized into MenuCanvas. Paint only on the settled, visible page. */
@@ -294,6 +298,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         val mx = point.first.toInt(); val my = point.second.toInt()
         tooltip.beginFrame()
         val custom = MenuGraphics(canvas, mx, my, width, height, tooltip)
+        allowMenuMotionOverflow(uiAdapter.rootComponent)
         uiAdapter.extractRenderState(custom, mx, my, partialTicks)
         closingDropdown?.let { popup ->
             if (popup.finishedClosing) closingDropdown = null else popup.draw(custom, mx, my, partialTicks, 0f)
@@ -382,9 +387,13 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private fun pointer(x: Double, y: Double): Pair<Double, Double> {
         val sx = paintedShell.inverseX(viewport.x(x)); val sy = paintedShell.inverseY(viewport.y(y))
         val body = content
+        dropdown?.pointer(sx, sy)?.let { point ->
+            body?.let { menuCardPointer(it, -1.0, -1.0) }
+            sidebar?.let { menuCardPointer(it, -1.0, -1.0) }
+            return point
+        }
         val bx = paintedContent.inverseX(sx); val by = paintedContent.inverseY(sy)
         val cardPoint = body?.let { menuCardPointer(it, bx, by) }
-        dropdown?.pointer(sx, sy)?.let { return it }
         (sidebar as? MenuNavigation)?.pointer(sx, sy)?.let { return it }
         sidebar?.takeIf { it !is MenuNavigation && it.isInBoundingBox(sx, sy) }?.let {
             return menuCardPointer(it, sx, sy) ?: (sx to sy)
@@ -441,8 +450,12 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         if (closing) return true
         clearDetachedFocus()
         dropdown?.let {
-            if (it.pointer(paintedShell.inverseX(viewport.x(event.x())), paintedShell.inverseY(viewport.y(event.y()))) == null)
+            if (it.pointer(paintedShell.inverseX(viewport.x(event.x())), paintedShell.inverseY(viewport.y(event.y()))) == null) {
+                val anchorPoint = pointer(event)
+                val clickedAnchor = dropdownAnchor?.isInBoundingBox(anchorPoint.x(), anchorPoint.y()) == true
                 closeMenuDropdown()
+                if (clickedAnchor) return true
+            }
         }
         val mapped = pointer(event)
         val handler = uiAdapter?.rootComponent?.focusHandler()
@@ -499,7 +512,7 @@ fun openMenuCategory(category: MenuCategory) = navigateMenu(menuCategoryScreen(c
 fun openMenuFeature(id: String, configure: Boolean = false) {
     val feature = MenuDirectory.catalog.findFeature(id) ?: return
     MenuShortcuts.visit(id)
-    val parent = menuCategoryScreen(feature.category)
+    val parent = menuBackScreen(menuBackTarget(feature.category, openedFromHome = MC.screen is MenuHomeScreen))
     if (!configure && feature.tool == "global-chat") {
         // The composer selector only replaces gameplay or an existing ChatScreen.
         MC.instance.setScreen(null)

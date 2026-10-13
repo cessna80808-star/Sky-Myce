@@ -65,6 +65,7 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
     OwoUIGraphics(Minecraft.getInstance(), GuiRenderState(), mouseX, mouseY, {}) {
     override fun guiWidth() = menuWidth
     override fun guiHeight() = menuHeight
+    override fun getMatrixStack() = pose()
     internal val canvasClip get(): MenuCanvas.Clip? { sync(); return canvas.clip }
     /** Compose effects without changing retained layout, focus, or component state. */
     fun layer(alpha: Double = 1.0, x: Double = 0.0, y: Double = 0.0, scale: Double = 1.0,
