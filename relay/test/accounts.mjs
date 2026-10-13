@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { generateKeyPairSync, sign, verify, createHash, randomUUID } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { checkLaunchSessions } from "./launch-sessions.mjs";
@@ -13,6 +14,7 @@ export async function checkAccounts(script, minecraftProof) {
     r2Buckets: ["PRIVATE_ARTIFACTS"], durableObjects: { ACCOUNT_STORE: { className: "AccountStore", useSQLite: true }, RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: () => { throw Error("Account authorization must not depend on unverified external identity"); } });
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   options.unsafeInspectDurableObjects = true;
   const mf = new Miniflare(options);
   try {

@@ -7,6 +7,7 @@
   "vars": {
     "ROOMS": "friends,testing",
     "SKYMYCE_ENVIRONMENT": "production",
+    "COMMUNITY_SERVICES_ENABLED": "true",
     "MINECRAFT_VERSION": "26.1.2",
     "SKY_MYCE_VERSION": "2.4.4",
     "MINIMUM_LOADER_VERSION": "1.0.0",
@@ -21,7 +22,10 @@
         "limit": 20,
         "period": 60
       }
-    }
+    },
+    { "name": "REQUEST_LIMIT", "namespace_id": "7112050", "simple": { "limit": 120, "period": 60 } },
+    { "name": "SERVICE_LIMIT", "namespace_id": "7112051", "simple": { "limit": 1000, "period": 60 } },
+    { "name": "DOWNLOAD_LIMIT", "namespace_id": "7112052", "simple": { "limit": 6, "period": 60 } }
   ],
   "durable_objects": {
     "bindings": [
@@ -65,6 +69,7 @@
       "vars": {
         "ROOMS": "testing",
         "SKYMYCE_ENVIRONMENT": "staging",
+        "COMMUNITY_SERVICES_ENABLED": "true",
         "DISCORD_INTERACTIONS_ROOM": "testing",
         "MINECRAFT_VERSION": "26.1.2",
         "SKY_MYCE_VERSION": "2.4.4",
@@ -80,7 +85,10 @@
             "limit": 20,
             "period": 60
           }
-        }
+        },
+        { "name": "REQUEST_LIMIT", "namespace_id": "7112053", "simple": { "limit": 120, "period": 60 } },
+        { "name": "SERVICE_LIMIT", "namespace_id": "7112054", "simple": { "limit": 1000, "period": 60 } },
+        { "name": "DOWNLOAD_LIMIT", "namespace_id": "7112055", "simple": { "limit": 6, "period": 60 } }
       ],
       "durable_objects": {
         "bindings": [
@@ -111,6 +119,7 @@
       "vars": {
         "ROOMS": "friends,testing",
         "SKYMYCE_ENVIRONMENT": "production",
+        "COMMUNITY_SERVICES_ENABLED": "true",
         "MINECRAFT_VERSION": "26.1.2",
         "SKY_MYCE_VERSION": "2.4.31",
         "MINIMUM_LOADER_VERSION": "1.0.11",
@@ -149,7 +158,10 @@
             "limit": 20,
             "period": 60
           }
-        }
+        },
+        { "name": "REQUEST_LIMIT", "namespace_id": "7112056", "simple": { "limit": 120, "period": 60 } },
+        { "name": "SERVICE_LIMIT", "namespace_id": "7112057", "simple": { "limit": 1000, "period": 60 } },
+        { "name": "DOWNLOAD_LIMIT", "namespace_id": "7112058", "simple": { "limit": 6, "period": 60 } }
       ],
       "durable_objects": {
         "bindings": [
@@ -177,12 +189,13 @@
   },
   "observability": {
     "enabled": true,
+    "redact_query_string": true,
     "logs": {
       "enabled": true,
       "invocation_logs": false
     },
     "traces": {
-      "enabled": false,
+      "enabled": true,
       "head_sampling_rate": 0.1
     }
   }

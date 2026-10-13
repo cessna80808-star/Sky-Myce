@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
+import { checkTraffic } from './traffic.mjs';
 import { readFile } from "node:fs/promises";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
@@ -43,6 +45,7 @@ if (process.argv.includes("--rich-only")) {
   await checkRichIrc(script, proof);
   process.exit(0);
 }
+if (process.argv.includes("--traffic-only")) { await checkTraffic(script, proof); process.exit(0); }
 if (process.argv.includes("--community-only")) {
   await checkCommunity(script, proof);
   process.exit(0);
@@ -63,6 +66,7 @@ const options = convertV4MiniflareOptions({
   outboundService: () => { throw new Error("Account verification must not make outbound requests"); },
 });
 options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 20, period: 60 } };
+configureTrafficLimits(options);
 options.unsafeInspectDurableObjects = true;
 const mf = new Miniflare(options);
 const sockets = [];
@@ -424,6 +428,7 @@ await checkDigest(script, proof);
 await checkSocial(script, proof);
 await checkCosmetics(script, proof);
 await checkCommunity(script, proof);
+await checkTraffic(script, proof);
 await checkCommunityCancellation(script, proof);
 await checkCommunityPrivacy(script, proof);
 await checkStrictCosmetics(script, proof);

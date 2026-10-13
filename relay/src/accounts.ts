@@ -226,6 +226,8 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   communityOAuthFinish(flow: string, user: { id: string; username: string; displayName: string }) { return this.community.finishOAuth(flow, user); }
   authorizeCommunitySession(input: { uuid: string; token: string; challenge: string; modVersion?: string }) { return this.community.authorize(input); }
   checkCommunitySession(input: CommunitySessionCheck) { return this.community.checkSession(input); }
+  consumeCommunitySessionRequest(input: CommunitySessionCheck) { return this.community.consumeRequest(input); }
+  reportCommunityTrafficViolation(input: CommunitySessionCheck) { return this.community.reportTrafficViolation(input); }
   markCommunitySessionOffline(sessionId: string, connectionId: string) { this.community.markOffline(sessionId, connectionId); }
   communityUserCommand(actor: DeveloperActor, action: string, options: Record<string, unknown> = {}) { return this.community.user(actor, action, options); }
   communityRead(actor: DeveloperActor, action: string, target = "", options: Record<string, unknown> = {}) { return this.community.read(actor, action, target, options); }
@@ -578,7 +580,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       ...(runtime ? { minecraftUuid: runtime.uuid, minecraftName: player?.name ?? null, buildId: runtime.build_id, loaderVersion: runtime.loader_version, sessionId: runtime.session_id } : {}), serverTime: Date.now(), ...metadata };
     const error = String(metadata.error ?? "");
     const severity = action === "signing_configuration_failure" ? "critical" :
-      ["activation_replay", "challenge_replay", "hwid_reset", "hwid_revoke", "build_revoke"].includes(action) || ["invalid_signature", "invalid_lease", "installation_proof_invalid", "challenge_replayed"].includes(error) ? "security" :
+      ["activation_replay", "challenge_replay", "hwid_reset", "hwid_revoke", "build_revoke", "traffic_cooldown"].includes(action) || ["invalid_signature", "invalid_lease", "installation_proof_invalid", "challenge_replayed"].includes(error) ? "security" :
         ["device_transferred", "warning_issued"].includes(action) || ["HWID_MISMATCH", "invalid_activation_key", "BUILD_REVOKED"].includes(error) ? "warning" : "information";
     const now = Date.now(), id = this.ctx.storage.sql.exec<{ id: number }>("INSERT INTO account_audit(at,actor,account_id,action,override,metadata,severity) VALUES(?,?,?,?,?,?,?) RETURNING id",
       now, actor, accountId, action, override ? 1 : 0, JSON.stringify(context), severity).one().id;

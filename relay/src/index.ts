@@ -18,10 +18,12 @@ import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHA
 import type { IrcUpdate } from "./irc-model";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
 import type { SharingState, SharingDecision, SharingCategory } from "./community-sharing";
+import { takeTrafficCredit, type TrafficCredit } from "./traffic";
 export { AccountStore } from "./accounts";
 
-type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
+type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
   SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string; COSMETIC_ASSETS?: R2Bucket;
+  COMMUNITY_SERVICES_ENABLED?: string;
   ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; RELAY_ROOMS: DurableObjectNamespace<RelayRoom>;
 };
 const legacyRelay = (env: RelayEnv) => env.SKYMYCE_ENVIRONMENT === "development" && env.ALLOW_LEGACY_RELAY === "true";
@@ -33,6 +35,7 @@ const discordEnvironment = (env: RelayEnv): RelayEnv => ({ ...env,
   DISCORD_BACKEND_BOT_TOKEN: env.BACKEND_BOT_TOKEN ?? env.DISCORD_BACKEND_BOT_TOKEN });
 type JoinPolicy = { floor: string; maxPbMillis: number | null; open: boolean; selectedClass?: string };
 type Session = IrcSession & {
+  incoming?: TrafficCredit;
   started?: number;
   challenge: string;
   expires: number;
@@ -74,13 +77,22 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     env = discordEnvironment(env);
     const url = new URL(request.url);
+    const ip = request.headers.get("CF-Connecting-IP") ?? "local";
+    const limited = (status = 429) => Response.json({ ok: false, error: status === 429 ? "rate_limited" : "service_busy" },
+      { status, headers: { "Cache-Control": "no-store", "Retry-After": "60" } });
+    // One IP budget covers all paths and query strings, including unknown routes.
+    if (!(await env.REQUEST_LIMIT.limit({ key: ip })).success) return limited();
+    const costly = url.pathname.startsWith("/community/") || ["/websocket", "/discord/bridge", "/discord/interactions", "/discord/backend/interactions", "/discord/community-feed", "/prompt/runner"].includes(url.pathname);
+    if (costly && !(await env.SERVICE_LIMIT.limit({ key: "public" })).success) return limited(503);
+    if (env.COMMUNITY_SERVICES_ENABLED === "false" && (url.pathname.startsWith("/community/") || ["/websocket", "/discord/bridge", "/discord/community-feed"].includes(url.pathname))) return limited(503);
+    if (url.pathname === "/community/artifact" && !(await env.DOWNLOAD_LIMIT.limit({ key: ip })).success) return limited();
     if (url.pathname === "/prompt/runner") {
       if (!(await env.CONNECT_LIMIT.limit({ key: `prompt-runner:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
       return await handlePromptRunner(request, env);
     }
     if (url.pathname.startsWith("/community/")) {
       if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
-      try { return await handleCommunityRelease(request, env) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
     if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/") || url.pathname === "/discord/loader") {
@@ -146,6 +158,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly rng: DigestRng;
   private readonly rngForward: RngForwardQueue;
   private rngCapacityDiagnosticAt = 0;
+  private trafficDiagnosticAt = 0;
+  private readonly incomingBudgets = new WeakMap<WebSocket, TrafficCredit>();
   private readonly cosmetics: PlayerCosmetics;
   private readonly irc: RoomIrc;
   constructor(ctx: DurableObjectState, env: RelayEnv) {
@@ -242,6 +256,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (this.env.COMMUNITY_SERVICES_ENABLED === "false") return new Response("Community services temporarily paused", { status: 503 });
     const url = new URL(request.url);
     if (!legacyRelay(this.env) && !await this.migrateLegacyAccounts(url.searchParams.get("room") ?? "friends")) return new Response("Account migration in progress; retry", { status: 503 });
     const bridge = url.pathname === "/discord/bridge";
@@ -276,9 +291,26 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (this.env.COMMUNITY_SERVICES_ENABLED === "false") { ws.close(1013, "Community services temporarily paused"); return; }
     let session = ws.deserializeAttachment() as Session;
+    const burst = session.bridge ? 256 : 64, incomingAt = Date.now();
+    // Older asynchronous handlers may serialize a snapshot; keep the live budget authoritative.
+    session.incoming = this.incomingBudgets.get(ws) ?? session.incoming ?? { credits: burst, updated: incomingAt };
+    this.incomingBudgets.set(ws, session.incoming);
+    const accepted = takeTrafficCredit(session.incoming, burst, session.bridge ? 25 : 125, incomingAt);
+    ws.serializeAttachment(session);
+    if (!accepted) {
+      this.trafficDiagnostic("incoming_message_rate_exceeded");
+      ws.close(1013, "Incoming message rate exceeded");
+      if (!legacyRelay(this.env) && !session.bridge && session.accountId && session.uuid && session.communitySessionId && session.generation !== undefined) {
+        this.ctx.waitUntil(this.env.ACCOUNT_STORE.getByName("global").reportCommunityTrafficViolation({ accountId: session.accountId,
+          uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation }).catch(() => this.trafficDiagnostic("traffic_report_unavailable")));
+      }
+      return;
+    }
     const maximum = session.bridge ? 32768 : 8192;
-    if (typeof raw !== "string" || encoder.encode(raw).length > maximum) { ws.close(1009, "Message too large"); return; }
+    if (typeof raw !== "string" || raw.length > maximum || encoder.encode(raw).length > maximum) { ws.close(1009, "Message too large"); return; }
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(raw);
@@ -313,7 +345,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           const authorization = await this.env.ACCOUNT_STORE.getByName("global").authorizeCommunitySession({ uuid: profile.id,
             token: data.communityToken, challenge: session.challenge, modVersion: typeof data.modVersion === "string" ? data.modVersion : undefined });
           if (!authorization.ok) {
-            if (authorization.error?.endsWith("unavailable")) ws.close(1013, "Authorization service unavailable");
+            if (["rate_limited", "traffic_cooldown", "service_busy"].includes(authorization.error ?? "")) ws.close(1013, authorization.error!);
+            else if (authorization.error?.endsWith("unavailable")) ws.close(1013, "Authorization service unavailable");
             else ws.close(authorization.error === "session_expired" ? 4006 : 4005, authorization.error ?? "not_authorized");
             return;
           }
@@ -730,11 +763,16 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (!Number.isSafeInteger(session.leaseExpiresAt) || session.leaseExpiresAt! <= Date.now()) {
         ws.close(4006, "Authorization renewal required"); return false;
       }
-      const state = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession({ accountId: session.accountId,
+      const input = { accountId: session.accountId,
         uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation,
-        heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId });
+        heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId };
+      const store = this.env.ACCOUNT_STORE.getByName("global");
+      const state = heartbeat ? await store.consumeCommunitySessionRequest(input) : await store.checkCommunitySession(input);
       if (!state.ok) {
         if (ws.readyState === WebSocket.OPEN) {
+          if (["rate_limited", "traffic_cooldown", "service_busy"].includes(state.error ?? "")) {
+            ws.close(1013, state.error!); return false;
+          }
           ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error ?? "session_expired" }));
           ws.close(state.error === "identity_blacklisted" ? 4005 : 4006, state.error ?? "session_expired");
         }
@@ -750,6 +788,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Authorization service unavailable");
       return false;
     }
+  }
+
+  private trafficDiagnostic(event: string): void {
+    if (Date.now() < this.trafficDiagnosticAt) return;
+    this.trafficDiagnosticAt = Date.now() + 60_000;
+    console.warn({ event });
   }
 
   /** Binding-only revocation push. Current state is still checked on every protected request. */
@@ -840,6 +884,10 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   async alarm(): Promise<void> {
+    if (this.env.COMMUNITY_SERVICES_ENABLED === "false") {
+      for (const ws of this.ctx.getWebSockets()) if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Community services temporarily paused");
+      return;
+    }
     await this.irc.flushGlobal();
     await this.rngForward.drain();
     let next = Infinity;

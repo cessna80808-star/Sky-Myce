@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { createHash, createHmac, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -55,7 +56,7 @@ export async function checkGlobalChat(script, proof) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
   }
-  async testOnlyDelayedCheckSession(input) {
+  async testOnlyDelayedCheckSession(input, consume = false) {
     await this.testOnlyGlobalRpcGate("session", input.uuid);
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_global_auth_delay (uuid TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
     const delay = this.ctx.storage.sql.exec("SELECT until_ms FROM test_global_auth_delay WHERE uuid=?", input.uuid).toArray()[0];
@@ -63,10 +64,13 @@ export async function checkGlobalChat(script, proof) {
       this.ctx.storage.sql.exec("DELETE FROM test_global_auth_delay WHERE uuid=?", input.uuid);
       await new Promise(resolve => setTimeout(resolve, Math.max(0, delay.until_ms - Date.now())));
     }
-    return this.checkCommunitySession(input);
+    return consume ? this.consumeCommunitySessionRequest(input) : this.checkCommunitySession(input);
   }\n  ${authorityAnchor}`);
   script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession(',
     'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSession(');
+  assert.ok(script.includes('store.consumeCommunitySessionRequest(input)'));
+  script = script.replaceAll('store.consumeCommunitySessionRequest(input)', 'store.testOnlyDelayedCheckSession(input, true)');
+  script = script.replaceAll('store.checkCommunitySession(input)', 'store.testOnlyDelayedCheckSession(input)');
   const ircAuthorityAnchor = 'canUseIrc(discordId) {';
   assert.equal(script.split(ircAuthorityAnchor).length, 2);
   script = script.replace(ircAuthorityAnchor, `async testOnlyDelayedCanUseIrc(discordId) {
@@ -88,6 +92,7 @@ export async function checkGlobalChat(script, proof) {
     outboundService: () => { throw new Error('Global chat fixtures never contact Discord or Minecraft services'); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112032', simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options), sockets = [];
   let sequence = 100, discordSequence = 900000000000000000n, ip = 1;
   const id = () => (sequence++).toString(16).padStart(32, '0');
@@ -293,6 +298,7 @@ export async function checkGlobalChat(script, proof) {
       const olderResult = await alice.next(); assert.equal(olderResult.id, firstId); assert.equal(olderResult.type, responseType);
       const current = await session();
       assert.equal(current.globalChatSubscribed, true, `${feature} completion must retain the newer global subscription`);
+      assert.deepEqual(current.incoming, newer.incoming, 'An older completion cannot restore spent incoming-message credits');
       assert.deepEqual(identity(current), identity(original), 'Feature writes preserve all authenticated bindings');
       assert.ok(current.inbox.some(receipt => receipt.id === inboxId), 'An incoming receipt survives an older feature authorization');
       if (feature === 'cosmetics') {

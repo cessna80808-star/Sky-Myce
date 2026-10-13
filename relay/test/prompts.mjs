@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { createHmac, randomUUID } from "node:crypto";
 import { readFile, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -17,6 +18,7 @@ export async function checkPrompts(script) {
     durableObjects: { ACCOUNT_STORE: { className: "AccountStore", useSQLite: true }, RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: request => { assert.equal(new URL(request.url).hostname, "discord.com", "Backend never calls models"); notificationAttempts++; return deliverNotification(request); } });
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112029", simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   options.unsafeInspectDurableObjects = true;
   options.resourcePersistencePath = persist;
   let mf = new Miniflare(options);

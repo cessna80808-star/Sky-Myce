@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -16,6 +17,7 @@ export async function checkRichIrc(script, proof) {
     outboundService: () => { throw new Error('Rich IRC fixtures never contact real external services'); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112033', simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options), sockets = []; let sequence = 1, ip = 1, discordSequence = 900000000000000001n;
   const id = () => (sequence++).toString(16).padStart(32, '0');
   function inbox(ws) {

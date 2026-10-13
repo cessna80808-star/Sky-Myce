@@ -26,4 +26,31 @@ for (const change of [{ protocol: 3 }, { installation: 'loader' }, { minimumLoad
 envelope = signed(base); envelope.payload = Buffer.from(JSON.stringify({ ...base, size: 1024 })).toString('base64url');
 await assert.rejects(verifyCommunityManifest(envelope, env));
 assert.equal((await handleCommunityRelease(new Request('https://example.test/community/release', { method: 'POST' }), env)).status, 405);
-console.log('Community release checks passed: authenticated public metadata, selected artifact only, private bucket isolation, expired/loader/traversal/tamper rejection.');
+envelope = signed(base); fetched = [];
+const cached = new Map(), pending = [], previousCaches = globalThis.caches;
+globalThis.caches = { default: {
+  match: async key => cached.get(key)?.clone(),
+  put: async (key, response) => { await response.clone().arrayBuffer(); cached.set(key, response); },
+} };
+const ctx = { waitUntil: promise => pending.push(promise) };
+const cachedRequest = async path => {
+  const response = await handleCommunityRelease(new Request(`https://example.test${path}`), env, ctx);
+  await Promise.all(pending.splice(0)); return response;
+};
+try {
+  assert.equal((await cachedRequest('/community/release?random=first')).status, 200);
+  assert.equal((await cachedRequest('/community/release?random=second')).status, 200);
+  assert.deepEqual(fetched, ['releases/community-current.json'], 'Query strings cannot bypass the metadata cache');
+  assert.equal((await cachedRequest('/community/artifact?version=2.5.1&random=first')).status, 200);
+  const hit = await cachedRequest('/community/artifact?version=2.5.1&random=second');
+  assert.equal(hit.status, 200); assert.deepEqual([...new Uint8Array(await hit.arrayBuffer())], [80, 75, 3, 4]);
+  assert.deepEqual(fetched, ['releases/community-current.json', base.artifact], 'Repeated downloads do not read private R2 again');
+  assert.equal((await cachedRequest('/community/artifact?version=2.4.0')).status, 409, 'Caching cannot expose an unselected release');
+  const pin = env.DRM_PUBLIC_KEYS; env.DRM_PUBLIC_KEYS = '{}';
+  assert.equal((await cachedRequest('/community/artifact?version=2.5.1')).status, 503, 'Cached metadata cannot bypass the current signature policy');
+  env.DRM_PUBLIC_KEYS = pin;
+  const selectedKey = [...cached.keys()].find(key => key.includes('/selection'));
+  cached.set(selectedKey, Response.json(signed({ ...base, expiresAt: Date.now() - 1 })));
+  assert.equal((await cachedRequest('/community/artifact?version=2.5.1')).status, 503, 'An expired signature cannot expose a cached artifact');
+} finally { if (previousCaches === undefined) delete globalThis.caches; else globalThis.caches = previousCaches; }
+console.log('Community release checks passed: signature policy, selected artifact only, canonical metadata/artifact cache, private bucket isolation and expired/loader/traversal/tamper rejection.');

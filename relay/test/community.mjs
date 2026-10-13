@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -18,6 +19,7 @@ export async function checkCommunity(script, proof) {
       throw Error('Community checks must not call live services');
     } });
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112026', simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   options.unsafeInspectDurableObjects = true;
   const mf = new Miniflare(options), sockets = [];
   try {

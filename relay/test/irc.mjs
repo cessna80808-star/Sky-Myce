@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { generateKeyPairSync, sign, createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
@@ -14,6 +15,7 @@ export async function checkIrc(script, proof) {
     outboundService: () => { throw new Error("IRC tests must not contact real services"); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112028", simple: { limit: 20, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options), sockets = []; let sequence = 100, ip = 1;
   const id = () => (sequence++).toString(16).padStart(32, "0");
   const people = new Map(["Alice", "Bob", "Carol"].map((name, i) => [name, { name, uuid: "abc"[i].repeat(32),

@@ -21,20 +21,43 @@ export async function verifyCommunityManifest(envelope: any, env: CommunityRelea
   return manifest;
 }
 /** Publish only the selected signed normal Fabric release. The R2 bucket remains private. */
-export async function handleCommunityRelease(request: Request, env: CommunityReleaseConfig): Promise<Response | null> {
+export async function handleCommunityRelease(request: Request, env: CommunityReleaseConfig, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   if (!["/community/release", "/community/artifact"].includes(url.pathname)) return null;
   if (request.method !== "GET") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
   try {
     if (!env.PRIVATE_ARTIFACTS) throw Error("release_unavailable");
-    const object = await env.PRIVATE_ARTIFACTS.get(env.COMMUNITY_RELEASE_MANIFEST_KEY ?? "releases/community-current.json");
-    if (!object || object.size > 65536) throw Error("release_unavailable");
-    const envelope = JSON.parse(await object.text()); const manifest = await verifyCommunityManifest(envelope, env);
-    if (url.pathname === "/community/release") return Response.json(envelope, { headers: { "Cache-Control": "public, max-age=60" } });
+    const cache = ctx ? caches.default : undefined;
+    const pointer = env.COMMUNITY_RELEASE_MANIFEST_KEY ?? "releases/community-current.json";
+    // Canonical keys prevent arbitrary query strings from forcing additional private R2 reads.
+    const selectionKey = new URL("/community/cache/selection", url.origin);
+    selectionKey.searchParams.set("pointer", pointer);
+    const selected = await cache?.match(selectionKey.toString());
+    let envelope: unknown;
+    if (selected) envelope = await selected.json();
+    else {
+      const object = await env.PRIVATE_ARTIFACTS.get(pointer);
+      if (!object || object.size > 65536) throw Error("release_unavailable");
+      envelope = JSON.parse(await object.text());
+    }
+    // Recheck the signature, key policy and expiry even when metadata came from our cache.
+    const manifest = await verifyCommunityManifest(envelope, env);
+    const remaining = Math.max(0, Math.floor((manifest.expiresAt - Date.now()) / 1000));
+    const metadata = Response.json(envelope, { headers: { "Cache-Control": `public, max-age=${Math.min(60, remaining)}` } });
+    if (!selected && cache) ctx!.waitUntil(cache.put(selectionKey.toString(), metadata.clone()).catch(() => {}));
+    if (url.pathname === "/community/release") return metadata;
     if (url.searchParams.get("version") !== manifest.version) return Response.json({ ok: false, error: "release_changed" }, { status: 409 });
+    const artifactKey = new URL("/community/cache/artifact", url.origin);
+    artifactKey.searchParams.set("version", manifest.version);
+    artifactKey.searchParams.set("sha256", manifest.sha256);
+    const cached = await cache?.match(artifactKey.toString());
+    if (cached) return cached;
     const artifact = await env.PRIVATE_ARTIFACTS.get(manifest.artifact);
     if (!artifact || artifact.size !== manifest.size) throw Error("release_unavailable");
-    return new Response(artifact.body, { headers: { "Content-Type": "application/java-archive", "Content-Length": String(artifact.size),
-      "Content-Disposition": `attachment; filename="Sky-Myce-${manifest.version}.jar"`, "Cache-Control": "public, max-age=60", "X-Content-Type-Options": "nosniff" } });
+    const response = new Response(artifact.body, { headers: { "Content-Type": "application/java-archive", "Content-Length": String(artifact.size),
+      "Content-Disposition": `attachment; filename="Sky-Myce-${manifest.version}.jar"`, "Cache-Control": `public, max-age=${Math.min(3600, remaining)}`,
+      "ETag": `"${manifest.sha256}"`, "X-Content-Type-Options": "nosniff" } });
+    if (cache) ctx!.waitUntil(cache.put(artifactKey.toString(), response.clone()).catch(() => {}));
+    return response;
   } catch { return Response.json({ ok: false, error: "release_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
 }

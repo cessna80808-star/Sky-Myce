@@ -23,6 +23,7 @@ const titles: Record<string, string> = {
   activation_replay: "Used activation key presented again", activation_expired: "Expired activation key presented",
   challenge_replay: "Authorization challenge presented again",
   warning_issued: "Account warning recorded",
+  traffic_cooldown: "Community access temporarily limited after repeated flooding",
   activation_denied: "Activation denied", lease_denied: "Authorization denied", authentication_failure: "Connection denied",
   signing_configuration_failure: "Backend signing configuration unavailable",
 };

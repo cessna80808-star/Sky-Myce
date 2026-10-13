@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { generateKeyPairSync, sign, verify, createHash, randomUUID, randomBytes } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
@@ -17,6 +18,7 @@ export async function checkLaunchSessions(script, minecraftProof) {
       r2Buckets: ["PRIVATE_ARTIFACTS"], durableObjects: { ACCOUNT_STORE: { className: "AccountStore", useSQLite: true } },
       outboundService: () => { throw Error("Launch authorization must not trust external unverified identity"); } });
     value.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 1000, period: 60 } };
+    configureTrafficLimits(value);
     value.unsafeInspectDurableObjects = true; return value;
   };
   const mf = new Miniflare(options());
