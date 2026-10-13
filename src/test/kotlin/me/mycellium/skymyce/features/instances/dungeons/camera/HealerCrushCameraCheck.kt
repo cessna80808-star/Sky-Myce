@@ -3,20 +3,25 @@ package me.mycellium.skymyce.features.instances.dungeons.camera
 import com.google.gson.JsonParser
 
 private val validContext = CrushEncounterContext(1, true, "F7", true, true, true, true)
-private val berserker = LeapDestination("ActualBerserker", "00000000-0000-0000-0000-000000000001", true, true, CrushPoint(11.0, 43.0, 21.0))
 private fun readySequence(floor: String = "F7") = HealerCrushSequence().apply {
     context(validContext.copy(floor = floor), 0); stormStarted(1_000)
 }
-private fun HealerCrushSequence.realLeap(time: Long = 1_100) {
-    leapSucceeded(berserker.name, time, berserker)
-    positionCorrected(1, CrushPoint(0.0, 43.0, 21.0), berserker.point, time + 50, berserker)
-}
 
 fun main() {
-    check(successfulLeapName("You have teleported to ActualBerserker!") == berserker.name)
-    check(successfulLeapName("Party > Friend: You have teleported to ActualBerserker!") == null)
-    check(successfulLeapName("You have teleported to ActualBerserker! trailing") == null)
-    check(successfulLeapName("You have teleported to bad-name!") == null)
+    val settings = me.mycellium.skymyce.config.instances.dungeons.HealerCrushCameraConfig
+    val classes = tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.entries
+    check(settings.classEnabled(null) == false)
+    check(classes.filter(settings::classEnabled) == listOf(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.HEALER))
+    settings.healer = false
+    val toggles = listOf<(Boolean) -> Unit>(
+        { settings.healer = it }, { settings.mage = it }, { settings.berserk = it }, { settings.archer = it }, { settings.tank = it })
+    val selected = listOf("HEALER", "MAGE", "BERSERKER", "ARCHER", "TANK")
+    toggles.forEachIndexed { index, toggle ->
+        toggle(true)
+        check(classes.filter(settings::classEnabled).map { it.name } == listOf(selected[index]))
+        toggle(false); check(classes.none(settings::classEnabled))
+    }
+    settings.healer = true
     val messages = StormCrushMessages()
     check(messages.accept("Party > Friend: [BOSS] Storm: Oof", 0) == null)
     check(messages.accept("[BOSS] Storm: Oof!", 0) == null)
@@ -25,52 +30,32 @@ fun main() {
     check(messages.accept("[BOSS] Storm: Oof", 600) == null)
     check(messages.accept("[BOSS] Storm: Ouch, that hurt!", 15_000)?.serial == 2L)
     messages.reset(); check(messages.latest == null)
+    check("[BOSS] Storm: I should have known that I stood no chance." in STORM_END)
+    check("[BOSS] Goldor: Who dares trespass into my domain?" in STORM_END)
     for (floor in listOf("F7", "M7")) {
         val sequence = readySequence(floor)
-        sequence.tick(1_100); sequence.underway(CrushStage.PURPLE, 1_200)
-        check(sequence.stage == null) // Phase/time/pillar alone cannot substitute for a successful leap.
-        sequence.realLeap()
-        sequence.stormStarted(1_160) // Duplicate phase entry must not erase verified leap evidence.
-        sequence.underway(CrushStage.YELLOW, 1_200); check(sequence.stage == null)
-        sequence.underway(CrushStage.PURPLE, 1_200); check(sequence.stage == CrushStage.PURPLE)
-        sequence.confirmed(CrushStage.PURPLE, "purple:collision", 1_200); check(sequence.stage == CrushStage.PURPLE)
-        sequence.confirmed(CrushStage.PURPLE, "purple:collision", 1_210); check(sequence.stage == CrushStage.YELLOW)
-        sequence.confirmed(CrushStage.PURPLE, "purple:collision", 1_220); check(sequence.stage == CrushStage.YELLOW)
-        sequence.confirmed(CrushStage.YELLOW, "yellow:collision", 1_210); check(sequence.stage == CrushStage.YELLOW)
-        sequence.confirmed(CrushStage.YELLOW, "yellow:collision", 1_230); check(sequence.stage == null)
-        sequence.realLeap(1_300); sequence.underway(CrushStage.PURPLE, 1_400); check(sequence.stage == null)
-        sequence.stormStarted(1_500); sequence.realLeap(1_600); sequence.underway(CrushStage.PURPLE, 1_700); check(sequence.stage == null)
-        sequence.reset(); sequence.context(validContext.copy(floor = floor), 2_000); sequence.stormStarted(2_000)
-        sequence.realLeap(2_100); sequence.underway(CrushStage.PURPLE, 2_200); check(sequence.stage == CrushStage.PURPLE)
+        sequence.tick(26_999); check(sequence.stage == null)
+        sequence.stormStarted(26_999) // Duplicate entry cannot restart the timer.
+        sequence.tick(27_000); check(sequence.stage == CrushStage.PURPLE)
+        sequence.crushed(1, 27_100); check(sequence.stage == CrushStage.YELLOW)
+        sequence.crushed(1, 27_200); check(sequence.stage == CrushStage.YELLOW)
+        sequence.crushed(2, 28_000); check(sequence.stage == CrushStage.YELLOW)
+        sequence.context(validContext.copy(floor = floor), 400_000); check(sequence.stage == CrushStage.YELLOW)
+        sequence.reset("Storm died"); check(sequence.stage == null && !sequence.stormActive)
+        sequence.tick(500_000); check(sequence.stage == null)
+        sequence.stormStarted(500_000); sequence.tick(526_000); check(sequence.stage == CrushStage.PURPLE)
     }
-    for (destination in listOf(berserker.copy(berserker = false), berserker.copy(alive = false), berserker.copy(name = "Other"))) {
-        val sequence = readySequence()
-        sequence.leapSucceeded(berserker.name, 1_100, destination)
-        sequence.positionCorrected(1, CrushPoint(0.0, 43.0, 21.0), berserker.point, 1_150, destination)
-        sequence.underway(CrushStage.PURPLE, 1_200); check(sequence.stage == null)
-    }
-    for (to in listOf(CrushPoint(0.0, 43.0, 21.0), CrushPoint(100.0, 43.0, 21.0), CrushPoint(Double.NaN, 43.0, 21.0))) {
-        val sequence = readySequence()
-        sequence.leapSucceeded(berserker.name, 1_100, berserker)
-        sequence.positionCorrected(1, CrushPoint(0.0, 43.0, 21.0), to, 1_150, berserker)
-        sequence.underway(CrushStage.PURPLE, 1_200); check(sequence.stage == null)
-    }
-    val correctionFirst = readySequence()
-    correctionFirst.positionCorrected(3, CrushPoint(0.0, 43.0, 21.0), berserker.point, 1_050, null)
-    correctionFirst.leapSucceeded(berserker.name, 1_100, berserker)
-    correctionFirst.underway(CrushStage.PURPLE, 1_200); check(correctionFirst.stage == CrushStage.PURPLE)
-    val tooLate = readySequence()
-    tooLate.leapSucceeded(berserker.name, 1_100, berserker)
-    tooLate.positionCorrected(1, CrushPoint(0.0, 43.0, 21.0), berserker.point, 4_000, berserker)
-    tooLate.underway(CrushStage.PURPLE, 4_100); check(tooLate.stage == null)
-    val expired = readySequence().apply { realLeap(); tick(31_151); underway(CrushStage.PURPLE, 31_200) }
-    check(expired.stage == null)
-    val timeout = readySequence().apply { realLeap(); underway(CrushStage.PURPLE, 1_200); tick(61_201) }
-    check(timeout.stage == null); timeout.realLeap(61_300); timeout.underway(CrushStage.PURPLE, 61_400); check(timeout.stage == null)
-    for (lost in listOf(validContext.copy(alive = false), validContext.copy(healer = false), validContext.copy(world = 2),
-        validContext.copy(inBoss = false), validContext.copy(enabled = false), validContext.copy(floor = "F6"), validContext.copy(calibrated = false))) {
-        val sequence = readySequence().apply { realLeap(); underway(CrushStage.PURPLE, 1_200); context(lost, 1_250) }
-        check(sequence.stage == null)
+    val earlyCrush = readySequence().apply { crushed(1, 20_000); tick(26_999) }
+    check(earlyCrush.stage == null)
+    earlyCrush.tick(27_000); check(earlyCrush.stage == CrushStage.YELLOW)
+    val unconfigured = readySequence().apply { context(validContext.copy(viewpointsReady = false), 27_000) }
+    check(unconfigured.stage == null && unconfigured.stormActive)
+    unconfigured.context(validContext, 28_000); check(unconfigured.stage == CrushStage.PURPLE)
+    for (lost in listOf(validContext.copy(alive = false), validContext.copy(classEnabled = false), validContext.copy(world = 2),
+        validContext.copy(inBoss = false), validContext.copy(enabled = false), validContext.copy(floor = "F6"))) {
+        val sequence = readySequence().apply { tick(27_000); context(lost, 27_250) }
+        check(sequence.stage == null && !sequence.stormActive)
+        sequence.context(validContext, 28_000); check(sequence.stage == null)
     }
     val world = linkedMapOf<CrushBlockCell, ObservedCrushBlock>()
     val purple = ObservedCrushBlock("minecraft:diorite", true)
@@ -141,5 +126,5 @@ fun main() {
     check(observedCrushColumn(calibration) { world[it] ?: air } == 46 to 54)
     world[CrushBlockCell(10, 48, 20)] = air
     check(observedCrushColumn(calibration) { world[it] ?: air } == null)
-    println("Healer crush sequence, measured pillar evidence, leap correlation, and reset checks passed")
+    println("Crush Camera class toggles, 26-second timing, Storm cleanup and measured pillar checks passed")
 }

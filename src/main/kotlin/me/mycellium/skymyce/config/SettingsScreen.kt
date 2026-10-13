@@ -84,6 +84,9 @@ fun settingGroups(rows: List<SettingRow>, featureId: String, query: String = "")
     val groups = if (featureId == "starred-routes") MenuCatalog.routingSettingGroups.mapValues { (_, keys) ->
         keys.mapNotNull { key -> settings.firstOrNull { it.element.id() == key } }
     }.filterValues { it.isNotEmpty() }.toMutableMap()
+    else if (featureId == "healer-crush-camera") settings.groupBy {
+        if (it.element.id() in setOf("enabled", "healer", "mage", "berserk", "archer", "tank")) "Automatic activation" else "Appearance"
+    }.toMutableMap()
     else settings.groupBy { it.path.substringBeforeLast('/', "Basics").substringAfterLast('/') }.toMutableMap()
     if (featureId == "party-finder") groups["Availability"] = emptyList()
     return groups.filter { (group, settings) -> query.isBlank() || group.contains(query, true) ||

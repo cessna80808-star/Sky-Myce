@@ -13,7 +13,7 @@ import net.minecraft.network.chat.Component
 import java.util.Locale
 
 /** Explicit developer preview/calibration controls, separate from automatic encounter events. */
-class HealerCrushCameraScreen : MenuScreen(Component.literal("Healer Crush Camera"), MenuPage.CRUSH_CAMERA) {
+class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), MenuPage.CRUSH_CAMERA) {
     override val menuCategory get() = MenuCategory.DUNGEONS
     private var selected = "purple"
     private var feedback = "Use your current view or enter coordinates. No dungeon viewpoint is guessed."
@@ -23,7 +23,7 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Healer Crush Camer
 
     override fun buildContent(root: FlowLayout) {
         root.surface(Surface.BLANK).padding(Insets.of(10)); root.gap(7)
-        root.child(label("HEALER CRUSH CAMERA", MenuTheme.ACCENT))
+        root.child(label("CRUSH CAMERA", MenuTheme.ACCENT))
         status = label("", MenuTheme.SECONDARY); root.child(status)
         root.child(label("F7 / M7 · a fixed live world view. Moving or looking around leaves this camera anchored.", MenuTheme.MUTED))
         val content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7) }
@@ -69,7 +69,7 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Healer Crush Camer
         feedbackLabel = label(feedback, MenuTheme.MUTED); content.child(feedbackLabel)
         content.child(label("WINDOW & CAMERA", MenuTheme.SECONDARY))
         content.child(row().apply {
-            child(button("Size, angle & appearance", 49) { navigateMenu(SettingsScreen.forFeature(this@HealerCrushCameraScreen, "healer-crush-camera")) })
+            child(button("Classes, size & appearance", 49) { navigateMenu(SettingsScreen.forFeature(this@HealerCrushCameraScreen, "healer-crush-camera")) })
             child(button("Move / resize HUD", 49) { navigateMenu(WidgetEditorScreen(this@HealerCrushCameraScreen)) })
         })
         content.child(label("In the HUD editor: drag to move, drag the lower-right square to resize, scroll to scale, V to hide. Aspect ratio locks height unless Free is selected.", MenuTheme.MUTED))
@@ -77,21 +77,12 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Healer Crush Camer
             child(button("Stop preview", 49) { HealerCrushCameraHud.stopPreview(); say("Manual preview stopped.") })
             child(button("Reset presentation", 49) { HealerCrushCameraHud.resetPresentation(); say("Window, orientation adjustments and appearance reset. Saved viewpoints remain.") })
         })
-        content.child(label("AUTOMATIC DUNGEON SETUP", MenuTheme.SECONDARY))
-        content.child(label("During Storm, select the purple/yellow stage you have verified, then aim at its actual hanging diorite pillar and capture it. Both pillars need calibration. Automatic mode is unavailable in singleplayer.", MenuTheme.MUTED))
-        content.child(row().apply {
-            child(button("Capture purple pillar", 49) { capturePillar(CrushStage.PURPLE) })
-            child(button("Capture yellow pillar", 49) { capturePillar(CrushStage.YELLOW) })
-        })
-        content.child(label("A successful leap to the live Berserker and corroborated crush observations are required. Missing or ambiguous signals keep the automatic window closed.", MenuTheme.MUTED))
+        content.child(label("AUTOMATIC ACTIVATION", MenuTheme.SECONDARY))
+        content.child(label("Save both viewpoints, then choose your classes in settings. The camera opens 26 seconds after Storm's phase starts, switches to yellow after the first Storm crush, and stays visible until Storm dies. Automatic mode requires a living player in F7/M7 on Hypixel.", MenuTheme.MUTED))
         root.child(button("Done", 100) { onClose() })
         updateStatus()
     }
 
-    private fun capturePillar(stage: CrushStage) {
-        HealerCrushCamera.capturePillar(stage)
-        say(HealerCrushCamera.captureStatus)
-    }
     private fun say(value: String) { feedback = value; feedbackLabel.text(Component.literal(value)) }
     private fun updateStatus() {
         status.text(Component.literal(if (HealerCrushCameraHud.previewing) "Manual HUD preview active · ${HealerCrushCameraHud.activeStage()}" else HealerCrushCamera.status))

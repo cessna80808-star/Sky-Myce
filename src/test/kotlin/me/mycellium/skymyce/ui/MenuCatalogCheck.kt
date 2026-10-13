@@ -50,6 +50,13 @@ fun main() {
     sourceEntries.clear()
     check(isolatedIndex.search("blood") == catalog.search("blood")) { "Search index retained a mutable caller inventory" }
     check(MenuSearchIndex(emptyList()).search("anything").isEmpty())
+    val camera = checkNotNull(catalog.findFeature("healer-crush-camera"))
+    check(camera.title == "Crush Camera")
+    check(camera.enabledPath == "Dungeons/Healer Crush Camera/enabled")
+    val cameraGroups = settingGroups(rows, camera.id)
+    check(cameraGroups.keys == setOf("Automatic activation", "Appearance"))
+    for (key in listOf("enabled", "healer", "mage", "berserk", "archer", "tank"))
+        check(cameraGroups.getValue("Automatic activation").any { it.path == "Dungeons/Healer Crush Camera/$key" })
     val irc = checkNotNull(catalog.findFeature("global-chat"))
     check(irc.title == "IRC Chat" && "/sm party" in irc.description && "/sm irc" in irc.description)
     for (key in listOf("enabled", "partyEnabled", "mediaPreviews", "previewSize", "animateGifs", "mentionHighlight", "mentionSounds"))

@@ -24,7 +24,7 @@ object HealerCrushCameraHud : SkyMyceModule() {
     private val liveViewport = CrushCameraViewport(false)
     private val editorViewport = CrushCameraViewport(true)
     val previewing get() = manualStage != null
-    val widget = Widget("healer_crush_camera", "Healer Crush Camera", 630, 8, anchor = Anchor.TOP_RIGHT,
+    val widget = Widget("healer_crush_camera", "Crush Camera", 630, 8, anchor = Anchor.TOP_RIGHT,
         previewBuilder = { editorViewport.prepare() }) { if (activeStage() == null) null else liveViewport.prepare() }.apply {
         resizeHandler = { width, height ->
             val size = cameraWindowSize(width - 8, height - if (Settings.stageLabel) 20 else 8, Settings.aspect.ratio)
@@ -84,7 +84,7 @@ object HealerCrushCameraHud : SkyMyceModule() {
                 graphics.fill(x(), y(), x() + 1, y() + height(), color)
                 graphics.fill(x() + width() - 1, y(), x() + width(), y() + height(), color)
             }
-            if (header > 0) graphics.text(MC.font, "${stage.replaceFirstChar { it.uppercase() }} · ${if (previewing || editor) "preview" else "Healer crush"}", x() + 4, y() + 3, -0x1000000 or tint, false)
+            if (header > 0) graphics.text(MC.font, "${stage.replaceFirstChar { it.uppercase() }} · ${if (previewing || editor) "preview" else "Crush"}", x() + 4, y() + 3, -0x1000000 or tint, false)
             val saved = CameraViewpoints.get(stage)
             if (saved == null || MC.instance.level == null) {
                 graphics.text(MC.font, "Set a viewpoint: /sm crush-camera", x() + 4, y() + header + 8, -0x1000000 or tint, false)
