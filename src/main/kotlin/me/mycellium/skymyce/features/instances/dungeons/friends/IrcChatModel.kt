@@ -4,7 +4,8 @@ import com.google.gson.JsonObject
 import java.net.URI
 
 internal data class IrcMedia(val id: String, val type: String, val url: URI, val thumbnailUrl: URI? = null,
-    val name: String? = null, val mime: String? = null, val bytes: Long? = null, val width: Int? = null, val height: Int? = null)
+    val name: String? = null, val mime: String? = null, val bytes: Long? = null, val width: Int? = null, val height: Int? = null,
+    val sourceUrl: URI? = null)
 internal data class IrcSender(val name: String, val uuid: String? = null, val cosmeticName: String? = null,
     val discordId: String? = null, val avatarUrl: URI? = null)
 internal data class IrcReaction(val emoji: String, val count: Int, val mine: Boolean = false)
@@ -55,10 +56,10 @@ internal data class IrcChatAction(val kind: String, val scope: String, val id: S
 }
 internal fun parseIrcChatAction(command: String): IrcChatAction? {
     val parts = command.split(' ')
-    if (parts.size !in 5..6 || parts[0] != "/sm" || parts[1] != "ircaction" || parts[2] !in setOf("media", "manage") ||
+    if (parts.size !in 5..6 || parts[0] != "/sm" || parts[1] != "ircaction" || parts[2] !in setOf("media", "manage", "reply", "react") ||
         parts[3] !in setOf("global", "room", "party") || !parts[4].matches(ircId)) return null
     val index = parts.getOrNull(5)?.toIntOrNull()
-    if (parts[2] == "media" && (parts.size != 6 || index !in 0..3) || parts[2] == "manage" && parts.size != 5) return null
+    if (parts[2] == "media" && (parts.size != 6 || index !in 0..3) || parts[2] != "media" && parts.size != 5) return null
     return IrcChatAction(parts[2], parts[3], parts[4], index)
 }
 
@@ -98,7 +99,8 @@ internal fun parseIrcMedia(json: JsonObject): List<IrcMedia> {
         val thumbnail = item.optionalString("thumbnailUrl", 2048)?.let { value -> requireNotNull(ircHttpsUrl(value)) }
         IrcMedia(id, type, url, thumbnail, item.optionalString("name", 120), item.optionalString("mime", 80),
             item.optionalInteger("bytes", 1_073_741_824), item.optionalInteger("width", 65535)?.toInt()?.also { value -> require(value > 0) },
-            item.optionalInteger("height", 65535)?.toInt()?.also { value -> require(value > 0) })
+            item.optionalInteger("height", 65535)?.toInt()?.also { value -> require(value > 0) },
+            item.optionalString("sourceUrl", 2048)?.let { value -> requireNotNull(ircHttpsUrl(value)) })
     }.also { require(it.map(IrcMedia::id).distinct().size == it.size) }
 }
 
@@ -168,7 +170,8 @@ internal fun parseIrcReply(json: JsonObject): GlobalChatReply? = json.get("reply
 }
 
 internal data class IrcUpdate(val key: IrcKey, val operation: String, val revision: Int,
-    val text: String?, val media: List<IrcMedia>?, val reactions: List<IrcReaction>?)
+    val text: String?, val media: List<IrcMedia>?, val reactions: List<IrcReaction>?,
+    val textRevision: Int = revision, val mediaRevision: Int = revision, val reactionRevision: Int = revision)
 internal fun parseIrcUpdate(json: JsonObject): IrcUpdate? = runCatching {
     require(json.ircString("type") == "irc_update" && json.ircString("id").matches(ircId))
     val scope = json.ircString("scope"); require(scope in setOf("global", "room", "party"))
@@ -186,38 +189,73 @@ internal fun parseIrcUpdate(json: JsonObject): IrcUpdate? = runCatching {
 
 /** Current-session metadata only; updates can never invent or resurrect a message. */
 internal class IrcChatStore {
-    private data class Entry(val message: GlobalChatMessage, val received: Long)
+    private data class Entry(val message: GlobalChatMessage, val received: Long,
+        val textRevision: Int = message.revision, val mediaRevision: Int = message.revision,
+        val reactionRevision: Int = if (message.reactions.isEmpty()) -1 else message.revision)
     private val messages = linkedMapOf<IrcKey, Entry>()
+    private data class Pending(var update: IrcUpdate, val received: Long)
+    private val pending = linkedMapOf<IrcKey, Pending>()
     private var boundary = ""
     fun boundary(value: String): Boolean {
         if (boundary == value) return false
-        boundary = value; messages.clear(); return true
+        boundary = value; messages.clear(); pending.clear(); return true
     }
-    fun clear() = messages.clear()
-    fun clearScope(scope: String) { messages.keys.removeIf { it.scope == scope } }
+    fun clear() { messages.clear(); pending.clear() }
+    fun clearPending() = pending.clear()
+    fun clearScope(scope: String) { messages.keys.removeIf { it.scope == scope }; pending.keys.removeIf { it.scope == scope } }
     fun get(key: IrcKey): GlobalChatMessage? = messages[key]?.message
     fun values(): List<GlobalChatMessage> = messages.values.map(Entry::message)
     fun accept(message: GlobalChatMessage, now: Long): Boolean {
+        expire(now)
         val key = message.key
         if (key in messages) return false
         messages[key] = Entry(message, now)
+        pending.remove(key)?.update?.let { apply(it, now) }
         while (messages.size > 128) messages.remove(messages.keys.first())
         expire(now)
         return true
     }
     fun apply(update: IrcUpdate, now: Long): GlobalChatMessage? {
         expire(now)
-        val entry = messages[update.key] ?: return null
+        val entry = messages[update.key] ?: run {
+            // Updates can win the initial fan-out's authorization await. They cannot become
+            // visible until their canonical initial message arrives in this same account boundary.
+            val waiting = pending[update.key]
+            if (waiting == null) pending[update.key] = Pending(update, now)
+            else if (waiting.update.operation != "delete") {
+                val previous = waiting.update
+                val later = update.revision > previous.revision
+                val text = update.text != null && (previous.text == null || update.textRevision > previous.textRevision)
+                val media = update.media != null && (previous.media == null || update.mediaRevision > previous.mediaRevision)
+                val reactions = update.reactions != null && (previous.reactions == null || update.reactionRevision > previous.reactionRevision)
+                waiting.update = (if (later || update.operation == "delete") update else previous).copy(
+                    revision = maxOf(previous.revision, update.revision),
+                    text = if (text) update.text else previous.text, textRevision = if (text) update.textRevision else previous.textRevision,
+                    media = if (media) update.media else previous.media, mediaRevision = if (media) update.mediaRevision else previous.mediaRevision,
+                    reactions = if (reactions) update.reactions else previous.reactions, reactionRevision = if (reactions) update.reactionRevision else previous.reactionRevision)
+            }
+            while (pending.size > 32) pending.remove(pending.keys.first())
+            return null
+        }
         val previous = entry.message
-        if (previous.deleted || update.revision <= previous.revision || previous.model != 1) return null
-        val next = if (update.operation == "delete") previous.copy(deleted = true, text = "Message deleted", media = emptyList(), reactions = emptyList(), revision = update.revision)
-        else previous.copy(text = update.text ?: previous.text, media = update.media ?: previous.media,
-            reactions = update.reactions ?: previous.reactions, revision = update.revision)
-        messages[update.key] = entry.copy(message = next)
+        if (previous.deleted || previous.model != 1) return null
+        val text = update.text != null && update.textRevision > entry.textRevision
+        val media = update.media != null && update.mediaRevision > entry.mediaRevision
+        val reactions = update.reactions != null && update.reactionRevision > entry.reactionRevision
+        if (update.operation != "delete" && !text && !media && !reactions) return null
+        val revision = maxOf(previous.revision, update.revision)
+        val next = if (update.operation == "delete") previous.copy(deleted = true, text = "Message deleted", media = emptyList(), reactions = emptyList(), revision = revision)
+        else previous.copy(text = if (text) update.text!! else previous.text, media = if (media) update.media!! else previous.media,
+            reactions = if (reactions) update.reactions!! else previous.reactions, revision = revision)
+        messages[update.key] = entry.copy(message = next, textRevision = if (text) update.textRevision else entry.textRevision,
+            mediaRevision = if (media) update.mediaRevision else entry.mediaRevision, reactionRevision = if (reactions) update.reactionRevision else entry.reactionRevision)
         return next
     }
     fun manageable(key: IrcKey, uuid: String, now: Long): Boolean = messages[key]?.let {
         !it.message.deleted && it.message.model == 1 && it.message.source == "minecraft" && it.message.sender?.uuid == uuid && now - it.received in 0..IRC_MANAGEMENT_MILLIS
     } == true
-    fun expire(now: Long) { messages.entries.removeIf { now - it.value.received !in 0..IRC_MANAGEMENT_MILLIS } }
+    fun expire(now: Long) {
+        messages.entries.removeIf { now - it.value.received !in 0..IRC_MANAGEMENT_MILLIS }
+        pending.entries.removeIf { now - it.value.received !in 0..15_000 }
+    }
 }

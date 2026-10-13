@@ -53,6 +53,9 @@ object CommunityClient {
     private val worker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "Sky-Myce community").apply { isDaemon = true } }
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
     val connected get() = sessionToken != null && accessExpiresAt > System.currentTimeMillis()
+    val hasSavedSession get() = refreshToken != null && refreshExpiresAt > System.currentTimeMillis()
+    val connectionPending get() = flow != null || connectingEpoch != null && busy || cancellation.hasPending
+    val cancellationPending get() = cancellation.hasPending || cancelledConnectEpoch != null
 
     fun initialize() {
         ClientTickEvents.END_CLIENT_TICK.register { tick() }
@@ -233,6 +236,8 @@ object CommunityClient {
                 if (epoch != boundary) { discarded?.let { runCatching { it(result) } }; return@execute }
                 busy = false
                 result.fold({ value -> runCatching { success(value) }.onFailure { status = "Community response unavailable. Local features remain available." } }, { error ->
+                    // A failed start has no flow to poll/cancel; later session refresh work must not look like a start.
+                    if (connectingEpoch == boundary) connectingEpoch = null
                     val code = (error as? CommunityFailure)?.code
                     status = when (code) {
                         "discord_blacklisted", "minecraft_blacklisted", "identity_blacklisted" -> "Online services are restricted for this identity. Local features remain available."

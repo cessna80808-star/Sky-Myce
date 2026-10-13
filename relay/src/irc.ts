@@ -1,6 +1,6 @@
 import type { AccountStore } from "./accounts";
 import type { RelayRoom } from "./index";
-import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircMentionNames, ircOperation, ircPlainText, ircPreview, ircTextDigest,
+import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircMediaKey, ircMentionNames, ircOperation, ircPlainText, ircPreview, ircTextDigest,
   type IrcMedia, type IrcPublicSender, type IrcReply, type IrcRecord, type IrcOperation, type IrcUpdate } from "./irc-model";
 
 export type IrcConfig = {
@@ -454,8 +454,38 @@ export class RoomIrc {
       const media = ircMedia(data.text, data.media);
       if (!media) { result("invalid_media"); return; }
       const continuation = data.part === "embeds";
+      if (data.replacement !== undefined && (!continuation || data.replacement !== true)) { result("invalid_part"); return; }
       if (data.mentions !== undefined && (!Array.isArray(data.mentions) || data.mentions.length > 100 || data.mentions.some(id => typeof id !== "string" || !snowflake.test(id)))) { result("invalid_mentions"); return; }
       if (continuation && (data.reply !== undefined || Array.isArray(data.mentions) && data.mentions.length > 0)) { result("invalid_part"); return; }
+      if (continuation) {
+        // Older Gateways sent only the delayed embed fragment. Enrich its media without replacing
+        // the original body with a truncated reply preview. Current Gateways send the full snapshot.
+        const record = this.lifecycle.fromDiscord(data.id);
+        if (!record || record.source !== "discord" || record.scope !== "global" || record.room !== GLOBAL_CHAT_ROOM || record.discordId !== data.discordId) { result("unknown_message"); return; }
+        const operationId = (await ircTextDigest(`${data.id}\n${data.replacement ? data.text : "media"}\n${JSON.stringify(media)}`)).slice(0, 32);
+        if (data.replacement === true) {
+          const outcome = await this.operation({ ...session, richChatVersion: 1 }, { ...data, type: "discord_operation", id: operationId,
+            operation: "edit", message_id: data.id, media }, "global");
+          result(outcome.error);
+        } else {
+          // The digest yields to other websocket events. Merge from current metadata, not
+          // the snapshot captured before a full edit or deletion could have committed.
+          const latest = this.lifecycle.get(record.id);
+          if (!latest || latest.deleted) { result(latest ? "message_deleted" : "unknown_message"); return; }
+          if (latest.bodyRevision !== undefined || latest.editedAt !== undefined) { result(); return; }
+          const merged = new Map(latest.media.map(item => [ircMediaKey(item.url), item]));
+          for (const item of media) {
+            for (const [key, previous] of merged) if (previous.id === item.id) merged.delete(key);
+            merged.set(ircMediaKey(item.url), item);
+          }
+          const outcome = this.lifecycle.operate(`dc:${data.discordId}`, { id: operationId, messageId: record.id, operation: "edit",
+            media: [...merged.values()].slice(0, 4), mediaOnly: true }, { native: true, discordId: data.discordId });
+          if (outcome.update && outcome.record) this.refreshQueuedGlobal(outcome.record, outcome.update);
+          if (outcome.update) await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).globalChatUpdate(outcome.update!, this.mineActors(record.id))));
+          result(outcome.error);
+        }
+        return;
+      }
       let reply: GlobalReply | undefined;
       if (data.reply !== undefined) {
         if (!data.reply || typeof data.reply !== "object" || Array.isArray(data.reply)) { result("invalid_reply"); return; }
@@ -463,11 +493,13 @@ export class RoomIrc {
         if (typeof candidate.message_id !== "string" || !snowflake.test(candidate.message_id) || typeof candidate.from !== "string" || candidate.from.length > 64 ||
             candidate.text !== undefined && (typeof candidate.text !== "string" || candidate.text.length > 256 || !candidate.text.isWellFormed() || unsafeText.test(candidate.text))) { result("invalid_reply"); return; }
         const receipt = this.ctx.storage.sql.exec<{ from_name: string }>("SELECT from_name FROM global_chat_receipts WHERE message_id=? AND expires>?", candidate.message_id, Date.now()).toArray()[0];
-        reply = { ...this.discordReply(candidate)!, message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
+        const canonical = this.lifecycle.fromDiscord(candidate.message_id);
+        reply = canonical ? { ...this.lifecycle.reply(canonical.id), message_id: candidate.message_id }
+          : { ...this.discordReply(candidate)!, message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
       }
-      const outcome = await this.enqueue(`dc:${data.discordId}`, `${data.id}${continuation ? ":embeds" : ""}`, { source: "discord", from: displayName(data.from), text: data.text,
+      const outcome = await this.enqueue(`dc:${data.discordId}`, data.id, { source: "discord", from: displayName(data.from), text: data.text,
         discordId: data.discordId, identity: { name: displayName(data.from), discordId: data.discordId }, media,
-        mentions: [...new Set((data.mentions as string[] | undefined) ?? [])], ...(reply ? { reply } : {}) }, continuation ? data.id : undefined);
+        mentions: [...new Set((data.mentions as string[] | undefined) ?? [])], ...(reply ? { reply } : {}) });
       result(outcome.error); return;
     }
     if (typeof data.id !== "string" || !packetId.test(data.id)) { ws.close(1008, "Invalid global chat packet"); return; }
@@ -496,13 +528,12 @@ export class RoomIrc {
     sql.exec("DELETE FROM global_chat_limits WHERE updated<?", now - 3_600_000);
   }
 
-  private async enqueue(actor: string, sourceId: string, input: Omit<GlobalChatMessage, "id" | "timestamp" | "expiresAt">, continuationFor?: string): Promise<GlobalChatResult> {
+  private async enqueue(actor: string, sourceId: string, input: Omit<GlobalChatMessage, "id" | "timestamp" | "expiresAt">): Promise<GlobalChatResult> {
     const bodyDigest = await ircTextDigest(input.text);
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(input.text.trim().replace(/\s+/g, " "))))].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const now = Date.now(), sql = this.ctx.storage.sql;
     const outcome = this.ctx.storage.transactionSync((): GlobalChatResult => {
       this.prune(now);
-      if (continuationFor && !sql.exec("SELECT 1 FROM global_chat_seen WHERE source_id=?", `discord:${continuationFor}`).toArray().length) return { ok: false, error: "unknown_message" };
       const dedupId = input.source === "discord" ? `discord:${sourceId}` : `${actor}:${sourceId}`;
       const seen = sql.exec<{ id: string }>("SELECT id FROM global_chat_seen WHERE source_id=?", dedupId).toArray()[0];
       if (seen) return { ok: false, error: "duplicate_message", id: seen.id };
@@ -515,8 +546,8 @@ export class RoomIrc {
       const global = sql.exec<{ credits: number; updated: number }>("SELECT * FROM global_chat_limits WHERE actor='global'").toArray()[0];
       const credits = Math.min(burst, previous ? previous.credits + Math.max(0, now - previous.updated) / refill : burst);
       const available = Math.min(globalBurst, global ? global.credits + Math.max(0, now - global.updated) / globalRefill : globalBurst);
-      if (available < 1 || !continuationFor && (credits < 1 || previous && now - previous.last_sent < bounded(this.env.GLOBAL_CHAT_MIN_INTERVAL_MS, 250, 0, 60_000))) return { ok: false, error: "rate_limited" };
-      if (!continuationFor) sql.exec("INSERT INTO global_chat_limits VALUES(?,?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated,last_sent=excluded.last_sent", actor, credits - 1, now, now);
+      if (available < 1 || credits < 1 || previous && now - previous.last_sent < bounded(this.env.GLOBAL_CHAT_MIN_INTERVAL_MS, 250, 0, 60_000)) return { ok: false, error: "rate_limited" };
+      sql.exec("INSERT INTO global_chat_limits VALUES(?,?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated,last_sent=excluded.last_sent", actor, credits - 1, now, now);
       sql.exec("INSERT INTO global_chat_limits VALUES('global',?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated,last_sent=excluded.last_sent", available - 1, now, now);
       const id = crypto.randomUUID().replaceAll("-", ""), expiresAt = now + bounded(this.env.GLOBAL_CHAT_OUTBOX_TTL_MS, 120_000, 1000, 120_000);
       const packet: GlobalChatMessage = { ...input, id, sourceId, timestamp: now, expiresAt, revision: 0 };
@@ -524,7 +555,7 @@ export class RoomIrc {
         from: input.from, discordId: input.discordId, ...(input.uuid ? { uuid: input.uuid } : {}),
         sender: input.identity ?? { name: input.from, discordId: input.discordId }, preview: ircPreview(input.text), bodyDigest, media: input.media ?? [],
         ...(input.reply ? { reply: input.reply } : {}), revision: 0, timestamp: now, expiresAt: now + IRC_MANAGEMENT_MS,
-        ...(input.source === "discord" ? { discordMessageId: sourceId.replace(/:embeds$/, "") } : {}) });
+        ...(input.source === "discord" ? { discordMessageId: sourceId } : {}) });
       sql.exec("INSERT INTO global_chat_seen VALUES(?,?,?)", dedupId, id, now + 3_600_000);
       sql.exec("INSERT INTO global_chat_repeats VALUES(?,?,?)", actor, digest, now + bounded(this.env.GLOBAL_CHAT_DUPLICATE_MS, 15_000, 0, 120_000));
       sql.exec("INSERT INTO global_chat_messages VALUES(?,?,?)", id, JSON.stringify(packet), expiresAt);
@@ -681,12 +712,24 @@ export class RoomIrc {
     });
     if (outcome.error) return { ok: false, error: outcome.error };
     if (outcome.update) {
+      if (scope === "global" && outcome.record) this.refreshQueuedGlobal(outcome.record, outcome.update);
       const mines = this.mineActors(record.id);
       if (scope === "global") await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).globalChatUpdate(outcome.update!, mines)));
       else await this.deliverUpdate(outcome.update, mines);
       if (!native) { await this.armGlobal(); await this.flushOperations(); }
     }
     return { ok: true, id: input.id };
+  }
+  private refreshQueuedGlobal(record: IrcRecord, update: IrcUpdate): void {
+    if (update.operation === "delete") {
+      this.ctx.storage.sql.exec("DELETE FROM global_chat_outbox WHERE id=?", record.id);
+      this.ctx.storage.sql.exec("DELETE FROM global_chat_messages WHERE id=?", record.id);
+      return;
+    }
+    if (update.operation !== "edit") return;
+    const queued = this.ctx.storage.sql.exec<{ packet: string }>("SELECT packet FROM global_chat_messages WHERE id=?", record.id).toArray()[0];
+    if (queued) this.ctx.storage.sql.exec("UPDATE global_chat_messages SET packet=? WHERE id=?",
+      JSON.stringify({ ...JSON.parse(queued.packet), ...(update.text !== undefined ? { text: update.text, mentions: [] } : {}), media: record.media, revision: record.revision }), record.id);
   }
   private mineActors(messageId: string): Record<string, string[]> {
     const result: Record<string, string[]> = {};

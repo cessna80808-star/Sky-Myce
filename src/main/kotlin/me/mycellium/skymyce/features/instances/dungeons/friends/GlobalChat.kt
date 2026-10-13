@@ -128,7 +128,7 @@ internal class GlobalChatSubscription {
     }
 }
 
-/** Bounded word wrapping; never cuts a UTF-16 surrogate pair or floods chat with empty lines. */
+/** Bounded word wrapping; never cuts an extended grapheme or floods chat with empty lines. */
 internal fun splitGlobalChatText(text: String, maximum: Int = 256, maxLines: Int = 32): List<String> {
     require(maximum in 32..256 && maxLines in 1..32)
     val output = ArrayList<String>()
@@ -138,17 +138,17 @@ internal fun splitGlobalChatText(text: String, maximum: Int = 256, maxLines: Int
         while (start < paragraph.length) {
             if (output.size == maxLines) {
                 val previous = output.last()
-                var end = minOf(previous.length, maximum - shortened.length)
-                if (end > 0 && previous[end - 1].isHighSurrogate()) end--
+                val end = ircGraphemeEnd(previous, 0, minOf(previous.length, maximum - shortened.length))
                 output[output.lastIndex] = previous.substring(0, end) + shortened
                 return output
             }
             var end = minOf(start + maximum, paragraph.length)
             if (end < paragraph.length) {
-                if (paragraph[end - 1].isHighSurrogate()) end--
+                end = ircGraphemeEnd(paragraph, start, end)
                 val space = paragraph.lastIndexOf(' ', end - 1)
                 if (space > start + maximum / 2) end = space
             }
+            if (end == start) end = Regex("\\X").find(paragraph, start)!!.range.last + 1
             output.add(paragraph.substring(start, end))
             start = end
             if (start < paragraph.length && paragraph[start] == ' ') start++
@@ -198,8 +198,7 @@ internal fun globalChatLines(text: String, maximum: Int = 256, maxLines: Int = 3
     fun shortened(): List<List<GlobalChatSpan>> {
         val suffix = "… (message shortened)"
         val previous = output.last().joinToString("") { it.text }
-        var end = minOf(previous.length, maximum - suffix.length)
-        if (end > 0 && previous[end - 1].isHighSurrogate()) end--
+        val end = ircGraphemeEnd(previous, 0, minOf(previous.length, maximum - suffix.length))
         output[output.lastIndex] = listOf(GlobalChatSpan(previous.substring(0, end) + suffix))
         return output
     }
@@ -210,19 +209,22 @@ internal fun globalChatLines(text: String, maximum: Int = 256, maxLines: Int = 3
         var start = 0
         while (start < span.text.length) {
             if (span.text[start] == '\n') { flush(); start++; continue }
-            if (length == maximum) flush()
+            if (length >= maximum) flush()
             if (output.size == maxLines) return shortened()
             val paragraphEnd = span.text.indexOf('\n', start).takeIf { it >= 0 } ?: span.text.length
             val available = maximum - length
             var end = minOf(start + available, paragraphEnd)
             if (end < paragraphEnd) {
-                if (span.text[end - 1].isHighSurrogate()) end--
+                end = ircGraphemeEnd(span.text, start, end)
                 if (span.url == null) {
                     val space = span.text.lastIndexOf(' ', end - 1)
                     if (space > start + available / 2) end = space
                 }
             }
-            if (end == start) { flush(); continue }
+            if (end == start) {
+                if (length > 0) { flush(); continue }
+                end = Regex("\\X").find(span.text, start)!!.range.last + 1
+            }
             line.add(GlobalChatSpan(span.text.substring(start, end), span.url))
             length += end - start
             start = end

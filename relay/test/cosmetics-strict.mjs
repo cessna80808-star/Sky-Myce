@@ -68,12 +68,12 @@ export async function checkStrictCosmetics(script, minecraftProof) {
     const pollSecret = 'x'.repeat(43), flow = await post('/community/connect/start', { challengeId: challenge.challengeId, minecraftProof: minecraftProof('Alice', challenge.nonce), pollSecret, modVersion: '0.1.0' });
     assert.equal((await store.communityUserCommand({ id: actor, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, 'connect', { code: flow.fallbackCode })).ok, true);
     const { credentials } = await post('/community/connect/poll', { flowId: flow.flowId, pollSecret });
-    async function connect(room) {
+    async function connect(room, version = 5) {
       const response = await mf.dispatchFetch(`https://example.test/websocket?room=${room}`, { headers: { Upgrade: 'websocket' } });
       assert.equal(response.status, 101); const ws = response.webSocket, next = inbox(ws); sockets.push(ws); ws.accept();
       const challenge = await next(); assert.equal(challenge.protocol, 3);
       ws.send(JSON.stringify({ ...minecraftProof('Alice', challenge.serverId), communityToken: credentials.accessToken,
-        cosmetics: true, cosmeticsVersion: 3 }));
+        cosmetics: true, cosmeticsVersion: version }));
       const ready = await next(); assert.equal(ready.cosmetics, true); assert.equal(ready.cosmeticsNames, true); return { ws, next };
     }
     const friends = await connect('friends'), testing = await connect('testing');
@@ -87,6 +87,33 @@ export async function checkStrictCosmetics(script, minecraftProof) {
     const shared = await testing.next(); assert.equal(shared.type, 'cosmetics_event'); assert.equal(shared.record.revision, event.record.revision);
     assert.equal((await packet(testing, { type: 'cosmetics_get', uuids: [id] })).records[0].revision, 1, 'All rooms in one deployment share one cosmetic authority');
     assert.match(await interaction('show'), /Aster/);
+    const cosmeticSql = await mf.unsafeGetDurableObjectStorage('strict-cosmetics-check', 'AccountStore', { name: 'global' });
+    const gradient = JSON.stringify([{ text: 'A', color: '#112233', bold: true }, [{ text: 's', color: '#223344' }, 't'], { text: '', extra: [{ text: 'e', color: '#334455' }, { text: 'r', color: '#445566' }] }]);
+    assert.match(await interaction('set', { name: gradient }), /Saved/);
+    const gradientEvent = (await friends.next()).record; await testing.next();
+    assert.equal(gradientEvent.name, 'Aster'); assert.equal(gradientEvent.nameStyle.color, '#112233');
+    assert.equal(gradientEvent.nameStyle.extra[0].color, '#223344');
+    assert.deepEqual(gradientEvent.nameStyle.extra[0].extra, [{ text: 't' }], 'Nested native arrays preserve inherited styles instead of flattening characters');
+    assert.equal(gradientEvent.nameStyle.extra[1].extra[1].color, '#445566');
+    assert.match(await interaction('set', { y: 1.4 }), /Saved/);
+    const untouched = (await friends.next()).record; await testing.next();
+    assert.deepEqual(untouched.nameStyle, gradientEvent.nameStyle, 'A body-only edit preserves the structured name exactly');
+    await cosmeticSql.exec('DELETE FROM cosmetics_limits');
+    const expanded = JSON.stringify(Array.from({ length: 32 }, (_, i) => ({ text: 'A', color: i % 2 ? '#223344' : '#112233' })));
+    assert.match(await interaction('set', { name: expanded }), /Saved/);
+    const native = (await friends.next()).record; await testing.next();
+    assert.equal(native.nameStyle.extra.length, 31, 'Version5 receives all actual character components');
+    for (const version of [2, 3, 4]) {
+      const older = await connect('testing', version);
+      const record = (await packet(older, { type: 'cosmetics_get', uuids: [id] })).records[0];
+      assert.equal(record.name, 'A'.repeat(32)); assert.deepEqual(record.nameStyle, { text: record.name }, `Version${version} cannot receive a tree rejected by its old strict parser`);
+      assert.equal(Object.hasOwn(record, 'capeAsset'), version === 4, 'Previous profile shapes remain exact');
+    }
+    for (const name of ['[]', '["", {"text":"Aster","clickEvent":{"action":"run_command","command":"/op"}}]', JSON.stringify(Array.from({ length: 65 }, () => '')), JSON.stringify('x'.repeat(33)), JSON.stringify({ text: 'Aster', extra: [[{ text: '@everyone' }]] })]) {
+      await cosmeticSql.exec('DELETE FROM cosmetics_limits');
+      assert.match(await interaction('set', { name }), /Name|name|text|components|characters/, 'Malformed, over-complex, executable and unsafe components fail closed instead of hitting rate limits');
+    }
+    await cosmeticSql.exec('DELETE FROM cosmetics_limits');
     assert.match(await interaction('set', { name: 'Stolen' }, stranger), /cannot use community services/);
     await interaction('set', { name: 'WrongGuild' }, actor, { guild_id: '99999999999999999' });
     const link = await packet(friends, { type: 'cosmetics_link', uuid: 'b'.repeat(32) });
@@ -109,7 +136,7 @@ export async function checkStrictCosmetics(script, minecraftProof) {
     });
     friends.ws.send(JSON.stringify({ type: 'cosmetics_get', id: nextId().padStart(32, '0'), names: ['Alice'] }));
     assert.equal((await revoked).code, 4005, 'Name lookup cannot bypass revoked account authorization');
-    assert.equal((await sql.exec('SELECT display_name FROM cosmetics_public WHERE uuid=?', id))[0].display_name, 'Aster');
+    assert.equal((await sql.exec('SELECT display_name FROM cosmetics_public WHERE uuid=?', id))[0].display_name, native.name, 'A revoked mutation cannot replace the last accepted expanded name');
     assert.ok(edits.length >= 9);
     console.log('Strict cosmetics checks passed: canonical configuration, private responses, community proofs, cross-room authoritative appearance, ownership, replay, expiry and identity blacklist.');
   } finally { for (const ws of sockets) { try { ws.close(); } catch {} } await mf.dispose(); }

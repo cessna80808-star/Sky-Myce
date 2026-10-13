@@ -364,16 +364,21 @@ export async function checkGlobalChat(script, proof) {
     const reply = await discord('Yes — dungeon and Hub share this channel.', { mentions: [bobPerson.discordId, bobPerson.discordId],
       reply: { message_id: originalDiscordId, from: 'Spoofed preview', text: 'anyone running F7?' } });
     assert.deepEqual(reply.packets.map(packet => packet.mention), [false, true, false]);
-    assert.deepEqual(reply.packets[0].reply, { from: 'Alice', text: 'anyone running F7?' });
+    assert.deepEqual(reply.packets[0].reply, { from: 'Alice', text: first.packet.text },
+      'A known parent uses its canonical current preview, not the Gateway\'s shorter cached excerpt');
     await ping(bot); // Discord-originated messages are never sent back to Discord.
     bot.ws.send(JSON.stringify({ type: 'discord_message', scope: 'global', source: 'discord', room: 'global-chat', channelId,
       id: reply.requestId, message_id: reply.requestId, discordId: '888888888888888888', from: 'Replayed author', text: 'changed metadata' }));
     assert.equal((await bot.next()).error, 'duplicate_message'); await ping(alice); await ping(bob);
     const creditsBeforePreview = (await globalSql.exec("SELECT credits,last_sent FROM global_chat_limits WHERE actor='dc:777777777777777777'"))[0];
-    const latePreview = await discord('Late link preview\nhttps://a.test', { id: reply.requestId, message_id: reply.requestId, part: 'embeds' });
-    assert.ok(latePreview.packets.every(packet => !packet.mention && !packet.reply));
+    bot.ws.send(JSON.stringify({ type: 'discord_message', scope: 'global', source: 'discord', room: 'global-chat', channelId,
+      id: reply.requestId, message_id: reply.requestId, part: 'embeds', discordId: '777777777777777777', from: 'Unlinked User',
+      text: 'Late link preview\nhttps://a.test', mentions: [] }));
+    assert.equal((await bot.next()).error, undefined);
+    for (const client of [alice, bob, otherAlice]) await ping(client); // No second logical message for older clients.
+    assert.equal((await globalSql.exec('SELECT id FROM irc_metadata WHERE source_id=?', reply.requestId))[0].id, reply.packets[0].id);
     assert.deepEqual((await globalSql.exec("SELECT credits,last_sent FROM global_chat_limits WHERE actor='dc:777777777777777777'"))[0], creditsBeforePreview);
-    for (const [part, messageId, error] of [['embeds', reply.requestId, 'duplicate_message'], ['embeds', String(discordSequence++), 'unknown_message'], ['unsupported', reply.requestId, 'invalid_part']]) {
+    for (const [part, messageId, error] of [['embeds', reply.requestId, undefined], ['embeds', String(discordSequence++), 'unknown_message'], ['unsupported', reply.requestId, 'invalid_part']]) {
       bot.ws.send(JSON.stringify({ type: 'discord_message', scope: 'global', source: 'discord', room: 'global-chat', channelId,
         id: messageId, message_id: messageId, part, discordId: '777777777777777777', from: 'Unlinked User', text: 'Another preview', mentions: [] }));
       const result = await bot.next(); assert.equal(result.error, error);

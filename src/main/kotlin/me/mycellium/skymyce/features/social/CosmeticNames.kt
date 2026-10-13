@@ -1,7 +1,9 @@
 package me.mycellium.skymyce.features.social
 
 import com.google.gson.JsonElement
+import com.mojang.serialization.JsonOps
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.ComponentSerialization
 import net.minecraft.network.chat.FormattedText
 import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.TextColor
@@ -11,33 +13,40 @@ import net.minecraft.util.StringDecomposer
 import java.text.Normalizer
 import java.util.Optional
 
-/** Validate the same inert component subset as the relay, without Minecraft's executable component codec. */
+/** Validate an inert bounded tree before letting the pinned native codec preserve its text-component semantics. */
 fun parseCosmeticText(json: JsonElement): Component {
+    require(json.toString().toByteArray(Charsets.UTF_8).size <= 8192) { "Name JSON may contain at most 8 KiB." }
     var nodes = 0
     val plain = StringBuilder()
-    fun parse(value: JsonElement, depth: Int): Component {
-        require(depth <= 4 && ++nodes <= 16 && value.isJsonObject)
+    fun text(value: String) {
+        require(value.matches(Regex("[\\p{L}\\p{N}\\p{S} _.'•·»«-]*")) && value.none { it == '§' || it == '@' } && Normalizer.normalize(value, Normalizer.Form.NFKC) == value) { "Name text contains unsupported characters or noncanonical Unicode." }
+        plain.append(value); require(plain.length <= 32) { "Display names may contain at most 32 characters." }
+    }
+    fun validate(value: JsonElement, depth: Int) {
+        require(depth <= 8 && ++nodes <= 64) { "Name JSON is too complex." }
+        if (value.isJsonPrimitive && value.asJsonPrimitive.isString) { text(value.asString); return }
+        if (value.isJsonArray) {
+            require(value.asJsonArray.size() in 1..64) { "Name arrays must contain text components." }; value.asJsonArray.forEach { validate(it, depth + 1) }; return
+        }
+        require(value.isJsonObject) { "Use text strings, objects or arrays in name JSON." }
         val node = value.asJsonObject
-        require(node.keySet().all { it in setOf("text", "color", "bold", "italic", "underlined", "strikethrough", "extra") })
-        val text = node.get("text").also { require(it.isJsonPrimitive && it.asJsonPrimitive.isString) }.asString
-        require(text.matches(Regex("[\\p{L}\\p{N}\\p{S} _.'•·»«-]*")) && text.none { it == '§' || it == '@' } && Normalizer.normalize(text, Normalizer.Form.NFKC) == text)
-        plain.append(text); require(plain.length <= 32)
-        var style = Style.EMPTY
+        require(node.keySet().all { it in setOf("text", "color", "bold", "italic", "underlined", "strikethrough", "extra") }) { "Only text, color, bold, italic, underlined, strikethrough and extra are allowed." }
+        require(node.has("text") && node["text"].isJsonPrimitive && node["text"].asJsonPrimitive.isString) { "Every name object needs a text string." }
+        text(node["text"].asString)
         node.get("color")?.let {
-            require(it.isJsonPrimitive && it.asJsonPrimitive.isString)
-            style = style.withColor(TextColor.parseColor(it.asString).result().orElseThrow())
+            require(it.isJsonPrimitive && it.asJsonPrimitive.isString && TextColor.parseColor(it.asString).result().isPresent) { "Use a Minecraft color name or #RRGGBB." }
         }
         for (key in listOf("bold", "italic", "underlined", "strikethrough")) node.get(key)?.let {
-            require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean)
-            style = when (key) { "bold" -> style.withBold(it.asBoolean); "italic" -> style.withItalic(it.asBoolean)
-                "underlined" -> style.withUnderlined(it.asBoolean); else -> style.withStrikethrough(it.asBoolean) }
+            require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "Text style flags must be true or false." }
         }
-        return Component.literal(text).withStyle(style).apply {
-            node.get("extra")?.let { require(it.isJsonArray && it.asJsonArray.size() <= 15); it.asJsonArray.forEach { append(parse(it, depth + 1)) } }
-        }
+        node.get("extra")?.let { require(it.isJsonArray && it.asJsonArray.size() in 0..64) { "Extra must be an array of text components." }; it.asJsonArray.forEach { child -> validate(child, depth + 1) } }
     }
-    return parse(json, 0).also { require(plain.isNotBlank() && plain.toString() == plain.toString().trim()) }
+    validate(json, 0)
+    require(plain.isNotBlank() && plain.toString() == plain.toString().trim()) { "Names must not be blank or start/end with spaces." }
+    return ComponentSerialization.CODEC.parse(JsonOps.INSTANCE, json).result().orElseThrow { IllegalArgumentException("Invalid Minecraft name JSON.") }
 }
+
+fun cosmeticTextJson(component: Component): JsonElement = ComponentSerialization.CODEC.encodeStart(JsonOps.INSTANCE, component).result().orElseThrow()
 
 /** Display-only copies. Never mutate received components, click actions, command input or item data. */
 class CosmeticNameMap {
@@ -116,6 +125,8 @@ object CosmeticNames {
     @JvmStatic fun exitOriginal() { suppressed.set((suppressed.get() - 1).coerceAtLeast(0)) }
     @JvmStatic fun original(source: FormattedCharSequence): FormattedCharSequence = OriginalSequence(if (source is DisplaySequence) source.source else source)
     fun original(source: Component): Component = OriginalComponent(source)
+    /** A chosen cosmetic is already decorated, including when it contains the real username itself. */
+    @JvmStatic fun decorated(source: Component): Component = if (source is OriginalComponent) source else OriginalComponent(source)
     @JvmStatic fun display(source: FormattedCharSequence): FormattedCharSequence =
         if (active()) mapping.sequence(source) else if (source is DisplaySequence) source.source else source
     @JvmStatic fun display(value: String): FormattedCharSequence = mapping.string(value)
@@ -130,6 +141,6 @@ object CosmeticNames {
         if (displayed === raw) return value
         val output = Component.empty()
         displayed.accept { _, style, code -> output.append(Component.literal(String(Character.toChars(code))).withStyle(style)); true }
-        return output
+        return decorated(output)
     }
 }

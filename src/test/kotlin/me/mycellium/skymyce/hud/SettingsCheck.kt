@@ -85,6 +85,11 @@ fun checkSettings() {
         commandCenterSettings(catalog, commandRows, it, "").map { row -> row.path }
     }
     check(categoryPaths.sorted() == commandRows.map { it.path }.sorted()) { "Each setting must appear directly in one category" }
+    catalog.features.forEach { feature ->
+        val scoped = commandCenterSettings(catalog, commandRows, feature.category, "", feature.id)
+        check(scoped.all { catalog.featureForPath(it.path)?.id == feature.id }) { "Feature settings leaked unrelated controls" }
+        check(scoped.map { it.path }.toSet() == commandRows.filter { catalog.featureForPath(it.path)?.id == feature.id }.map { it.path }.toSet())
+    }
     val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.COSMETICS, "dungeon profit")
     check(searched.any { it.path.startsWith("Dungeons/") } && searched.any { it.path == "Community Sharing/dungeons" } &&
         searched.none { it.path.startsWith("Cosmetics/") }) { "Search must override the sidebar category and include matching community privacy controls" }

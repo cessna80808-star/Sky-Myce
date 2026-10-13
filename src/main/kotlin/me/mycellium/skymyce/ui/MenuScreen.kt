@@ -40,7 +40,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected val menuHeight get() = menuLayout.height.coerceAtLeast(260)
     protected open val settingsCategory: SettingsTab? get() = null
     protected open fun selectSettings(tab: SettingsTab) {}
-    protected open val menuParent: net.minecraft.client.gui.screens.Screen? get() = null
+    protected open val menuParent: net.minecraft.client.gui.screens.Screen?
+        get() = if (modal) null else menuBackScreen(menuBackTarget(menuCategory, home = home))
     private var builtLayout: MenuLayout? = null
     private var builtTheme = -1L
     private var canvas = MenuCanvas()
@@ -243,8 +244,8 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
         { if (home) -1 else menuCategory?.ordinal ?: -1 }, navigationSelection,
         { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
-        { navigateMenu(MenuDirectoryScreen(parent = this)) },
-        { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK, parent = this)) },
+        { navigateMenu(MenuDirectoryScreen()) },
+        { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
         { if (introductionClaimed) ThemeConfig.animationMode else GuiMotion.OFF },
         { !introductionClaimed || opening.sample() >= .85 })
 
@@ -468,22 +469,31 @@ fun openMenu(page: MenuPage? = null) {
     if (feature == null) navigateMenu(MenuHomeScreen()) else openMenuFeature(feature)
 }
 
-fun openMenuCategory(category: MenuCategory) = navigateMenu(if (category == MenuCategory.SETTINGS)
-    SettingsScreen(MC.screen) else MenuDirectoryScreen(category, parent = MC.screen))
+internal fun menuCategoryScreen(category: MenuCategory): MenuScreen = MenuDirectoryScreen(category)
+
+fun openMenuCategory(category: MenuCategory) = navigateMenu(menuCategoryScreen(category))
 
 fun openMenuFeature(id: String, configure: Boolean = false) {
     val feature = MenuDirectory.catalog.findFeature(id) ?: return
     MenuShortcuts.visit(id)
-    val parent = MC.screen
+    val parent = menuCategoryScreen(feature.category)
+    if (!configure && feature.tool == "global-chat") {
+        // The composer selector only replaces gameplay or an existing ChatScreen.
+        MC.instance.setScreen(null)
+        me.mycellium.skymyce.features.instances.dungeons.friends.RelayMessages.selectGlobal()
+        return
+    }
     navigateMenu(if (configure && id != "cosmetics") SettingsScreen.forFeature(parent, id) else when (feature.tool) {
         "daily-digest" -> DailyDigestScreen()
         "party-finder" -> DungeonFriendsScreen()
         "dungeon-tracker" -> DungeonScreen()
+        "healer-crush-camera" -> me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()
         "auction-browser" -> AuctionHouseScreen()
         "cosmetics" -> CosmeticsScreen()
         "community" -> me.mycellium.skymyce.community.CommunityScreen()
         "leaderboards" -> me.mycellium.skymyce.community.LeaderboardScreen()
         "rng-journal" -> me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()
+        "rng-test" -> me.mycellium.skymyce.features.digest.testing.RngTestScreen()
         "loans" -> FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)
         "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
         "player-utilities" -> FriendsSocialScreen()
@@ -496,7 +506,7 @@ fun openMenuSetting(path: String) {
     if (MenuDirectory.catalog.settingEntry(path) == null) return
     val owner = MenuDirectory.catalog.featureForPath(path)
     if (owner != null) MenuShortcuts.visit(owner.id)
-    val parent = MC.screen
+    val parent = menuCategoryScreen(owner?.category ?: MenuCategory.SETTINGS)
     navigateMenu(when {
         path.startsWith("Cosmetics/") -> CosmeticsScreen(focusPath = path)
         path.startsWith("Theme & Appearance/") && path.substringAfterLast('/') !in listOf("animationMode", "graphicsQuality") ->

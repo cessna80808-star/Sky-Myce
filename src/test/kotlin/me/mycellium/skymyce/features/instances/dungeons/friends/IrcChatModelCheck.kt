@@ -96,6 +96,10 @@ fun checkIrcChatModel() {
         val action = IrcChatAction("media", scope, global.id, 3)
         check(parseIrcChatAction(action.command) == action)
         check(parseIrcChatAction(IrcChatAction("manage", scope, global.id).command)?.kind == "manage")
+        for (kind in listOf("reply", "react")) {
+            check(parseIrcChatAction(IrcChatAction(kind, scope, global.id).command) == IrcChatAction(kind, scope, global.id))
+            check(parseIrcChatAction("/sm ircaction $kind $scope ${global.id} 0") == null)
+        }
         val label = ircPrefix(scope); val colors = ircPrefixColors(label.length)
         check(colors.size == label.length && colors.first() == 0x44E4EF && colors.last() == 0xA46BFF && colors.distinct().size > 5)
     }
@@ -126,6 +130,72 @@ fun checkIrcChatModel() {
     names.sequence(replyHeader.visualOrderText).accept { _, _, code -> displayed.appendCodePoint(code); true }
     check(displayed.toString() == "✈ Alice ✈ ↩ Bob: ")
     check(!IrcChatRendering.addingMessage())
+    val joined = "👩🏽‍💻 👨‍👩‍👧‍👦 🇸🇪 ❤️"
+    val custom = "<a:party_blob:123456789012345678>"
+    val unicode = richMessage().apply { addProperty("text", "$joined $custom") }
+    check(parseGlobalChat(unicode)?.text == "$joined $custom")
+    val readable = ircReadableText("Hello $joined $custom")
+    check(readable.joinToString("") { it.original ?: it.text } == "Hello $joined $custom")
+    check(readable.last().text == ":party_blob:" && readable.last().original == custom)
+    check(readable.any { it.original == "👩🏽‍💻" } && readable.any { it.original == "👨‍👩‍👧‍👦" })
+    check(readable.all { it.text.codePoints().noneMatch { point -> point in 0x1F000..0x1FAFF || point == 0x200D } })
+    val unsigned = URI("https://cdn.discordapp.com/attachments/1/2/clip.gif")
+    val signed = URI("https://media.discordapp.net/attachments/1/2/clip.gif?ex=123&is=2&hm=abc")
+    check(ircMediaIdentity(unsigned) == ircMediaIdentity(signed))
+    check(ircMediaIdentity(URI("HTTPS://MEDIA.DISCORDAPP.NET:443/attachments/1/2/clip.gif?ex=123&is=2&hm=abc")) == ircMediaIdentity(unsigned))
+    check(ircMediaIdentity(URI("$unsigned?width=20")) != ircMediaIdentity(unsigned))
+    check(ircMediaIdentity(URI("https://example.com/clip.gif?ex=123")) != ircMediaIdentity(URI("https://example.com/clip.gif?ex=456")))
+    val resource = IrcMedia("clip", "gif", signed, sourceUrl = URI("https://tenor.com/view/clip"))
+    val repeated = "caption $unsigned https://tenor.com/view/clip $signed"
+    val previewBody = ircBodySpans(repeated, listOf(resource), previews = true)
+    check(previewBody.none { it.url != null || it.mediaIndex != null } && "caption" in previewBody.joinToString("") { it.text })
+    check(ircBodySpans(repeated, listOf(resource), previews = false).count { it.mediaIndex == 0 } == 1)
+    check(ircBodySpans("https://example.com/unrelated.gif", listOf(resource), previews = true).single().url != null)
+    val alias = richMessage().apply { add("media", JsonParser.parseString("""[{"id":"clip","type":"gif","url":"$signed","sourceUrl":"https://tenor.com/view/clip"}]""")) }
+    check(parseGlobalChat(alias)?.media?.single()?.sourceUrl == URI("https://tenor.com/view/clip"))
+    alias.getAsJsonArray("media")[0].asJsonObject.addProperty("sourceUrl", "javascript:bad")
+    check(parseGlobalChat(alias) == null)
+    val reactionRequests = IrcReactionRequests()
+    check(reactionRequests.start(global.key, "👍", true, 1000))
+    check(!reactionRequests.start(global.key, "👍", true, 1001) && !reactionRequests.start(global.key, "👍", false, 1001))
+    reactionRequests.observe(global.copy(reactions = listOf(IrcReaction("👍", 1, true))))
+    check(reactionRequests.start(global.key, "👍", false, 1002))
+    reactionRequests.finish(global.key, "👍"); check(reactionRequests.start(global.key, "👍", false, 1003))
+    reactionRequests.clear(); check(reactionRequests.start(global.key, "👍", true, 1004))
+    check(reactionRequests.start(global.key, "👍", false, 16004)) // Expired receipt state cannot lock the UI forever.
+    check(!reactionRequests.start(global.key, "not-an-emoji", true, 16005))
+    for (width in listOf(80, 320, 854, 1920)) for (height in listOf(160, 480, 1080)) {
+        val bounds = ircPickerBounds(width + 20, height + 20, width, height)
+        check(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width && bounds.y + bounds.height <= height - 28)
+    }
+    val reorder = IrcChatStore()
+    val early = requireNotNull(parseIrcUpdate(change()))
+    check(reorder.apply(early, 1000) == null && reorder.values().isEmpty())
+    check(reorder.apply(early, 1001) == null)
+    check(reorder.accept(global, 1002) && reorder.get(global.key)?.text == "changed" && reorder.values().size == 1)
+    check(!reorder.accept(global, 1003))
+    reorder.clear()
+    check(reorder.apply(early, 1004) == null)
+    reorder.boundary("new-account")
+    check(reorder.accept(global, 1005) && reorder.get(global.key)?.text == "hello")
+    reorder.clear()
+    check(reorder.apply(early, 1006) == null)
+    check(reorder.accept(global, 16007) && reorder.get(global.key)?.text == "hello")
+    // Body, media and full reaction snapshots can fan out in a different order.
+    for (beforeCreate in listOf(false, true)) {
+        val domains = IrcChatStore()
+        val latestReactions = IrcUpdate(global.key, "reaction", 3, null, null, listOf(IrcReaction("🔥", 1, true)))
+        val delayedBody = IrcUpdate(global.key, "edit", 1, "actual edited body", null, emptyList())
+        val newerMedia = IrcUpdate(global.key, "edit", 2, null, listOf(attachment), emptyList())
+        if (!beforeCreate) check(domains.accept(global, 1000))
+        domains.apply(latestReactions, 1001); domains.apply(newerMedia, 1002); domains.apply(delayedBody, 1003)
+        if (beforeCreate) check(domains.accept(global, 1004))
+        val merged = requireNotNull(domains.get(global.key))
+        check(merged.text == "actual edited body" && merged.media == listOf(attachment) && merged.reactions == latestReactions.reactions && merged.revision == 3)
+        check(domains.apply(delayedBody, 1005) == null && domains.apply(newerMedia, 1006) == null)
+        check(domains.apply(IrcUpdate(global.key, "delete", 2, null, null, null), 1007)?.deleted == true)
+        check(domains.apply(latestReactions.copy(revision = 4, reactionRevision = 4), 1008) == null)
+    }
     check(runCatching {
         IrcChatRendering.withTaggedMessage {
             check(IrcChatRendering.addingMessage())

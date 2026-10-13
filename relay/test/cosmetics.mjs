@@ -135,7 +135,7 @@ export async function checkCosmetics(script, proof) {
     }
     assert.equal(legacyUpdate.revision, longName.revision); assert.equal(legacyUpdate.name, null);
     assert.deepEqual(Object.keys(legacyUpdate).sort(), ["name", "revision", "scale", "updatedAt", "uuid"]);
-    for (const name of ['{"text":"Hawk","clickEvent":{"action":"run_command","command":"/op"}}', '{"text":"Hawk","font":"evil:font"}', '{"translate":"evil"}', '{"text":"Hawk","bold":"true"}', '["",{text:"Hawk",font:"evil:font"}]', '　'.repeat(700) + 'Hawk']) {
+    for (const name of ['{"text":"Hawk","clickEvent":{"action":"run_command","command":"/op"}}', '{"text":"Hawk","font":"evil:font"}', '{"translate":"evil"}', '{"text":"Hawk","bold":"true"}', '["",{text:"Hawk",font:"evil:font"}]', '　'.repeat(2800) + 'Hawk']) {
       await resetLimits(); assert.doesNotMatch(await call(command("set", { name })), /^Saved/);
     }
     await resetLimits();

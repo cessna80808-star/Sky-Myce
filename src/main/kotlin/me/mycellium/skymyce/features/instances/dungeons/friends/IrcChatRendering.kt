@@ -11,6 +11,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
 import net.minecraft.client.gui.ActiveTextCollector
 import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -27,6 +28,7 @@ import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.resources.Identifier
 import kotlin.math.roundToInt
+import org.lwjgl.glfw.GLFW
 
 internal const val IRC_THUMBNAIL_WIDTH = 96
 internal const val IRC_THUMBNAIL_HEIGHT = 72
@@ -45,10 +47,10 @@ internal fun ircThumbnailLayout(percent: Int, availableWidth: Int, lineHeight: I
 internal fun ircMessageHeader(message: GlobalChatMessage, highlight: Boolean): MutableComponent {
     val name = if (message.source == "discord") "@${message.from}" else message.from
     // The shared cosmetic font hook decorates the real name once, including with other chat mods installed.
-    val result = Component.literal(name).withColor(if (message.mention && highlight) 0xFFE18A else 0xAACBFF)
+    val result = Component.literal(ircReadableText(name).joinToString("") { it.text }).withColor(if (message.mention && highlight) 0xFFE18A else 0xAACBFF)
         .withStyle { it.withHoverEvent(HoverEvent.ShowText(Component.literal("${if (message.source == "discord") "Discord" else "Minecraft"}: ${message.from}"))) }
     message.reply?.takeUnless { message.deleted }?.let { reply ->
-        result.append(Component.literal(" ↩ ${reply.from}").withColor(0x969DA8).withStyle {
+        result.append(Component.literal(" ↩ ${ircReadableText(reply.from).joinToString("") { it.text }}").withColor(0x969DA8).withStyle {
             it.withHoverEvent(HoverEvent.ShowText(Component.literal(reply.text ?: "Reply to ${reply.from}")))
         })
     }
@@ -82,12 +84,18 @@ object IrcChatRendering {
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen !is ChatScreen) return@register
             ScreenMouseEvents.allowMouseClick(screen).register { _, click ->
+                if (click.button() == 0 && !suggestionsVisible() && IrcInlineControls.click(screen, click.x().toInt(), click.y().toInt())) return@register false
                 val action = actionAt(click.x().toInt(), click.y().toInt())
                 if (click.button() != 0 || click.hasShiftDown() || action == null) true
-                else { RelayMessages.chatAction(action.command); false }
+                else { RelayMessages.chatAction(action.command, click.x().toInt(), click.y().toInt()); false }
             }
+            ScreenKeyboardEvents.allowKeyPress(screen).register { _, key ->
+                !(key.key() == GLFW.GLFW_KEY_ESCAPE && !suggestionsVisible() && IrcInlineControls.escape())
+            }
+            ScreenEvents.remove(screen).register { IrcInlineControls.clear() }
             ScreenEvents.afterExtract(screen).register { _, output, mouseX, mouseY, _ ->
                 render(output)
+                if (!suggestionsVisible()) IrcInlineControls.render(screen, output, mouseX, mouseY)
                 val action = actionAt(mouseX, mouseY)
                 val message = action?.let { RelayMessages.chatStore.get(RelayMessages.key(it.scope, it.id)) }
                 if (action?.kind == "media" && message != null) {
@@ -128,6 +136,7 @@ object IrcChatRendering {
         MC.instance.gui.chat.scrollChat(0) // Native clamp after an edit or preference removes wrapped lines.
     }
     fun clear() {
+        IrcInlineControls.clear()
         textures.values.forEach { it.texture.close() }; textures.clear()
         val chat = accessor()
         if (chat.`skymyce$getMessages`().removeIf { it.tag()?.logTag()?.startsWith("skymyce:irc:") == true }) refresh(chat)
@@ -183,23 +192,31 @@ object IrcChatRendering {
         val result = prefixComponent(message.scope)
         result.append(ircMessageHeader(message, GlobalChatConfig.mentionHighlight))
         if (message.deleted) return result.append(Component.literal("Message deleted").withColor(0x969DA8).withStyle { it.withItalic(true) })
-        for (span in globalChatSpans(message.text)) {
+        val representedMedia = hashSetOf<Int>()
+        for (span in ircBodySpans(message.text, message.media, GlobalChatConfig.mediaPreviews)) {
             val url = span.url
-            val mediaIndex = message.media.indexOfFirst { it.url == url }
+            val mediaIndex = span.mediaIndex ?: -1
             if (url != null && mediaIndex >= 0) {
-                result.append(actionStyle("[${message.media[mediaIndex].type.uppercase()}]", IrcChatAction("media", message.scope, message.id, mediaIndex), "View media"))
+                if (!GlobalChatConfig.mediaPreviews && representedMedia.add(mediaIndex))
+                    result.append(actionStyle("[${message.media[mediaIndex].type.uppercase()}]", IrcChatAction("media", message.scope, message.id, mediaIndex), "View media"))
             } else {
                 val text = if (url != null && trustedIrcGifUrl(url)) "[GIF]" else span.text
-                val part = Component.literal(text).withColor(if (url == null) 0xE2E7EF else 0x68B9F5)
-                if (url != null) part.withStyle { it.withClickEvent(ClickEvent.OpenUrl(url)).withUnderlined(true)
-                    .withHoverEvent(HoverEvent.ShowText(Component.literal("Open original link"))) }
-                result.append(part)
+                for (readable in ircReadableText(text)) {
+                    val part = Component.literal(readable.text).withColor(if (url == null) 0xE2E7EF else 0x68B9F5)
+                    if (url != null) part.withStyle { it.withClickEvent(ClickEvent.OpenUrl(url)).withUnderlined(true)
+                        .withHoverEvent(HoverEvent.ShowText(Component.literal("Open original link"))) }
+                    else if (readable.original != null) part.withStyle { it.withHoverEvent(HoverEvent.ShowText(Component.literal("Emoji: ${readable.text}"))) }
+                    result.append(part)
+                }
             }
         }
         if (message.model == 1 && DungeonFriendRelay.richChatAvailable) {
             for (reaction in message.reactions.filter { it.count > 0 })
-                result.append(Component.literal("  ${reaction.emoji} ${reaction.count}").withColor(if (reaction.mine) 0x68B9F5 else 0xA4ADBD))
-            result.append(actionStyle("  [⋯]", IrcChatAction("manage", message.scope, message.id), "Reply, react or manage your message"))
+                result.append(actionStyle("  ${IRC_REACTION_NAMES[IRC_REACTIONS.indexOf(reaction.emoji)]} ${reaction.count}",
+                    IrcChatAction("react", message.scope, message.id), "${if (reaction.mine) "Remove or change" else "Add"} reaction"))
+            result.append(actionStyle("  [Reply]", IrcChatAction("reply", message.scope, message.id), "Reply in the current composer"))
+            result.append(actionStyle(" [React]", IrcChatAction("react", message.scope, message.id), "Choose a reaction"))
+            if (RelayMessages.canManage(message.key)) result.append(actionStyle(" [Edit/Delete]", IrcChatAction("manage", message.scope, message.id), "Manage your message"))
         }
         message.media.forEachIndexed { index, media ->
             if (GlobalChatConfig.mediaPreviews) {
@@ -215,7 +232,7 @@ object IrcChatRendering {
                 val placeholder = (listOf(title + padding) + List(layout.rows - 1) { blank }).joinToString("\n")
                 result.append("\n").append(actionStyle(placeholder,
                     IrcChatAction("media", message.scope, message.id, index), "View ${media.name ?: label}"))
-            } else if (message.text.indexOf(media.url.toString()) < 0) {
+            } else if (representedMedia.add(index)) {
                 result.append(" ").append(actionStyle("[${media.type.uppercase()} ${index + 1}]", IrcChatAction("media", message.scope, message.id, index), "View media"))
             }
         }
@@ -235,7 +252,8 @@ object IrcChatRendering {
         return action.takeIf { it.kind != "media" || message.media.getOrNull(it.mediaIndex ?: -1) != null }
     }
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
-    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null
+    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || !suggestionsVisible() &&
+        (MC.screen as? ChatScreen)?.let { IrcInlineControls.hasInteractionAt(it, mouseX, mouseY) } == true
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
     private fun thumbnailLayout() = ircThumbnailLayout(GlobalChatConfig.previewSize,
         (ChatComponent.getWidth(MC.instance.options.chatWidth().get()) / MC.instance.options.chatScale().get()).toInt(),

@@ -23,7 +23,8 @@ public abstract class AvatarCosmeticsMixin {
         ((CosmeticAvatarState)state).skymyce$setCosmetics(profile);
         if (profile != null) {
             state.skin = me.mycellium.skymyce.features.social.CapeTextures.apply(state.skin, profile);
-            if (CosmeticsConfig.INSTANCE.getNames() && profile.getNameStyle() != null && state.nameTag != null) state.nameTag = profile.getNameStyle();
+            if (CosmeticsConfig.INSTANCE.getNames() && profile.getNameStyle() != null && state.nameTag != null)
+                state.nameTag = me.mycellium.skymyce.features.social.CosmeticNames.decorated(profile.getNameStyle());
         }
         if (profile != null && CosmeticsConfig.INSTANCE.getScaling()) {
             state.eyeHeight *= profile.getScaleY();
