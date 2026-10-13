@@ -95,7 +95,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
         )
         if (state != renderedState) {
             renderedState = state
-            updateResults(animate = false)
+            updateResults()
         }
         actions.forEach { (button, tooltip) ->
             val reason = DungeonFriends.actionUnavailable
@@ -164,7 +164,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
 
     private fun friendsPanel(): FlowLayout = panel().apply {
         child(title("Dungeon Friends").apply {
-            floorButton = button(floor.name + " v", 42) { button ->
+            floorButton = button(floor.name, 42) { button ->
                 menu(button) { dropdown ->
                     FRIEND_FLOORS.forEach { value ->
                         dropdown.button(Component.literal(value.name)) {
@@ -173,7 +173,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
                         }
                     }
                 }
-            }
+            }.apply { trailingChevron = true }
             floorButton.tooltip(Component.literal("Dungeon floor for stats, invitations and Join requests. Changes save immediately."))
             child(floorButton)
         })
@@ -221,7 +221,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             gap(6)
             val field = MenuTextBox(Sizing.expand()).apply {
                 setMaxLength(16); text(search); setHint(Component.literal("Search friends..."))
-                onChanged().subscribe { search = it; updateResults(animate = false) }
+                onChanged().subscribe { search = it; updateResults() }
             }
             child(field)
             child(button("Clear", 42) { field.text("") }.tooltip(Component.literal("Clear the friend search")))
@@ -285,10 +285,9 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
         tooltip(Component.literal("Sort by ${value.label}; click again to reverse"))
     }
 
-    private fun updateResults(animate: Boolean = true) {
+    private fun updateResults() {
         if (!::results.isInitialized) return
-        if (animate) contentChanged()
-        floorButton.message = Component.literal("§b${floor.name} v")
+        floorButton.message = Component.literal("§b${floor.name}")
         val wanted = wantedClasses()
         classButton.message = Component.literal("Missing (${wanted.size})")
         sortButton.message = Component.literal("Sort: ${sort.label} ${if (ascending) "↑" else "↓"}")

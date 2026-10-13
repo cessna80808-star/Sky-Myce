@@ -5,6 +5,9 @@ import java.io.File
 import javax.imageio.ImageIO
 import kotlin.math.abs
 import java.lang.management.ManagementFactory
+import io.github.humbleui.skija.Bitmap
+import io.github.humbleui.skija.ImageInfo
+import io.github.humbleui.skija.Surface
 
 @Volatile private var navigationGeometrySink: MenuRect? = null
 
@@ -75,23 +78,89 @@ private fun checkStableCardEdges(layout: MenuLayout) {
     check(geometry.indexAt(Double.NaN, Double.POSITIVE_INFINITY) == null)
 }
 
+/** Compare real Home text commands with their unclipped native pixels, including the reported leading D. */
+private fun checkNativeHomeGlyphEdges() {
+    val previousActive = SkijaMenuFonts.active
+    val previousMode = ThemeConfig.animationMode
+    val canvas = MenuCanvas()
+    fun pixels(frame: MenuCanvas.Frame): IntArray = Surface.makeRaster(ImageInfo.makeN32Premul(frame.width, frame.height)).use { surface ->
+        surface.canvas.clear(0)
+        SkijaMenuPainter.draw(surface.canvas, frame)
+        surface.makeImageSnapshot().use { image -> Bitmap.makeFromImage(image).use { bitmap ->
+            IntArray(frame.width * frame.height) { bitmap.getColor(it % frame.width, it / frame.width) }
+        } }
+    }
+    try {
+        SkijaMenuFonts.active = true
+        val rect = MenuRect(110.25, 72.5, 400.0, 220.0)
+        var reproduced = false
+        for (mode in listOf(GuiMotion.LIGHT, GuiMotion.MEDIUM, GuiMotion.HEAVY)) {
+            ThemeConfig.animationMode = mode
+            for (hover in listOf(0.0, 1.0)) for (scale in listOf(1.0, 1.5, 2.0)) {
+                val pose = menuNavigationPose(rect, 0.0, hover, 0.0, mode)
+                canvas.begin()
+                canvas.transform = MenuCanvas.Transform(a = pose.scale, d = pose.scale,
+                    x = pose.x + pose.pivotX * (1 - pose.scale), y = pose.y + pose.pivotY * (1 - pose.scale))
+                paintMenuNavigationTile(canvas, rect, 0, 0.0, hover, homeRect = rect)
+                val frame = canvas.finishFrame(700, 360, scale)
+                val text = frame.commands.filter { it.kind == 3 }
+                check(text.any { it.runs.any { run -> run.text.startsWith("Dungeons · Open tool") } })
+                val clipped = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, text)
+                val reference = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision,
+                    text.map { it.copy(clip = null) })
+                check(pixels(clipped).contentEquals(pixels(reference))) {
+                    "Home title/description/footer glyph ink was clipped at $mode hover=$hover scale=$scale"
+                }
+                if (mode == GuiMotion.HEAVY && hover == 1.0 && scale == 2.0) {
+                    val footer = text.single { it.runs.any { run -> run.text.startsWith("Dungeons · Open tool") } }
+                    val oldClip = MenuCanvas.Clip((rect.x + 15).toInt(), rect.y.toInt(), (rect.width - 25).toInt(), rect.height.toInt())
+                    val old = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, listOf(footer.copy(clip = oldClip)))
+                    val whole = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, listOf(footer.copy(clip = null)))
+                    reproduced = !pixels(old).contentEquals(pixels(whole))
+                }
+            }
+        }
+        check(reproduced) { "Native Home fixture did not reproduce the screenshot's old leading-glyph clip" }
+    } finally {
+        canvas.close(); SkijaMenuPainter.close()
+        SkijaMenuFonts.active = previousActive; ThemeConfig.animationMode = previousMode
+    }
+}
+
 fun main() {
     repeat(1000) { iteration ->
         val category = MenuCategory.entries[iteration % MenuCategory.entries.size]
         check(menuBackTarget(category) == MenuBackTarget.Category(category))
+        check(menuBackTarget(category, openedFromHome = true) == MenuBackTarget.Home)
         check(menuBackTarget(category, categoryRoot = true) == MenuBackTarget.Home)
         check(menuBackTarget(null) == MenuBackTarget.Home) // Search, Quick, Favorites and Recent
         check(menuBackTarget(null, home = true) == MenuBackTarget.Game)
+        check(menuBackTarget(null, home = true, openedFromHome = true) == MenuBackTarget.Game)
     }
     measureNavigationGeometry()
-    check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
+    check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "General Settings"))
+    val homeTools = defaultMenuHomeTools.indices.map { menuHomeFeature(it) }
+    check(homeTools.map { it.id } == listOf("party-finder", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "daily-digest"))
+    check(homeTools.all(::canUseMenuHomeTool)) { "A Home card opens a category or settings-only feature instead of a tool" }
+    val customized = defaultMenuHomeTools.toMutableList().apply { this[0] = "rng-journal" }
+    check(menuHomeFeature(0, customized).tool == "rng-journal")
     for (index in MenuCategory.entries.indices) for (width in listOf(110, 140, 220, 400)) {
         val descriptions = menuNavigationDescription(index, width)
         check(descriptions.size in 1..2 && descriptions.all { MenuCanvas.textWidth(it, size = 9.0) <= width }) {
-            "A home category description was clipped instead of wrapping at width $width"
+            "A Home tool description was clipped instead of wrapping at width $width"
         }
         check(menuNavigationDescription(index, width) === descriptions) { "Settled home cards repeatedly rewrapped descriptions" }
-        if (width == 400) check(descriptions.joinToString(" ") == MenuCategory.entries[index].description)
+        if (width == 400) check(descriptions.joinToString(" ") == homeTools[index].description)
+    }
+    val defaultDescription = menuNavigationDescription(0, 400)
+    val customDescription = menuNavigationDescription(0, 400, menuHomeFeature(0, customized))
+    check(customDescription.joinToString(" ") == menuHomeFeature(0, customized).description && customDescription != defaultDescription)
+    val longTitle = MenuCatalog.definitions.first { it.id == "leaderboards" }
+    for (width in listOf(90, 110, 220, 400)) {
+        val title = menuNavigationTitle(0, width, 11.0, 2, longTitle)
+        check(title.size in 1..2 && title.all { MenuCanvas.textWidth(it, bold = true, size = 11.0) <= width })
+        check(menuNavigationTitle(0, width, 11.0, 2, longTitle) === title) { "Settled customized Home titles rewrapped each frame" }
+        if (width == 400) check(title.joinToString(" ") == longTitle.title)
     }
     val actionSets = listOf(listOf(90, 24, 24, 60), listOf(98, 105), listOf(94, 54), listOf(76, 76))
     for (available in listOf(160, 300, 579, 580, 900, 1048)) {
@@ -196,5 +265,6 @@ fun main() {
     } finally {
         ThemeConfig.animationMode = modeBefore; ThemeConfig.graphicsQuality = qualityBefore; canvas.close()
     }
-    println("Menu navigation checks passed: stable logical card edges across hover/press/reveal profiles, responsive cards/rail, rapid final intent, bounded shortcuts, real tile previews and idle geometry/raster reuse")
+    checkNativeHomeGlyphEdges()
+    println("Menu navigation checks passed: stable logical card edges across hover/press/reveal profiles, native Home glyph edges, responsive cards/rail, rapid final intent, bounded shortcuts, real tile previews and idle geometry/raster reuse")
 }

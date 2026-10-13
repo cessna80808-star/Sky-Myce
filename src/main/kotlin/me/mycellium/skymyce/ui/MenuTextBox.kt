@@ -105,7 +105,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
         updateScroll()
         focusMotion.animateTo(if (isFocused) 1.0 else 0.0, 120, MotionEasing.QUICK,
             ThemeConfig.animationMode)
-        hoverMotion.animateTo(if (active && isMouseOver(mouseX.toDouble(), mouseY.toDouble())) 1.0 else 0.0,
+        hoverMotion.animateTo(if (active && isMouseOver(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY)) 1.0 else 0.0,
             110, MotionEasing.QUICK, ThemeConfig.animationMode)
         val focus = focusMotion.sample().coerceIn(0.0, 1.0)
         val hover = hoverMotion.sample().coerceIn(0.0, 1.0)

@@ -3,6 +3,7 @@ package me.mycellium.skymyce.ui
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.misc.ThemeConfig
+import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.network.chat.Component
 import kotlin.math.ceil
@@ -19,29 +20,50 @@ internal data class MenuRect(val x: Double, val y: Double, val width: Double, va
 }
 
 internal val menuSectionTitles = MenuCategory.entries.map { it.title }
-private fun homeActionWidths(layout: MenuLayout) = if (layout.contentWidth - 24 >= 396) listOf(64, 108, 102, 98) else listOf(64, 90)
+private fun homeActionWidths(layout: MenuLayout) = if (layout.contentWidth - 24 >= 312) listOf(64, 108, 124) else listOf(64, 124)
 internal fun menuHomeFooterRows(layout: MenuLayout) = menuActionRows(homeActionWidths(layout), (layout.contentWidth - 24).coerceAtLeast(1), 8)
-private val menuSectionPreviews = MenuCategory.entries.map { category ->
-    MenuCatalog.definitions.filter { it.category == category }.map { it.subcategory }.distinct().take(3).joinToString(" · ")
-}
-private val descriptionLines = arrayOfNulls<Triple<Int, Boolean, List<String>>>(MenuCategory.entries.size)
+internal fun menuHomeFeature(index: Int, ids: List<String> = defaultMenuHomeTools): MenuFeature =
+    MenuCatalog.definitions.first { it.id == ids[index] }
+private data class NavigationDescription(val id: String, val width: Int, val nativeMetrics: Boolean, val lines: List<String>)
+private val descriptionLines = arrayOfNulls<NavigationDescription>(MenuCategory.entries.size)
+private data class NavigationTitle(val id: String, val width: Int, val size: Double, val maximumLines: Int,
+                                   val nativeMetrics: Boolean, val lines: List<String>)
+private val titleLines = arrayOfNulls<NavigationTitle>(MenuCategory.entries.size)
 
-/** Card descriptions use measured text advances and a bounded second line, including during the home-to-sidebar morph. */
-internal fun menuNavigationDescription(index: Int, width: Int): List<String> {
-    val available = width.coerceAtLeast(1)
-    val nativeMetrics = SkijaMenuFonts.active
-    descriptionLines[index]?.takeIf { it.first == available && it.second == nativeMetrics }?.let { return it.third }
-    val wrapped = menuTextLines(Component.literal(MenuCategory.entries[index].description), available, 9.0).map { line ->
+private fun navigationTextLines(text: String, width: Int, size: Double, bold: Boolean, maximumLines: Int): List<String> {
+    val component = Component.literal(text).apply { if (bold) withStyle(ChatFormatting.BOLD) }
+    val wrapped = menuTextLines(component, width, size).map { line ->
         buildString { line.accept { _, _, codepoint -> appendCodePoint(codepoint); true } }
     }
-    val lines = wrapped.take(2).toMutableList()
-    if (wrapped.size > 2 && lines.isNotEmpty()) {
+    val lines = wrapped.take(maximumLines).toMutableList()
+    if (wrapped.size > maximumLines && lines.isNotEmpty()) {
         var last = lines.last().trimEnd()
-        while (last.isNotEmpty() && MenuCanvas.textWidth("$last…", size = 9.0) > available)
+        while (last.isNotEmpty() && MenuCanvas.textWidth("$last…", bold = bold, size = size) > width)
             last = last.dropLast(Character.charCount(last.codePointBefore(last.length))).trimEnd()
-        lines[lines.lastIndex] = if (MenuCanvas.textWidth("$last…", size = 9.0) <= available) "$last…" else ""
+        lines[lines.lastIndex] = if (MenuCanvas.textWidth("$last…", bold = bold, size = size) <= width) "$last…" else ""
     }
-    return lines.also { descriptionLines[index] = Triple(available, nativeMetrics, it) }
+    return lines
+}
+
+internal fun menuNavigationTitle(index: Int, width: Int, size: Double, maximumLines: Int,
+                                 feature: MenuFeature = menuHomeFeature(index)): List<String> {
+    val available = width.coerceAtLeast(1)
+    val nativeMetrics = SkijaMenuFonts.active
+    titleLines[index]?.takeIf { it.id == feature.id && it.width == available && it.size == size &&
+        it.maximumLines == maximumLines && it.nativeMetrics == nativeMetrics }?.let { return it.lines }
+    return navigationTextLines(feature.title, available, size, true, maximumLines).also {
+        titleLines[index] = NavigationTitle(feature.id, available, size, maximumLines, nativeMetrics, it)
+    }
+}
+
+/** Card descriptions use measured text advances and a bounded second line, including during the home-to-sidebar morph. */
+internal fun menuNavigationDescription(index: Int, width: Int, feature: MenuFeature = menuHomeFeature(index)): List<String> {
+    val available = width.coerceAtLeast(1)
+    val nativeMetrics = SkijaMenuFonts.active
+    descriptionLines[index]?.takeIf { it.id == feature.id && it.width == available && it.nativeMetrics == nativeMetrics }?.let { return it.lines }
+    return navigationTextLines(feature.description, available, 9.0, false, 2).also {
+        descriptionLines[index] = NavigationDescription(feature.id, available, nativeMetrics, it)
+    }
 }
 
 /** The same surfaces travel between these two arrangements; content never changes their geometry. */
@@ -101,7 +123,7 @@ internal fun menuNavigationPose(rect: MenuRect, compact: Double, hover: Double, 
 /** Shared production paint is also rendered by the headless navigation checks. */
 internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: Int, compact: Double,
                                      hover: Double = 0.0, chosen: Double = 0.0, focused: Boolean = false,
-                                     homeRect: MenuRect = rect) {
+                                     homeRect: MenuRect = rect, homeFeature: MenuFeature = menuHomeFeature(index)) {
     val profile = ThemeConfig.animationMode.profile
     val expansion = 1 - compact.coerceIn(0.0, 1.0)
     fun rounded(r: MenuRect, color: Int, radius: Double = 10.0 - compact * 4) {
@@ -144,24 +166,67 @@ internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: 
     if (roomy && expansion > 0) rounded(MenuRect(iconX - 6 * expansion, iconY - 6 * expansion,
         iconSize + 12 * expansion, iconSize + 12 * expansion),
         MenuTheme.alpha(MenuTheme.ACCENT, ((7 + hover * 5) * expansion).toInt()), 8.0)
-    paintMenuIcon(canvas, MenuCategory.entries[index].iconId, iconX, iconY, iconSize, MenuTheme.alpha(if (chosen > 0 || hover > .2) MenuTheme.ACCENT else MenuTheme.MUTED))
+    val iconColor = MenuTheme.alpha(if (chosen > 0 || hover > .2) MenuTheme.ACCENT else MenuTheme.MUTED)
+    val categoryIcon = MenuCategory.entries[index].iconId
+    if (homeFeature.iconId == categoryIcon) paintMenuIcon(canvas, categoryIcon, iconX, iconY, iconSize, iconColor)
+    else {
+        val opacity = canvas.opacity
+        if (expansion > 0) {
+            canvas.opacity = opacity * expansion
+            paintMenuIcon(canvas, homeFeature.iconId, iconX, iconY, iconSize, iconColor)
+        }
+        if (compact > 0) {
+            canvas.opacity = opacity * compact
+            paintMenuIcon(canvas, categoryIcon, iconX, iconY, iconSize, iconColor)
+        }
+        canvas.opacity = opacity
+    }
     val textAlpha = (1 - compact / .42).coerceIn(0.0, 1.0)
     if (textAlpha > 0) {
         val opacity = canvas.opacity
         canvas.opacity *= textAlpha
         val left = rect.x + if (roomy) 15.0 else 39.0
-        val titleTop = if (roomy) rect.y + 55 else rect.y + (rect.height - MenuCanvas.lineHeight(11.0)) / 2
+        val titleSize = if (roomy) 15.0 else 11.0
+        val titleWidth = (homeRect.width - if (roomy) 25 else 49).toInt()
+        val title = menuNavigationTitle(index, titleWidth, titleSize, if (homeRect.height >= 35) 2 else 1, homeFeature)
+        val titleHeight = title.size * MenuCanvas.lineHeight(titleSize)
+        val titleTop = if (roomy) rect.y + 55 else rect.y + (rect.height - titleHeight) / 2
         val oldClip = canvas.clip
-        val textClip = MenuCanvas.Clip(left.toInt(), rect.y.toInt(), (rect.x + rect.width - left - 10).toInt().coerceAtLeast(0), rect.height.toInt())
+        // Clips are global screen coordinates. Hover/shell transforms move the glyphs, including their leading ink.
+        val textClip = menuNavigationTextClip(rect, canvas.transform)
         canvas.clip = oldClip?.let { intersectMenuClip(it, textClip) } ?: textClip
-        canvas.text(listOf(MenuCanvas.Run(menuSectionTitles[index], MenuTheme.alpha(MenuTheme.TEXT), bold = true)), left, titleTop, if (roomy) 15.0 else 11.0)
-        if (roomy) menuNavigationDescription(index, (homeRect.width - 25).toInt()).forEachIndexed { line, text ->
-            canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 24 + line * MenuCanvas.lineHeight(9.0), 9.0)
+        title.forEachIndexed { line, text -> canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.alpha(MenuTheme.TEXT), bold = true)),
+            left, titleTop + line * MenuCanvas.lineHeight(titleSize), titleSize) }
+        if (roomy) {
+            val descriptionTop = titleTop + titleHeight + 8
+            val remaining = homeRect.height - (descriptionTop - rect.y) - if (homeRect.height > 140) 36 else 10
+            val lines = (remaining / MenuCanvas.lineHeight(9.0)).toInt().coerceIn(0, 2)
+            val description = menuNavigationDescription(index, (homeRect.width - 25).toInt(), homeFeature)
+            for (line in 0 until minOf(lines, description.size)) {
+                canvas.text(listOf(MenuCanvas.Run(description[line], MenuTheme.alpha(MenuTheme.MUTED))), left,
+                    descriptionTop + line * MenuCanvas.lineHeight(9.0), 9.0)
+            }
         }
-        if (roomy && homeRect.height > 140) canvas.text(listOf(MenuCanvas.Run(menuSectionPreviews[index], MenuTheme.alpha(MenuTheme.ACCENT))),
+        if (roomy && homeRect.height > 140) canvas.text(listOf(MenuCanvas.Run("${homeFeature.category.title} · Open tool", MenuTheme.alpha(MenuTheme.ACCENT))),
             left, rect.y + rect.height - 26, 9.0)
         canvas.clip = oldClip; canvas.opacity = opacity
     }
+}
+
+private fun menuNavigationTextClip(rect: MenuRect, transform: MenuCanvas.Transform): MenuCanvas.Clip {
+    // Keep an ink cushion inside the card rather than clipping exactly at a glyph's advance origin.
+    val inset = minOf(6.0, rect.width / 2)
+    val left = rect.x + inset; val right = rect.x + rect.width - inset
+    val top = rect.y; val bottom = rect.y + rect.height
+    val x = kotlin.math.floor(minOf(transform.a * left, transform.a * right) +
+        minOf(transform.c * top, transform.c * bottom) + transform.x).toInt()
+    val y = kotlin.math.floor(minOf(transform.b * left, transform.b * right) +
+        minOf(transform.d * top, transform.d * bottom) + transform.y).toInt()
+    val endX = kotlin.math.ceil(maxOf(transform.a * left, transform.a * right) +
+        maxOf(transform.c * top, transform.c * bottom) + transform.x).toInt()
+    val endY = kotlin.math.ceil(maxOf(transform.b * left, transform.b * right) +
+        maxOf(transform.d * top, transform.d * bottom) + transform.y).toInt()
+    return MenuCanvas.Clip(x, y, (endX - x).coerceAtLeast(0), (endY - y).coerceAtLeast(0))
 }
 
 private fun intersectMenuClip(a: MenuCanvas.Clip, b: MenuCanvas.Clip): MenuCanvas.Clip {
@@ -192,9 +257,11 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
 internal class MenuNavigation(private val layout: MenuLayout, private val progress: () -> Double,
                               private val activeSection: () -> Int, private val indicator: MotionValue,
                               private val action: (Int?) -> Unit, search: () -> Unit, quick: () -> Unit,
-                              private val revealMode: () -> GuiMotion, private val revealReady: () -> Boolean) :
+                              private val revealMode: () -> GuiMotion, private val revealReady: () -> Boolean,
+                              private val home: Boolean, homeToolIds: List<String>) :
     FlowLayout(Sizing.fixed(layout.sidebar), Sizing.fixed(layout.height), Algorithm.VERTICAL) {
     private val buttons = ArrayList<MenuButton>()
+    private val homeFeatures = homeToolIds.indices.map { menuHomeFeature(it, homeToolIds) }
     private val geometry = MenuNavigationGeometry(layout)
     private var hasPainted = false
     var revealsSettled = false
@@ -231,7 +298,8 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
         }.apply { sizing(Sizing.fixed((layout.sidebar - 16).coerceAtLeast(1)), Sizing.fixed(24)); positioning(Positioning.absolute(8, (layout.height - 64).coerceAtLeast(0))); navigation = true; tooltip(Component.literal("Quick Settings · pinned controls")) }
         menuSectionTitles.forEachIndexed { index, title ->
             val mini = geometry.mini(index)
-            child(object : MenuButton(Component.literal(title), { action(index) }) {
+            val feature = homeFeatures[index]
+            child(object : MenuButton(Component.literal(if (home) feature.title else title), { action(index) }) {
                 private fun rect() = geometry.rect(index)
                 override fun interactionPose(hover: Double, press: Double) = menuNavigationPose(rect(), progress(), hover, press, ThemeConfig.animationMode)
                 override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
@@ -242,14 +310,14 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
                     revealsSettled = revealsSettled && reveal >= 1.0
                     graphics.layer(alpha = reveal, y = (1 - reveal) * ThemeConfig.animationMode.profile.revealOffset) {
                         paintMenuNavigationTile(graphics.canvas, r, index, progress(), hover, chosen, isFocused,
-                            geometry.home(index))
+                            geometry.home(index), feature)
                     }
                 }
                 override fun shouldDrawTooltip(mouseX: Double, mouseY: Double) = progress() > .95 && super.shouldDrawTooltip(mouseX, mouseY)
             }.apply {
                 sizing(Sizing.fixed(mini.width.toInt()), Sizing.fixed(mini.height.toInt()))
                 positioning(Positioning.absolute(mini.x.toInt(), mini.y.toInt())); navigation = true; selected = { activeSection() == index }
-                tooltip(Component.literal(title)); buttons += this
+                tooltip(Component.literal(if (home) "Open ${feature.title}" else title)); buttons += this
             })
         }
         child(quickButton); child(searchButton)
@@ -275,7 +343,7 @@ internal class MenuNavigation(private val layout: MenuLayout, private val progre
         }
         graphics.layer(alpha = (1 - p * 3).coerceIn(0.0, 1.0)) {
             graphics.canvas.text(listOf(MenuCanvas.Run("SKY-MYCE", MenuTheme.alpha(MenuTheme.TEXT), bold = true)), x() + 22.0, y() + 17.0, 18.0)
-            if (layout.height > 300) graphics.canvas.text(listOf(MenuCanvas.Run("Choose a category, or search any setting.", MenuTheme.alpha(MenuTheme.MUTED))), x() + 22.0, y() + 43.0, 10.0)
+            if (layout.height > 300) graphics.canvas.text(listOf(MenuCanvas.Run("Choose a tool, or search any setting.", MenuTheme.alpha(MenuTheme.MUTED))), x() + 22.0, y() + 43.0, 10.0)
         }
         super.draw(g, mouseX, mouseY, partialTicks, delta)
     }
@@ -296,18 +364,13 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override val menuCategory get() = null
     override fun buildContent(root: FlowLayout) {
         val widths = homeActionWidths(menuLayout)
-        val actions = if (widths.size == 4) listOf(
+        val actions = if (widths.size == 3) listOf(
             MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
             MenuButton(Component.literal("Quick Settings")) { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
-            MenuButton(Component.literal("Community")) { openMenuFeature("community") },
-            MenuButton(Component.literal("Global Chat")) { openMenuFeature("global-chat") },
+            MenuButton(Component.literal("Customize Home")) { navigateMenu(MenuHomeShortcutsScreen()) },
         ) else listOf(
             MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
-            MenuButton(Component.literal("Shortcuts")) { anchor -> openMenuDropdown(anchor) { dropdown ->
-                dropdown.button(Component.literal("Quick Settings")) { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) }
-                dropdown.button(Component.literal("Community")) { openMenuFeature("community") }
-                dropdown.button(Component.literal("Global Chat")) { openMenuFeature("global-chat") }
-            } },
+            MenuButton(Component.literal("Customize Home")) { navigateMenu(MenuHomeShortcutsScreen()) },
         )
         val rows = menuHomeFooterRows(menuLayout)
         root.child(io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {

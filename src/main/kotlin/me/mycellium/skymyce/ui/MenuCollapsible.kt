@@ -125,7 +125,7 @@ class MenuCollapsible(horizontal: Sizing, vertical: Sizing, title: Component, ex
         heightMotion.animateTo(if (expanded) expandedHeight else 0.0, 190, MotionEasing.QUICK, ThemeConfig.animationMode)
         arrowMotion.animateTo(if (expanded) 1.0 else 0.0, 160, MotionEasing.QUICK, ThemeConfig.animationMode)
         val headerHovered = mouseX >= x() && mouseX < x() + width() &&
-            mouseY >= titleLayout.y() && mouseY < titleLayout.y() + titleLayout.height()
+            mouseY >= titleLayout.y() && mouseY < titleLayout.y() + titleLayout.height() && menuHoverAllowed(this, mouseX, mouseY)
         hoverMotion.animateTo(if (headerHovered || focusHandler()?.focused() === this) 1.0 else 0.0,
             110, MotionEasing.QUICK, ThemeConfig.animationMode)
         applyHeight()

@@ -67,7 +67,7 @@ fun main() {
     check(previewRange.min == 50.0 && previewRange.max == 200.0)
     check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
-    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
+    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "General Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)
     MenuPage.entries.forEach { check(catalog.findFeature(it.featureId) != null) }
     check(catalog.features.map { it.category }.toSet() == MenuCategory.entries.toSet())
@@ -118,6 +118,28 @@ fun main() {
     check(catalog.search("reduced motion").any { it.settingPath == "Theme & Appearance/animationMode" })
     val opacity = catalog.search("opacity").first { it.settingPath == "Dungeons/Starred Clear Routing/opacity" }
     check(opacity.breadcrumb == "Dungeons → Routes → Dungeon Routing → Line opacity")
+    val onlySetting = menuSearchFeatureGroups(catalog, listOf(opacity))
+    check(onlySetting.single().first.id == opacity.featureId && onlySetting.single().second == listOf(opacity)) {
+        "Settings-only search lost its owning feature context"
+    }
+    val routingEntry = indexedEntries.single { it.featureId == opacity.featureId && it.settingPath == null }
+    val cameraEntry = indexedEntries.single { it.featureId == camera.id && it.settingPath == null }
+    val heightEntry = checkNotNull(catalog.settingEntry("Dungeons/Starred Clear Routing/lineHeight"))
+    val mixedMatches = listOf(opacity, cameraEntry, routingEntry, heightEntry)
+    val groupedMatches = menuSearchFeatureGroups(catalog, mixedMatches)
+    check(groupedMatches.map { it.first.id } == listOf(opacity.featureId, camera.id)) {
+        "Search owner cards duplicated or changed first-match order"
+    }
+    check(groupedMatches.first().second == listOf(opacity, heightEntry) && groupedMatches.last().second.isEmpty()) {
+        "Search showed unmatched settings or changed matching child order"
+    }
+    for (limit in 0..mixedMatches.size) {
+        val page = mixedMatches.take(limit)
+        val groups = menuSearchFeatureGroups(catalog, page)
+        check(groups.flatMap { it.second }.toSet() == page.filter { it.settingPath != null }.toSet()) {
+            "Search owner context changed the paged matching settings"
+        }
+    }
     val routing = checkNotNull(catalog.findFeature("starred-routes"))
     check(routing.title == "Dungeon Routing" && routing.enabledPath == "Dungeons/Starred Clear Routing/enabled")
     val routingGroups = settingGroups(rows, routing.id)

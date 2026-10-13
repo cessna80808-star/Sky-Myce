@@ -99,6 +99,24 @@ internal fun settingsFocusTarget(component: UIComponent): UIComponent? = when {
     else -> null
 }
 
+/** Only a direct setting/friend link requests keyboard focus; opening a feature does not. */
+internal fun settingsFocusPath(settingPath: String?, dungeonFriend: String?): String? =
+    settingPath ?: dungeonFriend?.let { "friend/$it" }
+
+internal fun settingsScroll(body: FlowLayout): MenuScroll<FlowLayout> {
+    body.padding(Insets.of(18, 26, 18, 22))
+    return menuDirectoryScroll(body).apply {
+        scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2); scrollStep(32)
+    }
+}
+
+/** Header and cards share an inset while the stationary viewport includes their motion gutters. */
+internal fun settingsPage(search: UIComponent, heading: UIComponent, scroll: UIComponent, footer: UIComponent): FlowLayout =
+    UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()).apply {
+        padding(Insets.of(14, 14, 18, 18)); gap(8)
+        child(search); child(heading); child(scroll); child(footer)
+    }
+
 internal fun settingNumber(entry: ResourcefulConfigValueEntry, value: String): Number? {
     val number = value.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
     val range = entry.options().getOption(Option.RANGE)
@@ -155,8 +173,7 @@ class SettingsScreen @JvmOverloads constructor(
     private val catalog by lazy { MenuCatalog(rows) }
     private var featureId = featureId ?: legacySettingsFeature(tab)
     internal override val canonicalFeatureId get() = featureId
-    private var pendingSetting = settingPath ?: dungeonFriend?.let { "friend/$it" }
-        ?: featureId?.let { id -> catalog.findFeature(id)?.settings?.firstOrNull()?.path }
+    private var pendingSetting = settingsFocusPath(settingPath, dungeonFriend)
     private val controls = mutableMapOf<String, UIComponent>()
     private var renderedValues = emptyList<Any?>()
     private var renderedPins = -1L
@@ -168,7 +185,7 @@ class SettingsScreen @JvmOverloads constructor(
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
     private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
-    public override val menuParent get() = parent.takeIf { it is WidgetEditorScreen } ?: menuCategoryScreen(category)
+    public override val menuParent get() = parent.takeIf { it is WidgetEditorScreen } ?: super.menuParent
     override val menuCategory get() = category
     override val settingsCategory get() = tab
     public override fun selectSettings(tab: SettingsTab) {
@@ -176,7 +193,7 @@ class SettingsScreen @JvmOverloads constructor(
         if (destination == featureId) return
         val direction = if (tab.ordinal < this.tab.ordinal) -1 else 1
         this.tab = tab; featureId = destination; featureScoped = true; category = catalog.findFeature(destination)!!.category; query = ""; editingDungeonFriend = null; friendDraft = null; availabilityDraft = null; keyCapture = null
-        pendingSetting = catalog.findFeature(destination)?.settings?.firstOrNull()?.path
+        pendingSetting = null
         rebuildMenu(direction)
     }
     private var editingDungeonFriend = dungeonFriend
@@ -191,8 +208,8 @@ class SettingsScreen @JvmOverloads constructor(
         var template = DungeonFriendsSettings.messageTemplate
         var titles = DungeonFriendsSettings.titleNotifications
     }
-    private val detailWidth get() = menuWidth
-    private val controlWidth get() = (detailWidth - 48).coerceAtLeast(1)
+    private val detailWidth get() = menuDirectoryContentWidth(menuWidth)
+    private val controlWidth get() = (detailWidth - 20).coerceAtLeast(1)
 
     override fun init() {
         val previousBody = if (::body.isInitialized) body else null
@@ -212,19 +229,12 @@ class SettingsScreen @JvmOverloads constructor(
             tip("Search names, descriptions and aliases across every category. Ctrl+F focuses search.")
             onChanged().subscribe { query = it; keyCapture = null; closeMenuDropdown(); populate(animate = false) }
         }
-        root.child(UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()).apply {
-            padding(Insets.of(14)); gap(8)
-            child(search)
-            heading = label(category.title, MenuTheme.TEXT, 17f); child(heading)
-            contentScroll = menuScroll(Sizing.fill(), Sizing.expand(), body).apply {
-                scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.BORDER))); scrollbarThiccness(2); scrollStep(32)
-            }
-            child(contentScroll)
-            child(settingsRow().apply {
-                child(label("Changes save on close • Friend preferences use Save", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
-                child(button("Done", 42, "Save settings and return") { onClose() })
-            })
-        })
+        heading = label(category.title, MenuTheme.TEXT, 17f)
+        contentScroll = settingsScroll(body)
+        root.child(settingsPage(search, heading, contentScroll, settingsRow().apply {
+            child(label("Changes save on close • Friend preferences use Save", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
+            child(button("Done", 42, "Save settings and return") { onClose() })
+        }))
         populate(animate = false)
     }
 
@@ -288,7 +298,7 @@ class SettingsScreen @JvmOverloads constructor(
             ?: FriendPreferenceDraft(if (availabilityOnly) "Availability" else "Dungeon Friends", friend).also { if (availabilityOnly) availabilityDraft = it else friendDraft = it }
         if (availabilityOnly) {
             child(label("Choose the floor and classes you offer when joining a party.", MenuTheme.MUTED))
-            child(button("Floor: ${draft.floor.name}", detailWidth - 28, "Your available dungeon floor") { anchor ->
+            child(button("Floor: ${draft.floor.name}", detailWidth, "Your available dungeon floor") { anchor ->
                 menu(anchor) { dropdown -> FRIEND_FLOORS.forEach { option ->
                     dropdown.button(MenuTheme.text(Component.literal(option.name))) {
                         draft.floor = option; anchor.message = Component.literal("Floor: ${draft.floor.name}"); it.parent()?.removeChild(it)
@@ -302,7 +312,7 @@ class SettingsScreen @JvmOverloads constructor(
                 options.forEach { clazz -> child(SettingsButton(Component.literal(clazz.displayName)) {
                     draft.classes = if (clazz in draft.classes) draft.classes - clazz else draft.classes + clazz
                 }.apply {
-                    selected = { clazz in draft.classes }; sizing(Sizing.fixed((detailWidth - 33) / 2), Sizing.fixed(24))
+                    selected = { clazz in draft.classes }; sizing(Sizing.fixed(((detailWidth - 5) / 2).coerceAtLeast(1)), Sizing.fixed(24))
                     tip(if (availabilityOnly) "Offer ${clazz.displayName} when joining" else
                         "Include ${clazz.displayName} in $friend's class matching. Level: ${friendStats?.classes?.get(clazz) ?: "Unknown"}")
                 }) }

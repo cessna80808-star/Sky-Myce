@@ -43,14 +43,14 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     }
 
     override fun buildContent(root: FlowLayout) {
-        root.padding(Insets.of(14)); root.gap(9)
+        root.padding(Insets.of(14, 14, 18, 18)); root.gap(9)
         root.child(row().apply {
             child(label(category?.title ?: view.title, MenuTheme.TEXT, 16f).horizontalSizing(Sizing.expand()))
             child(button("Back", 48) { onClose() })
         })
         root.child(label(category?.description ?: view.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         if (category == null) {
-            if (menuWidth < 350) root.child(button(view.title, minOf(150, menuWidth - 28)) { anchor ->
+            if (menuWidth < 350) root.child(button(view.title, minOf(150, menuWidth - 36)) { anchor ->
                 openMenuDropdown(anchor) { dropdown -> MenuDirectoryView.entries.forEach { tab -> dropdown.button(Component.literal(tab.title)) {
                     if (view != tab) { view = tab; query = ""; limit = 50; focusSearch = tab == MenuDirectoryView.SEARCH; rebuildMenu() }
                 } } }
@@ -73,7 +73,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                     } }
                 })
             })
-            if (category != null) root.child(button(section ?: "All sections", minOf(150, menuWidth - 28)) { anchor ->
+            if (category != null) root.child(button(section ?: "All sections", minOf(150, menuWidth - 36)) { anchor ->
                 openMenuDropdown(anchor) { dropdown ->
                     (listOf<String?>(null) + catalog.features.filter { it.category == category }.map { it.subcategory }.distinct()).forEach { next ->
                         dropdown.button(Component.literal(next ?: "All sections")) {
@@ -83,8 +83,9 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                 }
             })
         }
-        results = column().apply { gap(8); padding(Insets.right(4)) }
-        root.child(menuScroll(Sizing.fill(), Sizing.expand(), results))
+        // Keep the gutters outside the header-aligned cards, while the wider viewport clips scrolling.
+        results = column().apply { gap(8); padding(Insets.of(18, 26, 18, 22)) }
+        root.child(menuDirectoryScroll(results))
         populate()
     }
 
@@ -115,8 +116,9 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     }
     private fun showFeatures(features: List<MenuFeature>) {
         if (features.isEmpty()) results.child(label("No features match this filter.", MenuTheme.MUTED))
-        val columns = menuFeatureColumns(menuWidth - 32)
-        val cardWidth = ((menuWidth - 32 - (columns - 1) * 8) / columns).coerceAtLeast(1)
+        val available = menuDirectoryContentWidth(menuWidth)
+        val columns = menuFeatureColumns(available)
+        val cardWidth = ((available - (columns - 1) * 8) / columns).coerceAtLeast(1)
         features.groupBy { it.subcategory }.forEach { (section, items) ->
             results.child(label(section, MenuTheme.ACCENT, 11f))
             items.chunked(columns).forEach { group -> results.child(row().apply {
@@ -141,15 +143,16 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         if (entries.isEmpty()) results.child(label("No matches. Try a feature name, description or alias such as ah, hud or party.", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         entries.take(limit).groupBy { it.category }.forEach { (group, items) ->
             results.child(label(group.title, MenuTheme.ACCENT, 11f))
-            items.forEach { entry ->
-                if (entry.settingPath == null) catalog.findFeature(entry.featureId)?.let { results.child(featureCard(it, true)) }
-                else results.child(settingCard(entry))
+            menuSearchFeatureGroups(catalog, items).forEach { (feature, settings) ->
+                results.child(featureCard(feature, true))
+                settings.forEach { results.child(settingCard(it, indent = 14)) }
             }
         }
         if (entries.size > limit) results.child(button("Show more (${entries.size - limit})", 150) { limit += 50; populate() })
     }
 
-    private fun settingCard(entry: MenuSearchEntry) = card("search/${entry.id}").apply {
+    private fun settingCard(entry: MenuSearchEntry, indent: Int = 0) = card("search/${entry.id}").apply {
+        margins(Insets.left(indent))
         val path = checkNotNull(entry.settingPath)
         child(row().apply {
             child(label(entry.title, MenuTheme.TEXT, 11f).horizontalSizing(Sizing.expand()))
@@ -159,14 +162,14 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         child(label(entry.description, MenuTheme.MUTED, 9f).horizontalSizing(Sizing.fill()))
         val controls = mutableListOf(button("Open setting", 94) { openMenuSetting(path) })
         if (entry.quickSettingEligible && MenuShortcuts.eligible(path)) controls += pinButton(path)
-        child(actions(controls))
+        child(actions(controls, menuDirectoryContentWidth(menuWidth) - 20 - indent))
     }
     private fun favoriteButton(id: String, title: String) = button(if (MenuShortcuts.isFavorite(id)) "★" else "☆", 26) {
         if (!MenuShortcuts.toggleFavorite(id)) showMenuToast("Favorites is full (32 shortcuts)", MenuToastKind.INFO)
         populate()
     }.apply { tooltip(Component.literal("Favorite $title")); selected = { MenuShortcuts.isFavorite(id) } }
 
-    private fun featureCard(feature: MenuFeature, breadcrumb: Boolean = false, available: Int = menuWidth - 52) = card("feature/${feature.id}").apply {
+    private fun featureCard(feature: MenuFeature, breadcrumb: Boolean = false, available: Int = menuDirectoryContentWidth(menuWidth) - 20) = card("feature/${feature.id}").apply {
         child(row().apply {
             child(label(feature.title, MenuTheme.TEXT, 12f).horizontalSizing(Sizing.expand()))
             if (feature.favoriteEligible) child(favoriteButton(feature.id, feature.title))
@@ -192,7 +195,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private fun showQuick() {
         results.child(actions(listOf(
             button("Add controls", 98) { view = MenuDirectoryView.SEARCH; query = ""; focusSearch = true; rebuildMenu() },
-            button("Reset defaults", 105) { MenuShortcuts.resetPins(); populate() }), menuWidth - 32))
+            button("Reset defaults", 105) { MenuShortcuts.resetPins(); populate() }), menuDirectoryContentWidth(menuWidth)))
         results.child(label("${MenuShortcuts.pins.size}/8 pinned • values come from their original controls", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         MenuShortcuts.pins.forEachIndexed { index, path ->
             val setting = catalog.setting(path) ?: return@forEachIndexed
@@ -231,7 +234,10 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                 } } }
             }
             else -> button("Edit: ${entry.get()}", 120) { openMenuSetting(setting.path) }
-        }.apply { tooltip(Component.literal(setting.tip)) }
+        }.apply {
+            horizontalSizing(Sizing.fixed(horizontalSizing().get().value.coerceAtMost((menuDirectoryContentWidth(menuWidth) - 20).coerceAtLeast(1))))
+            tooltip(Component.literal(setting.tip))
+        }
     }
     private fun quickChanged(path: String) {
         SkyMyce.config.save(); notifySettingsChanged()
@@ -254,7 +260,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         }) populate()
     }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content())
-    private fun actions(controls: List<ButtonComponent>, available: Int = menuWidth - 52) = column().apply {
+    private fun actions(controls: List<ButtonComponent>, available: Int = menuDirectoryContentWidth(menuWidth) - 20) = column().apply {
         gap(6)
         val width = available.coerceAtLeast(1)
         val sizes = controls.map { it.horizontalSizing().get().value.coerceAtMost(width) }
@@ -269,6 +275,20 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
 }
 
 internal fun menuFeatureColumns(available: Int) = if (available >= 580) 2 else 1
+
+/** Widen into the outer padding so motion gutters do not indent cards beyond the page header. */
+internal fun menuDirectoryScroll(results: FlowLayout) = menuScroll(Sizing.fill(), Sizing.expand(), results).apply {
+    margins(Insets.horizontal(-18))
+}
+
+/** Outer page padding and four pixels for the scrollbar share the same card/action width. */
+internal fun menuDirectoryContentWidth(menuWidth: Int) = (menuWidth - 36 - 4).coerceAtLeast(1)
+
+/** Include each matched setting's owning feature once, retaining first-owner and child match order. */
+internal fun menuSearchFeatureGroups(catalog: MenuCatalog, matches: List<MenuSearchEntry>): List<Pair<MenuFeature, List<MenuSearchEntry>>> =
+    matches.groupBy { it.featureId }.mapNotNull { (id, entries) ->
+        catalog.findFeature(id)?.let { feature -> feature to entries.filter { it.settingPath != null } }
+    }
 
 /** Read at most eight pinned values without constructing a replacement list every idle tick. */
 internal inline fun menuQuickValuesChanged(paths: List<String>, values: List<Any?>, value: (String) -> Any?): Boolean {
