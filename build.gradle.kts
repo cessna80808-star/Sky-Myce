@@ -499,6 +499,36 @@ val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
 }
 tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
+val cameraRenderCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks independent secondary camera projection, target bounds and strict viewpoints"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck"
+}
+val healerCrushCameraCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks Healer leap/crush sequencing, corroboration and encounter cleanup"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt"
+}
+val cameraViewpointCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks saved world-space camera views and HUD sizing/resize bounds"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.CameraViewpointCheckKt"
+}
+tasks.check { dependsOn(cameraRenderCheck, healerCrushCameraCheck, cameraViewpointCheck) }
+val rngTesterCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks isolated RNG parser, confirmation, journal and duplicate fixtures"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.digest.testing.RngTesterCheckKt"
+}
+tasks.check { dependsOn(rngTesterCheck) }
 tasks.test { failOnNoDiscoveredTests = false }
 
 // configure the maven publication

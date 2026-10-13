@@ -1,62 +1,157 @@
 package me.mycellium.skymyce.community
 
-import io.wispforest.owo.ui.component.LabelComponent
-import io.wispforest.owo.ui.component.UIComponents
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
-import me.mycellium.skymyce.ui.MenuScreen
-import me.mycellium.skymyce.ui.navigateMenu
-import me.mycellium.skymyce.ui.MenuButton
-import me.mycellium.skymyce.ui.MenuLabel
-import me.mycellium.skymyce.ui.MenuTheme
-import me.mycellium.skymyce.ui.menuScroll
+import me.mycellium.skymyce.ui.*
+import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
 
-/** One place for Discord identity, sharing controls and updates; local gameplay always stays available. */
+/** State-specific identity actions, independent sharing settings, and explicit update consent. */
 class CommunityScreen : MenuScreen(Component.literal("Sky-Myce Community")) {
-    private lateinit var status: LabelComponent
-    private lateinit var fallback: LabelComponent
-    private lateinit var update: LabelComponent
-    private lateinit var notes: LabelComponent
-    private var displayed = emptyList<Any?>()
+    private lateinit var status: MenuLabel
+    private lateinit var heading: MenuLabel
+    private lateinit var account: MenuLabel
+    private lateinit var autoUpdate: MenuButton
+    private lateinit var connectionActions: FlowLayout
+    private lateinit var fallback: FlowLayout
+    private lateinit var update: MenuLabel
+    private lateinit var notes: FlowLayout
+    private lateinit var check: MenuButton
+    private lateinit var install: MenuButton
+    private lateinit var later: MenuButton
+    private lateinit var noteButton: MenuButton
+    private val actionButtons = mutableMapOf<CommunityConnectionAction, MenuButton>()
+    private var actionKey: Pair<CommunityConnectionKind, List<CommunityConnectionAction>>? = null
+    private var fallbackCode: String? = null
+    private var shownNotes = ""
+    private var notesOpen = false
     override val canonicalFeatureId get() = "community"
+
     override fun buildContent(root: FlowLayout) {
-        root.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER).surface(Surface.BLANK)
-        val content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(8); padding(Insets.of(12)) }
-        root.child(menuScroll(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), content))
-        fun label(text: String) = MenuLabel(Component.literal(text)).apply { horizontalSizing(Sizing.fill()); color(Color.ofRgb(MenuTheme.TEXT)) }
-        fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
-        content.child(label("SKY-MYCE COMMUNITY"))
-        status = label(CommunityClient.status); content.child(status)
-        content.child(label("Connect Discord for chat, cosmetics and community progress. Minecraft and local Sky-Myce features work while disconnected or offline."))
-        content.child(button("Connect Discord") { CommunityClient.connect() })
-        content.child(button("Open connection in browser") { CommunityClient.openBrowser() })
-        fallback = label(""); content.child(fallback)
-        content.child(button("Cancel pending connection") { CommunityClient.cancelConnect() })
-        content.child(button("Reconnect saved session") { CommunityClient.retry() })
-        content.child(button("Disconnect this Minecraft session") { CommunityClient.disconnect() })
-        content.child(label("Community statistics are shared by default. Your explicit opt-outs are kept. Sharing controls apply to statistics, progress and feeds; chat and cosmetics stay connected."))
-        content.child(button("Community Sharing settings") { navigateMenu(SettingsScreen.forFeature(this, "community")) })
-        content.child(label("UPDATES"))
-        update = label(CommunityUpdates.status); content.child(update)
-        notes = label(""); content.child(notes)
-        content.child(label("Update Now downloads a verified update and installs it after you exit Minecraft. Your current JAR is backed up. Later keeps this version working."))
-        content.child(button("Check for updates") { CommunityUpdates.check(manual = true) })
-        content.child(button("Update Now") { CommunityUpdates.install() })
-        content.child(button("Later") { CommunityUpdates.defer() })
-        content.child(button("Done") { onClose() })
-        refresh()
+        root.surface(Surface.BLANK).padding(Insets.of(10)); root.gap(8)
+        root.child(label("COMMUNITY", MenuTheme.ACCENT))
+        root.child(label("Discord connects chat, cosmetics and shared progress. Local features work offline.", MenuTheme.MUTED))
+        val content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(10) }
+        root.child(menuScroll(Sizing.fill(), Sizing.expand(), content).apply { scrollStep(20); scrollbarThiccness(2) })
+        val connection = card(); content.child(connection)
+        heading = label("DISCORD", MenuTheme.SECONDARY); connection.child(heading)
+        status = label(CommunityClient.status); connection.child(status)
+        account = label("", MenuTheme.MUTED); connection.child(account)
+        connectionActions = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(6) }; connection.child(connectionActions)
+        fallback = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }; connection.child(fallback)
+
+        val services = card(); content.child(services)
+        services.child(label("CHAT & COSMETICS", MenuTheme.SECONDARY))
+        services.child(label("Global Chat uses your connected identity. Local cosmetic choices work offline; Publish shares them with compatible clients.", MenuTheme.MUTED))
+        services.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6)
+            child(button("Open Global Chat") { openMenuFeature("global-chat") }.horizontalSizing(Sizing.fill(48)))
+            child(button("Player cosmetics") { openMenuFeature("cosmetics") }.horizontalSizing(Sizing.fill(48)))
+        })
+        content.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(8); verticalAlignment(VerticalAlignment.CENTER)
+            child(label("Sharing is on by default; your opt-outs are kept.", MenuTheme.MUTED).horizontalSizing(Sizing.expand()))
+            child(button("Sharing settings") { navigateMenu(SettingsScreen.forFeature(this@CommunityScreen, "community")) }.horizontalSizing(Sizing.fixed(125)))
+        })
+        val updates = card(); content.child(updates)
+        updates.child(label("UPDATES • installed ${CommunityClient.version}", MenuTheme.SECONDARY))
+        update = label(CommunityUpdates.status); updates.child(update)
+        updates.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); verticalAlignment(VerticalAlignment.CENTER)
+            child(label("Auto-update", MenuTheme.TEXT).horizontalSizing(Sizing.expand()))
+            autoUpdate = button(if (CommunityUpdates.autoUpdate) "On" else "Off") { CommunityUpdates.setAutoUpdate(!CommunityUpdates.autoUpdate) }.apply {
+                horizontalSizing(Sizing.fixed(64)); toggled = { CommunityUpdates.autoUpdate }
+                tooltip(Component.literal("On downloads verified releases and installs after exit. Off leaves installation to Update Now."))
+            }; child(autoUpdate)
+        })
+        updates.child(label("On: download verified releases and install after exit. Off: choose Update Now. Later skips that release. Your current JAR is backed up.", MenuTheme.MUTED))
+        updates.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6)
+            check = button("Check updates") { CommunityUpdates.check(manual = true) }.apply { horizontalSizing(Sizing.fill(31)) }; child(check)
+            install = button("Update Now") { CommunityUpdates.install() }.apply { horizontalSizing(Sizing.fill(31)); intent = MenuButtonIntent.PRIMARY }; child(install)
+            later = button("Later") { CommunityUpdates.defer() }.apply { horizontalSizing(Sizing.fill(31)) }; child(later)
+        })
+        noteButton = button("Release notes") { notesOpen = !notesOpen; updateNotes() }.apply { horizontalSizing(Sizing.fixed(125)) }; updates.child(noteButton)
+        notes = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()); updates.child(notes)
+        root.child(button("Done") { onClose() })
+        actionKey = null; fallbackCode = null; shownNotes = ""; refresh()
     }
-    override fun tick() { super.tick(); if (::status.isInitialized) refresh() }
+
+    override fun tick() { super.tick(); if (::status.isInitialized && !menuClosing) refresh() }
+
     private fun refresh() {
-        val state = listOf(CommunityClient.status, CommunityClient.fallbackCode, CommunityUpdates.status, CommunityUpdates.releaseNotes)
-        if (state == displayed) return
-        displayed = state
+        val view = CommunityConnectionView(CommunityClient.connected, CommunityClient.hasSavedSession,
+            CommunityClient.connectionPending, CommunityClient.cancellationPending, CommunityClient.busy, CommunityClient.browserUrl != null)
+        val key = view.kind to view.actions
+        if (key != actionKey) {
+            actionKey = key; actionButtons.clear(); connectionActions.clearChildren()
+            view.actions.forEach { action ->
+                val title = when (action) {
+                    CommunityConnectionAction.CONNECT -> "Connect Discord"
+                    CommunityConnectionAction.RECONNECT -> "Reconnect saved session"
+                    CommunityConnectionAction.BROWSER -> "Open Discord in browser"
+                    CommunityConnectionAction.CANCEL -> if (view.cancelling) "Retry cancellation" else "Cancel connection"
+                    CommunityConnectionAction.DISCONNECT -> "Disconnect this session"
+                }
+                val component = button(title) { when (action) {
+                    CommunityConnectionAction.CONNECT -> CommunityClient.connect()
+                    CommunityConnectionAction.RECONNECT -> CommunityClient.retry()
+                    CommunityConnectionAction.BROWSER -> CommunityClient.openBrowser()
+                    CommunityConnectionAction.CANCEL -> CommunityClient.cancelConnect()
+                    CommunityConnectionAction.DISCONNECT -> CommunityClient.disconnect()
+                } }.apply { horizontalSizing(if (view.actions.size == 1) Sizing.fill() else Sizing.fill(96 / view.actions.size)) }
+                component.intent = when (action) {
+                    CommunityConnectionAction.CONNECT, CommunityConnectionAction.RECONNECT, CommunityConnectionAction.BROWSER -> MenuButtonIntent.PRIMARY
+                    CommunityConnectionAction.DISCONNECT -> MenuButtonIntent.DESTRUCTIVE
+                    CommunityConnectionAction.CANCEL -> MenuButtonIntent.SECONDARY
+                }
+                actionButtons[action] = component; connectionActions.child(component)
+            }
+        }
+        actionButtons.forEach { (action, button) -> button.active = view.enabled(action) }
+        heading.text(Component.literal(when (view.kind) {
+            CommunityConnectionKind.DISCONNECTED -> "DISCORD • not connected"
+            CommunityConnectionKind.SAVED -> "DISCORD • saved session"
+            CommunityConnectionKind.CONNECTED -> "DISCORD • connected"
+            CommunityConnectionKind.PENDING -> "FINISH CONNECTING"
+            CommunityConnectionKind.CANCELLING -> "PENDING CONNECTION • cancellation"
+        }).withColor(MenuTheme.SECONDARY))
         status.text(Component.literal(CommunityClient.status))
-        fallback.text(Component.literal(CommunityClient.fallbackCode?.let { "Browser unavailable? In Mousebot, use /connect code:$it. This code expires shortly and works once." } ?: ""))
+        account.text(Component.literal(if (CommunityClient.connected) {
+            val identity = CommunityClient.identity
+            val name = identity?.get("displayName")?.asString ?: identity?.get("username")?.asString ?: "Discord user"
+            "Discord: $name • Minecraft: ${MC.instance.user.name}"
+        } else "Connecting is optional. Saved credentials stay on this installation."))
+        val code = CommunityClient.fallbackCode.takeIf { view.kind == CommunityConnectionKind.PENDING }
+        if (code != fallbackCode) {
+            fallbackCode = code; fallback.clearChildren()
+            if (code != null) {
+                fallback.child(label("Browser unavailable? Use Mousebot in the Sky-Myce Discord:", MenuTheme.MUTED))
+                fallback.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+                    gap(6); verticalAlignment(VerticalAlignment.CENTER)
+                    child(label("/connect code:$code", MenuTheme.ACCENT).horizontalSizing(Sizing.expand()))
+                    child(button("Copy command") { MC.instance.keyboardHandler.clipboard = "/connect code:$code"; showMenuToast("Connection command copied", MenuToastKind.SUCCESS) }.horizontalSizing(Sizing.fixed(112)))
+                })
+                fallback.child(label("Private, one-use code • expires within ten minutes. Cancel requests server revocation.", MenuTheme.MUTED))
+            }
+        }
+        check.active = CommunityUpdates.canCheck
+        install.active = CommunityUpdates.canInstall; later.active = CommunityUpdates.canDefer
         update.text(Component.literal(CommunityUpdates.status))
-        notes.text(Component.literal(CommunityUpdates.releaseNotes))
+        autoUpdate.message = Component.literal(if (CommunityUpdates.autoUpdate) "On" else "Off")
+        noteButton.active = CommunityUpdates.releaseNotes.isNotBlank()
+        if (CommunityUpdates.releaseNotes != shownNotes) updateNotes()
     }
+
+    private fun updateNotes() {
+        shownNotes = CommunityUpdates.releaseNotes; notes.clearChildren()
+        noteButton.message = Component.literal(if (notesOpen) "Hide release notes" else "Release notes")
+        if (notesOpen && shownNotes.isNotBlank()) notes.child(label(shownNotes, MenuTheme.MUTED))
+    }
+
+    private fun card() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(6); padding(Insets.of(10)); surface(MenuTheme.panel()) }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
+    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
 }

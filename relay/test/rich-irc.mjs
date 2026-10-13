@@ -156,6 +156,95 @@ export async function checkRichIrc(script, proof) {
       assert.equal((await bot.next()).error, 'invalid_media');
       for (const client of clients) await ping(client);
     }
+    // Legacy delayed embeds and native rich edits enrich the SAME Discord source identity.
+    const canonicalSql = await mf.unsafeGetDurableObjectStorage('rich-irc-check', 'RelayRoom', { name: 'global-chat' });
+    const source = String(discordSequence++), unicode = '👩🏽‍💻 👨‍👩‍👧‍👦 🇸🇪 ❤️ <a:blob:123456789012345678>';
+    const page = 'https://tenor.com/view/fixture-123', gif = 'https://media1.tenor.com/m/fixture/one.gif';
+    const original = { type: 'discord_message', id: source, message_id: source, source: 'discord', channelId: channels['global-chat'],
+      discordId: people[0].discordId, from: 'Discord Alice', text: `${unicode} ${page}`, media: [], mentions: [] };
+    send(globalBot, 'global', original);
+    let canonical;
+    for (const client of [alice, bob, isolated, legacy]) {
+      const incoming = await client.next(); assert.equal(incoming.text, original.text); canonical ??= incoming.id;
+    }
+    assert.equal((await globalBot.next()).error, undefined);
+    const legacyFragment = { ...original, part: 'embeds', text: 'Delayed media-only fragment',
+      media: [{ id: 'fixture-gif', type: 'gif', url: gif, sourceUrl: page },
+        { id: 'fixture-gif-variant', type: 'gif', url: `${gif}?variant=2`, sourceUrl: page }] };
+    send(globalBot, 'global', legacyFragment);
+    for (const client of [alice, bob, isolated]) {
+      const update = await client.next(); assert.equal(update.messageId, canonical); assert.equal(update.text, undefined);
+      assert.equal(update.media.length, 2, 'Different meaningful media queries remain distinct');
+    }
+    assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
+    const enriched = { ...original, part: 'embeds', replacement: true, text: `${original.text}\n${gif}`,
+      media: [{ id: 'fixture-gif', type: 'gif', url: gif, sourceUrl: page }] };
+    send(globalBot, 'global', enriched);
+    for (const client of [alice, bob, isolated]) {
+      const update = await client.next(); assert.equal(update.type, 'irc_update'); assert.equal(update.messageId, canonical);
+      assert.equal(update.text, enriched.text); assert.equal(update.media.length, 1); assert.equal(update.media[0].sourceUrl, page);
+    }
+    assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
+    const retainedCount = (await canonicalSql.exec('SELECT COUNT(*) AS count FROM irc_metadata WHERE source_id=?', source))[0].count;
+    assert.equal(retainedCount, 1);
+    send(globalBot, 'global', enriched);
+    assert.equal((await globalBot.next()).error, undefined);
+    for (const client of [alice, bob, isolated, legacy]) await ping(client);
+    // A different old fragment must not restore media removed by the complete snapshot.
+    send(globalBot, 'global', { ...legacyFragment, media: [{ id: 'stale-media', type: 'gif', url: `${gif}?variant=obsolete` }] });
+    assert.equal((await globalBot.next()).error, undefined);
+    for (const client of [alice, bob, isolated, legacy]) await ping(client);
+    assert.equal(JSON.parse((await canonicalSql.exec('SELECT record FROM irc_metadata WHERE id=?', canonical))[0].record).media.length, 1);
+    const editedAt = Date.now() - 1000, currentText = `${unicode} Actual edited body`;
+    const nativeEdit = { type: 'discord_operation', id: id(), source: 'discord', channelId: channels['global-chat'],
+      message_id: source, discordId: people[0].discordId, operation: 'edit', editedAt, text: currentText, media: [] };
+    send(globalBot, 'global', nativeEdit);
+    for (const client of [alice, bob, isolated]) {
+      const update = await client.next(); assert.equal(update.text, currentText); assert.deepEqual(update.media, []);
+    }
+    assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
+    // Discord's automatic embeds can arrive with the SAME author edit timestamp.
+    send(globalBot, 'global', { ...nativeEdit, id: id(), media: enriched.media });
+    for (const client of [alice, bob, isolated]) {
+      const update = await client.next(); assert.equal(update.text, currentText); assert.equal(update.media.length, 1);
+    }
+    assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
+    send(globalBot, 'global', { ...nativeEdit, id: id(), editedAt: editedAt - 1, text: 'Obsolete author edit' });
+    assert.equal((await globalBot.next()).error, undefined);
+    for (const client of [alice, bob, isolated, legacy]) await ping(client);
+    send(globalBot, 'global', { ...enriched, discordId: people[1].discordId, text: 'Forged continuation' });
+    assert.equal((await globalBot.next()).error, 'unknown_message');
+    send(alice, 'global', { type: 'irc_send', id: id(), text: 'Reply to one canonical Discord GIF', replyTo: canonical });
+    for (const client of [alice, bob, isolated, legacy]) {
+      const incoming = await client.next(); if (client.rich) assert.equal(incoming.reply.messageId, canonical);
+    }
+    assert.equal((await alice.next()).error, undefined);
+    const answer = await globalBot.next(); assert.equal(answer.reply.discordMessageId, source); await acknowledge(globalBot, answer);
+    const nativeReply = () => {
+      const replyId = String(discordSequence++);
+      return { ...original, id: replyId, message_id: replyId, discordId: people[1].discordId, from: 'Discord Bob',
+        text: `Canonical reference ${replyId}`, reply: { message_id: source, from: 'Cached original sender', text: 'Stale cached original body' } };
+    };
+    send(globalBot, 'global', nativeReply());
+    for (const client of [alice, bob, isolated, legacy]) {
+      const incoming = await client.next(); assert.equal(incoming.reply.from, original.from); assert.equal(incoming.reply.text, currentText);
+      if (client.rich) assert.equal(incoming.reply.messageId, canonical);
+    }
+    assert.equal((await globalBot.next()).error, undefined);
+    send(globalBot, 'global', { ...nativeEdit, id: id(), operation: 'delete' });
+    for (const client of [alice, bob, isolated]) assert.equal((await client.next()).operation, 'delete');
+    assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
+    send(globalBot, 'global', nativeReply());
+    for (const client of [alice, bob, isolated, legacy]) {
+      const incoming = await client.next(); assert.equal(incoming.reply.from, 'Unavailable message');
+      assert.equal(incoming.reply.text, 'The original message is no longer available.');
+      assert.ok(!JSON.stringify(incoming.reply).includes('Stale cached original body'));
+    }
+    assert.equal((await globalBot.next()).error, undefined);
+    await mf.unsafeEvictDurableObject('rich-irc-check', 'RelayRoom', { name: 'global-chat', webSockets: 'hibernate' });
+    send(globalBot, 'global', original);
+    assert.equal((await globalBot.next()).error, 'duplicate_message');
+    for (const client of [alice, bob, isolated, legacy]) await ping(client);
     const partyMembers = people.slice(0, 2).map(person => person.uuid).sort(), leader = people[0].uuid;
     const partyId = createHash('sha256').update(`sky-myce-party-v1\n${leader}\n${partyMembers.join('\n')}`).digest('hex').slice(0, 32);
     async function partySubscribe(client, enabled = true, members = partyMembers, partyLeader = leader) {

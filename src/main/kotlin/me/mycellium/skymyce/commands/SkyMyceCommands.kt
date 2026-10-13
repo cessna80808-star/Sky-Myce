@@ -75,9 +75,13 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             }
             .then(dungeon())
+            .then(literal("crush-camera").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()) }
+                1
+            })
             .then(me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRouting.command())
             .then(literal("settings").executes {
-                MC.instance.execute { navigateMenu(SettingsScreen()) }
+                MC.instance.execute { me.mycellium.skymyce.ui.openMenuCategory(me.mycellium.skymyce.ui.MenuCategory.SETTINGS) }
                 1
             })
             .then(m7PbCommand())
@@ -116,6 +120,9 @@ object SkyMyceCommands : SkyMyceModule() {
             })
             .then(literal("journal").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
+            })
+            .then(literal("rng-test").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.digest.testing.RngTestScreen()) }; 1
             })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->

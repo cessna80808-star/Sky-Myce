@@ -33,6 +33,9 @@ class Widget(
     val builder: Widget.() -> UIComponent? = { null }
 ) {
     var visible = true
+    /** Optional native-pixel resize callback; other widgets retain drag/scale behavior. */
+    var resizeHandler: ((Int, Int) -> Unit)? = null
+    var resizeFinished: (() -> Unit)? = null
     val defaultLayout = WidgetConfig(x, y, scale, anchor)
     var sinceActive: Long = 0L
     var theme: ThemeOverrides? = null

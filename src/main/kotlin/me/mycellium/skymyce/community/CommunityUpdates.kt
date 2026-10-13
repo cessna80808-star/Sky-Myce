@@ -2,7 +2,6 @@ package me.mycellium.skymyce.community
 
 import com.google.gson.JsonParser
 import me.mycellium.skymyce.community.update.UpdateInstaller
-import me.mycellium.skymyce.utils.AtomicJsonFile
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
@@ -20,10 +19,16 @@ import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import java.util.zip.ZipFile
 
-/** Only public metadata is fetched automatically. Artifact download and helper creation require Update Now. */
+/** Verified staging is approved by Update Now or the user's persisted auto-update preference. */
 object CommunityUpdates {
+    var autoUpdate = false; private set
     var status = "Updates are checked without interrupting gameplay"; private set
     val releaseNotes get() = available?.notes ?: ""
+    val availableVersion get() = available?.version
+    val canCheck get() = !busy && plan == null
+    val canInstall get() = available != null && !busy && plan == null
+    val canDefer get() = available != null
+    val staged get() = plan != null
     private var available: CommunityRelease? = null
     private var busy = false
     private var checked = false
@@ -32,13 +37,16 @@ object CommunityUpdates {
     private var notified = false
     private var plan: Path? = null
     private var helper: Path? = null
+    private var automaticPending = false
+    private var automaticAttempt = ""
     private val selection = CommunityUpdateSelection()
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "Sky-Myce updates").apply { isDaemon = true } }
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
     private val directory get() = FabricLoader.getInstance().gameDir.resolve(".sky-myce-updates")
-    private val preferences by lazy { AtomicJsonFile(directory.resolve("preferences.json"), 4096) }
+    private val preferences by lazy { CommunityUpdatePreferenceStore(directory.resolve("preferences.json")) }
     fun initialize() {
-        deferred = runCatching { preferences.read()?.asJsonObject?.get("deferredVersion")?.asString }.getOrNull() ?: ""
+        val saved = runCatching { preferences.read() }.getOrDefault(CommunityUpdatePreferences())
+        deferred = saved.deferredVersion; autoUpdate = saved.autoUpdate
         directory.resolve("result.txt").takeIf(Files::isRegularFile)?.let { result ->
             status = runCatching { Files.newInputStream(result).use { it.readNBytes(1024).toString(Charsets.UTF_8).trim() } }.getOrDefault(status)
         }
@@ -54,9 +62,14 @@ object CommunityUpdates {
     fun tick() {
         if (!checked && System.currentTimeMillis() - started >= 15000) check(false)
         val release = available ?: return
+        if (autoUpdate && release.version != deferred && release.version != automaticAttempt && !busy && plan == null) {
+            install(automatic = true)
+        }
         if (!notified && release.version != deferred && Minecraft.getInstance().player != null) {
             notified = true
-            me.mycellium.skymyce.utils.Utils.displayMessage(Component.literal("Sky-Myce ${release.version} is available. Open /sm community for notes, Update Now or Later."))
+            me.mycellium.skymyce.utils.Utils.displayMessage(Component.literal(if (autoUpdate)
+                "Sky-Myce ${release.version} is available. Auto-update stages verified updates for installation after exit. Open /sm community for status."
+            else "Sky-Myce ${release.version} is available. Open /sm community for notes, Update Now or Later."))
         }
     }
     private fun endpoint(path: String): URI {
@@ -88,18 +101,42 @@ object CommunityUpdates {
         if (!selection.defer(release.version)) return
         val cancelledPlan = plan; val cancelledHelper = helper
         plan = null; helper = null
+        automaticPending = false
         deferred = release.version; notified = true; status = "Update ${release.version} deferred. This version remains available."
-        val selected = deferred
+        persistPreferences()
         worker.submit {
-            runCatching { preferences.write(com.google.gson.JsonObject().apply { addProperty("deferredVersion", selected) }) }
             if (cancelledPlan != null && cancelledHelper != null) discard(cancelledPlan, cancelledHelper)
         }
     }
-    fun install() {
+    fun setAutoUpdate(enabled: Boolean) {
+        if (enabled == autoUpdate) return
+        autoUpdate = enabled; automaticAttempt = ""
+        val cancelledPlan = plan.takeIf { automaticPending && !enabled }
+        val cancelledHelper = helper.takeIf { automaticPending && !enabled }
+        if (!enabled && automaticPending) {
+            selection.cancel(); plan = null; helper = null; automaticPending = false
+            status = "Auto-update Off. Automatic staging cancelled; Update Now remains available."
+        }
+        persistPreferences()
+        worker.submit {
+            if (cancelledPlan != null && cancelledHelper != null) discard(cancelledPlan, cancelledHelper)
+        }
+    }
+    private fun persistPreferences() {
+        // This tiny atomic write must finish before an exit, even while the download worker is busy.
+        runCatching { preferences.write(CommunityUpdatePreferences(autoUpdate, deferred)) }.onFailure {
+            me.mycellium.skymyce.SkyMyce.logger.warn("Could not save update preferences", it)
+            status = "Update preference could not be saved. Try again before restarting."
+        }
+    }
+    fun install() = install(automatic = false)
+    private fun install(automatic: Boolean) {
         val release = available ?: return
         if (busy || plan != null) return
         val approvedSelection = selection.approve()
-        busy = true; status = "Downloading the update you selected…"
+        automaticPending = automatic
+        if (automatic) automaticAttempt = release.version
+        busy = true; status = if (automatic) "Auto-update: downloading a verified release…" else "Downloading the update you selected…"
         worker.submit {
             val result = runCatching { stage(release) }
             Minecraft.getInstance().execute {
@@ -108,7 +145,10 @@ object CommunityUpdates {
                     if (selection.generation != approvedSelection) { worker.submit { discard(updatePlan, updateHelper) }; return@fold }
                     plan = updatePlan; helper = updateHelper; notified = true
                     status = "Update verified and ready. Exit Minecraft to install ${release.version}; then launch normally."
-                }, { if (selection.generation == approvedSelection) status = "Update failed or this installation needs a manual JAR replacement. Your current version is unchanged." })
+                }, { if (selection.generation == approvedSelection) {
+                    automaticPending = false
+                    status = "Update failed or this installation needs a manual JAR replacement. Your current version is unchanged."
+                } })
             }
         }
     }

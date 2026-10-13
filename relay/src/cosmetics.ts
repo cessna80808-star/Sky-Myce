@@ -44,6 +44,14 @@ function publicRow(row: CosmeticRow): CosmeticProfile {
     nametagScale: row.nametag_scale ?? 1, capePreset: row.cape_preset ?? null, capeAsset: row.cape_asset_json ? JSON.parse(row.cape_asset_json) : null };
 }
 export function cosmeticPayload(profile: CosmeticProfile, version?: number): object {
+  if (version === 5) return profile;
+  let nodes = 0;
+  function oldStyleSafe(value: CosmeticText, depth: number): boolean {
+    return depth <= 4 && ++nodes <= 16 && (value.extra ?? []).every(child => oldStyleSafe(child, depth + 1));
+  }
+  if (profile.nameStyle && (!oldStyleSafe(profile.nameStyle, 0) || encoder.encode(JSON.stringify(profile.nameStyle)).length > 2048)) {
+    profile = { ...profile, nameStyle: profile.name ? { text: profile.name } : null };
+  }
   if (version === 4) return profile;
   const { nametagScale: _nametag, capePreset: _preset, capeAsset: _asset, ...previous } = profile;
   if (version === 3) return previous;

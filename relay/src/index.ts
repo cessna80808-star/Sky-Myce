@@ -6,6 +6,7 @@ import { DigestNews, DigestRng, rngPayload, type DigestConfig } from "./digest";
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand, type CosmeticProfile } from "./cosmetics";
 import { handleCosmeticAssets } from "./cosmetic-assets";
 import { handleLeaderboardsRequest, handleCommunityFeed } from "./leaderboards";
+import { handleRngTestRequest, handleRngTestInteraction } from "./rng-tester";
 import { RngForwardQueue } from "./rng-forwarding";
 import { verifiedInteraction, discordCommand } from "./discord";
 import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, type DiscordAccountsConfig } from "./discord-accounts";
@@ -79,7 +80,7 @@ export default {
     }
     if (url.pathname.startsWith("/community/")) {
       if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
-      try { return await handleCommunityRelease(request, env) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      try { return await handleCommunityRelease(request, env) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
     if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/") || url.pathname === "/discord/loader") {
@@ -102,6 +103,8 @@ export default {
       if (data.type === 4) return handleAccountAutocomplete(data, env, backend ? "backend" : "user");
       const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
       if (promptResponse) return promptResponse;
+      const rngTestResponse = handleRngTestInteraction(data, env, ctx, backend);
+      if (rngTestResponse) return rngTestResponse;
       const accountResponse = await handleAccountInteraction(data, env, ctx, backend ? "backend" : "user");
       if (accountResponse) return accountResponse;
       if (backend) return Response.json({ type: 4, data: { content: "Unsupported command.", flags: 64, allowed_mentions: { parse: [] } } });
@@ -332,11 +335,11 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.liveUpdates = data.liveUpdates === true;
         session.userMessages = data.userMessages === true;
         session.cosmetics = data.cosmetics === true;
-        session.cosmeticsVersion = data.cosmeticsVersion === 4 ? 4 : data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
+        session.cosmeticsVersion = data.cosmeticsVersion === 5 ? 5 : data.cosmeticsVersion === 4 ? 4 : data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
         session.rngMetadataVersion = data.rngMetadataVersion === 1 ? 1 : undefined;
         session.challenge = "";
         ws.serializeAttachment(session);
-        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 4, cosmeticsNames: true,
+        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 5, cosmeticsNames: true,
           irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
           account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }

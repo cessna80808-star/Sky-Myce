@@ -78,7 +78,9 @@ object SkyMyce : ClientModInitializer {
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
-            me.mycellium.skymyce.features.social.CosmeticsClient
+            me.mycellium.skymyce.features.social.CosmeticsClient,
+            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera,
+            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud
         )
 
         ModuleManager.modules.forEach {

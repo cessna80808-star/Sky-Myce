@@ -51,7 +51,7 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
 /** Existing caller labels remain compatible; their destinations use the shared feature identities. */
 enum class MenuPage(val title: String, val featureId: String) {
     DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
-    DUNGEONS("Dungeons", "dungeon-tracker"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
+    DUNGEONS("Dungeons", "dungeon-tracker"), CRUSH_CAMERA("Healer Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 
 object MenuTheme {
@@ -151,7 +151,10 @@ object MenuTheme {
 }
 
 /** No vanilla button renderer or texture; inherit its tested input and narration. */
+enum class MenuButtonIntent { PRIMARY, SECONDARY, DESTRUCTIVE }
+
 open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : ButtonComponent(message, action) {
+    var intent = MenuButtonIntent.SECONDARY
     var selected: () -> Boolean = { false }
     var navigation = false
     var background = true
@@ -241,17 +244,19 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             val w = minOf(26, width - 4)
             val h = minOf(14, height - 4)
             if (w < 6 || h < 6) return
-            val left = x + (width - w) / 2
+            val left = if (width >= 54) x + 4 else x + (width - w) / 2
             val top = y + (height - h) / 2
             MenuTheme.glow(graphics, left, top, w, h, hover * .7 + toggleProgress * .3)
             MenuTheme.rounded(graphics, left - 1, top - 1, w + 2, h + 2, MenuTheme.blend(MenuTheme.PANEL, MenuTheme.BORDER, 45), h / 2 + 1)
-            MenuTheme.rounded(graphics, left, top, w, h, MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (toggleProgress * 100).toInt()), h / 2)
+            MenuTheme.rounded(graphics, left, top, w, h, MenuTheme.blend(MenuTheme.BORDER, if (active) MenuTheme.ACCENT else MenuTheme.MUTED, (toggleProgress * 100).toInt()), h / 2)
             graphics.layer(x = toggleProgress * (w - h)) {
                 graphics.drawCircle(left + h / 2, top + h / 2 + 1, 24, h / 2 - 1.5, Color.ofArgb(MenuTheme.alpha(0x06040C, 24)))
                 graphics.drawCircle(left + h / 2, top + h / 2, 24,
                     h / 2 - 2 + hover * .5, Color.ofRgb(MenuTheme.blend(MenuTheme.MUTED, MenuTheme.TEXT, (toggleProgress * 100).toInt())))
             }
             if (isFocused && background) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
+            if (width >= 54) graphics.styledText(listOf(MenuCanvas.Run(if (on) "On" else "Off", MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED))),
+                (left + w + 6).toDouble(), (y + (height - MenuCanvas.lineHeight()) / 2).toDouble())
             return
         }
         if (background && renderer() !== Renderer.VANILLA) {
@@ -260,13 +265,19 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             graphics.layer(alpha = if (navigation) maxOf(chosen, hover) else 1.0) {
                 MenuTheme.shadow(graphics, x, y, width, height, (.2 + hover * .7) * ThemeConfig.animationMode.profile.shadowStrength)
                 MenuTheme.glow(graphics, x, y, width, height, hover * ThemeConfig.animationMode.profile.glowStrength)
+                val accent = if (!active) MenuTheme.MUTED else if (intent == MenuButtonIntent.DESTRUCTIVE) MenuTheme.RED else MenuTheme.ACCENT
                 MenuTheme.box(graphics, x, y, width, height,
-                    MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * 12 + chosen * 16 + press * 9).toInt()),
-                    MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (maxOf(chosen, hover * .65) * 100).toInt()))
+                    MenuTheme.blend(MenuTheme.CARD, accent, (hover * 12 + chosen * 16 + press * 9 + if (active && intent == MenuButtonIntent.PRIMARY) 18 else 0).toInt()),
+                    MenuTheme.blend(MenuTheme.BORDER, accent, (maxOf(chosen, hover * .65).coerceAtLeast(if (active && intent != MenuButtonIntent.SECONDARY) .65 else 0.0) * 100).toInt()))
                 MenuTheme.sheen(graphics, x, y, width, height, .45 + hover * .55)
                 if (navigation && chosen > 0.0) {
                     val indicatorHeight = ((height - 10) * chosen).toInt()
                     MenuTheme.rounded(graphics, x + 1, y + (height - indicatorHeight) / 2, 2, indicatorHeight, MenuTheme.ACCENT, 1)
+                }
+                if (!navigation && chosen >= .99 && width >= 38) {
+                    // A geometric check remains readable even when the active menu font lacks a glyph.
+                    for (i in 0..2) graphics.fill(x + 4 + i, y + height / 2 + i, x + 5 + i, y + height / 2 + i + 2, MenuTheme.alpha(MenuTheme.TEXT))
+                    for (i in 0..4) graphics.fill(x + 6 + i, y + height / 2 + 2 - i, x + 7 + i, y + height / 2 + 4 - i, MenuTheme.alpha(MenuTheme.TEXT))
                 }
             }
             if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))

@@ -2,16 +2,16 @@
 export const IRC_MANAGEMENT_MS = 15 * 60_000;
 export const IRC_EMOJI = ["👍", "❤️", "😂", "🎉", "👀", "🔥"] as const;
 export type IrcScope = "room" | "global" | "party";
-export type IrcMedia = { id: string; type: "image" | "gif" | "video"; url: string; thumbnailUrl?: string;
+export type IrcMedia = { id: string; type: "image" | "gif" | "video"; url: string; thumbnailUrl?: string; sourceUrl?: string;
   name?: string; mime?: string; bytes?: number; width?: number; height?: number };
 export type IrcPublicSender = { uuid?: string; name: string; cosmeticName?: string; discordId: string; avatarUrl?: string };
 export type IrcReply = { messageId?: string; discordMessageId?: string; from: string; text: string };
 export type IrcReaction = { emoji: string; count: number; mine?: boolean };
 export type IrcRecord = { id: string; scope: IrcScope; room: string; source: "minecraft" | "discord"; sourceId: string;
   from: string; discordId: string; uuid?: string; sender: IrcPublicSender; preview: string; media: IrcMedia[]; reply?: IrcReply;
-  revision: number; timestamp: number; expiresAt: number; discordMessageId?: string; editedAt?: number; deleted?: boolean; bodyDigest?: string };
+  revision: number; timestamp: number; expiresAt: number; discordMessageId?: string; editedAt?: number; deleted?: boolean; bodyDigest?: string; bodyRevision?: number };
 export type IrcOperation = { id: string; messageId: string; operation: "edit" | "delete" | "reaction"; text?: string;
-  emoji?: string; active?: boolean; media?: IrcMedia[]; editedAt?: number; bodyDigest?: string };
+  emoji?: string; active?: boolean; media?: IrcMedia[]; editedAt?: number; bodyDigest?: string; mediaOnly?: true };
 export async function ircTextDigest(text: string): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -19,6 +19,7 @@ export type IrcUpdate = { type: "irc_update"; model: 1; id: string; scope: IrcSc
   operation: IrcOperation["operation"]; revision: number; text?: string; media?: IrcMedia[]; reactions: IrcReaction[]; sender: IrcPublicSender; reply?: IrcReply };
 const id = /^[a-f0-9]{32}$/;
 const controls = /[\x00-\x09\x0b-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/;
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 export const ircPlainText = (value: unknown, maximum: number): value is string => typeof value === "string" &&
   value.trim().length > 0 && value.length <= maximum && value.isWellFormed() && !controls.test(value);
 export function ircMentionNames(text: string): string[] {
@@ -32,9 +33,15 @@ export function ircMentionNames(text: string): string[] {
   return [...names];
 }
 export function ircPreview(value: string, maximum = 256): string {
-  let result = value.toWellFormed().replace(/[\x00-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/g, " ").slice(0, maximum);
-  if (!result.isWellFormed()) result = result.slice(0, -1);
-  return result;
+  const safe = value.toWellFormed().replace(/[\x00-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/g, " ");
+  let end = 0;
+  for (const part of graphemes.segment(safe)) {
+    if (part.index + part.segment.length > maximum) break;
+    end = part.index + part.segment.length;
+  }
+  for (const match of safe.matchAll(/<a?:[A-Za-z0-9_]{1,32}:\d{17,20}>/gu))
+    if (match.index < end && match.index + match[0].length > end) end = match.index;
+  return safe.slice(0, end);
 }
 export function ircMediaUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 2048 || controls.test(value)) return;
@@ -48,7 +55,7 @@ export function ircMediaUrl(value: unknown): string | undefined {
 }
 export function ircMediaKey(value: string): string {
   const url = new URL(value);
-  if (["cdn.discordapp.com", "media.discordapp.net"].includes(url.hostname) && /^\/attachments\/\d{17,20}\/\d{17,20}\//.test(url.pathname)) {
+  if (["cdn.discordapp.com", "media.discordapp.net"].includes(url.hostname) && /^\/attachments\/\d{1,20}\/\d{1,20}\/[^/]+$/.test(url.pathname)) {
     url.hostname = "cdn.discordapp.com";
     for (const key of ["ex", "is", "hm"]) url.searchParams.delete(key);
   }
@@ -69,21 +76,24 @@ export function ircMedia(text: string, supplied?: unknown): IrcMedia[] | undefin
     const candidate = raw as Record<string, unknown>, url = ircMediaUrl(candidate.url);
     if (!url || typeof candidate.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(candidate.id) ||
         !["image", "gif", "video"].includes(String(candidate.type)) || candidate.thumbnailUrl !== undefined && !ircMediaUrl(candidate.thumbnailUrl) ||
+        candidate.sourceUrl !== undefined && !ircMediaUrl(candidate.sourceUrl) ||
         candidate.name !== undefined && (typeof candidate.name !== "string" || candidate.name.length > 80 || controls.test(candidate.name)) ||
         candidate.mime !== undefined && (typeof candidate.mime !== "string" || candidate.mime.length > 96 || !/^(image|video)\/[A-Za-z0-9.+-]+$/.test(candidate.mime)) ||
         ["bytes", "width", "height"].some(key => candidate[key] !== undefined && (!Number.isSafeInteger(candidate[key]) || Number(candidate[key]) < 0 || Number(candidate[key]) > (key === "bytes" ? 100_000_000 : 32768)))) return;
     const media: IrcMedia = { id: candidate.id, type: candidate.type as IrcMedia["type"], url,
       ...(candidate.thumbnailUrl ? { thumbnailUrl: ircMediaUrl(candidate.thumbnailUrl) } : {}),
+      ...(candidate.sourceUrl ? { sourceUrl: ircMediaUrl(candidate.sourceUrl) } : {}),
       ...(candidate.name !== undefined ? { name: ircPreview(candidate.name as string, 80) } : {}),
       ...(candidate.mime !== undefined ? { mime: candidate.mime as string } : {}),
       ...Object.fromEntries(["bytes", "width", "height"].filter(key => candidate[key] !== undefined).map(key => [key, candidate[key]])) };
     entries.set(ircMediaKey(url), media);
   }
+  if (new Set([...entries.values()].map(item => item.id)).size !== entries.size) return;
   for (const match of text.matchAll(/https:\/\/[^\s<>"`]+/gu)) {
     const url = ircMediaUrl(match[0].replace(/[),.;\]]+$/, ""));
     if (!url || !mediaType(url)) continue;
     const key = ircMediaKey(url), previous = entries.get(key);
-    if (previous) continue; // Preserve the signed attachment URL supplied by the Gateway.
+    if (previous || [...entries.values()].some(item => item.sourceUrl && ircMediaKey(item.sourceUrl) === key)) continue; // Preserve the actual supplied resource and its original link.
     entries.set(key, { id: `link-${entries.size}`, type: mediaType(url)!, url });
     if (entries.size >= 4) break;
   }
@@ -169,7 +179,10 @@ export class IrcLifecycle {
       const limit = sql.exec<{ credits: number; updated: number }>("SELECT credits,updated FROM irc_operation_limits WHERE actor=?", actor).toArray()[0];
       const credits = Math.min(12, limit ? limit.credits + (now - limit.updated) / 2000 : 12);
       if (credits < 1) return { error: "rate_limited" };
-      if (operation.operation === "edit" && operation.editedAt !== undefined && (record.editedAt ?? 0) >= operation.editedAt) return {};
+      // Unversioned legacy embed fragments cannot prove they belong to an already edited body.
+      if (operation.mediaOnly && (record.bodyRevision !== undefined || record.editedAt !== undefined)) return {};
+      // Discord can enrich embeds without changing the actual edit timestamp.
+      if (operation.operation === "edit" && operation.editedAt !== undefined && (record.editedAt ?? 0) > operation.editedAt) return {};
       sql.exec("INSERT INTO irc_operation_limits VALUES(?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated", actor, credits - 1, now);
       sql.exec("INSERT INTO irc_operations_seen VALUES(?,?,?)", actor, operation.id, now + IRC_MANAGEMENT_MS);
       let changed = true;
@@ -185,8 +198,15 @@ export class IrcLifecycle {
         record.deleted = true; record.preview = ""; record.media = []; delete record.reply; delete record.bodyDigest;
         sql.exec("DELETE FROM irc_reactions WHERE message_id=?", record.id);
       } else {
-        changed = record.bodyDigest !== operation.bodyDigest || JSON.stringify(record.media) !== JSON.stringify(operation.media);
-        record.preview = ircPreview(operation.text!); record.media = operation.media!; record.editedAt = operation.editedAt ?? now; record.bodyDigest = operation.bodyDigest;
+        changed = !operation.mediaOnly && record.bodyDigest !== operation.bodyDigest || JSON.stringify(record.media) !== JSON.stringify(operation.media);
+        record.media = operation.media!;
+        if (!operation.mediaOnly) {
+          record.preview = ircPreview(operation.text!); record.bodyDigest = operation.bodyDigest;
+          record.bodyRevision = record.revision + (changed ? 1 : 0);
+          // An absent native timestamp is not a later Discord edit. Do not invent one that
+          // would reject a genuine timestamped update queued before this server received it.
+          if (operation.editedAt !== undefined || !owner.native) record.editedAt = operation.editedAt ?? now;
+        }
       }
       if (!changed) { if (operation.operation === "edit") this.save(record); return {}; }
       record.revision++;
@@ -194,7 +214,7 @@ export class IrcLifecycle {
       const update: IrcUpdate = { type: "irc_update", model: 1, id: operation.id, scope: record.scope, room: record.room,
         messageId: record.id, operation: operation.operation, revision: record.revision, sender: record.sender,
         reactions: this.reactions(record.id), ...(record.reply ? { reply: record.reply } : {}),
-        ...(operation.operation === "edit" ? { text: operation.text!, media: record.media } : {}) };
+        ...(operation.operation === "edit" ? { ...(!operation.mediaOnly ? { text: operation.text! } : {}), media: record.media } : {}) };
       queue?.(update, record);
       return { update, record };
     });

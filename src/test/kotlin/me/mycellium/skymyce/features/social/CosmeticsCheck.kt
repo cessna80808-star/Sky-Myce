@@ -17,7 +17,11 @@ import net.minecraft.util.FormattedCharSequence
 import net.minecraft.client.StringSplitter
 
 fun checkCosmetics() {
+    // The native component codec now references registered dialog types; production is already bootstrapped.
+    net.minecraft.SharedConstants.tryDetectVersion()
+    net.minecraft.server.Bootstrap.bootStrap()
     studioAsyncWorkChecks()
+    cosmeticDraftChecks()
     fun parse(text: String) = parseCosmeticProfile(JsonParser.parseString(text).asJsonObject)
     val raw = """{"uuid":"${"a".repeat(32)}","name":"Hawk","scale":1.5,"revision":1,"updatedAt":1700000000000}"""
     val profile = requireNotNull(parse(raw))
@@ -112,7 +116,7 @@ fun checkCosmetics() {
         hiddenCape.model() == originalSkin.model() && hiddenCape.secure() == originalSkin.secure())
     check(applyCosmeticCape(originalSkin, live.copy(capePreset = null), null) === originalSkin)
     val customCape = applyCosmeticCape(originalSkin, live, bodyTexture)
-    check(customCape.cape()?.id() == bodyTexture && customCape.elytra() == originalSkin.elytra())
+    check(customCape.cape()?.id() == bodyTexture && customCape.cape()?.texturePath() == bodyTexture && customCape.elytra() == originalSkin.elytra())
     check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", true) }) == null)
     check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("capePreset", "NONE") }) == null)
     for (value in listOf(.49, 2.01)) check(parseCosmeticProfile(studio.deepCopy().apply { addProperty("nametagScale", value) }) == null)
@@ -130,6 +134,7 @@ fun checkCosmetics() {
     check(parseCosmeticProfile(pristine.deepCopy().apply { addProperty("nametagScale", 1.1) }) == null)
     check(parseCosmeticProfile(pristine.deepCopy().apply { addProperty("capePreset", "forest") }) == null)
     val png = checkCapeValidation()
+    localCosmeticsChecks(png)
     val descriptor = JsonParser.parseString("""{"id":"${"b".repeat(32)}","sha256":"${HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(png))}","size":${png.size},"width":64,"height":32}""").asJsonObject
     val asset = parseCapeAsset(descriptor)
     capePreviewChecks(profile, asset, png)

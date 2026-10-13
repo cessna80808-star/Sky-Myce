@@ -155,6 +155,13 @@ fun checkGlobalChat() {
     check(receive(globalPacket(8), delivered = "account-B", current = "account-B") != null)
 
     val emoji = "😀".repeat(2048)
+    for (cluster in listOf("👩🏽‍💻", "👨‍👩‍👧‍👦", "🇸🇪", "❤️")) {
+        val input = "x".repeat(30) + cluster + "y".repeat(30)
+        val chunks = splitGlobalChatText(input, 32)
+        check(chunks.joinToString("") == input && chunks.any { cluster in it })
+        val spans = globalChatLines(input, 32).flatten()
+        check(spans.joinToString("") { it.text } == input && spans.any { cluster in it.text })
+    }
     val split = splitGlobalChatText(emoji, 163)
     check(split.size <= 32 && split.all { it.length <= 163 && !it.last().isHighSurrogate() && !it.first().isLowSurrogate() })
     check(split.joinToString("") == emoji)

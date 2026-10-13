@@ -1,6 +1,7 @@
 package me.mycellium.skymyce.utils
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import java.nio.file.AtomicMoveNotSupportedException
@@ -11,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Synchronous file operations: use from the background scheduler, never a GUI/render callback. */
-class AtomicJsonFile(val path: Path, private val maxBytes: Int = 65536) {
+class AtomicJsonFile(val path: Path, private val maxBytes: Int = 65536, private val serializeNulls: Boolean = false) {
     var damaged = false
         private set
 
@@ -31,7 +32,7 @@ class AtomicJsonFile(val path: Path, private val maxBytes: Int = 65536) {
     }
 
     @Synchronized fun write(json: JsonElement) {
-        val bytes = Gson().toJson(json).toByteArray(Charsets.UTF_8)
+        val bytes = (if (serializeNulls) GsonBuilder().serializeNulls().create() else Gson()).toJson(json).toByteArray(Charsets.UTF_8)
         require(bytes.size <= maxBytes)
         Files.createDirectories(path.parent)
         if (damaged) { preserveOriginal("corrupt-${System.currentTimeMillis()}"); damaged = false }

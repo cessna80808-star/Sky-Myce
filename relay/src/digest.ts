@@ -180,6 +180,24 @@ export function rngPayload(event: PublicRngEvent, metadataVersion?: number): Pub
   return { id, item, activity, occurredAt, player, unverified, ...(metadataVersion === 1 ? rngMetadata(event) ?? {} : {}) };
 }
 
+export type RngSubmission = RngMetadata & { id: string; item: string; activity: string; occurredAt: number };
+/** The normal report parser is also used by the isolated administrator tester. */
+export function parsedRngSubmission(data: Record<string, unknown>, now: number): RngSubmission | null {
+  const event = record(data.event), metadata = event && rngMetadata(event);
+  if (data.type !== "rng_publish" || Object.keys(data).some(key => !["type", "id", "event", "showName"].includes(key)) || typeof data.showName !== "boolean" || !event ||
+      !metadata || Object.keys(event).some(key => !rngEventKeys.includes(key)) ||
+      typeof event.id !== "string" || !identifier.test(event.id) || typeof event.item !== "string" ||
+      typeof event.activity !== "string" || !Object.hasOwn(rareDrops, event.activity) || !rareDrops[event.activity].includes(event.item) ||
+      typeof event.occurredAt !== "number" || !Number.isSafeInteger(event.occurredAt) ||
+      event.occurredAt <= now - 300_000 || event.occurredAt > now + 60_000) return null;
+  return { id: event.id, item: event.item, activity: event.activity, occurredAt: event.occurredAt, ...metadata };
+}
+
+export function rngAcquisitionDecision(id: string, reports: { id: string; time: number }[], persisted: boolean, now: number): "accepted" | "duplicate" | "rate_limited" {
+  if (persisted || reports.some(report => report.time > now - 360_000 && report.id === id)) return "duplicate";
+  return reports.filter(report => report.time > now - 60_000).length >= 3 ? "rate_limited" : "accepted";
+}
+
 export class DigestRng {
   constructor(private sql: SqlStorage) {
     sql.exec(`CREATE TABLE IF NOT EXISTS digest_rng (
@@ -214,24 +232,19 @@ export class DigestRng {
   }
 
   publish(author: string, name: string, data: Record<string, unknown>, now: number): { stored: boolean; error?: string; event?: PublicRngEvent } {
-    const event = record(data.event), metadata = event && rngMetadata(event);
-    if (Object.keys(data).some(key => !["type", "id", "event", "showName"].includes(key)) || typeof data.showName !== "boolean" || !event ||
-        !metadata || Object.keys(event).some(key => !rngEventKeys.includes(key)) ||
-        typeof event.id !== "string" || !identifier.test(event.id) || typeof event.item !== "string" ||
-        typeof event.activity !== "string" || !Object.hasOwn(rareDrops, event.activity) || !rareDrops[event.activity].includes(event.item) ||
-        typeof event.occurredAt !== "number" || !Number.isSafeInteger(event.occurredAt) ||
-        event.occurredAt <= now - 300_000 || event.occurredAt > now + 60_000) return { stored: false, error: "invalid_event" };
+    const event = parsedRngSubmission(data, now);
+    if (!event) return { stored: false, error: "invalid_event" };
     const row = this.sql.exec<{ reports: string }>("SELECT reports FROM digest_rng_limits WHERE author = ?", author).toArray()[0];
     const reports: { id: string; time: number }[] = row ? JSON.parse(row.reports) : [];
     const recent = reports.filter(report => report.time > now - 360_000);
-    if (recent.some(report => report.id === event.id) ||
-        this.sql.exec("SELECT id FROM digest_rng WHERE author = ? AND source_id = ?", author, event.id).toArray().length) return { stored: false };
-    if (recent.filter(report => report.time > now - 60_000).length >= 3) {
-      return { stored: false, error: "rate_limited" };
-    }
-    const published: PublicRngEvent = { id: crypto.randomUUID().replaceAll("-", ""), item: event.item, activity: event.activity,
-      occurredAt: event.occurredAt, player: data.showName ? name : "Anonymous", unverified: true, ...metadata };
-    this.sql.exec("INSERT INTO digest_rng (author, source_id, received_at, event) VALUES (?, ?, ?, ?)", author, event.id, now, JSON.stringify(published));
+    const disposition = rngAcquisitionDecision(event.id, recent,
+      this.sql.exec("SELECT id FROM digest_rng WHERE author = ? AND source_id = ?", author, event.id).toArray().length > 0, now);
+    if (disposition === "duplicate") return { stored: false };
+    if (disposition === "rate_limited") return { stored: false, error: "rate_limited" };
+    const { id: sourceId, ...fields } = event;
+    const published: PublicRngEvent = { id: crypto.randomUUID().replaceAll("-", ""), ...fields,
+      player: data.showName ? name : "Anonymous", unverified: true };
+    this.sql.exec("INSERT INTO digest_rng (author, source_id, received_at, event) VALUES (?, ?, ?, ?)", author, sourceId, now, JSON.stringify(published));
     // Keep rate limits independent of the public history cap, so evictions/reconnects cannot reset them.
     this.sql.exec("INSERT OR REPLACE INTO digest_rng_limits VALUES (?, ?, ?)", author, JSON.stringify([...recent, { id: event.id, time: now }]), now);
     this.sql.exec("DELETE FROM digest_rng_limits WHERE updated <= ?", now - 360_000);
