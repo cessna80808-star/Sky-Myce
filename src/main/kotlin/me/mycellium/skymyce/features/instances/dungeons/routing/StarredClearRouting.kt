@@ -575,7 +575,7 @@ object StarredClearRouting : SkyMyceModule() {
             ?: RoomWorldGeometry.playerCell(world, detected, snapshot, position, allowSight = true)
         if (start == null) {
             startLines = emptyList()
-            if (!refreshSightRouteStart(world, detected, snapshot, position)) {
+            if (!refreshSightRouteStart(world, detected, position)) {
                 displayStartLines = emptyList()
                 displayChunkLines = emptyList()
                 displayCursor = -1
@@ -906,7 +906,7 @@ object StarredClearRouting : SkyMyceModule() {
             { RoomWorldGeometry.feet(detected, it, snapshot).distanceToSqr(actual) })
         if (cursor == null) {
             startLines = emptyList()
-            if (!refreshSightRouteStart(world, detected, snapshot, actual)) {
+            if (!refreshSightRouteStart(world, detected, actual)) {
                 displayStartLines = emptyList()
                 displayChunkLines = emptyList()
                 displayCursor = -1
@@ -947,8 +947,10 @@ object StarredClearRouting : SkyMyceModule() {
         } }, { RoomWorldGeometry.feet(detected, it, snapshot).distanceToSqr(actual) })
 
     /** Airborne display joins use a checked landing without consuming the physical walking cursor. */
-    private fun refreshSightRouteStart(world: ClientLevel, detected: DetectedRoom, snapshot: RoomGeometry, actual: Vec3): Boolean {
+    private fun refreshSightRouteStart(world: ClientLevel, detected: DetectedRoom, actual: Vec3): Boolean {
+        if (routeCursor < 0) return false
         val current = route ?: return false
+        val snapshot = retainedGeometry ?: geometry ?: return false
         val cursor = sightRouteCursor(world, detected, snapshot, current, actual, routeCursor) ?: return false
         refreshDisplayPath(world, detected, current, snapshot, actual, cursor)
         return true
@@ -1277,15 +1279,8 @@ object StarredClearRouting : SkyMyceModule() {
     private fun drawPath(world: ClientLevel, detected: DetectedRoom, result: RoomRoute, actual: Vec3, hasExit: Boolean,
         snapshot: RoomGeometry, startIndex: Int = 0, display: Boolean = false,
         endIndex: Int = result.path.lastIndex): List<PathLine> {
-        val stops = ArrayList<Int>()
-        var healerFrom = 0
-        for (id in result.targetOrder) {
-            val index = result.path.subList(healerFrom, result.path.size).indexOf(snapshot.targets.getValue(id))
-            if (index < 0) return emptyList()
-            healerFrom += index
-            stops.add(healerFrom)
-        }
-        stops.add(result.path.lastIndex)
+        val stops = result.targetStops(snapshot.targets) ?: return emptyList()
+        val healerFrom = if (result.targetOrder.isEmpty()) 0 else stops[stops.lastIndex - 1]
         val output = ArrayList<PathLine>()
         var from = actual
         var begin = startIndex

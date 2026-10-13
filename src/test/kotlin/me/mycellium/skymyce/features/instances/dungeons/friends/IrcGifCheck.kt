@@ -57,7 +57,7 @@ private fun gifFixture(width: Int, height: Int, frames: List<GifFixtureFrame>, l
 }
 
 fun checkIrcGif() {
-    for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com", "media1.tenor.com")) {
+    for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com", "media1.tenor.com", "static.klipy.com")) {
         check(trustedIrcGifUrl(URI("https://$host/path/name.GIF?signature=abc%2Fdef")))
     }
     check(trustedIrcGifUrl(URI("https://MEDIA.TENOR.COM:443/test.gif")))
@@ -66,7 +66,8 @@ fun checkIrcGif() {
         "https://media1.tenor.com.evil.invalid/test.gif", "https://media2.tenor.com/test.gif",
         "https://user@media.tenor.com/test.gif", "https://media.tenor.com/test.gif#fragment",
         "https://media.tenor.com/test.png", "https://media.tenor.com/%00test.gif", "https://media.tenor.com/%0atest.gif",
-        "https://media.tenor.com/%255ctest.gif", "https://media.tenor.com/%5ctest.gif", "https://media.tenor.com./test.gif")) {
+        "https://media.tenor.com/%255ctest.gif", "https://media.tenor.com/%5ctest.gif", "https://media.tenor.com./test.gif",
+        "https://static.klipy.com.evil.invalid/test.gif", "https://static.klipy.com/test.mp4")) {
         check(!trustedIrcGifUrl(URI(url))) { url }
     }
 
@@ -137,9 +138,16 @@ fun checkIrcGif() {
     check(wide.width == 1726 && wide.height == 909 && wide.frames.size == 1)
     val thumbnail = requireNotNull(decode(caption, thumbnail = true))
     check(thumbnail.width == 192 && thumbnail.height == 101 && thumbnail.frames.size == 1)
-    val firstFrame = requireNotNull(decode(sequence, thumbnail = true))
-    check(firstFrame.width == 2 && firstFrame.height == 1 && firstFrame.frames.size == 1)
-    check(firstFrame.frames.single().image.getRGB(1, 0) == 0xffff0000.toInt())
+    val animatedThumbnail = requireNotNull(decode(sequence, thumbnail = true))
+    check(animatedThumbnail.width == 2 && animatedThumbnail.height == 1 && animatedThumbnail.frames.size == 2)
+    check(animatedThumbnail.frames.map { it.durationMillis } == gif.frames.map { it.durationMillis })
+    check(animatedThumbnail.frameAt(30).image.getRGB(1, 0) == 0xff0000ff.toInt())
+    val resizedAnimation = requireNotNull(decode(gifFixture(384, 288, listOf(
+        GifFixtureFrame(IntArray(384 * 288) { 1 }, 384, disposal = "restoreToPrevious", transparent = true),
+        GifFixtureFrame(IntArray(384 * 288) { 2 }, 384, transparent = true))), thumbnail = true))
+    check(resizedAnimation.width == 192 && resizedAnimation.height == 144 && resizedAnimation.frames.size == 2)
+    check(resizedAnimation.frames[0].image.getRGB(0, 0) == 0xffff0000.toInt())
+    check(resizedAnimation.frames[1].image.getRGB(0, 0) == 0xff0000ff.toInt())
 
     val longSequence = requireNotNull(decode(gifFixture(1, 1, List(121) {
         GifFixtureFrame(intArrayOf(if (it == 120) 2 else 1), 1)
@@ -173,7 +181,7 @@ fun checkIrcGif() {
     check(storedBytes <= 32L * 1024 * 1024 && storedBytes + 2L * 1024 * 1024 * 4 <= 40L * 1024 * 1024)
     val withRestore = gifFixture(2048, 2048, listOf(GifFixtureFrame(intArrayOf(1), 1, disposal = "restoreToPrevious")))
     check(decode(withRestore) == null)
-    check(requireNotNull(decode(withRestore, thumbnail = true)).frames.size == 1)
+    check(decode(withRestore, thumbnail = true) == null)
 
     check(decodeIrcGif(sequence, System.nanoTime() - 1) == null)
     check(decode(ByteArray(IRC_GIF_MAX_BYTES + 1)) == null)

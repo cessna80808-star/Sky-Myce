@@ -279,6 +279,38 @@ private fun checkLiveStart() {
     check(detour.liveStart(0, wall.targets, { false }) { 0.0 } == null)
 }
 
+private fun checkLiveSnapshotRouteStops() {
+    val (room, start) = maze("S#AB", ".#..", "....", "H...")
+    val route = requireNotNull(room.navigation.plan(start, room.targets.keys))
+    val stops = requireNotNull(route.targetStops(room.targets))
+    check(stops.size == route.targetOrder.size + 1 && stops.last() == route.path.lastIndex)
+    route.targetOrder.forEachIndexed { index, id -> check(route.path[stops[index]] == room.targets[id]) }
+
+    // The first stop still exists, so the old first-stop-only validation allowed this stale route.
+    val removed = room.targets - route.targetOrder.last()
+    check(route.targetOrder.first() in removed && route.targetStops(removed) == null)
+    var joins = 0
+    check(route.liveStart(0, removed, { joins++; true }) { 0.0 } == null && joins == 0)
+    check(route.targetStops(emptyMap()) == null)
+    check(route.targetStops(room.targets + (route.targetOrder.last() to GridCell(100, 0, 100))) == null)
+    check(route.copy(path = emptyList()).targetStops(room.targets) == null)
+    check(route.targetStops(room.targets) == stops) // Retained geometry remains usable while a new snapshot is pending.
+
+    val updated = fixture(room.cells, room.adjacency, removed, room.healer)
+    val replacement = requireNotNull(updated.navigation.plan(start, removed.keys, route.targetOrder))
+    check(replacement.targetStops(removed) != null)
+    verifyPath(updated, start, removed.keys, replacement) // Recovery still follows checked edges around the wall.
+    val exitOnly = requireNotNull(updated.navigation.plan(start, emptySet(), replacement.targetOrder))
+    check(exitOnly.targetStops(emptyMap()) == listOf(exitOnly.path.lastIndex))
+    verifyPath(updated, start, emptySet(), exitOnly)
+
+    val revisited = RoomRoute(listOf("A", "B", "C"),
+        listOf(GridCell(0, 0, 0), GridCell(1, 0, 0), GridCell(2, 0, 0), GridCell(1, 0, 0), GridCell(0, 0, 0)), 4)
+    val anchors = mapOf("A" to GridCell(1, 0, 0), "B" to GridCell(2, 0, 0), "C" to GridCell(1, 0, 0))
+    check(revisited.targetStops(anchors) == listOf(1, 2, 3, 4)) // Revisited cells retain the required visit order.
+    check(revisited.targetStops(anchors + ("C" to GridCell(2, 0, 1))) == null)
+}
+
 private fun checkValidationAndSnapshots() {
     val start = GridCell(0, 0, 0)
     val target = GridCell(3, 0, 0)
@@ -397,6 +429,7 @@ fun checkRoomNavigation() {
     checkStability()
     checkOptionalEndpoint()
     checkLiveStart()
+    checkLiveSnapshotRouteStops()
     checkValidationAndSnapshots()
     println("Room navigation checks passed: supplied safe geometry, four rotations, wall detours, exact total-route optimization, healer, weighted elevations, directed paths, bounded inputs and stable replanning")
 }

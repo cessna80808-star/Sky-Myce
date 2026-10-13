@@ -51,16 +51,19 @@ internal fun ircPrefixColors(length: Int): List<Int> {
     }
 }
 
-internal data class IrcChatAction(val kind: String, val scope: String, val id: String, val mediaIndex: Int? = null) {
-    val command get() = "/sm ircaction $kind $scope $id${mediaIndex?.let { " $it" }.orEmpty()}"
+internal data class IrcChatAction(val kind: String, val scope: String, val id: String, val mediaIndex: Int? = null,
+    val previewRow: Int? = null) {
+    val command get() = "/sm ircaction $kind $scope $id${mediaIndex?.let { " $it" }.orEmpty()}${previewRow?.let { " $it" }.orEmpty()}"
 }
 internal fun parseIrcChatAction(command: String): IrcChatAction? {
     val parts = command.split(' ')
-    if (parts.size !in 5..6 || parts[0] != "/sm" || parts[1] != "ircaction" || parts[2] !in setOf("media", "manage", "reply", "react") ||
+    if (parts.size !in 5..7 || parts[0] != "/sm" || parts[1] != "ircaction" || parts[2] !in setOf("media", "manage", "reply", "react") ||
         parts[3] !in setOf("global", "room", "party") || !parts[4].matches(ircId)) return null
     val index = parts.getOrNull(5)?.toIntOrNull()
-    if (parts[2] == "media" && (parts.size != 6 || index !in 0..3) || parts[2] != "media" && parts.size != 5) return null
-    return IrcChatAction(parts[2], parts[3], parts[4], index)
+    val row = parts.getOrNull(6)?.toIntOrNull()
+    if (parts[2] == "media" && (parts.size !in 6..7 || index !in 0..3 || parts.size == 7 && row !in 0..15) ||
+        parts[2] != "media" && parts.size != 5) return null
+    return IrcChatAction(parts[2], parts[3], parts[4], index, row)
 }
 
 internal fun ircText(value: String, maximum: Int, multiline: Boolean = false): Boolean = value.length <= maximum &&
@@ -211,7 +214,7 @@ internal class IrcChatStore {
         if (key in messages) return false
         messages[key] = Entry(message, now)
         pending.remove(key)?.update?.let { apply(it, now) }
-        while (messages.size > 128) messages.remove(messages.keys.first())
+        while (messages.size > 1024) messages.remove(messages.keys.first())
         expire(now)
         return true
     }
@@ -255,7 +258,10 @@ internal class IrcChatStore {
         !it.message.deleted && it.message.model == 1 && it.message.source == "minecraft" && it.message.sender?.uuid == uuid && now - it.received in 0..IRC_MANAGEMENT_MILLIS
     } == true
     fun expire(now: Long) {
-        messages.entries.removeIf { now - it.value.received !in 0..IRC_MANAGEMENT_MILLIS }
         pending.entries.removeIf { now - it.value.received !in 0..15_000 }
+    }
+    fun retain(nativeTags: Set<String>, now: Long) {
+        // A chat mod may queue the initial insertion while the world finishes loading.
+        messages.entries.removeIf { it.key.tag !in nativeTags && now - it.value.received !in 0..15_000 }
     }
 }

@@ -7,6 +7,9 @@ import java.util.concurrent.CompletableFuture
 import com.mojang.brigadier.CommandDispatcher
 import me.mycellium.skymyce.commands.relayChannelCommand
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.tree.AnnotationNode
+import org.objectweb.asm.tree.ClassNode
 
 private fun globalPacket(number: Int = 1, text: String = "Hello", mention: Boolean = false): JsonObject = JsonObject().apply {
     addProperty("type", "irc_message")
@@ -210,8 +213,28 @@ fun checkGlobalChat() {
     for (protected in listOf("sm chat Player", "sm irc", "sm help", "other chat", "sm chat text")) check(!relayChatExit.matches(protected))
     check(mode.chat("normal") { error("Normal Hypixel chat must not be intercepted") })
     check(!mode.command("chat sky") && mode.global)
+    val composerSends = mutableListOf<String>()
+    var rewritten = false
+    for (text in listOf("My first message", "#", "hello @Friend")) {
+        if (mode.composer(text, false, composerSends::add)) { rewritten = true; composerSends += "#" }
+    }
+    check(composerSends == listOf("My first message", "#", "hello @Friend") && !rewritten)
+    check(!mode.composer("Sky-Myce IRC: Wait a moment before sending another IRC message.", true, composerSends::add))
+    check(!mode.composer("", false, composerSends::add) && composerSends.size == 3)
+    check(mode.composer("/chat all", false) { error("Commands must retain native dispatch") })
+    val composerMixin = ClassNode()
+    ClassReader("me.mycellium.mixin.IrcComposerMixin").accept(composerMixin, ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
+    fun AnnotationNode.fields() = values.chunked(2).associate { it[0] as String to it[1] }
+    val composerPriority = composerMixin.invisibleAnnotations.single { it.desc == "Lorg/spongepowered/asm/mixin/Mixin;" }.fields()["priority"] as Int
+    check(composerPriority in 1 until 1000) // HEAD callbacks follow ascending mixin priority, before installed chat hooks.
+    val composerHook = composerMixin.methods.single { it.name == "skymyce\$selectedIrc" }.visibleAnnotations
+        .single { it.desc == "Lorg/spongepowered/asm/mixin/injection/Inject;" }.fields()
+    check(composerHook["method"] == listOf("handleChatInput") && composerHook["cancellable"] == true)
+    val composerAt = (composerHook["at"] as List<*>).single() as AnnotationNode
+    check(composerAt.fields()["value"] == "HEAD")
     check(!mode.chat("global only even after failed delivery") { })
     check(mode.command("chat guild") && !mode.selected)
+    check(mode.composer("normal Minecraft chat", false) { error("Normal chat must remain native") })
     check(!mode.command("chat irc") && mode.selected && mode.global && !mode.party)
     check(mode.command("chat p") && !mode.selected)
     mode.selectParty()

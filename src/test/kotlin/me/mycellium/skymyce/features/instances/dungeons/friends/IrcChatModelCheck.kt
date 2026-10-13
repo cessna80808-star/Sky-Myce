@@ -88,9 +88,25 @@ fun checkIrcChatModel() {
     check(state.apply(requireNotNull(parseIrcUpdate(change(revision = 4))), 1006) == null) // Deleted IDs never resurrect.
     check(!state.manageable(global.key, "b".repeat(32), 1006))
     check(state.boundary("account2|endpoint|lease|1") && state.values().isEmpty())
-    check(state.accept(global, 2000)); state.expire(2000 + IRC_MANAGEMENT_MILLIS + 1); check(state.values().isEmpty())
-    for (index in 0..128) state.accept(global.copy(id = index.toString(16).padStart(32, '0')), 3000)
-    check(state.values().size == 128 && state.get(global.copy(id = "0".repeat(32)).key) == null)
+    val retainedGif = global.copy(media = listOf(IrcMedia("retained", "gif", URI("https://media.tenor.com/retained.gif"))))
+    check(state.accept(retainedGif, 2000))
+    val later = 3000 + IRC_MANAGEMENT_MILLIS + 1
+    state.expire(later)
+    state.retain(setOf(global.key.tag), later)
+    check(state.get(global.key) == retainedGif && !state.manageable(global.key, "b".repeat(32), later))
+    state.retain(emptySet(), later); check(state.values().isEmpty())
+    for (index in 0..1024) state.accept(global.copy(id = index.toString(16).padStart(32, '0')), 3000)
+    check(state.values().size == 1024 && state.get(global.copy(id = "0".repeat(32)).key) == null)
+    val oldest = state.values().first()
+    state.expire(later)
+    state.retain(setOf(oldest.key.tag), later)
+    check(state.values() == listOf(oldest) && !state.manageable(oldest.key, "b".repeat(32), later))
+    val queued = global.copy(id = "e".repeat(32))
+    check(state.accept(queued, later))
+    state.retain(setOf(oldest.key.tag), later + 15_000)
+    check(state.get(queued.key) == queued)
+    state.retain(setOf(oldest.key.tag), later + 15_001)
+    check(state.get(queued.key) == null && state.get(oldest.key) == oldest)
     val tag = global.key.tag
     check(tag != room.key.tag && tag.endsWith(global.id))
     for (scope in listOf("global", "room", "party")) {
@@ -127,6 +143,37 @@ fun checkIrcChatModel() {
         check(layout.width in 1..width && layout.height > 0 && layout.rows > 0)
         check((layout.rows - 1) * lineHeight < layout.height && layout.rows * lineHeight >= layout.height)
     }
+    val mediaAction = IrcChatAction("media", "global", global.id, 0)
+    for (row in 0..15) check(parseIrcChatAction(mediaAction.copy(previewRow = row).command) == mediaAction.copy(previewRow = row))
+    for (row in listOf("-1", "16", "bad")) check(parseIrcChatAction(mediaAction.command + " $row") == null)
+    check(parseIrcChatAction(IrcChatAction("reply", "global", global.id).command + " 0 0") == null)
+    fun mediaRow(text: String, row: Int) = net.minecraft.network.chat.Component.literal(text).withStyle {
+        it.withClickEvent(net.minecraft.network.chat.ClickEvent.RunCommand(mediaAction.copy(previewRow = row).command))
+    }.visualOrderText
+    val pose = org.joml.Matrix3x2f().scale(2f).translate(4f, 5f)
+    val parameters = net.minecraft.client.gui.ActiveTextCollector.Parameters(pose)
+    val captured = IrcThumbnailCollector(9, 0.0)
+    // Chat traverses bottom-first. Empty rows must reserve space despite having no drawable glyphs.
+    for (row in 7 downTo 0) captured.accept(net.minecraft.client.gui.TextAlignment.LEFT, 0, 20 + row * 9,
+        parameters, mediaRow(if (row == 0) "[GIF 1]" else "\u00a0".repeat(24), row))
+    val anchor = captured.anchors.getValue(mediaAction)
+    check(anchor.top == 19 && anchor.visibleTop == 19 && anchor.visibleBottom == 91)
+    check(anchor.rectangle(96) == net.minecraft.client.gui.navigation.ScreenRectangle(8, 48, 192, 144))
+    val partial = IrcThumbnailCollector(9, 0.0)
+    for (row in 0..2) partial.accept(net.minecraft.client.gui.TextAlignment.LEFT, 0, 20 + row * 9,
+        parameters, mediaRow(if (row == 0) "[GIF 1]" else "\u00a0".repeat(24), row))
+    check(partial.anchors.getValue(mediaAction).rectangle(96).height() == 54)
+    val middle = IrcThumbnailCollector(9, 0.0)
+    for (row in 4..7) middle.accept(net.minecraft.client.gui.TextAlignment.LEFT, 0, 20 + row * 9,
+        parameters, mediaRow("\u00a0".repeat(24), row))
+    val middleAnchor = middle.anchors.getValue(mediaAction)
+    check(middleAnchor.top == anchor.top && middleAnchor.visibleTop == 55 && middleAnchor.visibleBottom == 91)
+    check(middleAnchor.rectangle(96) == net.minecraft.client.gui.navigation.ScreenRectangle(8, 120, 192, 72))
+    val clipped = anchor.copy(parameters = parameters.withScissor(net.minecraft.client.gui.navigation.ScreenRectangle(8, 48, 72, 22)))
+    check(clipped.rectangle(96) == net.minecraft.client.gui.navigation.ScreenRectangle(8, 48, 72, 22))
+    check(anchor.copy(parameters = parameters.withScissor(net.minecraft.client.gui.navigation.ScreenRectangle(300, 300, 100, 100))).rectangle(96) == net.minecraft.client.gui.navigation.ScreenRectangle.empty())
+    captured.accept(net.minecraft.client.gui.TextAlignment.LEFT, 0, 1000, parameters, mediaRow("body [GIF 1]", 0))
+    check(captured.anchors.getValue(mediaAction).visibleBottom == 91)
     check(ircMessageHeader(global, false).string == "Alice: ")
     check(ircMessageHeader(global.copy(source = "discord"), false).string == "@Alice: ")
     val replied = global.copy(reply = GlobalChatReply("Bob", "https://cdn.discordapp.com/attachments/1/2/clip.gif?signature=${"x".repeat(180)}"))
@@ -148,6 +195,24 @@ fun checkIrcChatModel() {
     check(readable.last().text == ":party_blob:" && readable.last().original == custom)
     check(readable.any { it.original == "👩🏽‍💻" } && readable.any { it.original == "👨‍👩‍👧‍👦" })
     check(readable.all { it.text.codePoints().noneMatch { point -> point in 0x1F000..0x1FAFF || point == 0x200D } })
+    val flag = ircReadableText("🏳️‍⚧️").single()
+    check(flag.emoji && flag.original == "🏳️‍⚧️" && flag.text.length == 1 && flag.text.single().code in 0xE000..0xF8FF)
+    check(ircReadableText("🏳‍⚧").single().text == flag.text)
+    check(ircReadableText("☀\uFE0E").single() == IrcReadableText("☀\uFE0E"))
+    check(ircReadableText("©️ #️⃣ 1️⃣ 👩🏽‍💻 🇸🇪 ❤️").count { it.emoji } == 6)
+    check(readable.filter { it.original != null && it.original != custom }.all { it.emoji && it.text.length == 1 })
+    check(ircReadableText("Hello 123").single() == IrcReadableText("Hello 123"))
+    val emojiFont = net.minecraft.network.chat.FontDescription.Resource(net.minecraft.resources.Identifier.fromNamespaceAndPath("skymyce", "irc_emoji"))
+    val styledFlag = net.minecraft.network.chat.Component.literal(flag.text).withStyle { it.withFont(emojiFont)
+        .withClickEvent(net.minecraft.network.chat.ClickEvent.RunCommand("/sm irc-action react global ${global.id}"))
+        .withHoverEvent(net.minecraft.network.chat.HoverEvent.ShowText(net.minecraft.network.chat.Component.literal("old actions")))
+        .withInsertion("expired") }
+    val passive = ircPassiveText(styledFlag)
+    check(passive.string == flag.text)
+    passive.visualOrderText.accept { _, style, _ ->
+        check(style.font == emojiFont && style.clickEvent == null && style.hoverEvent == null && style.insertion == null); true
+    }
+    checkIrcEmojiFont()
     val unsigned = URI("https://cdn.discordapp.com/attachments/1/2/clip.gif")
     val signed = URI("https://media.discordapp.net/attachments/1/2/clip.gif?ex=123&is=2&hm=abc")
     check(ircMediaIdentity(unsigned) == ircMediaIdentity(signed))
@@ -243,5 +308,32 @@ fun checkIrcChatModel() {
         else check(shown.isEmpty() || shown.endsWith("…"))
     }
     println("IRC model checks passed")
+}
+
+private fun checkIrcEmojiFont() {
+    fun resource(path: String) = requireNotNull(IrcReadableText::class.java.getResourceAsStream(path))
+    val index = resource("/assets/skymyce/font/irc_emoji_index.json").bufferedReader().use { JsonParser.parseReader(it).asJsonArray }
+    val font = resource("/assets/skymyce/font/irc_emoji.json").bufferedReader().use { JsonParser.parseReader(it).asJsonObject }
+    val glyphs = arrayListOf<Int>()
+    for (provider in font.getAsJsonArray("providers")) {
+        val definition = provider.asJsonObject
+        check(net.minecraft.client.gui.font.providers.BitmapProvider.Definition.CODEC.codec().parse(
+            com.mojang.serialization.JsonOps.INSTANCE, definition).result().isPresent)
+        check(definition.get("type").asString == "bitmap" && definition.get("ascent").asInt == 7 && definition.get("height").asInt == 8)
+        val rows = definition.getAsJsonArray("chars").map { it.asString.codePoints().toArray().toList() }
+        check(rows.all { it.size == 32 })
+        val path = definition.get("file").asString.substringAfter("skymyce:")
+        resource("/assets/skymyce/textures/$path").use { stream ->
+            val image = requireNotNull(javax.imageio.ImageIO.read(stream))
+            check(image.width == 1024 && image.height == rows.size * 32 && image.colorModel.hasAlpha())
+        }
+        glyphs.addAll(rows.flatten().filter { it != 0 })
+    }
+    check(index.size() in 3001..6400 && glyphs == (0xE000 until 0xE000 + index.size()).toList())
+    for ((offset, key) in index.withIndex()) {
+        val unicode = key.asString.split('-').joinToString("") { String(Character.toChars(it.toInt(16))) }
+        val part = ircReadableText(unicode).single()
+        check(part.emoji && part.text.single().code == 0xE000 + offset && part.original == unicode)
+    }
 }
 fun main() = checkIrcChatModel()

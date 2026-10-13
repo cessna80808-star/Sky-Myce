@@ -1,6 +1,13 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import io.github.humbleui.skija.Bitmap
+import io.github.humbleui.skija.Codec
+import io.github.humbleui.skija.ColorAlphaType
+import io.github.humbleui.skija.ColorType
+import io.github.humbleui.skija.Data
+import io.github.humbleui.skija.EncodedImageFormat
+import io.github.humbleui.skija.ImageInfo
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -28,7 +35,7 @@ internal fun ircMediaViewerCurrent(capturedGeneration: Long, generation: Long, m
     (key == null || currentChannel && message != null && message.key == key && !message.deleted && media in message.media)
 
 private val mediaHosts = setOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com",
-    "media.tenor.com", "media1.tenor.com", "i.imgur.com", "images.unsplash.com")
+    "media.tenor.com", "media1.tenor.com", "static.klipy.com", "i.imgur.com", "images.unsplash.com")
 private const val FULL_IMAGE_BYTES = 12 * 1024 * 1024
 private const val THUMBNAIL_BYTES = 2 * 1024 * 1024
 internal const val IRC_MEDIA_THUMBNAIL_WIDTH = 192
@@ -36,6 +43,7 @@ internal const val IRC_MEDIA_THUMBNAIL_HEIGHT = 144
 private const val MAX_IMAGE_DIMENSION = 4096
 private const val MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 private const val MAX_IMAGE_DECODED_BYTES = 32L * 1024 * 1024
+private val klipyVideoPath = Regex("/ii/[a-fA-F0-9]{32}/[a-fA-F0-9]{2}/[a-fA-F0-9]{2}/[A-Za-z0-9_-]{1,128}\\.mp4")
 
 internal fun trustedIrcMediaUrl(uri: URI): Boolean {
     if (!uri.scheme.equals("https", true) || uri.isOpaque || uri.userInfo != null || uri.fragment != null ||
@@ -72,11 +80,20 @@ internal fun ircDiscordThumbnail(uri: URI): URI? {
     return URI("https://media.discordapp.net${uri.rawPath}?${query.joinToString("&")}")
 }
 
+internal fun ircKlipyGif(uri: URI): URI? {
+    if (!trustedIrcMediaUrl(uri) || uri.host.lowercase() != "static.klipy.com" ||
+        !uri.path.matches(klipyVideoPath)) return null
+    // Klipy publishes the same animation as GIF, so no video codec is needed in Minecraft.
+    return URI("https://static.klipy.com${uri.rawPath.dropLast(4)}.gif${uri.rawQuery?.let { "?$it" }.orEmpty()}")
+}
+
 private fun imageFormat(bytes: ByteArray): String? = when {
     bytes.size >= 8 && bytes.take(8).map { it.toInt() and 255 } == listOf(137, 80, 78, 71, 13, 10, 26, 10) -> "png"
     bytes.size >= 4 && bytes[0] == (-1).toByte() && bytes[1] == 0xd8.toByte() &&
         bytes[bytes.size - 2] == (-1).toByte() && bytes.last() == 0xd9.toByte() -> "jpeg"
     bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII) in setOf("GIF87a", "GIF89a") -> "gif"
+    bytes.size >= 12 && String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+        String(bytes, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
     else -> null
 }
 
@@ -109,6 +126,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
         require(bytes.size in 1..if (thumbnail) THUMBNAIL_BYTES else FULL_IMAGE_BYTES)
         timely()
         val format = imageFormat(bytes)
+        if (format == "webp") return decodeIrcWebp(bytes, deadline, thumbnail)
         require(format in setOf("png", "jpeg"))
         if (format == "png") require(completePng(bytes, ::timely))
         val reader = ImageIO.getImageReadersByFormatName(format).next()
@@ -163,6 +181,52 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
         } finally { reader.dispose() }
     } catch (_: Exception) { null }
 }
+
+/** Discord can return WebP for a .gif URL; validate bounds before asking the bundled CPU codec for pixels. */
+private fun decodeIrcWebp(bytes: ByteArray, deadline: Long, thumbnail: Boolean): IrcGif? = try {
+    fun timely() = require(System.nanoTime() - deadline < 0)
+    val declared = (0..3).fold(0L) { value, index -> value or ((bytes[4 + index].toLong() and 255) shl (index * 8)) }
+    require(declared + 8 == bytes.size.toLong())
+    Data.makeFromBytes(bytes).use { data ->
+        Codec.makeFromData(data).use { codec ->
+            val info = codec.imageInfo
+            require(codec.encodedImageFormat == EncodedImageFormat.WEBP && codec.frameCount <= 1)
+            require(info.width in 1..MAX_IMAGE_DIMENSION && info.height in 1..MAX_IMAGE_DIMENSION &&
+                info.width.toLong() * info.height * 4 <= MAX_IMAGE_DECODED_BYTES)
+            timely()
+            // Native pixels, the copied byte buffer and the retained image share the decode budget.
+            val scale = minOf(1.0, kotlin.math.sqrt(MAX_IMAGE_DECODED_BYTES.toDouble() /
+                (3 * info.width.toLong() * info.height * 4)), if (thumbnail)
+                minOf(IRC_MEDIA_THUMBNAIL_WIDTH.toDouble() / info.width, IRC_MEDIA_THUMBNAIL_HEIGHT.toDouble() / info.height) else 1.0)
+            val width = (info.width * scale).toInt().coerceAtLeast(1)
+            val height = (info.height * scale).toInt().coerceAtLeast(1)
+            val rgba = ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL)
+            Bitmap().use { bitmap ->
+                require(bitmap.allocPixels(rgba))
+                codec.readPixels(bitmap)
+                timely()
+                val pixels = requireNotNull(bitmap.readPixels())
+                require(pixels.size.toLong() == width.toLong() * height * 4)
+                val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+                var retained = false
+                try {
+                    val row = IntArray(width)
+                    for (y in 0 until height) {
+                        timely()
+                        for (x in 0 until width) {
+                            val offset = (y * width + x) * 4
+                            row[x] = ((pixels[offset + 3].toInt() and 255) shl 24) or
+                                ((pixels[offset].toInt() and 255) shl 16) or
+                                ((pixels[offset + 1].toInt() and 255) shl 8) or (pixels[offset + 2].toInt() and 255)
+                        }
+                        image.setRGB(0, y, width, 1, row, 0, width)
+                    }
+                    IrcGif(width, height, listOf(IrcGifFrame(image, 100)), -1).also { retained = true }
+                } finally { if (!retained) image.flush() }
+            }
+        }
+    }
+} catch (_: Exception) { null } catch (_: LinkageError) { null }
 
 private fun IrcGif.decodedBytes(): Long = frames.sumOf { it.image.width.toLong() * it.image.height * 4 }
 private fun IrcGif.release() = frames.forEach { it.image.flush() }
@@ -226,16 +290,24 @@ private data class MediaSource(val uri: URI, val full: Boolean, val maximumBytes
 
 internal fun ircMediaThumbnailUrl(media: IrcMedia): URI? {
     val explicit = media.thumbnailUrl?.takeIf(::trustedIrcMediaUrl)
+    ircKlipyGif(media.url)?.let { return it }
+    if (media.type == "gif") {
+        // A PNG Discord derivative loses animation; resize the verified GIF frames locally.
+        media.url.takeIf { trustedIrcGifUrl(it) && trustedIrcMediaUrl(it) }?.let { return it }
+        explicit?.takeIf(::trustedIrcGifUrl)?.let { return it }
+    }
     return explicit?.let { ircDiscordThumbnail(it) ?: it } ?: (if (media.type != "video") ircDiscordThumbnail(media.url) else null)
         ?: media.url.takeIf { media.type in setOf("image", "gif") && trustedIrcMediaUrl(it) }
 }
 
 private fun mediaSource(media: IrcMedia, full: Boolean): MediaSource? {
     if (media.type !in setOf("image", "gif", "video")) return null
+    ircKlipyGif(media.url)?.let { return MediaSource(it, full, IRC_GIF_MAX_BYTES) }
     if (full && media.type != "video") return media.url.takeIf(::trustedIrcMediaUrl)?.let {
         MediaSource(it, true, if (media.type == "gif") IRC_GIF_MAX_BYTES else FULL_IMAGE_BYTES)
     }
-    return ircMediaThumbnailUrl(media)?.let { MediaSource(it, false, THUMBNAIL_BYTES) }
+    return ircMediaThumbnailUrl(media)?.let { MediaSource(it, false,
+        if (trustedIrcGifUrl(it)) IRC_GIF_MAX_BYTES else THUMBNAIL_BYTES) }
 }
 
 internal object IrcMediaAssets {
@@ -348,11 +420,11 @@ internal object IrcMediaAssets {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = 4000
                 connection.readTimeout = 4000
-                connection.setRequestProperty("Accept", "image/png,image/jpeg,image/gif")
+                connection.setRequestProperty("Accept", "image/png,image/jpeg,image/gif,image/webp")
                 connection.setRequestProperty("User-Agent", "Sky-Myce IRC media")
                 require(connection.responseCode == 200)
                 val mime = connection.contentType.orEmpty().substringBefore(';').trim().lowercase()
-                require(mime in setOf("image/png", "image/jpeg", "image/gif", "application/octet-stream"))
+                require(mime in setOf("image/png", "image/jpeg", "image/gif", "image/webp", "application/octet-stream"))
                 val bytes = connection.inputStream.use {
                     readIrcMediaBytes(it, connection.contentLengthLong, deadline, load.source.maximumBytes) { load.cancelled }
                 }

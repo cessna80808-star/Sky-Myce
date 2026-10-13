@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
 import { configureTrafficLimits } from './traffic-fixture.mjs';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 /** Synthetic HTTP/Mojang/Discord lifecycle: no live accounts, bot messages, operator secrets or deployments. */
 export async function checkCommunity(script, proof) {
   const adminId = '90000000000000001', guild = '90000000000000002', first = '90000000000000003', second = '90000000000000004';
+  const oldVersion = '2.5.11', newVersion = '2.5.13', signingKey = generateKeyPairSync('ed25519');
   const bindings = { ROOMS: 'friends,testing', SKYMYCE_ENVIRONMENT: 'production', DISCORD_GUILD_ID: guild, ADMIN_BOOTSTRAP_USER_ID: adminId,
     SKYMYCE_PUBLIC_URL: 'https://community.test', DISCORD_OAUTH_CLIENT_ID: '90000000000000005', DISCORD_OAUTH_CLIENT_SECRET: 'synthetic-test-secret',
-    DISCORD_OAUTH_REDIRECT_URI: 'https://community.test/community/oauth/callback' };
+    DISCORD_OAUTH_REDIRECT_URI: 'https://community.test/community/oauth/callback', SKY_MYCE_VERSION: '2.4.31',
+    DRM_PUBLIC_KEYS: JSON.stringify({ fixture: signingKey.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') }) };
   let oauthCalls = 0;
   const options = convertV4MiniflareOptions({ name: 'community-check', modules: true, script, compatibilityDate: '2026-09-27', bindings,
+    r2Buckets: ['PRIVATE_ARTIFACTS'],
     durableObjects: { ACCOUNT_STORE: { className: 'AccountStore', useSQLite: true }, RELAY_ROOMS: { className: 'RelayRoom', useSQLite: true } },
     outboundService: request => {
       oauthCalls++;
@@ -24,6 +27,22 @@ export async function checkCommunity(script, proof) {
   const mf = new Miniflare(options), sockets = [];
   try {
     const store = (await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');
+    const bucket = await mf.getR2Bucket('PRIVATE_ARTIFACTS');
+    const publish = async version => {
+      const artifact = `releases/Sky-Myce-${version}.jar`, bytes = Buffer.from([80, 75, 3, 4]);
+      const manifest = { product: 'sky-myce', protocol: 4, installation: 'fabric', minecraft: '26.1.2', version, artifact,
+        size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), issuedAt: Date.now(), expiresAt: Date.now() + 86400000 };
+      const payload = Buffer.from(JSON.stringify(manifest));
+      await bucket.put(artifact, bytes);
+      await bucket.put('releases/community-current.json', JSON.stringify({ kid: 'fixture', payload: payload.toString('base64url'),
+        signature: sign(null, payload, signingKey.privateKey).toString('base64url') }));
+      // Observe the newly selected release after its bounded metadata-cache lifetime.
+      await (await mf.getCaches()).default.delete('https://community.test/community/cache/selection?pointer=releases%2Fcommunity-current.json');
+      const response = await mf.dispatchFetch('https://community.test/community/release');
+      assert.equal(response.status, 200);
+      assert.equal(JSON.parse(Buffer.from((await response.json()).payload, 'base64url')).version, version);
+    };
+    await publish(oldVersion);
     let sql, interaction = 91000000000000000n, sequence = 0;
     const actor = (who = adminId, changes = {}) => ({ id: who, guildId: guild, roles: [], interactionId: String(interaction++), ...changes });
     const post = async (path, body, bearer) => {
@@ -35,7 +54,7 @@ export async function checkCommunity(script, proof) {
     const challenge = async purpose => { const result = await post('/community/challenge', { purpose, clientNonce: clientNonce() }); assert.equal(result.body.ok, true); return result.body; };
     const start = async (name = 'Alice', device) => {
       const c = await challenge('connect'), pollSecret = randomBytes(32).toString('base64url');
-      const result = await post('/community/connect/start', { challengeId: c.challengeId, minecraftProof: proof(name, c.nonce), pollSecret, device, modVersion: '0.1.0' });
+      const result = await post('/community/connect/start', { challengeId: c.challengeId, minecraftProof: proof(name, c.nonce), pollSecret, device, modVersion: oldVersion });
       assert.equal(result.body.ok, true, JSON.stringify(result.body)); return { ...result.body, pollSecret, name };
     };
     const poll = flow => post('/community/connect/poll', { flowId: flow.flowId, pollSecret: flow.pollSecret });
@@ -57,7 +76,7 @@ export async function checkCommunity(script, proof) {
       assert.equal(response.status, 101); const ws = response.webSocket; sockets.push(ws);
       const queue = [], waits = []; ws.addEventListener('message', event => { const data = event.data === 'pong' ? 'pong' : JSON.parse(event.data); const next = waits.shift(); if (next) next(data); else queue.push(data); });
       const next = () => queue.length ? Promise.resolve(queue.shift()) : new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('Community socket timeout')), 5000); waits.push(data => { clearTimeout(timer); resolve(data); }); });
-      ws.accept(); const c = await next(); ws.send(JSON.stringify({ ...proof(name, c.serverId), communityToken: credential.accessToken, modVersion: '0.1.0', cosmetics: true }));
+      ws.accept(); const c = await next(); ws.send(JSON.stringify({ ...proof(name, c.serverId), communityToken: credential.accessToken, modVersion: oldVersion, cosmetics: true, cosmeticsVersion: 5 }));
       assert.equal((await next()).type, 'ready'); return { ws, next };
     };
     for (const purpose of ['connect', 'refresh', 'disconnect']) {
@@ -88,6 +107,30 @@ export async function checkCommunity(script, proof) {
     a1.ws.send('ping'); assert.equal(await a1.next(), 'pong'); a2.ws.send('ping'); assert.equal(await a2.next(), 'pong');
     const policy = await mf.dispatchFetch('https://community.test/community/sharing', { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
     const initialPolicy = await policy.json(); assert.equal(initialPolicy.policy.enabled, true); assert.equal(initialPolicy.policy.dungeons, true);
+    const savedCosmetic = await post('/community/cosmetics', { expectedAccountId: alice.identity.accountId, expectedUuid: alice.identity.uuid,
+      revision: 0, profile: { name: { text: 'Old client', color: 'gold' }, scaleX: 1.25, scaleY: 1.5, scaleZ: 0.75,
+        nametagScale: 0.8, capePreset: 'forest', capeAsset: null } }, alice.credentials.accessToken);
+    assert.equal(savedCosmetic.body.ok, true, JSON.stringify(savedCosmetic.body));
+    const cosmetic = async client => {
+      const id = randomBytes(16).toString('hex');
+      client.ws.send(JSON.stringify({ type: 'cosmetics_get', id, uuids: [alice.identity.uuid] }));
+      const result = await client.next(); assert.equal(result.id, id); return result.records[0];
+    };
+    const beforeRelease = await cosmetic(a1);
+    assert.deepEqual(beforeRelease, savedCosmetic.body.profile, 'The older client receives its saved custom profile before publication');
+    const sessionBefore = await sql.exec('SELECT session_id,uuid,generation,created_at,revoked_at,access_expires_at,refresh_expires_at,mod_version FROM community_sessions WHERE session_id=?', alice.credentials.sessionId);
+    assert.equal(sessionBefore[0].mod_version, oldVersion);
+    await publish(newVersion);
+    assert.deepEqual(await sql.exec('SELECT session_id,uuid,generation,created_at,revoked_at,access_expires_at,refresh_expires_at,mod_version FROM community_sessions WHERE session_id=?', alice.credentials.sessionId),
+      sessionBefore, 'Publishing a signed standalone update cannot revoke, expire or relabel the running older session');
+    assert.deepEqual(await cosmetic(a1), beforeRelease, 'Existing older sockets retain the exact name, body scales, cape and cosmetic revision');
+    a1.ws.send('ping'); assert.equal(await a1.next(), 'pong');
+    const olderReconnect = await socket('Alice', alice.credentials);
+    assert.deepEqual(await cosmetic(olderReconnect), beforeRelease, 'The same older build can reconnect after the newer release becomes current');
+    const retainedPolicy = await mf.dispatchFetch('https://community.test/community/sharing', { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
+    assert.deepEqual((await retainedPolicy.json()).policy, initialPolicy.policy, 'Release activation preserves account sharing settings');
+    assert.equal((await mf.dispatchFetch(`https://community.test/community/artifact?version=${oldVersion}`)).status, 409,
+      'Continuing older sessions does not expose an unselected private release artifact');
     const wrongOwner = await post('/community/sharing', { revision: 0, policy: { ...initialPolicy.policy, revision: undefined, updatedAt: undefined, notBefore: undefined }, expectedAccountId: randomUUID(), expectedUuid: alice.identity.uuid }, alice.credentials.accessToken);
     assert.equal(wrongOwner.body.error, 'session_identity_changed');
     const plain = { version: 1, enabled: true, dungeons: false, economy: false, rng: false, activity: true, leaderboards: false, publicName: false };
@@ -141,6 +184,6 @@ export async function checkCommunity(script, proof) {
     const rebound = await connect('Alice', first);
     assert.equal(rebound.identity.uuid, detachedUuid);
     assert.equal((await store.checkSharing(detachedUuid, 'rng')).allowed, false, 'A later proof-based reconnect inherits detached consent');
-    console.log('Community checks passed: ordinary linking, OAuth state/cookie/replay, persistent rotating sessions, multiple PCs/Minecraft identities, admin-only device reports, explicit blacklist, opt-outs and legitimate reconnect.');
+    console.log('Community checks passed: signed update compatibility for older sessions/cosmetics/preferences, ordinary linking, OAuth state/cookie/replay, persistent rotating sessions, multiple PCs/Minecraft identities, admin-only device reports, explicit blacklist, opt-outs and legitimate reconnect.');
   } finally { for (const ws of sockets) try { ws.close(); } catch {} await mf.dispose(); }
 }

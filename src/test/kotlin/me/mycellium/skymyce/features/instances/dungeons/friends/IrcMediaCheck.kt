@@ -3,9 +3,15 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.InetAddress
 import java.net.URI
 import java.util.zip.CRC32
+import io.github.humbleui.skija.ColorAlphaType
+import io.github.humbleui.skija.ColorType
+import io.github.humbleui.skija.EncodedImageFormat
+import io.github.humbleui.skija.Image
+import io.github.humbleui.skija.ImageInfo
 import javax.imageio.ImageIO
 import javax.imageio.stream.MemoryCacheImageOutputStream
 
@@ -27,9 +33,19 @@ private fun pngWidth(bytes: ByteArray, width: Int): ByteArray = bytes.clone().al
     for (index in 0..3) it[29 + index] = (crc ushr (24 - index * 8)).toByte()
 }
 
+private fun webpFixture(): ByteArray {
+    val rgba = ByteArray(256 * 128 * 4)
+    for (pixel in rgba.indices step 4) {
+        rgba[pixel] = 0xef.toByte(); rgba[pixel + 1] = 0x23; rgba[pixel + 2] = 0x11; rgba[pixel + 3] = 0xff.toByte()
+    }
+    return Image.makeRasterFromBytes(ImageInfo(256, 128, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL), rgba, 256L * 4).use { image ->
+        requireNotNull(image.encodeToData(EncodedImageFormat.WEBP, 100)).use { it.bytes }
+    }
+}
+
 fun checkIrcMedia() {
     for (host in listOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com",
-        "media.tenor.com", "media1.tenor.com", "i.imgur.com", "images.unsplash.com")) check(trustedIrcMediaUrl(URI("https://$host/path/image.png?signature=abc%2Fdef")))
+        "media.tenor.com", "media1.tenor.com", "static.klipy.com", "i.imgur.com", "images.unsplash.com")) check(trustedIrcMediaUrl(URI("https://$host/path/image.png?signature=abc%2Fdef")))
     check(trustedIrcMediaUrl(URI("https://I.IMGUR.COM:443/attachment.jpeg")))
     for (url in listOf("http://i.imgur.com/a.png", "https://i.imgur.com:444/a.png", "https://user@i.imgur.com/a.png",
         "https://i.imgur.com/a.png#fragment", "https://i.imgur.com.evil.invalid/a.png", "https://i.imgur.com./a.png",
@@ -51,19 +67,31 @@ fun checkIrcMedia() {
     val derivative = requireNotNull(ircDiscordThumbnail(discord))
     check(derivative.host == "media.discordapp.net" && derivative.rawPath == discord.rawPath)
     check(derivative.rawQuery == "ex=abc&hm=def%2Fghi&width=192&format=png")
-    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", discord, URI(derivative.toString() + "&height=32&fit=cover"))) == derivative)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", discord, URI(derivative.toString() + "&height=32&fit=cover"))) == discord)
     check(ircDiscordThumbnail(URI("https://media.tenor.com/a.gif")) == null)
-    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", discord)) == derivative)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", discord)) == discord)
+    val signedGif = URI("https://cdn.discordapp.com/attachments/1/2/name.gif?ex=abc&is=def&hm=ghi%2Fjkl&")
+    check(trustedIrcMediaUrl(signedGif) && trustedIrcGifUrl(signedGif))
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", signedGif))?.toASCIIString() == signedGif.toASCIIString())
     val gif = URI("https://media.tenor.com/a.gif")
     check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif)) == gif)
     check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, gif)) == gif)
     val tenor = URI("https://media1.tenor.com/m/example/complete.gif")
     check(trustedIrcMediaUrl(tenor) && ircMediaThumbnailUrl(IrcMedia("gif", "gif", tenor)) == tenor)
     val poster = URI("https://i.imgur.com/poster.png")
-    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, poster)) == poster)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", gif, poster)) == gif)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", URI("https://unsupported.invalid/a.gif"), gif)) == gif)
+    check(ircMediaThumbnailUrl(IrcMedia("gif", "gif", URI("https://unsupported.invalid/a.gif"), poster)) == poster)
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://cdn.discordapp.com/a.mp4"))) == null)
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://cdn.discordapp.com/a.mp4"), poster)) == poster)
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", URI("https://media.tenor.com/a.mp4"), tenor)) == tenor)
+    val klipy = URI("https://static.klipy.com/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/m0x6kK9nfqNDjk8V.mp4?signature=abc%2Fdef")
+    val klipyGif = requireNotNull(ircKlipyGif(klipy))
+    check(klipyGif.toASCIIString() == klipy.toASCIIString().replace(".mp4?", ".gif?"))
+    check(ircMediaThumbnailUrl(IrcMedia("video", "video", klipy)) == klipyGif)
+    for (url in listOf("https://static.klipy.com.evil.invalid/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.mp4",
+        "https://static.klipy.com/other.mp4", "https://static.klipy.com/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.webm",
+        "https://static.klipy.com/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.gif")) check(ircKlipyGif(URI(url)) == null)
 
     // A modal browser confirmation may return after a session change, deletion, or media replacement.
     val viewerMedia = IrcMedia("image", "image", poster)
@@ -109,6 +137,13 @@ fun checkIrcMedia() {
     for (length in listOf(0, 8, 24, png.size - 1, png.size / 2)) check(decode(png.copyOf(length)) == null)
     check(decode(png.clone().also { it[29] = (it[29].toInt() xor 1).toByte() }) == null)
     check(decode(jpeg.copyOf(jpeg.size - 1)) == null)
+    val webp = webpFixture()
+    val webpImage = requireNotNull(decode(webp))
+    check(webpImage.width == 256 && webpImage.height == 128 && webpImage.frames.size == 1)
+    check(webpImage.frames.single().image.getRGB(0, 0) ushr 24 == 255)
+    check(requireNotNull(decode(webp, true)).let { it.width == 192 && it.height == 96 })
+    for (length in listOf(0, 12, webp.size - 1, webp.size / 2)) check(decode(webp.copyOf(length)) == null)
+    check(decode(webp.clone().also { it[4] = (it[4].toInt() xor 1).toByte() }) == null)
 
     // Caller limits also apply independently of a declared Content-Length.
     check(ByteArrayInputStream(png).use {
@@ -162,4 +197,21 @@ fun checkIrcMedia() {
     println("IRC media checks passed")
 }
 
-fun main() = checkIrcMedia()
+fun main(args: Array<String>) {
+    checkIrcMedia()
+    // Private reproduction files stay outside Git; normal checks use only generated fixtures.
+    for (path in args) {
+        val file = File(path)
+        check(file.length() in 1..IRC_GIF_MAX_BYTES.toLong())
+        val bytes = file.readBytes()
+        val gif = bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII) in setOf("GIF87a", "GIF89a")
+        for (thumbnail in listOf(false, true)) {
+            val deadline = System.nanoTime() + 2_000_000_000L
+            val asset = requireNotNull(if (gif) decodeIrcGif(bytes, deadline, thumbnail) else decodeIrcImage(bytes, deadline, thumbnail)) {
+                "${file.name} could not be decoded (thumbnail=$thumbnail)"
+            }
+            println("${file.name}: thumbnail=$thumbnail ${asset.width}x${asset.height}, ${asset.frames.size} frames")
+            asset.frames.forEach { it.image.flush() }
+        }
+    }
+}
