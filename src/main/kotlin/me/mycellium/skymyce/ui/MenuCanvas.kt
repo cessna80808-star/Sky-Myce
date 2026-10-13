@@ -15,32 +15,42 @@ import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 
-/** The menu renderer. No Minecraft fonts, sprites, widgets or render pipelines are used here. */
+/** Retained menu commands shared by the native GPU painter and compatibility fallback. */
 class MenuCanvas {
     data class Transform(val a: Double = 1.0, val b: Double = 0.0, val c: Double = 0.0, val d: Double = 1.0, val x: Double = 0.0, val y: Double = 0.0)
     data class Clip(val x: Int, val y: Int, val width: Int, val height: Int)
     data class Run(val text: String, val color: Int, val bold: Boolean = false, val italic: Boolean = false, val underline: Boolean = false)
-    private data class Paint(val kind: Int, val x: Double, val y: Double, val width: Double = 0.0,
+    internal data class Paint(val kind: Int, val x: Double, val y: Double, val width: Double = 0.0,
         val height: Double = 0.0, val extra: Double = 0.0, val inner: Double = 0.0,
         val color: Int = 0, val topRight: Int = 0, val bottomRight: Int = 0, val bottomLeft: Int = 0,
         val runs: List<Run> = emptyList(), val transform: Transform, val clip: Clip?,
-        val picture: BufferedImage? = null, val opacity: Double = 1.0, val group: String? = null) {
+        val picture: BufferedImage? = null, val opacity: Double = 1.0, val group: String? = null,
+        val snapshot: SkijaMenuSnapshot? = null, val blend: Blend? = null) {
         // The six geometry slots retain each command's original interpretation without boxed lists.
         operator fun get(index: Int): Double = when (index) {
             0 -> x; 1 -> y; 2 -> width; 3 -> height; 4 -> extra; 5 -> inner
             else -> throw IndexOutOfBoundsException(index)
         }
     }
+    internal data class Blend(val outgoing: List<Paint>, val incoming: List<Paint>, val amount: Double)
+    class Frame internal constructor(val width: Int, val height: Int, val scale: Double, val revision: Long,
+                                     internal val commands: List<Paint>)
     var transform = Transform()
     var clip: Clip? = null
     var opacity = 1.0
     var group: String? = null
     /** A bounded inert raster captured on interaction, never a live screen, adapter, or texture. */
-    class Snapshot internal constructor(internal val replay: (MenuCanvas, Double, Double, Double, Clip?) -> Unit)
+    class Snapshot internal constructor(private val resource: AutoCloseable? = null,
+        internal val replay: (MenuCanvas, Double, Double, Double, Clip?) -> Unit) : AutoCloseable {
+        private var references = 1
+        fun retain(): Snapshot { check(references > 0); references++; return this }
+        override fun close() { if (references > 0 && --references == 0) resource?.close() }
+    }
     private val pending = ArrayList<Paint>()
     private var previous = emptyList<Paint>()
     private var previousScale = Double.NaN
     private var image: BufferedImage? = null
+    private var frame: Frame? = null
     private var transitionOld: BufferedImage? = null
     private var transitionNew: BufferedImage? = null
     private var transitionBlend: BufferedImage? = null
@@ -85,12 +95,32 @@ class MenuCanvas {
     fun picture(image: BufferedImage, x: Double, y: Double, width: Double, height: Double) {
         add(5, x, y, width, height, picture = image)
     }
+    fun roundedRect(x: Double, y: Double, width: Double, height: Double, radius: Double, color: Int) =
+        add(7, x, y, width, height, radius.coerceIn(0.0, minOf(width, height).coerceAtLeast(0.0) / 2), color = color)
+    fun roundedBorder(x: Double, y: Double, width: Double, height: Double, radius: Double, thickness: Double, color: Int) =
+        add(8, x, y, width, height, radius.coerceIn(0.0, minOf(width, height).coerceAtLeast(0.0) / 2), thickness.coerceAtLeast(0.0), color)
+    fun shadow(x: Double, y: Double, width: Double, height: Double, radius: Double, sigma: Double, color: Int) {
+        if (width > 0 && height > 0 && sigma.isFinite() && sigma > 0)
+            add(10, x, y, width, height, radius.coerceAtLeast(0.0), sigma.coerceAtMost(8.0), color)
+    }
 
     fun snapshot(group: String? = null): Snapshot? {
         val prefix = "$group/"
         val commands = previous.filter { if (group == null) it.group != "tooltip" && it.group != "toast"
             else it.group == group || it.group?.startsWith(prefix) == true }
         if (commands.isEmpty()) return null
+        frame?.let { source ->
+            var area: Rectangle? = null
+            commands.forEach { physicalBounds(it, source.width, source.height, source.scale)?.let { bounds -> area = area?.union(bounds) ?: bounds } }
+            val region = area?.takeUnless { it.isEmpty } ?: return null
+            val capture = SkijaMenuSnapshot(commands, region, source.scale)
+            val scale = source.scale
+            return Snapshot(capture) { destination, alpha, dx, dy, boundary ->
+                if (alpha > 0) destination.pending += Paint(6, region.x / scale, region.y / scale, region.width / scale, region.height / scale,
+                    transform = Transform(x = dx, y = dy), clip = boundary, snapshot = capture,
+                    opacity = alpha.coerceIn(0.0, 1.0), group = destination.group)
+            }
+        }
         val source = image ?: return null
         val scale = previousScale
         var area: Rectangle? = null
@@ -130,6 +160,11 @@ class MenuCanvas {
         snapshot.replay(this, 1.0, outgoingX, 0.0, boundary)
         val outgoing = pending.subList(first, pending.size).toList()
         pending.subList(first, pending.size).clear()
+        if (frame != null) {
+            pending += Paint(9, boundary.x.toDouble(), boundary.y.toDouble(), boundary.width.toDouble(), boundary.height.toDouble(),
+                transform = Transform(), clip = boundary, group = group, blend = Blend(outgoing, incoming, amount))
+            return
+        }
         val scale = previousScale
         val left = kotlin.math.floor(boundary.x * scale).toInt()
         val top = kotlin.math.floor(boundary.y * scale).toInt()
@@ -167,7 +202,7 @@ class MenuCanvas {
     }
 
     fun close() {
-        pending.clear(); previous = emptyList(); gradients.clear(); transitionGradients.clear(); image = null; dirtyRegion = null
+        pending.clear(); previous = emptyList(); gradients.clear(); transitionGradients.clear(); image = null; frame = null; dirtyRegion = null
         releaseTransition()
     }
 
@@ -184,6 +219,14 @@ class MenuCanvas {
 
     /** Hover/tooltips only repaint their old and new bounds, including the underlying menu layers. */
     fun finish(width: Int, height: Int, scale: Double = 2.0): BufferedImage {
+        if (frame != null) {
+            // A failed GPU frame cannot replay native textures; retain the current incoming page.
+            val fallback = pending.flatMap { command ->
+                if (command.kind == 9) command.blend!!.incoming else listOf(command)
+            }.filter { it.snapshot == null }
+            pending.clear(); pending.addAll(fallback)
+        }
+        frame = null
         val w = (width * scale).toInt().coerceAtLeast(1)
         val h = (height * scale).toInt().coerceAtLeast(1)
         val resized = image?.width != w || image?.height != h
@@ -205,6 +248,16 @@ class MenuCanvas {
         gradients.keys.retainAll(pending.filter { it.kind == 2 }.map { gradientKey(it) }.toSet() + transitionGradients)
         previous = pending.toList(); previousScale = scale; revision++
         return image!!
+    }
+    fun finishFrame(width: Int, height: Int, scale: Double = 2.0): Frame {
+        require(width > 0 && height > 0 && scale.isFinite() && scale > 0)
+        val w = (width * scale).toInt().coerceAtLeast(1)
+        val h = (height * scale).toInt().coerceAtLeast(1)
+        val current = frame
+        if (current != null && current.width == w && current.height == h && current.scale == scale && pending == previous) return current
+        previous = pending.toList(); previousScale = scale; revision++
+        image = null; gradients.clear(); dirtyRegion = null
+        return Frame(w, h, scale, revision, previous).also { frame = it }
     }
 
     private fun prepare(g: Graphics2D, scale: Double) {
@@ -276,7 +329,9 @@ class MenuCanvas {
     private fun bounds(paint: Paint): Rectangle2D {
         val v = paint
         return when (paint.kind) {
-            0, 2, 5 -> Rectangle2D.Double(v[0], v[1], v[2], v[3])
+            0, 2, 5, 6, 7, 8, 9 -> Rectangle2D.Double(v[0], v[1], v[2], v[3])
+            10 -> Rectangle2D.Double(paint.x - paint.inner * 3, paint.y - paint.inner * 3,
+                paint.width + paint.inner * 6, paint.height + paint.inner * 6)
             1 -> Rectangle2D.Double(v[0] - v[2], v[1] - v[2], v[2] * 2, v[2] * 2)
             4 -> Rectangle2D.Double(minOf(v[0], v[2]) - v[4] / 2, minOf(v[1], v[3]) - v[4] / 2,
                 kotlin.math.abs(v[2] - v[0]) + v[4], kotlin.math.abs(v[3] - v[1]) + v[4])
@@ -290,10 +345,14 @@ class MenuCanvas {
                     var index = 0
                     while (index < run.text.length) {
                         val codepoint = run.text.codePointAt(index)
-                        val glyph = glyph(codepoint, run.bold, run.italic, v[2])
-                        val b = glyph.bounds
-                        include(Rectangle2D.Double(left + b.x, baseline + b.y, b.width, b.height))
-                        left += glyph.width
+                        if (SkijaMenuFonts.active) {
+                            val b = SkijaMenuFonts.bounds(codepoint, run.bold, run.italic, v[2])
+                            include(Rectangle2D.Double(left + b.left, baseline + b.top, b.width.toDouble(), b.height.toDouble()))
+                        } else {
+                            val b = glyph(codepoint, run.bold, run.italic, v[2]).bounds
+                            include(Rectangle2D.Double(left + b.x, baseline + b.y, b.width, b.height))
+                        }
+                        left += textWidth(codepoint, run.bold, run.italic, v[2])
                         index += Character.charCount(codepoint)
                     }
                     if (run.underline) include(Rectangle2D.Double(start, baseline + 1, left - start, .6))
@@ -343,7 +402,7 @@ class MenuCanvas {
             3 -> {
                 var left = v[0]
                 val line = metrics(v[2])
-                val baseline = v[1] + line.ascent
+                val baseline = v[1] + ascent(v[2])
                 val clip = g.clipBounds
                 // All eight fonts used below contribute their maximum glyph bounds. A whole line
                 // outside the inverse clip cannot contribute pixels, including styled fallback glyphs.
@@ -359,7 +418,7 @@ class MenuCanvas {
                         if (g.hitClip(kotlin.math.floor(left + bounds.x).toInt() - 1, kotlin.math.floor(baseline + bounds.y).toInt() - 1,
                                 kotlin.math.ceil(bounds.width).toInt() + 3, kotlin.math.ceil(bounds.height).toInt() + 3))
                             g.drawGlyphVector(glyph.vector, left.toFloat(), baseline.toFloat())
-                        left += glyph.width
+                        left += textWidth(codepoint, run.bold, run.italic, v[2])
                         index += Character.charCount(codepoint)
                     }
                     if (run.underline) g.fill(Rectangle2D.Double(start, baseline + 1, left - start, .6))
@@ -374,6 +433,21 @@ class MenuCanvas {
                 if (!visible(g, v[0], v[1], v[2], v[3])) return
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
                 g.drawImage(p.picture, AffineTransform(v[2] / p.picture!!.width, 0.0, 0.0, v[3] / p.picture.height, v[0], v[1]), null)
+            }
+            7, 8 -> {
+                g.color = Color(p.color, true)
+                val shape = java.awt.geom.RoundRectangle2D.Double(p.x, p.y, p.width, p.height, p.extra * 2, p.extra * 2)
+                if (p.kind == 7) g.fill(shape) else {
+                    g.stroke = java.awt.BasicStroke(p.inner.toFloat()); g.draw(shape)
+                }
+            }
+            10 -> {
+                for (layer in 3 downTo 1) {
+                    val spread = p.inner * layer / 3
+                    g.color = Color((p.color and 0xFFFFFF) or ((p.color ushr 24) / 4 shl 24), true)
+                    g.fill(java.awt.geom.RoundRectangle2D.Double(p.x - spread, p.y - spread,
+                        p.width + spread * 2, p.height + spread * 2, (p.extra + spread) * 2, (p.extra + spread) * 2))
+                }
             }
         }
     }
@@ -437,16 +511,16 @@ class MenuCanvas {
             }
             LineMetrics(ascent, kotlin.math.ceil(ascent + maxOf(a.descent, b.descent) + maxOf(a.leading, b.leading) + 1).toInt(), minY, maxY)
         }
-        private fun ascent(size: Double) = metrics(size).ascent
-        fun lineHeight(size: Double = 10.0): Int = metrics(size).height
+        private fun ascent(size: Double) = if (SkijaMenuFonts.active) SkijaMenuFonts.ascent(size) else metrics(size).ascent
+        fun lineHeight(size: Double = 10.0): Int = if (SkijaMenuFonts.active) SkijaMenuFonts.lineHeight(size) else metrics(size).height
         fun textWidth(codepoint: Int, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double =
-            glyph(codepoint, bold, italic, size).width
+            if (SkijaMenuFonts.active) SkijaMenuFonts.width(codepoint, bold, italic, size) else glyph(codepoint, bold, italic, size).width
         fun textWidth(text: String, bold: Boolean = false, italic: Boolean = false, size: Double = 10.0): Double {
             var width = 0.0
             var index = 0
             while (index < text.length) {
                 val codepoint = text.codePointAt(index)
-                width += glyph(codepoint, bold, italic, size).width
+                width += textWidth(codepoint, bold, italic, size)
                 index += Character.charCount(codepoint)
             }
             return width

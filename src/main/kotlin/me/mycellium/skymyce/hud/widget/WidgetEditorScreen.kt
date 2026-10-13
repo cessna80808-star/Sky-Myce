@@ -77,6 +77,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     private var closing = false
 
     override fun init() {
+        texture.prepareFrame()
         appearance.animateTo(if (closing) 0.0 else 1.0, if (closing) 120 else 180, MotionEasing.QUICK, ThemeConfig.animationMode)
         controls.snap(if (controlsVisible) 1.0 else 0.0)
         ui?.dispose()
@@ -137,6 +138,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, a: Float) {
+        if (texture.prepareFrame()) { tooltip.clear(); canvas.close(); ui?.inflateAndMount() }
         appearance.animateTo(if (closing) 0.0 else 1.0, if (closing) 120 else 180, MotionEasing.QUICK, ThemeConfig.animationMode)
         val alpha = appearance.sample().coerceIn(0.0, 1.0)
         output.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.SIDEBAR, (25 * alpha).toInt()))
@@ -184,7 +186,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         }
         if (closing) tooltip.clear() else tooltip.endFrame(canvas)
         val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
-        texture.render(output, canvas.finish(width, height, rasterScale), width, height, canvas.revision, canvas.dirtyRegion)
+        texture.render(output, canvas, width, height, rasterScale)
     }
 
 

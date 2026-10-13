@@ -2,6 +2,7 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import me.mycellium.skymyce.ui.MenuCanvas
 import java.net.URI
 import java.util.UUID
 
@@ -100,6 +101,14 @@ fun checkIrcChatModel() {
             check(parseIrcChatAction(IrcChatAction(kind, scope, global.id).command) == IrcChatAction(kind, scope, global.id))
             check(parseIrcChatAction("/sm ircaction $kind $scope ${global.id} 0") == null)
         }
+        for (manageable in listOf(false, true)) {
+            val controls = ircMessageActions(global.copy(scope = scope), manageable)
+            val kinds = if (manageable) listOf("reply", "react", "manage") else listOf("reply", "react")
+            check(controls.string == if (manageable) " [↩] [+] [⋯]" else " [↩] [+]")
+            check(controls.siblings.map { parseIrcChatAction((it.style.clickEvent as net.minecraft.network.chat.ClickEvent.RunCommand).command()) } ==
+                kinds.map { IrcChatAction(it, scope, global.id) })
+            check(controls.siblings.all { it.style.hoverEvent is net.minecraft.network.chat.HoverEvent.ShowText })
+        }
         val label = ircPrefix(scope); val colors = ircPrefixColors(label.length)
         check(colors.size == label.length && colors.first() == 0x44E4EF && colors.last() == 0xA46BFF && colors.distinct().size > 5)
     }
@@ -168,6 +177,16 @@ fun checkIrcChatModel() {
         val bounds = ircPickerBounds(width + 20, height + 20, width, height)
         check(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width && bounds.y + bounds.height <= height - 28)
     }
+    for (width in 1..246) {
+        val bounds = IrcControlBounds(4, 7, width, 64)
+        for (row in 0..1) for (x in bounds.x until bounds.x + bounds.width) {
+            val index = requireNotNull(ircReactionAt(bounds, x, bounds.y + 20 + row * 20))
+            check(index / 3 == row && ircReactionCell(bounds, index).contains(x, bounds.y + 20 + row * 20))
+            check(IRC_REACTIONS.indices.count { ircReactionCell(bounds, it).contains(x, bounds.y + 20 + row * 20) } == 1)
+        }
+        for ((x, y) in listOf(bounds.x - 1 to bounds.y + 20, bounds.x + bounds.width to bounds.y + 20,
+            bounds.x to bounds.y + 19, bounds.x to bounds.y + 60)) check(ircReactionAt(bounds, x, y) == null)
+    }
     val reorder = IrcChatStore()
     val early = requireNotNull(parseIrcUpdate(change()))
     check(reorder.apply(early, 1000) == null && reorder.values().isEmpty())
@@ -184,14 +203,16 @@ fun checkIrcChatModel() {
     // Body, media and full reaction snapshots can fan out in a different order.
     for (beforeCreate in listOf(false, true)) {
         val domains = IrcChatStore()
+        val original = global.copy(reply = GlobalChatReply("Bob", "Quoted message", "d".repeat(32)))
         val latestReactions = IrcUpdate(global.key, "reaction", 3, null, null, listOf(IrcReaction("🔥", 1, true)))
         val delayedBody = IrcUpdate(global.key, "edit", 1, "actual edited body", null, emptyList())
         val newerMedia = IrcUpdate(global.key, "edit", 2, null, listOf(attachment), emptyList())
-        if (!beforeCreate) check(domains.accept(global, 1000))
+        if (!beforeCreate) check(domains.accept(original, 1000))
         domains.apply(latestReactions, 1001); domains.apply(newerMedia, 1002); domains.apply(delayedBody, 1003)
-        if (beforeCreate) check(domains.accept(global, 1004))
+        if (beforeCreate) check(domains.accept(original, 1004))
         val merged = requireNotNull(domains.get(global.key))
         check(merged.text == "actual edited body" && merged.media == listOf(attachment) && merged.reactions == latestReactions.reactions && merged.revision == 3)
+        check(merged.key == original.key && merged.reply == original.reply) // Discord preview reparsing cannot change a reply's stable reference.
         check(domains.apply(delayedBody, 1005) == null && domains.apply(newerMedia, 1006) == null)
         check(domains.apply(IrcUpdate(global.key, "delete", 2, null, null, null), 1007)?.deleted == true)
         check(domains.apply(latestReactions.copy(revision = 4, reactionRevision = 4), 1008) == null)
@@ -213,6 +234,14 @@ fun checkIrcChatModel() {
     val subscription = GlobalChatSubscription()
     val pending = requireNotNull(subscription.take(true, 0)); subscription.queued(pending, true)
     subscription.reset(); check(!subscription.current(pending) && !subscription.enabled)
+    val mediaHeading = "GIF · café 😀 · a long media title"
+    for (size in listOf(8.0, 10.0, 12.0)) for (available in 0..260) {
+        val shown = ircMediaTextEllipsis(mediaHeading, available.toDouble(), size)
+        check(MenuCanvas.textWidth(shown, size = size) <= available + 1e-9) { "Media chrome text exceeded its measured width" }
+        check(shown.codePoints().noneMatch { it in 0xD800..0xDFFF }) { "Media chrome truncation split a Unicode character" }
+        if (MenuCanvas.textWidth(mediaHeading, size = size) <= available) check(shown == mediaHeading)
+        else check(shown.isEmpty() || shown.endsWith("…"))
+    }
     println("IRC model checks passed")
 }
 fun main() = checkIrcChatModel()

@@ -56,6 +56,18 @@ internal fun ircMessageHeader(message: GlobalChatMessage, highlight: Boolean): M
     }
     return result.append(": ")
 }
+internal fun ircMessageActions(message: GlobalChatMessage, manageable: Boolean): Component = Component.empty().apply {
+    for ((kind, label, hint) in listOf(
+        Triple("reply", " [↩]", "Reply in the current composer"),
+        Triple("react", " [+]", "Choose a reaction"),
+        Triple("manage", " [⋯]", "Edit or delete your message"))) {
+        if (kind == "manage" && !manageable) continue
+        append(Component.literal(label).withColor(0x68B9F5).withStyle {
+            it.withClickEvent(ClickEvent.RunCommand(IrcChatAction(kind, message.scope, message.id).command))
+                .withHoverEvent(HoverEvent.ShowText(Component.literal(hint)))
+        })
+    }
+}
 
 /** Chat owns wrapping, scrolling and hit testing. Our tagged placeholder rows own only their thumbnails. */
 object IrcChatRendering {
@@ -214,9 +226,7 @@ object IrcChatRendering {
             for (reaction in message.reactions.filter { it.count > 0 })
                 result.append(actionStyle("  ${IRC_REACTION_NAMES[IRC_REACTIONS.indexOf(reaction.emoji)]} ${reaction.count}",
                     IrcChatAction("react", message.scope, message.id), "${if (reaction.mine) "Remove or change" else "Add"} reaction"))
-            result.append(actionStyle("  [Reply]", IrcChatAction("reply", message.scope, message.id), "Reply in the current composer"))
-            result.append(actionStyle(" [React]", IrcChatAction("react", message.scope, message.id), "Choose a reaction"))
-            if (RelayMessages.canManage(message.key)) result.append(actionStyle(" [Edit/Delete]", IrcChatAction("manage", message.scope, message.id), "Manage your message"))
+            result.append(ircMessageActions(message, RelayMessages.canManage(message.key)))
         }
         message.media.forEachIndexed { index, media ->
             if (GlobalChatConfig.mediaPreviews) {

@@ -329,6 +329,12 @@ private fun checkNativeMenuDropdown(rowHeight: Int) {
         }
         root.focusHandler()?.focus(null, io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
         root.removeChild(popup)
+        val detachedFocus = popup.focusHandler()
+        check(viewport.focusHandler() === detachedFocus && entries.focusHandler() === detachedFocus) {
+            "A graphics dropdown detached before its closing flag lost owo's required paint focus context"
+        }
+        popup.beginClose()
+        check(popup.focusHandler() === detachedFocus && detachedFocus.focused() == null)
     }
 }
 
@@ -410,7 +416,7 @@ internal fun checkMenuDropdownInput() {
             io.wispforest.owo.ui.core.Sizing.fixed(maxOf(116, popupWidth)), io.wispforest.owo.ui.core.Sizing.content(),
             io.wispforest.owo.ui.container.FlowLayout.Algorithm.VERTICAL) {
             private val exitFocus = io.wispforest.owo.ui.util.FocusHandler(this)
-            override fun focusHandler() = me.mycellium.skymyce.ui.menuDropdownFocus(super.focusHandler(), closing, exitFocus)
+            override fun focusHandler() = me.mycellium.skymyce.ui.menuDropdownFocus(super.focusHandler(), exitFocus)
         }
         val entries = io.wispforest.owo.ui.container.UIContainers.verticalFlow(
             io.wispforest.owo.ui.core.Sizing.fill(), io.wispforest.owo.ui.core.Sizing.content()).apply {
@@ -449,7 +455,9 @@ internal fun checkMenuDropdownInput() {
         }
         closing = false
         replacementRoot.removeChild(popup)
-        check(popup.focusHandler() == null) { "Detached open popup unexpectedly acquired an exit focus context" }
+        check(popup.focusHandler() === exitFocus && entries.focusHandler() === exitFocus && row.focusHandler() === exitFocus) {
+            "Reparenting a graphics dropdown lost its local paint focus context"
+        }
     }
     val white = 0xFFFFFFFF.toInt()
     fun paint(clipped: Boolean): java.awt.image.BufferedImage = MenuCanvas().run {

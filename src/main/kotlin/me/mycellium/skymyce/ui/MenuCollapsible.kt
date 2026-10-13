@@ -20,6 +20,7 @@ class MenuCollapsible(horizontal: Sizing, vertical: Sizing, title: Component, ex
     private var expandedHeight = 0.0
     private var collapseHeight = 1.0
     private var outgoing: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
     private var lastCanvas: MenuCanvas? = null
     private var lastGroup: String? = null
     private var paintedX = 0.0

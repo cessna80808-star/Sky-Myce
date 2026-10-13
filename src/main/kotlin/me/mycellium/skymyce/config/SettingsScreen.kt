@@ -192,7 +192,7 @@ class SettingsScreen @JvmOverloads constructor(
         var titles = DungeonFriendsSettings.titleNotifications
     }
     private val detailWidth get() = menuWidth
-    private val controlWidth get() = (detailWidth - 28).coerceAtLeast(1)
+    private val controlWidth get() = (detailWidth - 48).coerceAtLeast(1)
 
     override fun init() {
         val previousBody = if (::body.isInitialized) body else null
@@ -374,15 +374,16 @@ class SettingsScreen @JvmOverloads constructor(
         toggled = { setting.entry.boolean }; sizing(Sizing.fixed(64), Sizing.fixed(22)); tip(setting.tip)
     }
 
-    private fun editor(setting: SettingRow): FlowLayout = column().apply {
-        gap(8); padding(Insets.vertical(10)); tip(setting.tip)
+    private fun editor(setting: SettingRow): FlowLayout = MenuRevealCard("settings/${setting.path}", Sizing.fill(), Sizing.content()).apply {
+        gap(7); padding(Insets.of(10)); surface(MenuTheme.panel(true)); tip(setting.tip)
         val entry = setting.entry
         val themeKey = setting.element.id().takeIf { setting.path.startsWith("Theme & Appearance/") }
         if (themeKey in MenuCatalog.themeColorTitles) {
-            child(label(setting.title))
+            child(label(setting.title, size = 11f))
+            child(label(setting.tip, MenuTheme.MUTED, 9f))
             val feedback = label("", MenuTheme.RED, 8f)
             child(settingsRow().apply {
-                val hex = MenuTextBox(Sizing.fixed(minOf(100, controlWidth))).apply {
+                val hex = MenuTextBox(Sizing.fixed(minOf(100, (controlWidth - 63).coerceAtLeast(1)))).apply {
                     setMaxLength(7); text(if (entry.int < 0) "" else "#%06X".format(entry.int)); setHint(Component.literal("Inherited")); tip("Six RGB hex digits. Inherit restores the preset color.")
                     onChanged().subscribe { value ->
                         val color = parseThemeHex(value)
@@ -406,12 +407,14 @@ class SettingsScreen @JvmOverloads constructor(
                     anchor.message = Component.literal(caption())
                 })
             })
+            child(label(setting.tip, MenuTheme.MUTED, 9f))
             return@apply
         }
         if (themeKey in MenuCatalog.themeNumberTitles) {
             val min = if (themeKey == "opacity") 20 else 2
             val max = if (themeKey == "opacity") 100 else 12
-            child(label(setting.title))
+            child(label(setting.title, size = 11f))
+            child(label(setting.tip, MenuTheme.MUTED, 9f))
             val valueLabel = label(if (entry.int < 0) "Inherited" else entry.int.toString()); child(valueLabel)
             val resolved = resolveTheme(ThemeConfig.preset, ThemeConfig.overrides())
             child(MenuSlider().apply {
@@ -429,6 +432,7 @@ class SettingsScreen @JvmOverloads constructor(
                 child(label(setting.title).horizontalSizing(Sizing.expand()))
                 child(toggle(setting))
             })
+            child(label(setting.tip, MenuTheme.MUTED, 9f))
             if (setting.path == "Dungeons/Starred Clear Routing/routeThroughMobs") {
                 child(label("Off: route directly toward Blood.", MenuTheme.MUTED, 8f))
                 child(label("Mob markers are separate.", MenuTheme.MUTED, 8f))
@@ -436,9 +440,10 @@ class SettingsScreen @JvmOverloads constructor(
             child(pinControl(setting))
             return@apply
         }
-        child(label(setting.title))
+        child(label(setting.title, size = 11f))
+        child(label(setting.tip, MenuTheme.MUTED, 9f))
         when {
-            entry.isArray -> child(button("Choose options (${entry.array.size} selected)", detailWidth - 28, setting.tip) { anchor ->
+            entry.isArray -> child(button("Choose options (${entry.array.size} selected)", controlWidth, setting.tip) { anchor ->
                 menu(anchor) { dropdown -> entry.objectType().enumConstants?.forEach { option ->
                     dropdown.checkbox(MenuTheme.text(Component.literal(option.toString())), option in entry.array) { selected ->
                         val values = entry.array.toMutableList()

@@ -33,7 +33,8 @@
     "MenuEditBoxAccessor",
     "MenuTextTooltipAccessor",
     "LabelComponentMixin",
-    "ResourcefulConfigScreenBuilderMixin"
+    "ResourcefulConfigScreenBuilderMixin",
+    "SkijaMenuRenderMixin"
   ],
   "injectors": {
     "defaultRequire": 1

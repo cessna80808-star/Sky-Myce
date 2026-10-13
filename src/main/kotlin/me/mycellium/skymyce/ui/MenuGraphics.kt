@@ -119,6 +119,15 @@ class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val
     fun picture(image: BufferedImage, x: Int, y: Int, width: Int, height: Int) {
         sync(); canvas.picture(image, x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble())
     }
+    fun roundedRect(x: Int, y: Int, width: Int, height: Int, radius: Double, color: Int) {
+        sync(); canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), radius, color)
+    }
+    fun roundedBorder(x: Int, y: Int, width: Int, height: Int, radius: Double, thickness: Double, color: Int) {
+        sync(); canvas.roundedBorder(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), radius, thickness, color)
+    }
+    fun shadow(x: Int, y: Int, width: Int, height: Int, radius: Double, sigma: Double, color: Int) {
+        sync(); canvas.shadow(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), radius, sigma, color)
+    }
     // Dropdown state is a vector check/chevron rather than owo's Minecraft sprite sheet.
     override fun blit(pipeline: RenderPipeline, texture: Identifier, x: Int, y: Int, u: Float, v: Float, width: Int, height: Int, textureWidth: Int, textureHeight: Int) {
         val color = Color.ofRgb(MenuTheme.TEXT)
@@ -164,6 +173,7 @@ class MenuTooltipMotion {
     private var seen = false
     private val fade = MotionValue(0.0)
     private var outgoing: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
     fun beginFrame() { seen = false }
     fun show(lines: List<FormattedCharSequence>): Double {
         seen = true

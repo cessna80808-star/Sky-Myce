@@ -1,46 +1,57 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
-import net.minecraft.client.gui.GuiGraphicsExtractor
-import net.minecraft.client.gui.components.Button
-import net.minecraft.client.gui.components.EditBox
+import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.container.UIContainers
+import io.wispforest.owo.ui.core.Insets
+import io.wispforest.owo.ui.core.Sizing
+import me.mycellium.skymyce.ui.MenuButton
+import me.mycellium.skymyce.ui.MenuButtonIntent
+import me.mycellium.skymyce.ui.MenuLabel
+import me.mycellium.skymyce.ui.MenuScreen
+import me.mycellium.skymyce.ui.MenuTextBox
+import me.mycellium.skymyce.ui.MenuTheme
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
 /** Own-message editing only; Reply and React remain directly inside native chat. */
-internal class IrcMessageControlsScreen(private val previous: Screen?, private val key: IrcKey) : Screen(Component.literal("Edit your IRC message")) {
+internal class IrcMessageControlsScreen(private val previous: Screen?, private val key: IrcKey) : MenuScreen(Component.literal("Edit your IRC message")) {
     internal val scope get() = key.scope
-    private lateinit var edit: EditBox
-    private lateinit var save: Button
-    private lateinit var delete: Button
+    override val modal = true
+    override val menuParent get() = previous
+    private lateinit var edit: MenuTextBox
+    private lateinit var save: MenuButton
+    private lateinit var delete: MenuButton
+    private lateinit var feedback: MenuLabel
     private var confirmDelete = false
     private var requestAfter = 0L
     private var seenRevision = -1
     private var status = ""
 
-    override fun init() {
+    override fun buildContent(root: FlowLayout) {
         confirmDelete = false
         val draft = if (::edit.isInitialized) edit.value else null
         val message = RelayMessages.chatStore.get(key)
-        val panelWidth = minOf(300, width - 24).coerceAtLeast(120)
-        val left = (width - panelWidth) / 2
-        val top = (height / 2 - 66).coerceAtLeast(54)
-        fun button(label: String, x: Int, y: Int, size: Int, action: () -> Unit): Button =
-            addRenderableWidget(Button.builder(Component.literal(label)) { action() }.bounds(x, y, size, 20).build())
-        edit = addRenderableWidget(EditBox(font, left, top, panelWidth, 20, Component.literal("Edit your message")))
+        root.padding(Insets.of(16)); root.gap(8)
+        root.child(label("EDIT MESSAGE", MenuTheme.ACCENT))
+        root.child(label("${ircPrefix(key.scope)} ${message?.from.orEmpty()}", MenuTheme.MUTED))
+        edit = MenuTextBox(Sizing.fill()).apply { verticalSizing(Sizing.fixed(24)); setHint(Component.literal("Edit your message")) }
+        root.child(edit)
         val maximum = if (key.scope == "room") 256 else 1024
         edit.setMaxLength(maximum)
         edit.value = draft ?: message?.text?.replace('\n', ' ').orEmpty().take(maximum)
         edit.setEditable(RelayMessages.canManage(key))
-        val half = (panelWidth - 4) / 2
-        save = button("Save edit", left, top + 24, half) {
+        save = button("Save edit") {
             if (RelayMessages.operation(key, "edit", text = edit.value)) queued("Edit requested; waiting for chat update.")
-        }
-        delete = button("Delete", left + half + 4, top + 24, half) {
+        }.apply { horizontalSizing(Sizing.fill(48)); intent = MenuButtonIntent.PRIMARY }
+        delete = button("Delete") {
             if (!confirmDelete) { confirmDelete = true; delete.message = Component.literal("Confirm delete") }
             else if (RelayMessages.operation(key, "delete")) queued("Deletion requested; waiting for chat update.")
-        }
-        button("Back to chat", left, top + 54, panelWidth) { onClose() }
+        }.apply { horizontalSizing(Sizing.fill(48)); intent = MenuButtonIntent.DESTRUCTIVE }
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).gap(6).apply { child(save); child(delete) })
+        root.child(label("Own-message edits and deletion are available for 15 minutes.", MenuTheme.MUTED))
+        feedback = label(status, MenuTheme.MUTED); root.child(feedback)
+        root.child(button("Back to chat") { onClose() })
         updateControls()
     }
     private fun queued(text: String) {
@@ -61,18 +72,10 @@ internal class IrcMessageControlsScreen(private val previous: Screen?, private v
         }
         seenRevision = message?.revision ?: -1
         if (!available) status = "This message is no longer available. Return to chat."
+        if (feedback.text().string != status) feedback.text(Component.literal(status))
     }
-    override fun tick() { super.tick(); updateControls() }
-    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
-        output.fill(0, 0, width, height, 0xEA111722.toInt())
-        val message = RelayMessages.chatStore.get(key)
-        output.centeredText(font, "${ircPrefix(key.scope)} ${message?.from.orEmpty()}", width / 2, 17, 0xFF83BBFF.toInt())
-        val preview = font.plainSubstrByWidth(message?.text?.replace('\n', ' ').orEmpty(), width - 32)
-        output.centeredText(font, preview, width / 2, 33, 0xFFCED8E6.toInt())
-        output.centeredText(font, "Own-message edits and deletion are available for 15 minutes.", width / 2, height - 30, 0xFF919EAF.toInt())
-        if (status.isNotEmpty()) output.centeredText(font, font.plainSubstrByWidth(status, width - 20), width / 2, height - 17, 0xFFAFBDD0.toInt())
-        super.extractRenderState(output, mouseX, mouseY, partialTicks)
-    }
-    override fun onClose() { minecraft.setScreen(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous) }
-    override fun isPauseScreen() = false
+    override fun tick() { super.tick(); if (::edit.isInitialized && !menuClosing) updateControls() }
+    override fun onClose() { closeMenuTo(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous) }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
+    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
 }

@@ -86,6 +86,10 @@ object MenuTheme {
         if (w <= 0 || h <= 0) return
         val r = if (ROUNDED) minOf(radius, w / 2, h / 2) else 0
         val color = if (rgb ushr 24 == 0) alpha(rgb) else rgb
+        if (g is MenuGraphics) {
+            g.roundedRect(x, y, w, h, r.toDouble(), color)
+            return
+        }
         g.fill(x + r, y, x + w - r, y + h, color)
         g.fill(x, y + r, x + r, y + h - r, color)
         g.fill(x + w - r, y + r, x + w, y + h - r, color)
@@ -98,6 +102,12 @@ object MenuTheme {
         }
     }
     fun box(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, background: Int, border: Int = BORDER) {
+        if (g is MenuGraphics) {
+            rounded(g, x, y, w, h, alpha(background, OPACITY), 6)
+            if (BORDERS && w >= 8 && h >= 8)
+                g.roundedBorder(x, y, w, h, if (ROUNDED) 6.0 else 0.0, 1.0, alpha(border))
+            return
+        }
         rounded(g, x + 1, y + 1, w - 2, h - 2, alpha(background, OPACITY), 3)
         if (!BORDERS || w < 8 || h < 8) return
         if (!ROUNDED) { g.drawRectOutline(x, y, w, h, alpha(border)); return }
@@ -111,17 +121,30 @@ object MenuTheme {
         g.drawRing(x + w - 4, y + h - 4, 180.0, 270.0, 12, 3.0, 4.0, color, color)
         g.drawRing(x + 4, y + h - 4, 270.0, 360.0, 12, 3.0, 4.0, color, color)
     }
-    /** A few nested silhouettes give depth without blur, extra textures or a post-processing pass. */
+    /** Native blur is reserved for expressive modes; lighter modes retain one cheap silhouette. */
     fun shadow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
         if (!SHADOW || strength <= 0.0 || w <= 0 || h <= 0) return
-        val layers = ThemeConfig.graphicsQuality.shadowLayers.coerceIn(0, 3)
+        val profile = ThemeConfig.animationMode.profile
+        val qualityLayers = ThemeConfig.graphicsQuality.shadowLayers.coerceIn(0, 3)
+        if (g is MenuGraphics && SkijaMenuFonts.active && qualityLayers >= 2 && profile.glowStrength > 0.0) {
+            g.shadow(x, y + 2, w, h, if (ROUNDED) 6.0 else 0.0, if (profile.ambient) 4.0 else 3.0,
+                alpha(0x06040C, (strength.coerceIn(0.0, 1.0) * profile.shadowStrength * 24).toInt()))
+            return
+        }
+        val layers = if (profile.glowStrength > 0.0) qualityLayers else minOf(qualityLayers, 1)
         for (layer in layers downTo 1) {
             val opacity = (strength.coerceIn(0.0, 1.0) * (11 - layer * 2)).toInt()
             if (opacity > 0) rounded(g, x - layer, y + 1, w + layer * 2, h + layer * 2, alpha(0x06040C, opacity), 4 + layer)
         }
     }
     fun glow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double) {
-        if (!ThemeConfig.graphicsQuality.glow || strength <= 0.0 || w <= 0 || h <= 0) return
+        val profile = ThemeConfig.animationMode.profile
+        if (!ThemeConfig.graphicsQuality.glow || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
+        if (g is MenuGraphics && SkijaMenuFonts.active) {
+            g.shadow(x, y, w, h, if (ROUNDED) 6.0 else 0.0, if (profile.ambient) 5.0 else 4.0,
+                alpha(ACCENT, (strength.coerceIn(0.0, 1.0) * 18).toInt()))
+            return
+        }
         val opacity = (strength.coerceIn(0.0, 1.0) * 9).toInt()
         if (opacity > 0) rounded(g, x - 1, y - 1, w + 2, h + 2, alpha(ACCENT, opacity), 5)
     }
@@ -171,6 +194,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     private var wrappedMessage: Component? = null
     private var wrappedWidth = -1
     private var wrappedNavigation = false
+    private var wrappedNativeMetrics = false
     private var wrappedLanguage: net.minecraft.locale.Language? = null
     private var lines = emptyList<net.minecraft.util.FormattedCharSequence>()
     private var lineWidths = IntArray(0)
@@ -284,10 +308,12 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         }
         val available = (width - 12).coerceAtLeast(1)
         val language = net.minecraft.locale.Language.getInstance()
-        if (message != wrappedMessage || available != wrappedWidth || navigation != wrappedNavigation || language !== wrappedLanguage) {
+        if (message != wrappedMessage || available != wrappedWidth || navigation != wrappedNavigation || language !== wrappedLanguage ||
+            wrappedNativeMetrics != SkijaMenuFonts.active) {
             wrappedMessage = message.copy()
             wrappedWidth = available; wrappedNavigation = navigation
             wrappedLanguage = language
+            wrappedNativeMetrics = SkijaMenuFonts.active
             lines = menuTextLines(wrappedMessage!!, available).take(if (navigation) 2 else 1)
             lineWidths = IntArray(lines.size) { kotlin.math.ceil(menuTextWidth(lines[it])).toInt() }
             lineRuns = emptyList()
@@ -335,7 +361,10 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     override fun determineHorizontalContentSize(sizing: Sizing): Int =
         kotlin.math.ceil(menuTextLines(text(), maxWidth(), fontSize.toDouble()).maxOfOrNull { menuTextWidth(it, fontSize.toDouble()) } ?: 0.0).toInt()
     override fun determineVerticalContentSize(sizing: Sizing): Int { wrap(); return textHeight() }
-    override fun inflate(space: Size) { super.inflate(space); wrap() }
+    override fun inflate(space: Size) {
+        lineHeight(MenuCanvas.lineHeight(fontSize.toDouble()))
+        super.inflate(space); wrap()
+    }
     // Owo's default drawing adds a Minecraft baseline offset. Canvas positions are top-of-line.
     override fun drawText(draw: LabelDrawFunction) {
         cacheLines()
@@ -394,7 +423,7 @@ internal fun menuTextStyleAt(text: net.minecraft.util.FormattedCharSequence, x: 
 internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : DropdownComponent(Sizing.fixed(minimumWidth)) {
     private var entryWidth = minimumWidth.coerceAtLeast(32)
     private val entryViewport = UIContainers.verticalScroll(Sizing.fixed(entryWidth), Sizing.fixed(1), entries)
-    private val closingFocus = FocusHandler(this)
+    private val localFocus = FocusHandler(this)
     private val appearance = MotionValue(0.0)
     private var painted = MotionPose()
     private var opened = false
@@ -413,8 +442,8 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
 
     fun fitViewport(space: Size) = fitMenuDropdownScroll(entryViewport, entries, entryWidth, space)
 
-    // Owo draws focus highlights through the root, even after this popup is detached for its exit.
-    override fun focusHandler(): FocusHandler? = menuDropdownFocus(super.focusHandler(), closing, closingFocus)
+    // Owo paints during reparenting and detached exits; its child painter requires a focus context in both cases.
+    override fun focusHandler(): FocusHandler = menuDropdownFocus(super.focusHandler(), localFocus)
 
     fun beginClose() {
         if (closing) return
@@ -526,8 +555,7 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
     }
 }
 
-internal fun menuDropdownFocus(parent: FocusHandler?, closing: Boolean, exit: FocusHandler): FocusHandler? =
-    parent ?: if (closing) exit else null
+internal fun menuDropdownFocus(parent: FocusHandler?, local: FocusHandler): FocusHandler = parent ?: local
 
 internal fun menuDropdownRowHeight() = MenuCanvas.lineHeight() + 8
 internal fun menuDropdownWidth(text: Component, indicator: Boolean) =

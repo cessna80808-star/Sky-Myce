@@ -138,6 +138,14 @@ val sharedRuntimeCheck by tasks.registering {
 }
 
 dependencies {
+    val skijaVersion = providers.gradleProperty("skija_version").get()
+    implementation("io.github.humbleui:skija-shared:$skijaVersion")
+    include("io.github.humbleui:skija-shared:$skijaVersion")
+    include("io.github.humbleui:types:0.2.0")
+    for (platform in listOf("windows-x64", "linux-x64", "linux-arm64", "macos-x64", "macos-arm64")) {
+        runtimeOnly("io.github.humbleui:skija-$platform:$skijaVersion") { isTransitive = false }
+        include("io.github.humbleui:skija-$platform:$skijaVersion") { isTransitive = false }
+    }
 	// To change the versions see the gradle.properties file
 	minecraft("com.mojang:minecraft:${providers.gradleProperty("minecraft_version").get()}")
 	implementation("net.fabricmc:fabric-loader:${providers.gradleProperty("loader_version").get()}")
@@ -472,6 +480,26 @@ val menuCanvasBenchmark by tasks.registering(JavaExec::class) {
     args("current", ".", "bulk")
     doFirst { workingDir.mkdirs() }
 }
+val skijaRendererCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks native menu primitives, transitions, typography and bounded resources"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.SkijaRendererCheckKt"
+    systemProperty("java.awt.headless", "true")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+val skijaGpuCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Explicit desktop GPU check of native composition and OpenGL state restoration"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.ui.SkijaGpuCheck"
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    workingDir = layout.buildDirectory.dir("skija-gpu-check").get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+tasks.check { dependsOn(skijaRendererCheck) }
 val dungeonRoutingCheck by tasks.registering {
     group = "verification"
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"

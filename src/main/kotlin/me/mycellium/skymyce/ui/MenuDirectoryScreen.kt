@@ -28,6 +28,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private val catalog get() = MenuDirectory.catalog
     private var query = ""
     private var filter = 0
+    private var section: String? = null
     private var limit = 50
     private lateinit var results: FlowLayout
     private lateinit var search: MenuTextBox
@@ -72,6 +73,15 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                     } }
                 })
             })
+            if (category != null) root.child(button(section ?: "All sections", minOf(150, menuWidth - 28)) { anchor ->
+                openMenuDropdown(anchor) { dropdown ->
+                    (listOf<String?>(null) + catalog.features.filter { it.category == category }.map { it.subcategory }.distinct()).forEach { next ->
+                        dropdown.button(Component.literal(next ?: "All sections")) {
+                            section = next; anchor.message = Component.literal(next ?: "All sections"); limit = 50; populate()
+                        }
+                    }
+                }
+            })
         }
         results = column().apply { gap(8); padding(Insets.right(4)) }
         root.child(menuScroll(Sizing.fill(), Sizing.expand(), results))
@@ -98,16 +108,21 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         }
     }
 
-    private fun matchesFilter(feature: MenuFeature) = when (filter) {
+    private fun matchesFilter(feature: MenuFeature) = (section == null || section == feature.subcategory) && when (filter) {
         1 -> featureEnabled(feature) == true
         2 -> featureEnabled(feature) == false
         else -> true
     }
     private fun showFeatures(features: List<MenuFeature>) {
         if (features.isEmpty()) results.child(label("No features match this filter.", MenuTheme.MUTED))
+        val columns = menuFeatureColumns(menuWidth - 32)
+        val cardWidth = ((menuWidth - 32 - (columns - 1) * 8) / columns).coerceAtLeast(1)
         features.groupBy { it.subcategory }.forEach { (section, items) ->
             results.child(label(section, MenuTheme.ACCENT, 11f))
-            items.forEach { results.child(featureCard(it)) }
+            items.chunked(columns).forEach { group -> results.child(row().apply {
+                gap(8); verticalAlignment(VerticalAlignment.TOP)
+                group.forEach { child(featureCard(it, available = cardWidth - 20).horizontalSizing(Sizing.fixed(cardWidth))) }
+            }) }
         }
     }
     private fun showSearch() {
@@ -151,7 +166,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         populate()
     }.apply { tooltip(Component.literal("Favorite $title")); selected = { MenuShortcuts.isFavorite(id) } }
 
-    private fun featureCard(feature: MenuFeature, breadcrumb: Boolean = false) = card("feature/${feature.id}").apply {
+    private fun featureCard(feature: MenuFeature, breadcrumb: Boolean = false, available: Int = menuWidth - 52) = card("feature/${feature.id}").apply {
         child(row().apply {
             child(label(feature.title, MenuTheme.TEXT, 12f).horizontalSizing(Sizing.expand()))
             if (feature.favoriteEligible) child(favoriteButton(feature.id, feature.title))
@@ -167,7 +182,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                 populate()
             }.apply { toggled = { setting.entry.boolean }; tooltip(Component.literal("Enable ${feature.title}")) }
         }
-        child(actions(controls))
+        child(actions(controls, available))
         child(row().apply {
             featureEnabled(feature)?.takeUnless { feature.id == "community" }?.let { child(label(if (it) "Enabled" else "Disabled", if (it) MenuTheme.ACCENT else MenuTheme.MUTED)) }
             if (feature.settings.isNotEmpty()) child(label("${feature.settings.size} options", MenuTheme.MUTED, 9f))
@@ -252,6 +267,8 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private fun label(text: String, color: Int = MenuTheme.TEXT, size: Float = 10f) = MenuLabel(Component.literal(text)).apply { color(Color.ofRgb(color)); fontSize = size }
     private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply { sizing(Sizing.fixed(width), Sizing.fixed(22)) }
 }
+
+internal fun menuFeatureColumns(available: Int) = if (available >= 580) 2 else 1
 
 /** Read at most eight pinned values without constructing a replacement list every idle tick. */
 internal inline fun menuQuickValuesChanged(paths: List<String>, values: List<Any?>, value: (String) -> Any?): Boolean {
