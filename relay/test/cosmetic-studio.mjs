@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
@@ -17,6 +18,7 @@ export async function checkCosmeticStudio(script, proof) {
     bindings:{ROOMS:'friends,testing',SKYMYCE_ENVIRONMENT:'production',DISCORD_GUILD_ID:guild},r2Buckets:['COSMETIC_ASSETS','PRIVATE_ARTIFACTS'],
     durableObjects:{ACCOUNT_STORE:{className:'AccountStore',useSQLite:true},RELAY_ROOMS:{className:'RelayRoom',useSQLite:true}},outboundService:()=>{throw Error('Studio tests cannot call live services');}});
   options.unsafeInspectDurableObjects=true;options.workers[0].config.env.CONNECT_LIMIT={type:'rate-limit',namespace:'7112026',simple:{limit:1000,period:60}};
+  configureTrafficLimits(options);
   const mf=new Miniflare(options),sockets=[];
   try {
     const store=(await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');

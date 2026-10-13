@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 /** Exercise the production protocol and SQLite cache with signed accounts and bounded fake upstreams. */
@@ -38,6 +39,7 @@ export async function checkDigest(script, proof) {
   });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 20, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options), sockets = [];
   let sequence = 1000;
   function inbox(ws) {

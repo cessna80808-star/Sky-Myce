@@ -3,6 +3,7 @@ import { verifyAccount } from "./auth";
 import { newLinkCode, normalizedCode } from "./cosmetics";
 import { AuthorizationError, deny, encode64, randomToken, sha256 } from "./drm";
 import type { DeveloperActor } from "./licensing";
+import { CommunityTraffic } from "./traffic";
 
 export type CommunityConfig = { DISCORD_OAUTH_CLIENT_ID?: string; DISCORD_OAUTH_CLIENT_SECRET?: string; DISCORD_OAUTH_REDIRECT_URI?: string; SKYMYCE_PUBLIC_URL?: string };
 export type CommunityIdentity = { accountId: string; discordId: string; username: string | null; displayName: string | null;
@@ -10,7 +11,7 @@ export type CommunityIdentity = { accountId: string; discordId: string; username
 export type CommunityCredentials = { sessionId: string; accessToken: string; accessExpiresAt: number; refreshToken: string; refreshExpiresAt: number };
 export type CommunitySessionCheck = { sessionId: string; accountId: string; uuid: string; generation: number; connectionId?: string; heartbeatAt?: number };
 export type CommunitySessionResult = { ok: boolean; error?: string; accountId?: string; discordId?: string; uuid?: string; sessionId?: string;
-  generation?: number; expiresAt?: number; connectionId?: string };
+  generation?: number; expiresAt?: number; connectionId?: string; retryAt?: number };
 type CommunityOptions = Record<string, string | number | boolean>;
 type PublicRow = Record<string, string | number | boolean | null>;
 type SqlRow = Record<string, string | number | null>;
@@ -20,7 +21,7 @@ export type CommunityResult = { ok: boolean; error?: string; identity?: Communit
   invalidatedAccounts?: string[]; invalidatedMinecraft?: string[]; challengeId?: string; nonce?: string; expiresAt?: number;
   flowId?: string; browserUrl?: string | null; fallbackCode?: string; pollIntervalMs?: number; minecraftName?: string; state?: string;
   status?: string; token?: string; action?: string; target?: string; options?: CommunityOptions; identities?: CommunityIdentity[];
-  entries?: PublicRow[]; sessions?: PublicRow[]; events?: (PublicRow & { metadata: string })[]; overview?: Record<string, number>; devices?: DeviceReport[] };
+  entries?: PublicRow[]; sessions?: PublicRow[]; events?: (PublicRow & { metadata: string })[]; overview?: Record<string, number>; devices?: DeviceReport[]; retryAt?: number };
 type Account = { account_id: string; discord_id: string; generation: number; status: string; is_admin: number };
 type Flow = { flow_id: string; launch_hash: string; poll_hash: string; code_hash: string; uuid: string; name: string; device_json: string | null;
   mod_version: string; expires_at: number; account_id: string | null; session_id: string | null; cancelled_at: number | null;
@@ -50,7 +51,9 @@ function device(raw: unknown): Device | null {
 
 /** Discord identity is shared with the existing account store. Device observations never participate in authorization. */
 export class CommunityAccounts {
+  private readonly traffic: CommunityTraffic;
   constructor(private sql: SqlStorage, private transaction: <T>(fn: () => T) => T, private env: CommunityConfig, private hooks: Hooks) {
+    this.traffic = new CommunityTraffic(sql, (accountId, retryAt) => this.hooks.audit("system", accountId, "traffic_cooldown", { retryAt, reason: "Repeated incoming traffic limit violations", source: "backend" }));
     sql.exec(`CREATE TABLE IF NOT EXISTS community_challenges(id TEXT PRIMARY KEY,purpose TEXT NOT NULL,nonce TEXT NOT NULL,expires_at INTEGER NOT NULL,used_at INTEGER);
       CREATE TABLE IF NOT EXISTS community_connect_flows(flow_id TEXT PRIMARY KEY,launch_hash TEXT UNIQUE NOT NULL,poll_hash TEXT NOT NULL,
         code_hash TEXT UNIQUE NOT NULL,uuid TEXT NOT NULL,name TEXT NOT NULL,device_json TEXT,mod_version TEXT NOT NULL,expires_at INTEGER NOT NULL,
@@ -283,9 +286,21 @@ export class CommunityAccounts {
     const session = this.sql.exec<Session>("SELECT * FROM community_sessions WHERE session_id=?", input.sessionId).toArray()[0], account = session && this.hooks.account(session.account_id);
     if (!session || !account || session.revoked_at !== null || session.access_expires_at <= Date.now() || account.generation !== input.generation || session.generation !== input.generation || session.account_id !== input.accountId || session.uuid !== input.uuid || this.profileOwner(input.uuid)?.account_id !== account.account_id) return { ok: false, error: "session_expired" };
     if (this.blacklisted(account.discord_id, input.uuid)) return { ok: false, error: "identity_blacklisted" };
+    const traffic = this.traffic.status(account.account_id);
+    if (!traffic.ok) return traffic;
     if (input.connectionId && session.connection_id === input.connectionId && input.heartbeatAt && input.heartbeatAt <= Date.now()) this.sql.exec("UPDATE community_sessions SET last_seen=MAX(last_seen,?) WHERE session_id=?", input.heartbeatAt, session.session_id);
     return { ok: true, accountId: account.account_id, discordId: account.discord_id, uuid: input.uuid, sessionId: session.session_id,
       generation: session.generation, expiresAt: session.access_expires_at, ...(session.connection_id ? { connectionId: session.connection_id } : {}) };
+  }
+  consumeRequest(input: CommunitySessionCheck): CommunitySessionResult {
+    const status = this.checkSession(input);
+    if (!status.ok) return status;
+    const traffic = this.traffic.consume(status.accountId!, "request");
+    return traffic.ok ? status : traffic;
+  }
+  reportTrafficViolation(input: CommunitySessionCheck): CommunitySessionResult {
+    const status = this.checkSession(input);
+    return status.ok ? this.traffic.violation(status.accountId!) : status;
   }
   async authorize(input: { uuid: string; token: string; challenge: string; modVersion?: string }): Promise<CommunitySessionResult> {
     try {
@@ -296,6 +311,8 @@ export class CommunityAccounts {
         if (!session) deny("session_expired");
         const status = this.checkSession({ sessionId: session.session_id, accountId: session.account_id, uuid: input.uuid, generation: session.generation });
         if (!status.ok) deny(status.error!);
+        const traffic = this.traffic.consume(status.accountId!, "connect");
+        if (!traffic.ok) return traffic;
         const nonce = `community-ws:${input.challenge}`;
         if (this.sql.exec("SELECT id FROM account_requests WHERE id=?", nonce).toArray().length) deny("challenge_replayed");
         this.sql.exec("INSERT INTO account_requests VALUES(?,?)", nonce, Date.now() + 300000);
@@ -309,7 +326,7 @@ export class CommunityAccounts {
       if (!token.test(value)) deny("session_expired");
       const digest = await sha256(value), session = this.sql.exec<Session>("SELECT * FROM community_sessions WHERE access_hash=?", digest).toArray()[0];
       if (!session) deny("session_expired");
-      return this.checkSession({ sessionId: session.session_id, accountId: session.account_id, uuid: session.uuid, generation: session.generation });
+      return this.consumeRequest({ sessionId: session.session_id, accountId: session.account_id, uuid: session.uuid, generation: session.generation });
     } catch (error) { return failure(error); }
   }
   markOffline(sessionId: string, connectionId: string): void { this.sql.exec("UPDATE community_sessions SET connected_at=NULL,connection_id=NULL WHERE session_id=? AND connection_id=?", sessionId, connectionId); }
@@ -483,7 +500,8 @@ function html(content: string, status = 200, extra: Record<string, string> = {})
 }
 export async function handleCommunityRequest(request: Request, env: CommunityConfig & { ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; ROOMS: string; RELAY_ROOMS: DurableObjectNamespace<import("./index").RelayRoom> }): Promise<Response | null> {
   const url = new URL(request.url), store = env.ACCOUNT_STORE.getByName("global");
-  const json = (result: CommunityResult) => Response.json(result, { status: result.ok ? 200 : result.error === "identity_blacklisted" ? 403 : 400, headers: { "Cache-Control": "no-store" } });
+  const json = (result: CommunityResult) => Response.json(result, { status: result.ok ? 200 : result.error === "identity_blacklisted" ? 403 : ["rate_limited", "traffic_cooldown"].includes(result.error ?? "") ? 429 : result.error === "service_busy" ? 503 : 400,
+    headers: { "Cache-Control": "no-store", ...(result.retryAt ? { "Retry-After": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : {}) } });
   if (url.pathname === "/community/sharing") {
     const credential = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
     if (request.method === "GET") return json(await store.communityGetSharing(credential));

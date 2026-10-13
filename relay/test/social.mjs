@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 export async function checkSocial(script, proof) {
@@ -7,6 +8,7 @@ export async function checkSocial(script, proof) {
     outboundService: () => { throw new Error("Social protocol must not make unexpected outbound requests"); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 20, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options), sockets = [];
   function inbox(ws) {
     const queue = [], waiting = [];

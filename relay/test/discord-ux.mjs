@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -24,6 +25,7 @@ export async function checkDiscordUx(script, minecraftProof) {
       return Response.json({});
     } });
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112026', simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   options.unsafeInspectDurableObjects = true;
   const mf = new Miniflare(options);
   try {

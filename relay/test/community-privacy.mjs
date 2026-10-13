@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -22,6 +23,7 @@ export async function checkCommunityPrivacy(script, proof) {
   const guild='93000000000000001',options=convertV4MiniflareOptions({name:'privacy-check',modules:true,script,compatibilityDate:'2026-09-27',bindings:{ROOMS:'friends',SKYMYCE_ENVIRONMENT:'production',DISCORD_GUILD_ID:guild},
     durableObjects:{ACCOUNT_STORE:{className:'AccountStore',useSQLite:true},RELAY_ROOMS:{className:'RelayRoom',useSQLite:true}},outboundService:()=>{throw Error('Privacy tests cannot call live services');}});
   options.unsafeInspectDurableObjects=true;options.workers[0].config.env.CONNECT_LIMIT={type:'rate-limit',namespace:'7112026',simple:{limit:1000,period:60}};
+  configureTrafficLimits(options);
   const mf=new Miniflare(options),sockets=[];let sequence=93000000000000100n;
   try {
     const store=(await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');

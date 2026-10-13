@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -13,6 +14,7 @@ export async function checkCommunityCancellation(script, proof) {
     outboundService: () => { throw Error('Cancellation checks must never call external OAuth or live services'); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112026', simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options);
   const mf = new Miniflare(options);
   try {
     const store = (await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');
