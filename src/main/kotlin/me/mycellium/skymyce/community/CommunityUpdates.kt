@@ -113,7 +113,17 @@ object CommunityUpdates {
                 } else {
                     prepared?.destroyForcibly()
                     restarting = false; busy = false
-                    status = "Restart preparation failed. Minecraft is still open; you can retry or restart from your launcher."
+                    val stage = LoaderRestart.failureStage(result.exceptionOrNull())
+                    val step = when (stage) {
+                        "RUNTIME_LIBRARIES" -> "runtime libraries"
+                        "NATIVE_LIBRARIES" -> "native libraries"
+                        "WRAPPER" -> "restart helper"
+                        "JVM_OPTIONS" -> "Java settings"
+                        "TIMEOUT" -> "preparation timeout"
+                        else -> "helper connection"
+                    }
+                    me.mycellium.skymyce.SkyMyce.logger.warn("Community restart preparation failed at {}.", stage)
+                    status = "Restart preparation failed ($step). Minecraft is still open; retry or restart from your launcher. Details are in logs/latest.log."
                 }
             }
         }

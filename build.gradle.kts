@@ -228,10 +228,12 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
+val standaloneRestartHelpers = setOf("LoaderRestart.class", "LoaderRestart\$Plan.class", "RestartNatives.class",
+    "RestartNatives\$1.class", "RestartNatives\$2.class")
 tasks.jar {
 	exclude("sky-myce-loader.properties")
 	exclude { it.path.startsWith("me/mycellium/skymyce/loader/") &&
-        it.path.substringAfterLast('/') !in setOf("LoaderRestart.class", "LoaderRestart\$Plan.class", "RestartNatives.class") }
+        it.path.substringAfterLast('/') !in standaloneRestartHelpers }
 	val projectName = project.name
 	inputs.property("projectName", projectName)
 
@@ -267,9 +269,8 @@ val communityPackagingCheck by tasks.registering {
             val mod = jar.getInputStream(jar.getEntry("fabric.mod.json")).reader().use { JsonSlurper().parse(it) as Map<*, *> }
             check(mod["id"] == "skymyce" && !(mod["depends"] as Map<*, *>).containsKey("skymyce-loader"))
             check(jar.getEntry("me/mycellium/mixin/MinecraftAccountKeyAccessor.class") != null)
-            val restartHelpers = setOf("LoaderRestart.class", "LoaderRestart\$Plan.class", "RestartNatives.class")
-            check(restartHelpers.all { jar.getEntry("me/mycellium/skymyce/loader/$it") != null })
-            check(jar.entries().asSequence().none { (it.name.startsWith("me/mycellium/skymyce/loader/") && it.name.substringAfterLast('/') !in restartHelpers && !it.isDirectory) || it.name == "sky-myce-loader.properties" })
+            check(standaloneRestartHelpers.all { jar.getEntry("me/mycellium/skymyce/loader/$it") != null })
+            check(jar.entries().asSequence().none { (it.name.startsWith("me/mycellium/skymyce/loader/") && it.name.substringAfterLast('/') !in standaloneRestartHelpers && !it.isDirectory) || it.name == "sky-myce-loader.properties" })
             val config = Properties().apply { jar.getInputStream(jar.getEntry("sky-myce-community.properties")).use { load(it) } }
             checkLoaderConfiguration(config)
             check(config.stringPropertyNames().all { it in setOf("backend", "minecraft") || it.startsWith("key.") })
