@@ -81,9 +81,6 @@ Open `/sm` and browse the categories. Sky-Hawk keeps settings organized and sear
 See also:
 
 - [README.md](README.md)
-- [docs/settings-party-finder.md](docs/settings-party-finder.md)
-- [community connection and privacy](docs/discord-ux.md)
-- [shared metric definitions](docs/community-leaderboards.md)
 
 ## 6) Tips
 
