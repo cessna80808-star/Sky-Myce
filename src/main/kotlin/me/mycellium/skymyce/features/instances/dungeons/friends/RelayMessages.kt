@@ -73,6 +73,7 @@ object RelayMessages {
     private var nextPartySubscribe = 0L
     internal val partyId get() = livePartyRoster()?.id
     private var replyDraft: IrcKey? = null
+    private val reactionRequests = IrcReactionRequests()
     private var globalAccount: java.util.UUID? = null
     private var globalNextSend = 0L
     private val conversations = RelayConversation()
@@ -81,6 +82,7 @@ object RelayMessages {
     @JvmStatic fun suppressChatLog() = quiet.get()
     // Reconnecting the relay must not silently turn a private conversation into public chat.
     fun reset() {
+        reactionRequests.clear(); IrcInlineControls.clear(); chatStore.clearPending()
         conversations.relayDisconnected(); nextSend = 0; globalSubscription.reset(); partySubscription.reset(); replyDraft = null
         partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
         if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.setScreen(null)
@@ -286,7 +288,7 @@ object RelayMessages {
         }
     }
 
-    fun globalReady() { globalSubscription.reset(); partySubscription.reset(); globalTick() }
+    fun globalReady() { reactionRequests.clear(); IrcInlineControls.clear(); globalSubscription.reset(); partySubscription.reset(); globalTick() }
 
     /** Late receipts cannot affect a different login, endpoint, authorization or reconnect session. */
     private fun currentGlobalResult(action: (String?) -> Unit): (String?) -> Unit {
@@ -304,20 +306,23 @@ object RelayMessages {
     }
 
     fun selectGlobal() = selectIrc("global")
-    private fun selectIrc(scope: String) {
+    private fun selectIrc(scope: String, openComposer: Boolean = true, announce: Boolean = true) {
         session(); conversations.leaveChat()
         if (scope == "global") { irc.command("chat sky"); enableGlobal() }
         else { irc.selectParty(); enableParty(); DungeonFriends.requestIrcPartyInfo() }
         if (replyDraft?.scope != scope) replyDraft = null
         globalTick()
-        notice("${if (scope == "global") "Global chat" else "Minecraft-only Party IRC"} selected. /sm chat returns to normal chat.")
+        if (announce) notice("${if (scope == "global") "Global chat" else "Minecraft-only Party IRC"} selected. /sm chat returns to normal chat.")
+        if (!openComposer) return
         val client = MC.instance
         val connection = client.connection
         val account = client.user.profileId
         client.schedule {
             if (client.connection === connection && client.user.profileId == account && client.player != null &&
-                irc.selected && (if (scope == "global") irc.global else irc.party) && (client.screen == null || client.screen is ChatScreen))
-                client.setScreen(ChatScreen("", false))
+                irc.selected && (if (scope == "global") irc.global else irc.party) && (client.screen == null || client.screen is ChatScreen)) {
+                val screen = client.screen as? ChatScreen
+                if (screen != null) IrcInlineControls.focusComposer(screen) else client.setScreen(ChatScreen("", false))
+            }
         }
     }
     private fun globalSelected() { globalTick(); notice("Global chat selected. /sm chat returns to normal chat.") }
@@ -388,15 +393,18 @@ object RelayMessages {
     }
     private fun acceptIrc(message: GlobalChatMessage, ping: Boolean) {
         if (message.model == 1 && !DungeonFriendRelay.richChatAvailable || !chatStore.accept(message, System.currentTimeMillis())) return
-        IrcChatRendering.add(message)
-        if (ping) MC.instance.soundManager.play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4f, 0.25f))
+        val current = chatStore.get(message.key) ?: message
+        IrcChatRendering.add(current)
+        if (ping && !current.deleted) MC.instance.soundManager.play(SimpleSoundInstance.forUI(SoundEvents.EXPERIENCE_ORB_PICKUP, 1.4f, 0.25f))
     }
     fun receiveUpdate(json: com.google.gson.JsonObject, deliveredTo: String) {
         if (deliveredTo != MC.instance.user.profileId.toString() || !DungeonFriendRelay.richChatAvailable) return
         val update = parseIrcUpdate(json) ?: return
         if (!currentIrcChannel(update.key)) return
-        val previous = chatStore.get(update.key) ?: return
+        val previous = chatStore.get(update.key)
+        if (previous == null) { chatStore.apply(update, System.currentTimeMillis()); return }
         val next = chatStore.apply(update, System.currentTimeMillis()) ?: return
+        reactionRequests.observe(next)
         if (next.deleted && replyDraft == next.key) replyDraft = null
         if (previous.media != next.media || next.deleted) {
             if ((MC.screen as? IrcMediaViewerScreen)?.messageKey == next.key) MC.instance.setScreen(MC.instance.gui.chat.restoreChatScreen())
@@ -405,27 +413,41 @@ object RelayMessages {
         IrcChatRendering.update(next)
     }
     internal fun key(scope: String, id: String) = IrcKey(scope, when (scope) { "global" -> "global-chat"; "party" -> partyId.orEmpty(); else -> DungeonFriendRelay.ircRoom }, id)
-    fun chatAction(command: String) {
+    fun chatAction(command: String, mouseX: Int? = null, mouseY: Int? = null) {
         val action = parseIrcChatAction(command) ?: return
         val key = key(action.scope, action.id)
         val message = chatStore.get(key)?.takeUnless { it.deleted } ?: return
         if (!currentIrcChannel(key)) return
+        if (message.model == 1 && DungeonFriendRelay.richChatAvailable) {
+            if (action.kind == "reply") { prepareReply(key); return }
+            if (action.kind == "react") {
+                if (MC.screen !is ChatScreen) MC.instance.setScreen(ChatScreen("", false))
+                IrcInlineControls.open(key, mouseX ?: 4, mouseY ?: (MC.instance.window.guiScaledHeight - 48))
+                return
+            }
+        }
         if (MC.screen is ChatScreen) MC.instance.gui.chat.preserveCurrentChatScreen()
         if (action.kind == "media") {
             val media = message.media.getOrNull(action.mediaIndex ?: return) ?: return
             val context = message.reply?.let { "Reply to ${it.from}: ${it.text.orEmpty().replace('\n', ' ').take(96)}" }
                 ?: message.text.replace('\n', ' ').take(160)
             MC.instance.setScreen(IrcMediaViewerScreen(MC.screen, media, message.from, "${ircPrefix(message.scope)} $context", key))
-        } else if (message.model == 1 && DungeonFriendRelay.richChatAvailable)
+        } else if (action.kind == "manage" && canManage(key))
             MC.instance.setScreen(IrcMessageControlsScreen(MC.screen, key))
     }
     internal fun prepareReply(key: IrcKey) {
         if (!currentIrcChannel(key) || chatStore.get(key)?.deleted != false || !DungeonFriendRelay.richChatAvailable) return
-        selectIrc(key.scope)
+        if (key.scope !in setOf("global", "party")) return
+        selectIrc(key.scope, openComposer = false, announce = false)
         replyDraft = key
-        notice("Replying to ${chatStore.get(key)?.from}. /sm irccancel cancels the reply.")
-        MC.instance.setScreen(ChatScreen("", false))
+        IrcInlineControls.clear()
+        val screen = MC.screen as? ChatScreen
+        if (screen != null) IrcInlineControls.focusComposer(screen)
+        else MC.instance.setScreen(ChatScreen("", false))
     }
+    internal fun replyMessage(): GlobalChatMessage? = replyDraft?.takeIf {
+        irc.selected && (if (it.scope == "global") irc.global else irc.party) && currentIrcChannel(it)
+    }?.let { chatStore.get(it)?.takeUnless { message -> message.deleted } }
     fun cancelReply() { replyDraft = null; notice("Reply cancelled.") }
     internal fun canManage(key: IrcKey): Boolean = currentIrcChannel(key) && DungeonFriendRelay.richChatAvailable &&
         chatStore.manageable(key, MC.instance.user.profileId.toString().replace("-", ""), System.currentTimeMillis())
@@ -435,13 +457,18 @@ object RelayMessages {
         if (operation in setOf("edit", "delete") && !canManage(key)) return false
         if (operation !in setOf("edit", "delete", "reaction") || operation == "edit" && (text == null || ircClientMessageError(key.scope, text) != null) ||
             operation == "reaction" && (emoji !in IRC_REACTIONS || active == null)) return false
+        if (operation == "reaction" && !reactionRequests.start(key, emoji!!, active!!, System.currentTimeMillis())) return false
         val fields = buildMap<String, Any> {
             put("messageId", key.id); put("operation", operation)
             text?.let { put("text", it) }; emoji?.let { put("emoji", it) }; active?.let { put("active", it) }
         }
         return DungeonFriendRelay.ircPacket(key.scope, "irc_operation", fields, currentGlobalResult { reason ->
+            if (reason != null && operation == "reaction") reactionRequests.finish(key, emoji!!)
             if (reason != null && currentIrcChannel(key) && chatStore.get(key) != null) notice(ircOperationError(reason), true)
-        }).also { if (!it) notice("Message control unavailable. Reconnect and try again.", true) }
+        }).also { if (!it) {
+            if (operation == "reaction") reactionRequests.finish(key, emoji!!)
+            notice("Message control unavailable. Reconnect and try again.", true)
+        } }
     }
     fun ircStatus() {
         val partyStatus = if (!GlobalChatConfig.partyEnabled) "off" else if (livePartyRoster() == null) partyRosterError()

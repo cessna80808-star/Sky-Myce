@@ -80,9 +80,11 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("community", "Discord & Community", "Connect Discord, control statistics sharing and choose updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
             MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.UTILS, "Progress", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
             MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.UTILS, "Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
+            MenuFeature("rng-test", "RNG Drop Tester", "Administrator-only parser checks and isolated mock feed delivery", MenuCategory.UTILS, "Administration", listOf("rng", "test", "admin", "mock", "dry-run", "fixtures"), tool = "rng-test"),
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
+            MenuFeature("healer-crush-camera", "Healer Crush Camera", "Calibrate a fixed secondary view for the F7/M7 purple-to-yellow crush", MenuCategory.DUNGEONS, "Boss", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
             MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
@@ -150,6 +152,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"
+                path.startsWith("Dungeons/Healer Crush Camera/") -> "healer-crush-camera"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"
                 path.startsWith("Dungeons/") && key == "dungeonWinScreen" -> "dungeon-summary"
                 path.startsWith("Dungeons/") && key == "dungeonMessageFilter" -> "dungeon-chat"

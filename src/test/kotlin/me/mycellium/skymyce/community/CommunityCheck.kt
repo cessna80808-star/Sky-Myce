@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 fun main() {
     cancellationChecks()
+    connectionViewChecks()
     updateSelectionChecks()
     leaderboardChecks()
     bodyDeadlineChecks()

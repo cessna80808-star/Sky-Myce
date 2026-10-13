@@ -12,6 +12,7 @@ import { CommunityAccounts, type CommunityConfig, type CommunitySessionCheck } f
 import { CommunitySharingStore, type SharingSession, type SharingCategory } from "./community-sharing";
 import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQuery, type JournalComparisonResult } from "./leaderboards";
 import type { PublicRngEvent } from "./digest";
+import { rngTestOptions, runRngTest, type RngTestResult } from "./rng-tester";
 
 export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
@@ -297,6 +298,37 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     if (actor.guildId !== this.env.DISCORD_GUILD_ID || !snowflake.test(actor.id) || !snowflake.test(actor.interactionId) || !this.communityIdentityAllowed(actor.id)) return { ok: false, error: "not_authorized" };
     this.interaction(actor); this.limit(`leaderboards-discord:${actor.id}`, 60);
     return this.leaderboards.query(query);
+  }
+  async discordRngTest(actor: DeveloperActor, raw: Record<string, unknown>): Promise<RngTestResult> {
+    try {
+      const options = rngTestOptions(raw); if (!options) deny("invalid_rng_test");
+      const authorize = () => {
+        if (!this.isAdmin(actor)) deny("admin_required");
+        if (!this.communityIdentityAllowed(actor.id)) deny("identity_blacklisted");
+      };
+      this.ctx.storage.transactionSync(() => { authorize(); this.interaction(actor); this.limit(`rng-tester:${actor.id}`, 12); });
+      const result = await runRngTest(options!);
+      authorize(); // No cached authority survives even the isolated mock's asynchronous receipt/ACK boundary.
+      return result;
+    } catch (error) { return failure(error); }
+  }
+  async communityRngTest(token: string, raw: Record<string, unknown>): Promise<RngTestResult> {
+    try {
+      const session = await this.community.tokenSession(token); if (!session.ok) return { ok: false, error: session.error };
+      if (Object.keys(raw).some(key => !["expectedAccountId", "expectedUuid", "mode", "fixture", "input"].includes(key))) deny("invalid_rng_test");
+      if (raw.expectedAccountId !== session.accountId || raw.expectedUuid !== session.uuid) deny("session_identity_changed");
+      const { expectedAccountId: _account, expectedUuid: _uuid, ...input } = raw, options = rngTestOptions(input); if (!options) deny("invalid_rng_test");
+      const authorize = () => {
+        const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
+        if (!current.ok) deny(current.error ?? "session_expired");
+        const account = this.byId(session.accountId!);
+        if (!account || !this.isAdmin({ id: account.discord_id, guildId: this.env.DISCORD_GUILD_ID ?? "", roles: [], interactionId: "" })) deny("admin_required");
+      };
+      this.ctx.storage.transactionSync(() => { authorize(); this.limit(`rng-tester:${session.accountId}`, 12); });
+      const result = await runRngTest(options!);
+      authorize();
+      return result;
+    } catch (error) { return failure(error); }
   }
   recordAcceptedCommunityRng(player: string, event: PublicRngEvent, sourceId: string, expectedAccountId: string) {
     return this.ctx.storage.transactionSync(() => {

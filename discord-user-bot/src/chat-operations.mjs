@@ -21,6 +21,11 @@ export function gatewayMessage(data, guild, channel) {
     ...(data.edited_timestamp ? { editedTimestamp: Date.parse(data.edited_timestamp) } : {}),
     ...(data.user_id ? { userId: data.user_id } : {}), ...(data.emoji ? { emoji: data.emoji } : {}) };
 }
+function reactionFooter(packet) {
+  const counts = (Array.isArray(packet.reactions) ? packet.reactions : []).filter(item => REACTION_EMOJI.includes(item?.emoji) && Number.isSafeInteger(item.count) && item.count > 0 && item.count <= 384).slice(0, 6);
+  const summary = counts.map(item => `${item.emoji} ${item.count}`).join('  ');
+  return `${packet.scope === 'global' ? 'Minecraft · Sky-Myce Global' : 'Minecraft · Sky-Myce IRC'}${summary ? ` · ${summary}` : ''}`;
+}
 /** Called only with a channel and routing identity already validated by the authenticated bridge. */
 export async function applyDiscordOperation(packet, { channel, guild, ownBotId, authorId, owned, receipts, expectEdit }) {
   if (channel?.guildId !== guild || channel.id !== receipts.source(packet.discordMessageId, packet.room)?.channelId ||
@@ -35,12 +40,16 @@ export async function applyDiscordOperation(packet, { channel, guild, ownBotId, 
   if (message?.id !== packet.discordMessageId || message.channelId !== channel.id || message.guildId !== guild || message.author?.id !== authorId ||
       owned && authorId !== ownBotId) throw new Error('not_authorized');
   if (packet.operation === 'delete') { await message.delete(); return; }
+  const progress = receipts.metadata(packet.messageId) ?? receipts.source(packet.discordMessageId, packet.room);
   if (packet.operation === 'edit') {
     const identity = packet.sender;
     const next = { ...packet, type: 'irc_message', source: 'minecraft', id: packet.messageId, message_id: packet.messageId,
       from: identity?.name, sender: identity, mentions: [] };
     const card = minecraftCard(next, packet.scope, packet.room);
     if (!card) throw new Error('invalid_operation');
+    const newerSummary = (progress?.reactionSummaryRevision ?? 0) > packet.revision;
+    const currentFooter = message.embeds?.length === 1 ? message.embeds[0]?.footer?.text : undefined;
+    card.embeds[0].footer = { text: newerSummary && typeof currentFooter === 'string' ? currentFooter : reactionFooter(packet) };
     expectEdit?.(message.id, card.embeds[0].description);
     await message.edit({ ...card, content: '', reply: undefined });
     receipts.setCard(packet.messageId, next);
@@ -51,13 +60,10 @@ export async function applyDiscordOperation(packet, { channel, guild, ownBotId, 
   if (packet.active) await channel.client.rest.put(route);
   else await channel.client.rest.delete(route);
   // One native bot reaction represents Minecraft actors. Own cards also show their logical totals.
-  if (owned && message.embeds?.length === 1) {
+  if (owned && message.embeds?.length === 1 && (progress?.reactionSummaryRevision ?? 0) <= packet.revision) {
     const embed = message.embeds[0].toJSON?.() ?? message.embeds[0];
-    const counts = (Array.isArray(packet.reactions) ? packet.reactions : []).filter(item => REACTION_EMOJI.includes(item?.emoji) && Number.isSafeInteger(item.count) && item.count > 0 && item.count <= 384).slice(0, 6);
-    const summary = counts.map(item => `${item.emoji} ${item.count}`).join('  ');
-    const footer = packet.scope === 'global' ? 'Minecraft · Sky-Myce Global' : 'Minecraft · Sky-Myce IRC';
     expectEdit?.(message.id, embed.description);
-    await message.edit({ embeds: [{ ...embed, footer: { text: `${footer}${summary ? ` · ${summary}` : ''}` } }], allowedMentions: { parse: [], repliedUser: false } });
+    await message.edit({ embeds: [{ ...embed, footer: { text: reactionFooter(packet) } }], allowedMentions: { parse: [], repliedUser: false } });
   }
 }
 export function nativeDiscordOperation(event, current, source, previous, operationId, { guild, channel, ownBotId, expectedDescription }) {

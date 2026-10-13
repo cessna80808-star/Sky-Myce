@@ -24,7 +24,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                                    private val parent: Screen? = null) :
     MenuScreen(Component.literal(category?.title ?: view.title)) {
     override val menuCategory get() = category
-    override val menuParent get() = parent
+    override val menuParent get() = menuBackScreen(menuBackTarget(category, categoryRoot = true))
     private val catalog get() = MenuDirectory.catalog
     private var query = ""
     private var filter = 0
@@ -159,11 +159,17 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
         if (breadcrumb) child(label(feature.breadcrumb, MenuTheme.ACCENT, 9f).horizontalSizing(Sizing.fill()))
         child(label(feature.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         val controls = mutableListOf(button(if (feature.tool == null) "Configure" else "Open", 76) { openMenuFeature(feature.id) })
-        if (feature.settings.isNotEmpty() && feature.tool in listOf("party-finder", "dungeon-tracker", "daily-digest"))
+        if (feature.settings.isNotEmpty() && feature.tool != null && feature.tool != "cosmetics")
             controls += button("Configure", 76) { openMenuFeature(feature.id, configure = true) }
+        enabledSetting(feature)?.takeUnless { feature.id == "community" }?.let { setting ->
+            controls += button(if (setting.entry.boolean) "On" else "Off", 64) {
+                if (setting.entry.setBoolean(!setting.entry.boolean)) quickChanged(setting.path)
+                populate()
+            }.apply { toggled = { setting.entry.boolean }; tooltip(Component.literal("Enable ${feature.title}")) }
+        }
         child(actions(controls))
         child(row().apply {
-            featureEnabled(feature)?.let { child(label(if (it) "Enabled" else "Disabled", if (it) MenuTheme.ACCENT else MenuTheme.MUTED)) }
+            featureEnabled(feature)?.takeUnless { feature.id == "community" }?.let { child(label(if (it) "Enabled" else "Disabled", if (it) MenuTheme.ACCENT else MenuTheme.MUTED)) }
             if (feature.settings.isNotEmpty()) child(label("${feature.settings.size} options", MenuTheme.MUTED, 9f))
         })
     }
@@ -196,7 +202,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private fun quickControl(setting: SettingRow): ButtonComponent {
         val entry = setting.entry
         return when (entry.type()) {
-            EntryType.BOOLEAN -> button(if (entry.boolean) "On" else "Off", 42) { anchor ->
+            EntryType.BOOLEAN -> button(if (entry.boolean) "On" else "Off", 64) { anchor ->
                 if (entry.setBoolean(!entry.boolean)) quickChanged(setting.path)
                 anchor.message = Component.literal(if (entry.boolean) "On" else "Off")
                 quickValues = MenuShortcuts.pins.map { catalog.setting(it)?.entry?.get() }
@@ -265,9 +271,11 @@ internal fun menuActionRows(widths: List<Int>, available: Int, gap: Int = 6): Li
     if (line.isNotEmpty()) add(line)
 }
 
-internal fun featureEnabled(feature: MenuFeature): Boolean? {
+internal fun enabledSetting(feature: MenuFeature): SettingRow? {
     val row = feature.enabledPath?.let { path -> feature.settings.firstOrNull { it.path == path } }
         ?: feature.settings.firstOrNull { it.element.id() == "enabled" && it.entry.type() == EntryType.BOOLEAN }
         ?: return null
-    return row.entry.boolean
+    return row
 }
+
+internal fun featureEnabled(feature: MenuFeature): Boolean? = enabledSetting(feature)?.entry?.boolean

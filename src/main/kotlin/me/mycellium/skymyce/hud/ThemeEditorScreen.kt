@@ -226,7 +226,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
         }
         super.removed()
     }
-    override fun onClose() { closeMenuTo(parent) }
+    override fun onClose() { closeMenuTo(menuParent) }
     private fun rebuild() {
         val offset = controlsScroll.scrollTarget
         rebuildMenu()

@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture
 
 data class CosmeticProfile(val uuid: UUID, val name: String?, val scale: Float, val revision: Long, val updatedAt: Long,
     val nameStyle: Component? = name?.let(Component::literal), val scaleX: Float = scale, val scaleY: Float = scale, val scaleZ: Float = scale,
-    val nametagScale: Float = 1f, val capePreset: String? = null, val capeAsset: CapeAsset? = null)
+    val nametagScale: Float = 1f, val capePreset: String? = null, val capeAsset: CapeAsset? = null, val localCape: Boolean = false)
 data class CapeAsset(val id: String, val sha256: String, val size: Int, val width: Int = 64, val height: Int = 32)
 fun parseCosmeticProfile(json: JsonObject): CosmeticProfile? = runCatching {
     val legacy = setOf("uuid", "name", "scale", "revision", "updatedAt")
@@ -178,13 +178,14 @@ object CosmeticsClient : SkyMyceModule() {
     var linkExpires = 0L
         private set
 
-    override fun init() { CapeTextures.initialize(); ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
+    override fun init() { CapeTextures.initialize(); LocalCosmetics.initialize(); ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
     override fun tick() {
+        LocalCosmetics.observeOwner()
         if (!isEnabled()) { if (enabled || identity != null) clear(); return }
         val now = System.currentTimeMillis()
         if (!LocationAPI.onHypixel || MC.instance.player == null || identity != null && identity != MC.instance.user.profileId) {
             if (identity != null || enabled) clear()
-            status = "Join Hypixel to synchronize cosmetics"; return
+            updateNames(now); status = "Local cosmetics work here • join Hypixel to synchronize community cosmetics"; return
         }
         identity = MC.instance.user.profileId
         val wanted = CosmeticsConfig.names || CosmeticsConfig.scaling
@@ -273,7 +274,7 @@ object CosmeticsClient : SkyMyceModule() {
         if (record.uuid !in checked) return
         if (cache.apply(record, System.currentTimeMillis())) { revision++; updateNames(System.currentTimeMillis()) }
     }
-    fun own() = cache.get(MC.instance.user.profileId, System.currentTimeMillis())
+    fun own() = LocalCosmetics.equipped() ?: cache.get(MC.instance.user.profileId, System.currentTimeMillis())
     fun acceptOwn(profile: CosmeticProfile) {
         if (profile.uuid != MC.instance.user.profileId) return
         if (cache.apply(profile, System.currentTimeMillis())) { checked[profile.uuid] = System.currentTimeMillis(); revision++; updateNames(System.currentTimeMillis()) }
@@ -300,10 +301,17 @@ object CosmeticsClient : SkyMyceModule() {
         } }
     }
     private fun updateNames(now: Long) {
-        val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap()
+        val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap().toMutableMap()
+        LocalCosmetics.equipped()?.let { local -> known.keys.removeIf { it.equals(MC.instance.user.name, true) }; local.nameStyle?.let { known[MC.instance.user.name] = it } }
+        CosmeticNames.enabled = isEnabled() && CosmeticsConfig.names
         if (CosmeticNames.update(known)) MC.instance.gui.chat.rescaleChat()
     }
-    @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? = if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis(), touch = true) else null
+    fun localChanged() { revision++; if (isEnabled()) updateNames(System.currentTimeMillis()) }
+    @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? {
+        if (!isEnabled()) return null
+        if (uuid == MC.instance.user.profileId) LocalCosmetics.equipped()?.let { return it }
+        return if (enabled && LocationAPI.onHypixel) cache.get(uuid, System.currentTimeMillis(), touch = true) else null
+    }
     fun diagnostics(): Map<String, Long> = mapOf("cosmetics.records" to cache.size.toLong(), "cosmetics.identities" to identities.size.toLong(),
         "cosmetics.checked" to checked.size.toLong(), "cosmetics.pending" to if (lookup != null) 1L else 0L)
 }

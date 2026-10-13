@@ -1,5 +1,7 @@
 # Cosmetics frontend migration — September 27, 2026
 
+October 13 source update: the current Studio also equips and persists a UUID-scoped local appearance without Discord. Presets and validated local PNGs render on the actual local player in any world; None unequips and persists independently of deleting a stored PNG. Explicit **Publish appearance to community** retains current session ownership and revision checks and leaves the local preference equipped. Native bounded Minecraft name JSON preserves component arrays and per-character styling; already decorated nametags no longer undergo recursive username substitution. See [the current Studio contract](COSMETICS_STUDIO.md) for storage, limits and public/private boundaries. This paragraph describes the current source; the migration, production observations and old license/HWID flows below are historical September/October records and do not establish deployment of this release.
+
 October 10 update: the IRC hosting deferral recorded below has ended. The persistent global User Bot Gateway now runs on Cloudflare, with a real Minecraft ↔ Discord round trip verified. See the [current implementation report](implementation-overhaul-2026-10.md). This does not alter the cosmetics migration or its ownership checks.
 
 Cosmetics now belong to **MouseBot Frontend**. Use its `/cosmetics` command in `#bot-commands`. The normal account, license and Minecraft identity checks still apply. A migrated appearance does not activate an account or grant a license.

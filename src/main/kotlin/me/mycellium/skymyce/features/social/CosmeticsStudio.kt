@@ -17,7 +17,7 @@ import java.time.Duration
 class CosmeticsStudio {
     var profile: CosmeticProfile? = null; private set
     var assets = emptyList<CapeAsset>(); private set
-    var status = "Connect Discord to save; preview works locally"; private set
+    var status = "Connect Discord to publish; Equip saves locally"; private set
     var busy = false; private set
     var revision = 0L; private set
     @Volatile private var epoch = 0L
@@ -37,6 +37,7 @@ class CosmeticsStudio {
     }) { (saved, owned) -> profile = saved; assets = owned; CosmeticsClient.acceptOwn(saved); status = "Saved revision ${saved.revision} • visual changes only" }
 
     fun save(draft: CosmeticProfile, name: com.google.gson.JsonElement?) {
+        if (draft.localCape) { status = "Publish the local PNG first; it is not a community asset."; revision++; return }
         observeOwner()
         val saved = profile ?: return
         work("Saving cosmetics…", true, { owner, token, guard ->
@@ -55,7 +56,33 @@ class CosmeticsStudio {
         }) { result -> profile = result; CosmeticsClient.acceptOwn(result); status = "Saved revision ${result.revision} • synchronized" }
     }
 
-    fun upload(path: String) = work("Validating and uploading cape…", true, { owner, token, guard ->
+    fun upload(path: String, accepted: (CapeAsset) -> Unit = {}) = work("Validating and uploading cape…", true, { owner, token, guard ->
+        uploadCape(path, owner, token, guard)
+    }) { asset -> assets = (assets.filterNot { it.id == asset.id } + asset).takeLast(8); status = "Uploaded cape ${asset.id.take(8)}; select it, then Save"; accepted(asset) }
+
+    /** One accepted mutation retains Publish intent across screen close, with authority checked between requests. */
+    fun publishLocal(draft: CosmeticProfile, name: com.google.gson.JsonElement?, path: String) {
+        observeOwner()
+        val saved = profile ?: return
+        work("Uploading and publishing local appearance…", true, { owner, token, guard ->
+            require(draft.localCape && cosmeticDraftOwnerCurrent(saved, draft, owner["expectedUuid"].asString))
+            capturedStudioPublish(guard, { uploadCape(path, owner, token, guard) }) { asset ->
+                val fields = JsonObject().apply {
+                    add("name", name ?: JsonNull.INSTANCE)
+                    addProperty("scaleX", draft.scaleX); addProperty("scaleY", draft.scaleY); addProperty("scaleZ", draft.scaleZ)
+                    addProperty("nametagScale", draft.nametagScale)
+                    add("capePreset", JsonNull.INSTANCE); addProperty("capeAsset", asset.id)
+                }
+                val result = CommunityClient.exchange("/community/cosmetics", owner.apply { addProperty("revision", saved.revision); add("profile", fields) }, "POST", token)
+                requireNotNull(parseCosmeticProfile(result.getAsJsonObject("profile")))
+            }
+        }) { result ->
+            profile = result; result.capeAsset?.let { asset -> assets = (assets.filterNot { it.id == asset.id } + asset).takeLast(8) }
+            CosmeticsClient.acceptOwn(result); status = "Published revision ${result.revision} • local preference retained"
+        }
+    }
+
+    private fun uploadCape(path: String, owner: JsonObject, token: String, guard: StudioRequestGuard): CapeAsset {
         val file = Path.of(path.trim()).toAbsolutePath().normalize()
         require(file.fileName.toString().endsWith(".png", true) && Files.isRegularFile(file) && Files.size(file) in 45..262144)
         val bytes = Files.newInputStream(file).use { it.readNBytes(262145) }; validateCapePng(bytes)
@@ -71,8 +98,8 @@ class CosmeticsStudio {
         val responseBytes = readCommunityBody(response.body(), 65536, Duration.ofSeconds(30))
         val result = JsonParser.parseString(responseBytes.toString(Charsets.UTF_8)).asJsonObject
         if (response.statusCode() !in 200..299 || result["ok"]?.asBoolean != true) throw CommunityFailure(result["error"]?.asString ?: "upload_failed")
-        parseCapeAsset(result.getAsJsonObject("asset"))
-    }) { asset -> assets = (assets.filterNot { it.id == asset.id } + asset).takeLast(8); status = "Uploaded cape ${asset.id.take(8)}; select it, then Save" }
+        return parseCapeAsset(result.getAsJsonObject("asset"))
+    }
 
     fun delete(asset: CapeAsset) = work("Removing uploaded cape…", true, { owner, token, guard ->
         guard.check()
@@ -80,10 +107,11 @@ class CosmeticsStudio {
     }) { assets = assets.filterNot { it.id == asset.id }; status = "Cape removed"; refresh() }
 
     fun observeOwner(): Boolean {
-        val key = CommunityClient.identity?.let { "${it["accountId"]}:${it["uuid"]}" }
+        val identity = CommunityClient.identity
+        val key = "${MC.instance.user.profileId}|" + (identity?.let { "${it["accountId"]}:${it["uuid"]}" } ?: "offline")
         if (key == ownerKey) return false
         ownerKey = key; epoch++; busy = false; profile = null; assets = emptyList(); revision++
-        status = if (key == null) "Connect Discord to save; preview works locally" else "Account changed; refresh saved cosmetics"
+        status = if (identity == null) "Connect Discord to publish; Equip saves locally" else "Account changed; refresh community cosmetics"
         return true
     }
     fun chooseFile(accept: (String) -> Unit) {
@@ -108,7 +136,7 @@ class CosmeticsStudio {
         observeOwner()
         val identity = CommunityClient.identity?.deepCopy()
         val token = CommunityClient.sessionToken
-        if (!CommunityClient.connected || identity == null || token == null) { status = "Connect Discord to save or upload cosmetics"; revision++; return }
+        if (!CommunityClient.connected || identity == null || token == null) { status = "Connect Discord to publish; local presets and PNG imports work offline"; revision++; return }
         val owner = JsonObject().apply { addProperty("expectedAccountId", identity["accountId"].asString); addProperty("expectedUuid", identity["uuid"].asString) }
         val generation = CommunityClient.sessionGeneration; val requestEpoch = ++epoch
         val captured = StudioOwner(owner["expectedAccountId"].asString, owner["expectedUuid"].asString, token, generation)
@@ -139,3 +167,7 @@ class CosmeticsStudio {
 
 internal fun cosmeticDraftOwnerCurrent(saved: CosmeticProfile, draft: CosmeticProfile, ownerUuid: String) =
     saved.uuid == draft.uuid && saved.uuid.toString().replace("-", "") == ownerUuid
+
+internal fun <T> capturedStudioPublish(guard: StudioRequestGuard, upload: () -> CapeAsset, save: (CapeAsset) -> T): T {
+    guard.check(); val asset = upload(); guard.check(); return save(asset)
+}

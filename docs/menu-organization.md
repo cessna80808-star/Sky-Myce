@@ -2,17 +2,26 @@
 
 The main menu and compact navigation use six systems: **Dungeons, Combat, Economy, Cosmetics, Utils, Settings**. Home cards show each category's purpose and, when space permits, its subgroups. Those same cards transform into the compact icon rail used by category pages, tools and Settings editors. The current category stays selected; Home, category tooltips, Search and Quick Settings remain available from the rail. Features have one home; search and shortcuts point back to it.
 
+As of 2.5.1, Home also has direct **Community** and **Global Chat** actions beside Search and Quick Settings. Narrow windows combine secondary shortcuts in one compact anchored dropdown. Community remains a single canonical Settings feature; Global Chat remains a Utils feature and opens the existing native composer. Common online actions have a one-click path without another top-level category or competing chat screen.
+
+Every category, including Settings, presents its feature inventory first. Feature settings display only their owner's controls, while typed search still spans all settings. Tool cards distinguish Open and Configure and expose the actual feature On/Off entry inline when available. Saved config paths, values, shortcut identities and pending save-on-close behavior remain intact.
+
+Back navigation follows structure: feature/settings → containing category → Home → game. Search, Quick Settings, Favorites and Recent return directly to Home. Switching categories replaces the current destination; it cannot accumulate prior categories as parents. Anchored dropdowns consume Escape before closing the page; bounded draft dialogs and the existing HUD integration retain their actual caller. `/sm settings` opens the Settings directory.
+
+This follows [Microsoft's game UI navigation guidance](https://learn.microsoft.com/en-us/xbox/accessibility/xbox-accessibility-guidelines/112): consistent focus order, repeated controls in consistent places, persistent Home access and more than one way to find a feature. The existing inventory, search and icon rail keep unrelated advanced controls off Home. Switches show On/Off text, selected buttons add a geometric check, and primary/destructive/disabled states share restrained styling with readable action labels. No HUD redesign is part of this menu work.
+
 `ui/MenuCatalog.kt` owns category descriptions, stable feature IDs, subgroups, aliases and the setting-owner resolver. Its inventory is built from the visible Resourceful Config entries, including their existing titles and descriptions. Category browsing, settings scopes and search use this same inventory. Twelve additional search entries describe real controls already owned by the dungeon preference and theme editors; they do not introduce new configuration fields.
 
 ## Audited inventory
 
-The audit covers the registered feature modules, existing menu screens, the full config tree and its callers. These are the 28 canonical menu entries:
+The audit covers the registered feature modules, existing menu screens, the full config tree and its callers. The canonical menu entries include:
 
 | Category / subgroup | Feature ID | Existing functionality and canonical destination |
 | --- | --- | --- |
 | Dungeons / Parties | `party-finder` | Online dungeon friends, LFG availability, invites, class/PB filters and friend preferences. The old dungeon friend and Party Finder settings share this home. |
 | Dungeons / Routes | `starred-routes` | Starred target routing, Blood/Wither exit display and recording diagnostics; feature settings. |
 | Dungeons / Runs | `dungeon-tracker` | Run totals, recorded acquisitions, loot/history filters and tracker settings; Dungeon Tracker. |
+| Dungeons / Boss | `healer-crush-camera` | Fixed secondary view calibration, preview and measured purple/yellow pillar setup; Healer Crush Camera. |
 | Dungeons / Rewards | `dungeon-chests` | Estimated chest profit, valuable-item thresholds, reroll and negative-profit protection; feature settings. |
 | Dungeons / Information | `dungeon-chat` | Dungeon message filtering; feature settings. |
 | Dungeons / Runs | `dungeon-summary` | Dungeon completion overlay; feature settings. |
@@ -27,6 +36,9 @@ The audit covers the registered feature modules, existing menu screens, the full
 | Economy / Item Values | `stash-helper` | Low-value stash filtering and pickup protection; feature settings. |
 | Cosmetics / Player Appearance | `cosmetics` | Cosmetic name, tooltip and player-scaling preferences, account linking and synchronization; Cosmetics. Server-owned cosmetic selection remains available through the existing Discord flow. |
 | Utils / Progress | `daily-digest` | Daily progress, public updates and personal/community RNG reports; Daily Digest and its settings. |
+| Utils / Progress | `rng-journal` | Preserved personal acquisition history and measured comparisons; RNG Journal. |
+| Utils / Progress | `leaderboards` | Consenting community comparisons with source/UTC/freshness labels; Community Leaderboards. |
+| Utils / Administration | `rng-test` | Authoritative administrator check, disposable parser fixtures and isolated mock feed delivery; RNG Drop Tester. |
 | Utils / Social | `global-chat` | Global IRC client/Discord chat opt-in and mention sound; feature settings. `/sm irc` selects the channel; `/sm irc <message>` sends one message. Older search aliases remain discoverable. |
 | Utils / Social | `party-commands` | Allowed party commands, cooldown and optional stats API fallback; feature settings. |
 | Utils / Social | `player-utilities` | Cached friend activity, location and profile information; Player Utilities. |
@@ -34,6 +46,7 @@ The audit covers the registered feature modules, existing menu screens, the full
 | Utils / Inventory | `auto-refill` | Consumable refill selection; feature settings. |
 | Utils / Information | `information` | Client information and skill XP overlays; feature settings. |
 | Settings / General | `settings-general` | Client data collection and developer preferences. |
+| Settings / Community | `community` | Optional Discord connection, independent sharing controls, signed updates and the persisted Auto-update switch. |
 | Settings / Appearance | `settings-appearance` | Animation personality and the shared theme editor: palette, opacity, spacing and visual flags. |
 | Settings / HUD | `settings-hud` | Existing HUD editor for widget layout, scaling and per-widget themes. Feature-specific visibility controls stay with their features. |
 | Settings / Performance | `settings-performance` | GUI graphics quality and rendering effects. |
@@ -41,7 +54,7 @@ The audit covers the registered feature modules, existing menu screens, the full
 
 There is no standalone Friends destination. Its three useful views are separated by purpose: dungeon parties under Dungeons, loans/wealth under Economy, cached player information under Utils. The existing shared screen implementation is scoped to the selected view, without tabs that recreate cross-category destinations.
 
-No separate Bazaar browser, leaderboard, Slayer system or global UI-scale setting was found, so the menu does not advertise them. Bazaar/auction price metrics remain available where they already affect dungeon tracking. Scale search finds actual cosmetic scaling and HUD widget scaling. The commented-out Waypoints event implementation does not become a new menu feature.
+No separate Bazaar browser, Slayer system or global UI-scale setting was found, so the menu does not advertise them. Bazaar/auction price metrics remain available where they already affect dungeon tracking. Scale search finds actual cosmetic scaling and HUD widget scaling. The commented-out Waypoints event implementation does not become a new menu feature.
 
 `WardrobeKeybinds` exists but is not currently registered by `SkyMyce.initializeModules`. This navigation change preserves its saved controls and does not activate that module. `MiningConfig.powderTracker` likewise has no active consumer in the audited implementation. These existing limitations are not silently presented as new functionality.
 
