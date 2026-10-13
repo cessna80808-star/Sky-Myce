@@ -21,6 +21,7 @@ class CommunityScreen : MenuScreen(Component.literal("Sky-Myce Community")) {
     private lateinit var check: MenuButton
     private lateinit var install: MenuButton
     private lateinit var later: MenuButton
+    private lateinit var restart: MenuButton
     private lateinit var noteButton: MenuButton
     private val actionButtons = mutableMapOf<CommunityConnectionAction, MenuButton>()
     private var actionKey: Pair<CommunityConnectionKind, List<CommunityConnectionAction>>? = null
@@ -73,7 +74,14 @@ class CommunityScreen : MenuScreen(Component.literal("Sky-Myce Community")) {
             install = button("Update Now") { CommunityUpdates.install() }.apply { horizontalSizing(Sizing.fill(31)); intent = MenuButtonIntent.PRIMARY }; child(install)
             later = button("Later") { CommunityUpdates.defer() }.apply { horizontalSizing(Sizing.fill(31)) }; child(later)
         })
-        noteButton = button("Release notes") { notesOpen = !notesOpen; updateNotes() }.apply { horizontalSizing(Sizing.fixed(125)) }; updates.child(noteButton)
+        updates.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6)
+            noteButton = button("Release notes") { notesOpen = !notesOpen; updateNotes() }.apply { horizontalSizing(Sizing.fill(48)) }; child(noteButton)
+            restart = button("Restart Minecraft") { CommunityUpdates.restart() }.apply {
+                horizontalSizing(Sizing.fill(48))
+                tooltip(Component.literal("Closes and relaunches Minecraft. A ready update is installed first. Save your work before restarting."))
+            }; child(restart)
+        })
         notes = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()); updates.child(notes)
         root.child(button("Done") { onClose() })
         actionKey = null; fallbackCode = null; shownNotes = ""; refresh()
@@ -139,8 +147,10 @@ class CommunityScreen : MenuScreen(Component.literal("Sky-Myce Community")) {
         }
         check.active = CommunityUpdates.canCheck
         install.active = CommunityUpdates.canInstall; later.active = CommunityUpdates.canDefer
+        restart.active = CommunityUpdates.canRestart
         update.text(Component.literal(CommunityUpdates.status))
         autoUpdate.message = Component.literal(if (CommunityUpdates.autoUpdate) "On" else "Off")
+        autoUpdate.active = CommunityUpdates.canChangePreferences
         noteButton.active = CommunityUpdates.releaseNotes.isNotBlank()
         if (CommunityUpdates.releaseNotes != shownNotes) updateNotes()
     }

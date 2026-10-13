@@ -5,10 +5,31 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Properties;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import me.mycellium.skymyce.loader.LoaderRestart;
+import me.mycellium.skymyce.loader.RestartNatives;
 
 /** Optional JDK-only helper. It runs from its own tiny JAR, never from the JAR being replaced. */
 public final class UpdateInstaller {
     private UpdateInstaller() {}
+    public static void writeHelper(Path destination) throws Exception {
+        var types = new ArrayList<>(List.of(UpdateInstaller.class, LoaderRestart.class, RestartNatives.class));
+        types.addAll(List.of(LoaderRestart.class.getDeclaredClasses()));
+        try (var jar = new JarOutputStream(Files.newOutputStream(destination))) {
+            for (var type : types) {
+                var resource = type.getName().replace('.', '/') + ".class";
+                jar.putNextEntry(new JarEntry(resource));
+                try (var input = type.getResourceAsStream("/" + resource)) {
+                    if (input == null) throw new java.io.IOException("Restart helper unavailable");
+                    input.transferTo(jar);
+                }
+                jar.closeEntry();
+            }
+        }
+    }
     public static String sha256(Path file) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         try (InputStream input = Files.newInputStream(file)) {
@@ -38,17 +59,27 @@ public final class UpdateInstaller {
         }
     }
     public static void main(String[] args) {
-        if (args.length != 1) return;
-        Path planPath = Path.of(args[0]); Properties plan = new Properties();
+        if (args.length != 1 && !(args.length == 3 && args[0].equals("--restart"))) return;
+        Path planPath = args.length == 1 ? Path.of(args[0]) : null;
         try {
-            try (InputStream input = Files.newInputStream(planPath)) { plan.load(input); }
-            long parent = Long.parseLong(plan.getProperty("parent"));
-            long deadline = System.nanoTime() + 600_000_000_000L;
-            while (ProcessHandle.of(parent).map(ProcessHandle::isAlive).orElse(false) && System.nanoTime() < deadline) Thread.sleep(250);
-            install(plan);
-            Files.writeString(planPath.resolveSibling("result.txt"), "Update installed. The previous JAR is retained in .sky-myce-updates.\n");
+            var plan = new Properties();
+            if (planPath != null) try (InputStream input = Files.newInputStream(planPath)) { plan.load(input); }
+            long parent = Long.parseLong(planPath == null ? args[1] : plan.getProperty("parent"));
+            long started = Long.parseLong(planPath == null ? args[2] : plan.getProperty("parentStarted", "0"));
+            LoaderRestart.afterExit(parent, started, () -> {
+                if (planPath != null) {
+                    // Windows may briefly retain the mod's file handle after the process exits.
+                    for (int attempt = 0; ; attempt++) {
+                        try { install(plan); break; }
+                        catch (FileSystemException locked) { if (attempt == 19) throw locked; Thread.sleep(250); }
+                    }
+                    Files.writeString(planPath.resolveSibling("result.txt"), "Update installed. The previous JAR is retained in .sky-myce-updates.\n");
+                }
+                return null;
+            });
         } catch (Exception failure) {
-            try { Files.writeString(planPath.resolveSibling("result.txt"), "Update was not installed. Inspect mods and .sky-myce-updates; the previous JAR was retained or restored.\n"); } catch (Exception ignored) {}
+            if (planPath != null) try { Files.writeString(planPath.resolveSibling("result.txt"), "Update/restart could not finish. Start Minecraft from your launcher; inspect mods and .sky-myce-updates.\n"); } catch (Exception ignored) {}
+            System.exit(1);
         }
     }
 }

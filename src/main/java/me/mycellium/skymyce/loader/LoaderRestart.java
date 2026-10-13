@@ -65,6 +65,27 @@ public final class LoaderRestart {
 
     static boolean committed() throws IOException { return System.in.read() == READY; }
 
+    /** Shared exit/restart handshake for the standalone updater; credentials stay in pipes. */
+    public static void afterExit(long parent, long started, Callable<Void> install) throws Exception {
+        if (parent <= 0) throw new IOException("Invalid parent process");
+        var restart = read(System.in);
+        Path wrapper = null;
+        if (restart != null) {
+            restart = preserveRuntime(restart);
+            wrapper = prepare(restart);
+            acknowledge();
+            if (!committed()) return;
+        }
+        var process = ProcessHandle.of(parent);
+        if (process.isPresent() && process.get().isAlive()) {
+            if (process.get().info().startInstant().orElseThrow().toEpochMilli() != started)
+                throw new IOException("Parent process changed");
+            process.get().onExit().get(10, TimeUnit.MINUTES);
+        }
+        install.call();
+        if (restart != null) launch(wrapper, restart);
+    }
+
     static Plan read(InputStream stream) throws IOException {
         int first = stream.read();
         if (first == -1) return null; // Normal game exit: install the update without restarting.
@@ -272,7 +293,7 @@ public final class LoaderRestart {
         return child;
     }
 
-    static void clearInjectedOptions(ProcessBuilder builder) {
+    public static void clearInjectedOptions(ProcessBuilder builder) {
         // RuntimeMXBean already captured these options; applying the environment a second time
         // would duplicate agents, and would inject game options into the small updater JVM.
         for (var key : List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")) builder.environment().remove(key);

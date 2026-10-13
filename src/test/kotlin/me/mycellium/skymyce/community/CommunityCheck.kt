@@ -8,8 +8,6 @@ import java.security.KeyPairGenerator
 import java.security.Signature
 import java.util.Base64
 import java.util.Properties
-import java.util.jar.JarEntry
-import java.util.jar.JarOutputStream
 import java.util.concurrent.TimeUnit
 import com.sun.net.httpserver.HttpServer
 import java.io.ByteArrayInputStream
@@ -76,14 +74,15 @@ fun main() {
     val realBackup = plan.getProperty("backup"); plan.setProperty("backup", root.resolve("escaped.backup").toString())
     check(runCatching { UpdateInstaller.install(plan) }.isFailure); plan.setProperty("backup", realBackup)
     // Run the exact isolated JDK-only helper in a fresh JVM, proving it does not depend on Minecraft/Gson or lock the target JAR.
-    val resource = UpdateInstaller::class.java.name.replace('.', '/') + ".class"
     val helper = staging.resolve("helper.jar")
-    JarOutputStream(Files.newOutputStream(helper)).use { jar -> jar.putNextEntry(JarEntry(resource)); UpdateInstaller::class.java.classLoader.getResourceAsStream(resource)!!.use { it.copyTo(jar) }; jar.closeEntry() }
+    UpdateInstaller.writeHelper(helper)
     val planFile = staging.resolve("plan.properties"); Files.newOutputStream(planFile).use { plan.store(it, "isolated fixture") }
     val executable = java.nio.file.Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
     val process = ProcessBuilder(executable.toString(), "-cp", helper.toString(), UpdateInstaller::class.java.name, planFile.toString()).redirectErrorStream(true).start()
+    process.outputStream.close()
     check(process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0)
     check(Files.readString(target) == "new verified version" && Files.readString(backup) == "working version" && !Files.exists(next))
+    communityRestartChecks(root.resolve("restart"), helper)
     println("Community checks passed: authenticated releases, persistent private sessions, bounded HTTP body deadlines, device normalization and after-exit atomic update refusal/backup safety")
 }
 

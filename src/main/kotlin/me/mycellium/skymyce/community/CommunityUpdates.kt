@@ -2,8 +2,10 @@ package me.mycellium.skymyce.community
 
 import com.google.gson.JsonParser
 import me.mycellium.skymyce.community.update.UpdateInstaller
+import me.mycellium.skymyce.loader.LoaderRestart
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.loader.api.FabricLoader
+import net.fabricmc.loader.impl.launch.FabricLauncherBase
 import net.minecraft.client.Minecraft
 import net.minecraft.network.chat.Component
 import java.net.URI
@@ -15,8 +17,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.Properties
 import java.util.concurrent.Executors
-import java.util.jar.JarEntry
-import java.util.jar.JarOutputStream
+import java.lang.management.ManagementFactory
 import java.util.zip.ZipFile
 
 /** Verified staging is approved by Update Now or the user's persisted auto-update preference. */
@@ -27,8 +28,10 @@ object CommunityUpdates {
     val availableVersion get() = available?.version
     val canCheck get() = !busy && plan == null
     val canInstall get() = available != null && !busy && plan == null
-    val canDefer get() = available != null
+    val canDefer get() = available != null && !restarting
     val staged get() = plan != null
+    val canRestart get() = !busy && !restarting && runCatching { FabricLauncherBase.getLauncher().classPath.isNotEmpty() }.getOrDefault(false)
+    val canChangePreferences get() = !restarting
     private var available: CommunityRelease? = null
     private var busy = false
     private var checked = false
@@ -39,6 +42,8 @@ object CommunityUpdates {
     private var helper: Path? = null
     private var automaticPending = false
     private var automaticAttempt = ""
+    private var restarting = false
+    private var restartCommitted = false
     private val selection = CommunityUpdateSelection()
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "Sky-Myce updates").apply { isDaemon = true } }
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
@@ -51,12 +56,66 @@ object CommunityUpdates {
             status = runCatching { Files.newInputStream(result).use { it.readNBytes(1024).toString(Charsets.UTF_8).trim() } }.getOrDefault(status)
         }
         ClientLifecycleEvents.CLIENT_STOPPING.register {
+            if (restartCommitted) return@register
             val stagedPlan = plan; val stagedHelper = helper
             if (stagedPlan != null && stagedHelper != null) runCatching {
-                val executable = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "javaw.exe" else "java").toString()
-                ProcessBuilder(executable, "-cp", stagedHelper.toString(), UpdateInstaller::class.java.name, stagedPlan.toString())
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                startHelper(stagedHelper, stagedPlan).outputStream.close()
             }.onFailure { status = "Updater could not start. Current version remains installed; update manually." }
+        }
+    }
+    private fun startHelper(jar: Path, updatePlan: Path?): Process {
+        val executable = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "javaw.exe" else "java").toString()
+        val current = ProcessHandle.current()
+        val arguments = if (updatePlan != null) listOf(updatePlan.toString()) else listOf("--restart", current.pid().toString(), current.info().startInstant().orElseThrow().toEpochMilli().toString())
+        val builder = ProcessBuilder(listOf(executable, "-cp", jar.toString(), UpdateInstaller::class.java.name) + arguments)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+        LoaderRestart.clearInjectedOptions(builder)
+        return builder.start()
+    }
+    fun restart() {
+        if (!canRestart) return
+        val minecraft = Minecraft.getInstance()
+        val user = minecraft.user
+        val account = user.profileId
+        val current = linkedMapOf("username" to user.name, "uuid" to account.toString(),
+            "accessToken" to user.accessToken, "clientId" to user.clientId.orElse(""), "xuid" to user.xuid.orElse(""),
+            "gameDir" to FabricLoader.getInstance().gameDir.toAbsolutePath().toString())
+        val original = FabricLoader.getInstance().getLaunchArguments(false)
+        val arguments = mutableListOf<String>()
+        var index = 0
+        while (index < original.size) {
+            val argument = original[index++]
+            val key = argument.removePrefix("--").substringBefore('=')
+            if (argument.startsWith("--") && key in current) {
+                if ('=' !in argument && index < original.size) index++
+            } else arguments += argument
+        }
+        current.forEach { (key, value) -> arguments += "--$key"; arguments += value }
+        val properties = System.getProperties().stringPropertyNames()
+            .filter { it.startsWith("fabric.") || it in setOf("java.library.path", "org.lwjgl.librarypath", "java.io.tmpdir") }
+            .associateWith { System.getProperty(it) }
+        val classPath = FabricLauncherBase.getLauncher().classPath.toList()
+        val vmArguments = ManagementFactory.getRuntimeMXBean().inputArguments.toList()
+        val updatePlan = plan
+        restarting = true; busy = true; status = "Preparing to restart Minecraft…"
+        worker.submit {
+            var process: Process? = null
+            val result = runCatching {
+                Files.createDirectories(directory)
+                val jar = helper ?: directory.resolve("restart-helper.jar").also(UpdateInstaller::writeHelper)
+                process = startHelper(jar, updatePlan)
+                LoaderRestart.request(process, Path.of(System.getProperty("user.dir")), vmArguments, classPath, properties, arguments.toTypedArray())
+            }
+            minecraft.execute {
+                val prepared = process
+                if (result.isSuccess && account == minecraft.user.profileId && plan == updatePlan && prepared != null && runCatching { LoaderRestart.commit(prepared) }.isSuccess) {
+                    restartCommitted = true; minecraft.stop()
+                } else {
+                    prepared?.destroyForcibly()
+                    restarting = false; busy = false
+                    status = "Restart preparation failed. Minecraft is still open; you can retry or restart from your launcher."
+                }
+            }
         }
     }
     fun tick() {
@@ -97,6 +156,7 @@ object CommunityUpdates {
         }
     }
     fun defer() {
+        if (restarting) return
         val release = available ?: return
         if (!selection.defer(release.version)) return
         val cancelledPlan = plan; val cancelledHelper = helper
@@ -109,6 +169,7 @@ object CommunityUpdates {
         }
     }
     fun setAutoUpdate(enabled: Boolean) {
+        if (restarting) return
         if (enabled == autoUpdate) return
         autoUpdate = enabled; automaticAttempt = ""
         val cancelledPlan = plan.takeIf { automaticPending && !enabled }
@@ -144,7 +205,7 @@ object CommunityUpdates {
                 result.fold({ (updatePlan, updateHelper) ->
                     if (selection.generation != approvedSelection) { worker.submit { discard(updatePlan, updateHelper) }; return@fold }
                     plan = updatePlan; helper = updateHelper; notified = true
-                    status = "Update verified and ready. Exit Minecraft to install ${release.version}; then launch normally."
+                    status = "Update verified and ready. Restart Minecraft to install ${release.version}, or exit and launch normally."
                 }, { if (selection.generation == approvedSelection) {
                     automaticPending = false
                     status = "Update failed or this installation needs a manual JAR replacement. Your current version is unchanged."
@@ -183,14 +244,11 @@ object CommunityUpdates {
                 require(data["id"].asString == "skymyce" && data["version"].asString == release.version && data.getAsJsonObject("depends")?.has("skymyce-loader") != true)
             }
             val installer = staging.resolve("update-helper.jar")
-            // This helper has no nested classes or dependencies beyond the JDK.
-            val resource = UpdateInstaller::class.java.name.replace('.', '/') + ".class"
-            JarOutputStream(Files.newOutputStream(installer)).use { jar ->
-                jar.putNextEntry(JarEntry(resource)); UpdateInstaller::class.java.classLoader.getResourceAsStream(resource)!!.use { it.copyTo(jar) }; jar.closeEntry()
-            }
+            UpdateInstaller.writeHelper(installer)
             val updatePlan = staging.resolve("update-plan.properties")
             val properties = Properties().apply {
                 setProperty("parent", ProcessHandle.current().pid().toString()); setProperty("mods", mods.toString()); setProperty("staging", staging.toString())
+                setProperty("parentStarted", ProcessHandle.current().info().startInstant().orElseThrow().toEpochMilli().toString())
                 setProperty("target", target.toString()); setProperty("next", next.toString())
                 setProperty("backup", staging.resolve("${target.fileName}.${System.currentTimeMillis()}.backup").toString())
                 setProperty("oldHash", UpdateInstaller.sha256(target)); setProperty("newHash", release.sha256); setProperty("size", release.size.toString())
