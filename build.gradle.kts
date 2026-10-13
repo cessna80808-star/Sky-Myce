@@ -508,7 +508,7 @@ val cameraRenderCheck by tasks.registering(JavaExec::class) {
 }
 val healerCrushCameraCheck by tasks.registering(JavaExec::class) {
     group = "verification"
-    description = "Checks Healer leap/crush sequencing, corroboration and encounter cleanup"
+    description = "Checks Crush Camera timing, class selection and encounter cleanup"
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt"

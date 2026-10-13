@@ -2,13 +2,46 @@ package me.mycellium.skymyce.config.instances.dungeons
 
 import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 
 /** F7 and M7 share one presentation; captured viewpoints are stored separately. */
 object HealerCrushCameraConfig : CategoryKt("Healer Crush Camera") {
+    // Keep the saved category ID so existing presentation settings survive the rename.
+    override val name = TranslatableValue.literal("Crush Camera")
     var enabled by boolean(true) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Show a fixed secondary view during the Healer purple-to-yellow Storm crush sequence. Requires calibrated dungeon viewpoints.")
+        description = TranslatableValue.literal("Show the saved crush viewpoints 26 seconds into Storm's F7/M7 phase, until Storm dies. Choose the classes below.")
     }
+    var healer by boolean(true) {
+        name = TranslatableValue.literal("Healer")
+        description = TranslatableValue.literal("Automatically show the Crush Camera when playing Healer.")
+    }
+    var mage by boolean(false) {
+        name = TranslatableValue.literal("Mage")
+        description = TranslatableValue.literal("Automatically show the Crush Camera when playing Mage.")
+    }
+    var berserk by boolean(false) {
+        name = TranslatableValue.literal("Berserk")
+        description = TranslatableValue.literal("Automatically show the Crush Camera when playing Berserk.")
+    }
+    var archer by boolean(false) {
+        name = TranslatableValue.literal("Archer")
+        description = TranslatableValue.literal("Automatically show the Crush Camera when playing Archer.")
+    }
+    var tank by boolean(false) {
+        name = TranslatableValue.literal("Tank")
+        description = TranslatableValue.literal("Automatically show the Crush Camera when playing Tank.")
+    }
+
+    fun classEnabled(clazz: DungeonClass?) = when (clazz) {
+        DungeonClass.HEALER -> healer
+        DungeonClass.MAGE -> mage
+        DungeonClass.BERSERKER -> berserk
+        DungeonClass.ARCHER -> archer
+        DungeonClass.TANK -> tank
+        null -> false
+    }
+
     var width by int(160) {
         name = TranslatableValue.literal("Window width")
         description = TranslatableValue.literal("HUD width in Minecraft GUI pixels. Drag the lower-right corner in the HUD editor to resize.")
