@@ -10,7 +10,7 @@ object HealerCrushCameraConfig : CategoryKt("Healer Crush Camera") {
     override val name = TranslatableValue.literal("Crush Camera")
     var enabled by boolean(true) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Show the saved crush viewpoints 26 seconds into Storm's F7/M7 phase, until Storm dies. Choose the classes below.")
+        description = TranslatableValue.literal("Show the saved crush viewpoints from 26 seconds into Storm's F7/M7 phase until Storm dies. Switch to yellow one second after the first crush, or at 38 seconds if its notice is missed. Choose the classes below.")
     }
     var healer by boolean(true) {
         name = TranslatableValue.literal("Healer")

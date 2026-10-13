@@ -23,6 +23,7 @@ private fun globalPacket(number: Int = 1, text: String = "Hello", mention: Boole
 }
 
 fun checkGlobalChat() {
+    checkIrcEmojiInput()
     val packet = globalPacket(text = "Update\nEmbed title: Something new\nhttps://example.com/update", mention = true).apply {
         add("reply", JsonObject().apply { addProperty("from", "MinecraftUser"); addProperty("text", "Anyone running F7?") })
         addProperty("discordId", "private-metadata") // Public rendering never incorporates extra fields.

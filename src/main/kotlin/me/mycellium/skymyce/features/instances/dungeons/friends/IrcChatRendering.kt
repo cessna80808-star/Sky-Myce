@@ -98,7 +98,7 @@ internal fun ircPassiveText(source: Component): Component = Component.empty().ap
         java.util.Optional.empty()
     }, net.minecraft.network.chat.Style.EMPTY)
 }
-private fun ircDisplayText(text: String, color: Int): MutableComponent {
+internal fun ircDisplayText(text: String, color: Int): MutableComponent {
     val parts = ircReadableText(text)
     if (parts.none { it.emoji }) return Component.literal(parts.joinToString("") { it.text }).withColor(color)
     return Component.empty().apply {
@@ -107,6 +107,9 @@ private fun ircDisplayText(text: String, color: Int): MutableComponent {
         })
     }
 }
+
+internal fun ircReactionText(reaction: IrcReaction): MutableComponent =
+    ircDisplayText("${reaction.emoji} ${reaction.count}", 0x68B9F5)
 
 internal fun ircMessageHeader(message: GlobalChatMessage, highlight: Boolean): MutableComponent {
     val name = if (message.source == "discord") "@${message.from}" else message.from
@@ -138,9 +141,11 @@ object IrcChatRendering {
     private data class Texture(val texture: MenuTexture, var asset: IrcGif, var seen: Long,
         var elapsedNanos: Long = 0, var lastNanos: Long = System.nanoTime())
     private val textures = linkedMapOf<String, Texture>()
+    private val compactMediaLayouts = linkedMapOf<String, Set<Int>>()
     private var frame = 0L
     private var preferences = ""
     private var nextHistoryPrune = 0L
+    private var mediaRevision = -1L
     private var initialized = false
     private val taggedMessage = ThreadLocal.withInitial { false }
 
@@ -180,7 +185,7 @@ object IrcChatRendering {
                     if (media != null) {
                         val state = IrcMediaAssets.view(media, false)
                         val text = "${media.name ?: media.type.uppercase()} · Click to view" +
-                            if (state.status == IrcMediaAssetStatus.FAILED || state.status == IrcMediaAssetStatus.UNSUPPORTED) "\n${state.detail.orEmpty()}" else ""
+                            if (compactIrcMedia(state.status)) "\n${state.detail.orEmpty()}" else ""
                         output.setTooltipForNextFrame(Component.literal(text), mouseX, mouseY)
                     }
                 }
@@ -215,10 +220,12 @@ object IrcChatRendering {
     fun clear() {
         IrcInlineControls.clear()
         textures.values.forEach { it.texture.close() }; textures.clear()
+        compactMediaLayouts.clear()
         val chat = accessor()
         if (chat.`skymyce$getMessages`().removeIf { it.tag()?.logTag()?.startsWith("skymyce:irc:") == true }) refresh(chat)
     }
     internal fun clearScope(scope: String) {
+        compactMediaLayouts.keys.removeIf { it.startsWith("skymyce:irc:$scope:") }
         textures.keys.filter { it.startsWith("skymyce:irc:$scope:") }.forEach { textures.remove(it)?.texture?.close() }
         val chat = accessor()
         if (chat.`skymyce$getMessages`().removeIf { it.tag()?.logTag()?.startsWith("skymyce:irc:$scope:") == true }) refresh(chat)
@@ -227,6 +234,8 @@ object IrcChatRendering {
         val current = "${GlobalChatConfig.mediaPreviews}|${GlobalChatConfig.previewSize}|${GlobalChatConfig.mentionHighlight}|${DungeonFriendRelay.richChatAvailable}|${MC.instance.options.chatWidth().get()}|${MC.instance.options.chatScale().get()}|${MC.instance.options.chatLineSpacing().get()}"
         val changed = current != preferences
         preferences = current
+        val currentMediaRevision = IrcMediaAssets.revision
+        val assetsChanged = currentMediaRevision != mediaRevision
         val chat = accessor()
         val now = System.nanoTime()
         val historyPruned = now >= nextHistoryPrune
@@ -236,13 +245,16 @@ object IrcChatRendering {
             RelayMessages.chatStore.retain(tags, System.currentTimeMillis())
         }
         if (changed || historyPruned) {
+            mediaRevision = currentMediaRevision
             val known = RelayMessages.chatStore.values().associateBy { it.key.tag }
             var modified = false
             for (index in chat.`skymyce$getMessages`().indices) {
                 val previous = chat.`skymyce$getMessages`()[index]
                 val tag = previous.tag()?.logTag()?.takeIf { it.startsWith("skymyce:irc:") } ?: continue
                 val message = known[tag]
-                if (message != null && changed) {
+                val mediaChanged = message != null && GlobalChatConfig.mediaPreviews && assetsChanged &&
+                    compactMediaIndices(message) != compactMediaLayouts[tag].orEmpty()
+                if (message != null && (changed || mediaChanged)) {
                     chat.`skymyce$getMessages`()[index] = GuiMessage(previous.addedTime(), component(message), previous.signature(), previous.source(), previous.tag())
                     modified = true
                 } else if (message == null && previous.content().style.clickEvent == null) {
@@ -278,6 +290,11 @@ object IrcChatRendering {
         val result = prefixComponent(message.scope)
         result.append(ircMessageHeader(message, GlobalChatConfig.mentionHighlight))
         if (message.deleted) return result.append(Component.literal("Message deleted").withColor(0x969DA8).withStyle { it.withItalic(true) })
+        val compactMedia = if (GlobalChatConfig.mediaPreviews) compactMediaIndices(message) else emptySet()
+        if (message.media.isNotEmpty()) {
+            compactMediaLayouts[message.key.tag] = compactMedia
+            while (compactMediaLayouts.size > 1024) compactMediaLayouts.remove(compactMediaLayouts.keys.first())
+        }
         val representedMedia = hashSetOf<Int>()
         for (span in ircBodySpans(message.text, message.media, GlobalChatConfig.mediaPreviews)) {
             val url = span.url
@@ -302,13 +319,20 @@ object IrcChatRendering {
         }
         if (message.model == 1 && DungeonFriendRelay.richChatAvailable) {
             for (reaction in message.reactions.filter { it.count > 0 })
-                result.append(actionStyle("  ${IRC_REACTION_NAMES[IRC_REACTIONS.indexOf(reaction.emoji)]} ${reaction.count}",
-                    IrcChatAction("react", message.scope, message.id), "${if (reaction.mine) "Remove or change" else "Add"} reaction"))
+                result.append("  ").append(ircReactionText(reaction).withStyle {
+                    it.withClickEvent(ClickEvent.RunCommand(IrcChatAction("react", message.scope, message.id).command))
+                        .withHoverEvent(HoverEvent.ShowText(Component.literal("${if (reaction.mine) "Remove or change" else "Add"} reaction")))
+                })
             result.append(ircMessageActions(message, RelayMessages.canManage(message.key)))
         }
         message.media.forEachIndexed { index, media ->
             if (GlobalChatConfig.mediaPreviews) {
                 val label = when (media.type) { "gif" -> "GIF"; "video" -> "Video"; else -> "Image" }
+                if (index in compactMedia) {
+                    result.append("\n").append(actionStyle("[$label preview unavailable]", IrcChatAction("media", message.scope, message.id, index),
+                        IrcMediaAssets.view(media, false).detail ?: "Open the media viewer for details"))
+                    return@forEachIndexed
+                }
                 val layout = thumbnailLayout()
                 val fullTitle = "[$label ${index + 1}]"
                 val title = layout.title(fullTitle, MC.instance.font.width(fullTitle), index)
@@ -324,6 +348,9 @@ object IrcChatRendering {
             }
         }
         return result
+    }
+    private fun compactMediaIndices(message: GlobalChatMessage): Set<Int> = message.media.indices.filterTo(linkedSetOf()) {
+        compactIrcMedia(IrcMediaAssets.view(message.media[it], false).status)
     }
 
     private fun actionAt(mouseX: Int, mouseY: Int): IrcChatAction? {
@@ -367,6 +394,7 @@ object IrcChatRendering {
             IrcMediaAssets.request(media, false)
             val state = IrcMediaAssets.view(media, false)
             val asset = state.asset
+            if (asset == null && compactIrcMedia(state.status)) continue
             val layout = thumbnailLayout()
             val scissor = anchor.rectangle(layout.width)
             if (scissor.width() <= 0 || scissor.height() <= 0) continue

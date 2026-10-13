@@ -32,7 +32,7 @@ class HealerCrushSequence {
         private set
     private var context: CrushEncounterContext? = null
     private var phaseStarted = 0L
-    private var purpleCrushed = false
+    private var yellowAt = 0L
     private var lastCrushSerial = 0L
 
     fun context(value: CrushEncounterContext, now: Long) {
@@ -44,13 +44,14 @@ class HealerCrushSequence {
 
     fun stormStarted(now: Long) {
         if (context?.eligible != true || stormActive) return
-        stormActive = true; phaseStarted = now; purpleCrushed = false; lastCrushSerial = 0L
+        stormActive = true; phaseStarted = now; yellowAt = now + 38_000L; lastCrushSerial = 0L
         tick(now)
     }
 
     fun crushed(serial: Long, now: Long) {
         if (!stormActive || serial <= lastCrushSerial) return
-        lastCrushSerial = serial; purpleCrushed = true
+        if (lastCrushSerial == 0L && now < yellowAt) yellowAt = now + 1_000L
+        lastCrushSerial = serial
         tick(now)
     }
 
@@ -60,12 +61,13 @@ class HealerCrushSequence {
         if (elapsed < 0L) { reset("Storm clock changed; waiting for the next encounter"); return }
         if (context?.viewpointsReady != true) { stage = null; status = "Save both purple and yellow viewpoints: /sm crush-camera"; return }
         if (elapsed < 26_000L) { stage = null; status = "Waiting for 26 seconds elapsed in Storm's phase"; return }
-        stage = if (purpleCrushed) CrushStage.YELLOW else CrushStage.PURPLE
-        status = "${if (purpleCrushed) "Yellow" else "Purple"} crush view; visible until Storm dies"
+        val yellow = now >= yellowAt
+        stage = if (yellow) CrushStage.YELLOW else CrushStage.PURPLE
+        status = "${if (yellow) "Yellow" else "Purple"} crush view; visible until Storm dies"
     }
 
     fun reset(reason: String = "Storm encounter ended") {
-        stage = null; stormActive = false; phaseStarted = 0L; purpleCrushed = false; lastCrushSerial = 0L; status = reason
+        stage = null; stormActive = false; phaseStarted = 0L; yellowAt = 0L; lastCrushSerial = 0L; status = reason
     }
 }
 
