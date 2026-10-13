@@ -4,9 +4,29 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
+import net.minecraft.client.Camera;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
+import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.PlayerModelType;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import java.util.HashMap;
+import java.util.Map;
 
 public final class CameraRenderCheck {
     public static void main(String[] args) {
+        checkDispatcherOwnership();
         int[] overlayCalls = {0};
         Object[] overlays = {
             (LevelRenderEvents.AfterBlockOutlineExtraction) (context, hit) -> overlayCalls[0]++,
@@ -136,7 +156,97 @@ public final class CameraRenderCheck {
         reject(() -> CameraMath.projection(70, 0, 360, 64, false));
         reject(() -> CameraMath.projection(70, 640, 360, Float.NaN, false));
         reject(() -> CameraMath.targetSize(100, 100, Double.POSITIVE_INFINITY));
-        System.out.println("Camera rendering checks passed: scoped render distance and terrain projection, independent rotations, Minecraft yaw/pitch, both depth conventions, aspect, target bounds, and invalid views.");
+        System.out.println("Camera rendering checks passed: dispatcher/cache ownership after teardown, avatar selection, scoped render distance and terrain projection, independent rotations, Minecraft yaw/pitch, both depth conventions, aspect, target bounds, and invalid views.");
+    }
+
+    private static void checkDispatcherOwnership() {
+        try {
+            // Construct only the dispatch/lookup objects: no Minecraft instance, registries, assets or GL context.
+            var field = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+            field.setAccessible(true);
+            var allocator = (sun.misc.Unsafe) field.get(null);
+            var main = (EntityRenderDispatcher) allocator.allocateInstance(EntityRenderDispatcher.class);
+            var secondary = (SecondaryEntityRenderDispatcher) allocator.allocateInstance(SecondaryEntityRenderDispatcher.class);
+            var mainRenderer = (LookupRenderer) allocator.allocateInstance(LookupRenderer.class);
+            var localRenderer = (LookupRenderer) allocator.allocateInstance(LookupRenderer.class);
+            putMap(EntityRenderDispatcher.class, main, "renderers", mainRenderer);
+            // A singleton-oriented superclass cache must never be the secondary view's lookup source.
+            putMap(EntityRenderDispatcher.class, secondary, "renderers", mainRenderer);
+            putMap(SecondaryEntityRenderDispatcher.class, secondary, "localRenderers", localRenderer);
+            var mainCamera = (Camera) allocator.allocateInstance(Camera.class);
+            var secondaryCamera = (Camera) allocator.allocateInstance(Camera.class);
+            main.prepare(mainCamera, null);
+            secondary.prepare(secondaryCamera, null);
+            var state = new EntityRenderState();
+            require(main.getRenderer(state) == mainRenderer && secondary.getRenderer(state) == localRenderer,
+                "main and secondary extracted entities use distinct dispatcher-local renderers");
+            secondary.resetCamera();
+            require(main.camera == mainCamera && secondary.camera == null && main.getRenderer(state) == mainRenderer,
+                "secondary teardown cannot clear the main renderer's camera or replace its renderer");
+            require(secondary.getRenderer(state) == localRenderer, "teardown does not redirect secondary lookup to a shared cache");
+
+            var mainBlocks = (BlockEntityRenderDispatcher) allocator.allocateInstance(BlockEntityRenderDispatcher.class);
+            var secondaryBlocks = (SecondaryBlockEntityRenderDispatcher) allocator.allocateInstance(SecondaryBlockEntityRenderDispatcher.class);
+            var mainBlock = new LookupBlockRenderer();
+            var localBlock = new LookupBlockRenderer();
+            putMap(BlockEntityRenderDispatcher.class, mainBlocks, "renderers", mainBlock);
+            putMap(BlockEntityRenderDispatcher.class, secondaryBlocks, "renderers", mainBlock);
+            putMap(SecondaryBlockEntityRenderDispatcher.class, secondaryBlocks, "localRenderers", localBlock);
+            var blockState = (BlockEntityRenderState) allocator.allocateInstance(BlockEntityRenderState.class);
+            require(mainBlocks.getRenderer(blockState) == mainBlock && secondaryBlocks.getRenderer(blockState) == localBlock,
+                "block-entity state lookup also ignores the main view's cache");
+
+            Object wide = new Object(), slim = new Object();
+            var avatars = Map.of(PlayerModelType.WIDE, wide, PlayerModelType.SLIM, slim);
+            require(SecondaryEntityRenderDispatcher.avatarRenderer(avatars, PlayerModelType.WIDE) == wide &&
+                SecondaryEntityRenderDispatcher.avatarRenderer(avatars, PlayerModelType.SLIM) == slim,
+                "both player and mannequin maps retain the selected vanilla skin model");
+            require(SecondaryEntityRenderDispatcher.avatarRenderer(Map.of(PlayerModelType.WIDE, wide), PlayerModelType.SLIM) == wide,
+                "a missing skin model retains vanilla's wide fallback");
+            require(SecondaryEntityRenderDispatcher.avatarRenderer(Map.of(), PlayerModelType.WIDE) == null,
+                "an unavailable avatar renderer remains unavailable");
+            checkOwnedDispatcherBytecode(SecondaryEntityRenderDispatcher.class, 3, 3);
+            checkOwnedDispatcherBytecode(SecondaryBlockEntityRenderDispatcher.class, 1, 2);
+        } catch (ReflectiveOperationException | java.io.IOException failure) { throw new AssertionError(failure); }
+    }
+
+    private static void putMap(Class<?> owner, Object dispatcher, String name, Object renderer) throws ReflectiveOperationException {
+        var field = owner.getDeclaredField(name);
+        field.setAccessible(true);
+        var map = new HashMap<>();
+        map.put(null, renderer); // A synthetic type key avoids initializing the game registry in this lookup fixture.
+        field.set(dispatcher, map);
+    }
+
+    private static void checkOwnedDispatcherBytecode(Class<?> owner, int factoryCalls, int lookups) throws java.io.IOException {
+        int[] factories = {0}, methods = {0};
+        try (var source = owner.getResourceAsStream("/" + owner.getName().replace('.', '/') + ".class")) {
+            new ClassReader(java.util.Objects.requireNonNull(source)).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                    if (!name.equals("onResourceManagerReload") && !name.equals("getRenderer") && !name.equals("getPlayerRenderer")) return null;
+                    if (name.equals("getRenderer") || name.equals("getPlayerRenderer")) methods[0]++;
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override public void visitMethodInsn(int opcode, String target, String method, String desc, boolean itf) {
+                            require(!(opcode == Opcodes.INVOKESPECIAL && target.equals(owner.getSuperclass().getName().replace('.', '/'))),
+                                "owned reload/lookup must not invoke singleton-oriented superclass hooks");
+                            if (name.equals("onResourceManagerReload") && (method.equals("createEntityRenderers") || method.equals("createAvatarRenderers"))) factories[0]++;
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        }
+        require(factories[0] == factoryCalls && methods[0] == lookups,
+            "all entity/state/avatar lookups are owned, and reload keeps public registered-renderer factories");
+    }
+
+    private static final class LookupRenderer extends EntityRenderer<Entity, EntityRenderState> {
+        private LookupRenderer() { super(null); }
+        @Override public EntityRenderState createRenderState() { return new EntityRenderState(); }
+    }
+
+    private static final class LookupBlockRenderer implements BlockEntityRenderer<BlockEntity, BlockEntityRenderState> {
+        @Override public BlockEntityRenderState createRenderState() { return null; }
+        @Override public void submit(BlockEntityRenderState state, PoseStack pose, SubmitNodeCollector submits, CameraRenderState camera) { }
     }
 
     private static void invokeOverlay(Class<?> event, Object invoker) {
