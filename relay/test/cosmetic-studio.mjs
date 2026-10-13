@@ -35,7 +35,7 @@ export async function checkCosmeticStudio(script, proof) {
     const socket=async(version,room='friends')=>{const response=await mf.dispatchFetch(`https://studio.test/websocket?room=${room}`,{headers:{Upgrade:'websocket','CF-Connecting-IP':String(sequence++)}});const ws=response.webSocket;assert.equal(response.status,101);sockets.push(ws);
       const queue=[],waits=[];ws.addEventListener('message',event=>{const data=JSON.parse(event.data),next=waits.shift();next?next(data):queue.push(data);});
       const next=()=>queue.length?Promise.resolve(queue.shift()):new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Studio socket timeout')),4000);waits.push(data=>{clearTimeout(timer);resolve(data);});});ws.accept();const c=await next();
-      ws.send(JSON.stringify({...proof('Alice',c.serverId),communityToken:token,cosmetics:true,cosmeticsVersion:version}));assert.equal((await next()).cosmeticsVersion,4);
+      ws.send(JSON.stringify({...proof('Alice',c.serverId),communityToken:token,cosmetics:true,cosmeticsVersion:version}));assert.equal((await next()).cosmeticsVersion,5);
       const requestId=randomBytes(16).toString('hex');ws.send(JSON.stringify({type:'cosmetics_get',id:requestId,uuids:[alice.identity.uuid]}));assert.equal((await next()).id,requestId);return {ws,next};};
     const modern=await socket(4),old=await socket(3,'testing');
     assert.equal((await call('/community/cosmetics',{method:'GET'})).body.ok,false,'Missing credentials fail closed');

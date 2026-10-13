@@ -63,15 +63,16 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         if (!current()) return
         if (!minecraft.options.chatLinks().get()) { browserDisabled = true; return }
         browserDisabled = false
+        val original = media.sourceUrl ?: media.url
         if (minecraft.options.chatLinksPrompt().get()) {
             minecraft.setScreen(ConfirmLinkScreen({ confirmed ->
                 if (!current()) closeExpired()
                 else {
-                    if (confirmed) Util.getPlatform().openUri(media.url)
+                    if (confirmed) Util.getPlatform().openUri(original)
                     minecraft.setScreen(this)
                 }
-            }, media.url.toString(), false))
-        } else Util.getPlatform().openUri(media.url)
+            }, original.toString(), false))
+        } else Util.getPlatform().openUri(original)
     }
 
     private fun fit() { zoom = 1.0; panX = 0.0; panY = 0.0 }

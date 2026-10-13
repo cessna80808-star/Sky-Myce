@@ -37,6 +37,9 @@ internal fun hudEditorCoordinate(pointer: Double, grabOffset: Int, anchor: Float
     return position.coerceIn(min(edge, edge + screenSize - size), max(edge, edge + screenSize - size))
 }
 
+internal fun hudEditorResizeAt(x: Double, y: Double, left: Int, top: Int, width: Int, height: Int): Boolean =
+    width > 0 && height > 0 && x >= left + width - 10 && x < left + width && y >= top + height - 10 && y < top + height
+
 internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
     val toolbarWidth = (screenWidth - 16).coerceIn(1, 208)
     val helpHeight = hudEditorHelp(screenWidth).size * MenuCanvas.lineHeight()
@@ -53,6 +56,9 @@ internal fun hudEditorHelp(screenWidth: Int) = menuTextLines(Component.literal(
 class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instance, MC.font, Component.literal("Widget Editor")) {
     private var selectedWidget: Widget? = null
     private var clickedWidget: Widget? = null
+    private var resizingWidget: Widget? = null
+    private var resizeLeft = 0
+    private var resizeTop = 0
     private var selectedAnchor: Anchor? = null
     private var screenWidgets: List<Widget> = emptyList()
     private var helpLines = emptyList<FormattedCharSequence>()
@@ -76,6 +82,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         ui?.dispose()
         selectedWidget = null
         clickedWidget = null
+        resizingWidget = null
         selectedAnchor = null
         snapPosition = false
         anchorSelect = false
@@ -103,6 +110,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     }
 
     override fun removed() {
+        resizingWidget?.resizeFinished?.invoke(); resizingWidget = null
         appearance.cancel(); controls.cancel(); tooltip.clear(); closing = false
         canvas.close()
         texture.close()
@@ -114,7 +122,8 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
 
     override fun onClose() {
         if (closing) return
-        closing = true; clickedWidget = null; selectedAnchor = null; anchorSelect = false; snapPosition = false
+        resizingWidget?.resizeFinished?.invoke()
+        closing = true; clickedWidget = null; resizingWidget = null; selectedAnchor = null; anchorSelect = false; snapPosition = false
         appearance.animateTo(0.0, 120, MotionEasing.QUICK, ThemeConfig.animationMode)
         if (!appearance.running && MC.screen === this) navigateMenu(parent)
     }
@@ -142,6 +151,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
                 if (!widget.render(output, mouseX, mouseY, a, editor = true)) return@forEach
                 val outlineColor = MenuTheme.alpha(if (clickedWidget == widget || selectedWidget == widget) MenuTheme.ACCENT else MenuTheme.MUTED)
                 graphics.outline(widget.renderX, widget.renderY, widget.width, widget.height, outlineColor)
+                if (widget.resizeHandler != null) graphics.outline(widget.renderX + widget.width - 8, widget.renderY + widget.height - 8, 7, 7, outlineColor)
                 if (selectedWidget == widget || clickedWidget == widget) {
                     val labelY = (widget.renderY + widget.height + 4).coerceAtMost(height - MenuCanvas.lineHeight()).coerceAtLeast(0)
                     graphics.text(MC.font, "${widget.title}${if (widget.visible) "" else " [hidden in gameplay]"} | X: ${widget.x} Y: ${widget.y} Scale: ${widget.scale}",
@@ -199,6 +209,13 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             return true
         }
         if (button.button() != 0) return false
+        val resize = screenWidgets.asReversed().firstOrNull { widget -> widget.resizeHandler != null &&
+            hudEditorResizeAt(button.x, button.y, widget.renderX, widget.renderY, widget.width, widget.height) }
+        if (resize != null) {
+            resizingWidget = resize
+            resizeLeft = resize.renderX; resizeTop = resize.renderY
+            return true
+        }
         clickedWidget = screenWidgets.asReversed().firstOrNull {
             it.inBounds(button.x.toInt(), button.y.toInt())
         }
@@ -211,6 +228,9 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
 
     override fun mouseReleased(button: MouseButtonEvent): Boolean {
         if (closing) return true
+        if (button.button() == 0 && resizingWidget != null) {
+            resizingWidget?.resizeFinished?.invoke(); resizingWidget = null; WidgetManager.save(); return true
+        }
         if (button.button() == 0 && clickedWidget != null) {
             clickedWidget = null
             return true
@@ -221,11 +241,19 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     // Minecraft 26.1 consumes clicks whenever getChildAt finds a child, even if it declines the click.
     // Keep vanilla focus/drag handling for actual controls, and pass empty space to HUD hit testing.
     override fun getChildAt(x: Double, y: Double): Optional<GuiEventListener> =
-        super.getChildAt(x, y).filter { it !== ui || hudEditorControlAt(ui?.rootComponent, x, y, controlsVisible && clickedWidget == null) }
+        super.getChildAt(x, y).filter { it !== ui || hudEditorControlAt(ui?.rootComponent, x, y, controlsVisible && clickedWidget == null && resizingWidget == null) }
 
     override fun mouseDragged(button: MouseButtonEvent, offsetX: Double, offsetY: Double): Boolean {
         if (closing) return true
         if (button.button() == 0) {
+            resizingWidget?.let { widget ->
+                widget.resizeHandler?.invoke(((button.x - resizeLeft) / widget.scale).toInt(), ((button.y - resizeTop) / widget.scale).toInt())
+                widget.prepareEditor()
+                // Resize from a stable corner even for right/bottom anchors.
+                widget.x = resizeLeft + (widget.anchor.x * widget.width).toInt()
+                widget.y = resizeTop + (widget.anchor.y * widget.height).toInt()
+                return true
+            }
             clickedWidget?.let { widget ->
                 widget.x = hudEditorCoordinate(button.x, mouseRelX, widget.anchor.x, widget.width, width, snapPosition)
                 widget.y = hudEditorCoordinate(button.y, mouseRelY, widget.anchor.y, widget.height, height, snapPosition)

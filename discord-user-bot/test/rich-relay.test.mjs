@@ -299,6 +299,63 @@ test('per-message mutations remain ordered and permanent permission failures ret
   assert.deepEqual(failed.packets('discord_operation_result'), [{ type: 'discord_operation_result', id: operationId(3), scope: 'global', room: GLOBAL_ROOM, channelId, error: 'not_authorized' }]);
 });
 
+test('a failed edit survives a newer reaction and restart, preserving the reaction footer and durable deletion', async t => {
+  const { receipts, path } = await storage(t); await owned(receipts);
+  let unavailable = true;
+  const d = discordFixture({ messageExtra: { async edit(body) {
+    d.calls.push({ kind: 'edit', body });
+    if (unavailable) { unavailable = false; throw Object.assign(new Error('Offline'), { code: 'ECONNRESET' }); }
+    this.embeds = body.embeds; return this;
+  } } });
+  const first = bridgeFixture(t, { receipts, onOperation: packet => applyDiscordOperation(packet, d.context(receipts)) });
+  first.capabilities(); first.receive(operation()); await drain(first.bridge);
+  assert.equal(receipts.operation(operationId(1)), undefined);
+  assert.equal(d.message.embeds[0].description, 'old body');
+  first.receive(operation(GLOBAL_ROOM, { id: operationId(2), revision: 2, operation: 'reaction', emoji: '👍', active: true,
+    reactions: [{ emoji: '👍', count: 2 }] })); await drain(first.bridge);
+  assert.equal(d.message.embeds[0].description, 'old body');
+  assert.equal(d.message.embeds[0].footer.text, 'Minecraft · Sky-Myce Global · 👍 2');
+  assert.equal(receipts.metadata(canonical).bodyRevision, undefined);
+  assert.equal(receipts.metadata(canonical).reactionRevisions['👍'], 2);
+  first.bridge.close();
+  const restored = await new DeliveryReceipts(path, () => 1000).load();
+  const next = bridgeFixture(t, { receipts: restored, onOperation: packet => applyDiscordOperation(packet, d.context(restored)) });
+  next.capabilities(); next.receive(operation()); await drain(next.bridge);
+  assert.equal(d.message.embeds[0].description, 'new body', 'A reaction receipt must not ACK an unapplied body');
+  assert.equal(d.message.embeds[0].footer.text, 'Minecraft · Sky-Myce Global · 👍 2');
+  assert.equal(restored.metadata(canonical).bodyRevision, 1);
+  assert.equal(restored.metadata(canonical).revision, 2);
+  const edits = d.calls.filter(item => item.kind === 'edit').length;
+  next.receive(operation()); await drain(next.bridge);
+  assert.equal(d.calls.filter(item => item.kind === 'edit').length, edits);
+  next.receive(operation(GLOBAL_ROOM, { id: operationId(3), revision: 3, operation: 'delete' })); await drain(next.bridge);
+  const deleted = await new DeliveryReceipts(path, () => 1000).load();
+  assert.equal(deleted.metadata(canonical).deletedRevision, 3);
+  const final = bridgeFixture(t, { receipts: deleted, onOperation: async () => assert.fail('A durable tombstone must suppress every later mutation') });
+  final.capabilities(); final.receive(operation(GLOBAL_ROOM, { id: operationId(4), revision: 4 }));
+  final.receive(operation(GLOBAL_ROOM, { id: operationId(5), revision: 5, operation: 'reaction', emoji: '🔥', active: true }));
+  await drain(final.bridge); assert.equal(final.packets('discord_operation_ack').length, 2);
+});
+
+test('different emoji retry progress remains independent without reverting the newest reaction summary', async t => {
+  const { receipts, path } = await storage(t); await owned(receipts);
+  const d = discordFixture();
+  const f = bridgeFixture(t, { receipts, onOperation: packet => applyDiscordOperation(packet, d.context(receipts)) });
+  f.capabilities();
+  f.receive(operation(GLOBAL_ROOM, { id: operationId(3), revision: 3, operation: 'reaction', emoji: '👍', active: false,
+    reactions: [{ emoji: '🔥', count: 1 }] })); await drain(f.bridge);
+  const footer = d.message.embeds[0].footer.text;
+  f.receive(operation(GLOBAL_ROOM, { id: operationId(2), revision: 2, operation: 'reaction', emoji: '🔥', active: true,
+    reactions: [{ emoji: '👍', count: 1 }, { emoji: '🔥', count: 1 }] })); await drain(f.bridge);
+  assert.deepEqual(d.calls.filter(item => ['put', 'remove'].includes(item.kind)).map(item => item.kind), ['remove', 'put']);
+  assert.equal(d.message.embeds[0].footer.text, footer);
+  f.receive(operation(GLOBAL_ROOM, { id: operationId(1), revision: 1, operation: 'reaction', emoji: '👍', active: true })); await drain(f.bridge);
+  assert.equal(d.calls.filter(item => item.kind === 'put').length, 1);
+  const restored = await new DeliveryReceipts(path, () => 1000).load();
+  assert.deepEqual(restored.metadata(canonical).reactionRevisions, { '👍': 3, '🔥': 2 });
+  assert.equal(restored.metadata(canonical).reactionSummaryRevision, 3);
+});
+
 test('a delayed older human-message reaction cannot undo the newer Discord state', async t => {
   const { receipts } = await storage(t);
   await receipts.rememberSource(destination, { room: GLOBAL_ROOM, channelId, authorId: human, name: 'Human', revision: 0 });
@@ -318,6 +375,8 @@ test('failed receipt writes expose no successful delivery or operation until dur
   await assert.rejects(receipts.recordOperation(operationId(1), canonical, 1, destination));
   assert.equal(receipts.operation(operationId(1)), undefined);
   assert.equal(receipts.metadata(canonical).revision, 0);
+  assert.equal(receipts.metadata(canonical).bodyRevision, undefined);
+  assert.equal(receipts.metadata(canonical).reactionSummaryRevision, undefined);
   const other = 'd'.repeat(32);
   await assert.rejects(receipts.record(other, stranger, { room: GLOBAL_ROOM, channelId, authorId: bot, revision: 0 }));
   assert.equal(receipts.get(other), undefined);

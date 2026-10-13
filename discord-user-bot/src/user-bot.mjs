@@ -4,6 +4,7 @@ import { RelayBridge, discordPacket } from './relay.mjs';
 import { DeliveryReceipts, GLOBAL_ROOM, globalEmbedPacket, resolveDiscordReply } from './global-chat.mjs';
 import { applyDiscordOperation, descriptionFingerprint, discordEventId, gatewayMessage, messageSnapshot, nativeDiscordOperation } from './chat-operations.mjs';
 import { CommunityFeed, communityFeedReceipts } from './community-feed.mjs';
+import { PendingDiscordCreates } from './native-create.mjs';
 
 let config;
 try { config = configuration(process.env); }
@@ -12,6 +13,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
   allowedMentions: { parse: [], repliedUser: false } });
 const bridges = new Map(), pending = new Map();
 const nativeTasks = new Map(), sourceMessages = new Map(), expectedEdits = new Map(), gatewaySessions = new Map();
+const pendingCreates = new PendingDiscordCreates();
 let nativeJobs = 0;
 const userRate = new RateLimit(config.limits.userBurst, config.limits.userRefillMs);
 const globalRate = new RateLimit(config.limits.globalBurst, config.limits.globalRefillMs, 1);
@@ -70,7 +72,7 @@ function shutdown() {
   for (const bridge of bridges.values()) bridge.close();
   bridges.clear();
   for (const item of pending.values()) { clearTimeout(item.timer); item.resolve?.(false); }
-  pending.clear(); nativeTasks.clear(); sourceMessages.clear(); expectedEdits.clear(); gatewaySessions.clear(); client.destroy();
+  pending.clear(); nativeTasks.clear(); pendingCreates.clear(); sourceMessages.clear(); expectedEdits.clear(); gatewaySessions.clear(); client.destroy();
 }
 function start() { void startBridges().catch(() => { console.error('Sky-Myce startup failed. Check application, guild, channel permissions and relay configuration.'); shutdown(); process.exitCode = 1; }); }
 client.once(Events.ClientReady, start);
@@ -96,23 +98,45 @@ client.on(Events.MessageCreate, message => {
     if (room !== GLOBAL_ROOM && message.author?.bot) return;
     if (room !== GLOBAL_ROOM && !userRate.allow(message.author.id)) { void notice(message, 'Please wait before sending another bridge message.'); return; }
     if (pending.has(message.id) || nativeTasks.has(message.id)) return;
-    if (pending.size >= 128 || !nativeTask(message.id, async () => {
-      if (!await bridge.whenCapabilitiesReady()) { await notice(message); return; }
-      const withReply = await resolveDiscordReply(message, config.guild, config.channels[room]);
-      const packet = discordPacket(withReply, config.guild, config.channels[room], room, config.limits.outboundLength, bridge.richChatVersion === 1);
-      if (!packet) {
-        if (room !== GLOBAL_ROOM) await notice(message, `Bridge messages must be plain text of 1–${config.limits.outboundLength} characters without control/formatting codes.`);
-        return;
-      }
-      const snapshot = messageSnapshot(message); snapshot.text = packet.text; snapshot.media = packet.media;
-      sourceMessages.set(packet.id, { snapshot, expires: Date.now() + 120000 }); pruneNative();
-      if (bridge.richChatVersion === 1) await bridge.receipts.rememberSource(packet.id, { room, channelId: config.channels[room], authorId: message.author.id, name: packet.from });
-      if (!bridge.send(packet)) { await notice(message); return; }
-      await new Promise(resolve => {
-        const timer = setTimeout(() => result(packet.id, 'timeout'), 10000);
-        pending.set(packet.id, { message, timer, resolve });
-      });
-    })) { void notice(message); return; }
+    const creation = pending.size < 128 ? pendingCreates.begin(message.id, room, config.channels[room]) : null;
+    if (!creation) { void notice(message); return; }
+    if (!nativeTask(message.id, async () => {
+      try {
+        if (!await bridge.whenCapabilitiesReady()) { await notice(message); return; }
+        const published = await pendingCreates.publish(creation, {
+          async resolve(changed) {
+            let current = message;
+            if (changed) {
+              const channel = await client.channels.fetch(config.channels[room]);
+              if (channel?.guildId !== config.guild || !channel.isSendable()) throw new Error('Channel unavailable');
+              current = await channel.messages.fetch({ message: message.id, force: true });
+            }
+            return resolveDiscordReply(current, config.guild, config.channels[room]);
+          },
+          async prepare(withReply) {
+            if (withReply?.id !== message.id || withReply?.author?.id !== message.author.id) return null;
+            const packet = discordPacket(withReply, config.guild, config.channels[room], room, config.limits.outboundLength, bridge.richChatVersion === 1);
+            if (!packet) {
+              if (room !== GLOBAL_ROOM) await notice(message, `Bridge messages must be plain text of 1–${config.limits.outboundLength} characters without control/formatting codes.`);
+              return null;
+            }
+            const snapshot = messageSnapshot(withReply); snapshot.text = packet.text; snapshot.media = packet.media;
+            if (bridge.richChatVersion === 1) await bridge.receipts.rememberSource(packet.id, { room, channelId: config.channels[room], authorId: message.author.id, name: packet.from });
+            return { packet, snapshot };
+          },
+          send({ packet, snapshot }) {
+            sourceMessages.set(packet.id, { snapshot, expires: Date.now() + 120000 }); pruneNative();
+            if (!bridge.send(packet)) { void notice(message); return false; }
+            return true;
+          },
+        });
+        if (!published) return;
+        await new Promise(resolve => {
+          const timer = setTimeout(() => result(message.id, 'timeout'), 10000);
+          pending.set(message.id, { message, timer, resolve });
+        });
+      } finally { pendingCreates.finish(creation); }
+    })) { pendingCreates.finish(creation); void notice(message); return; }
   }
 });
 client.on(Events.MessageUpdate, (previous, message) => {
@@ -131,10 +155,13 @@ client.on(Events.Raw, (dispatch, shardId) => {
   const [room, bridge] = entry, event = dispatch.t === 'MESSAGE_DELETE_BULK' ? 'MESSAGE_DELETE' : dispatch.t;
   const ids = dispatch.t === 'MESSAGE_DELETE_BULK' ? (Array.isArray(raw.ids) ? raw.ids : []).slice(0, 100) : [raw.id ?? raw.message_id];
   for (const messageId of ids) {
-    if (!/^\d{17,20}$/.test(messageId ?? '') || !bridge.receipts.source(messageId, room)) continue;
+    if (!/^\d{17,20}$/.test(messageId ?? '')) continue;
+    const creation = pendingCreates.observe(messageId, room, raw.channel_id, event);
+    if (!bridge.receipts.source(messageId, room) && !creation) continue;
     const data = { ...raw, id: messageId }; delete data.ids;
     const operationId = discordEventId(gatewaySessions.get(shardId) ?? `shard-${shardId}`, { ...dispatch, t: event, d: data });
     nativeTask(messageId, async () => {
+      if (creation && creation.status !== 'published') return;
       if (!await bridge.whenCapabilitiesReady() || bridge.richChatVersion !== 1) return;
       pruneNative();
       const source = bridge.receipts.source(messageId, room);

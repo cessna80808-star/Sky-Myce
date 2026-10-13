@@ -35,6 +35,11 @@ export const promptCommands = [
   { type: 3, name: 'Run prompt', default_member_permissions: '0', contexts: [0], integration_types: [0] },
 ];
 export const backendCommands = [
+  group('rng-test', ['dry-run', 'mock-delivery'].map(mode => sub(mode,
+    mode === 'dry-run' ? 'Validate a disposable RNG fixture without writing real reports' : 'Test presentation and retry suppression using an isolated mock transport', [
+      option('fixture', 'Choose a synthetic RNG fixture; use either fixture or input', 3, false, { choices: ['handle', 'warden-heart', 'duplicate', 'malformed'].map(value => ({ name: value, value })) }),
+      option('input', 'Optional normalized JSON report, at most 2000 characters; never a real publication', 3, false, { max_length: 2000 }),
+    ])), 'Administrator-only RNG tests; production statistics and Discord are never modified'),
   group('admin', [sub('add', 'Review granting this Discord user backend administrator access')], 'Manage Sky-Myce backend administrator accounts'),
   group('account', accountCommands, 'View private community account and device associations'),
   group('blacklist', [

@@ -8,11 +8,20 @@ const packetId = /^[a-f0-9]{32}$/;
 const unsafeDisplay = /[\x00-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/gu;
 const unsafeBody = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/gu;
 const noMentions = { parse: [], repliedUser: false };
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 function bounded(value, maximum, suffix = '') {
   if (value.length <= maximum) return value;
-  const prefix = value.slice(0, maximum - suffix.length);
-  return prefix.replace(/[\ud800-\udbff]$/u, '') + suffix;
+  const limit = maximum - suffix.length;
+  let end = 0;
+  for (const part of graphemes.segment(value)) {
+    if (part.index + part.segment.length > limit) break;
+    end = part.index + part.segment.length;
+  }
+  // A custom emoji is an inert source token, not a string of separately useful characters.
+  for (const match of value.matchAll(/<a?:[A-Za-z0-9_]{1,32}:\d{17,20}>/gu))
+    if (match.index < end && match.index + match[0].length > end) end = match.index;
+  return value.slice(0, end) + suffix;
 }
 function display(user, member) {
   const value = member?.displayName ?? user?.globalName ?? user?.username ?? 'Discord user';
@@ -29,7 +38,7 @@ function readable(value, message) {
     if (kind === '#') return `#${message.guild?.channels?.cache?.get(id)?.name ?? 'channel'}`;
     if (kind === '@&') return `@${message.guild?.roles?.cache?.get(id)?.name ?? 'role'}`;
     return `@${display(message.mentions?.users?.get?.(id), message.guild?.members?.cache?.get(id))}`;
-  }).replace(/<a?:([A-Za-z0-9_]{1,32}):\d{17,20}>/g, ':$1:');
+  }); // Preserve custom emoji name, animation marker and ID; Minecraft supplies its readable fallback.
 }
 const bodyUrl = /https?:\/\/[^\s<>"`]+/gu;
 function textLink(value, offset, text) {
@@ -150,11 +159,9 @@ export function globalDiscordPacket(message, guild, channel, ownBotId = message.
 export function globalEmbedPacket(previous, message, guild, channel, ownBotId = message.client?.user?.id) {
   if (!previous || previous.id !== message.id || previous.guildId !== guild || previous.channelId !== channel ||
       typeof previous.content !== 'string' || previous.content !== message.content || values(previous.embeds).length || !values(message.embeds).length) return null;
-  const packet = globalDiscordPacket({ id: message.id, guildId: message.guildId, channelId: message.channelId,
-    author: message.author, webhookId: message.webhookId, member: message.member, guild: message.guild,
-    content: '', embeds: message.embeds, mentions: message.mentions }, guild, channel, ownBotId,
-    Array.isArray(previous.links) ? previous.links : discordMessageLinks(previous));
-  return packet ? { ...packet, part: 'embeds', mentions: [] } : null;
+  const packet = globalDiscordPacket(message, guild, channel, ownBotId);
+  if (packet && packet.text === discordBody(previous) && JSON.stringify(packet.media) === JSON.stringify(discordMedia(previous))) return null;
+  return packet ? { ...packet, part: 'embeds', replacement: true, mentions: [], reply: undefined } : null;
 }
 export function globalMinecraftContent(packet) {
   if (packet?.type !== 'irc_message' || packet.scope !== 'global' || packet.room !== GLOBAL_ROOM || packet.source !== 'minecraft' ||
@@ -195,9 +202,12 @@ export function discordMedia(message) {
     const key = discordMediaKey(url), previous = chosen.get(key);
     if (!previous && chosen.size >= 4) return;
     const preferredUrl = previous && (!signedAttachment(url) || signedAttachment(previous.url)) ? previous.url : url;
-    const item = { ...previous, id: snowflake.test(raw.id ?? '') ? raw.id : previous?.id ?? `media-${chosen.size}`, type, url: preferredUrl };
+    const item = { ...previous, id: snowflake.test(raw.id ?? '') ? raw.id : previous?.id ??
+      `media-${createHash('sha256').update(key).digest('hex').slice(0, 32)}`, type, url: preferredUrl };
     const thumbnail = safeMediaUrl(raw.thumbnailUrl);
     if (thumbnail && type === 'video' && mediaType(undefined, thumbnail) !== 'video') item.thumbnailUrl = thumbnail;
+    const sourceUrl = safeMediaUrl(raw.sourceUrl);
+    if (sourceUrl && sourceUrl !== url) item.sourceUrl = sourceUrl;
     const name = raw.name ?? raw.filename;
     if (typeof name === 'string') item.name = bounded(name.replace(unsafeDisplay, ''), 80);
     const mime = raw.contentType ?? raw.content_type ?? raw.mime;
@@ -215,10 +225,10 @@ export function discordMedia(message) {
     const gif = safeMediaUrl(embed.thumbnail?.url);
     if (embed.type === 'gifv' && gif && mediaType(undefined, gif) === 'gif') {
       // Discord supplies the animated GIF alongside its video variant; use that actual GIF once.
-      add(gif, embed.thumbnail);
+      add(gif, { ...embed.thumbnail, sourceUrl: embed.url });
       continue;
     }
-    add(embed.video?.url, { ...embed.video, thumbnailUrl: embed.thumbnail?.url });
+    add(embed.video?.url, { ...embed.video, thumbnailUrl: embed.thumbnail?.url, ...(embed.type === 'gifv' ? { sourceUrl: embed.url } : {}) });
     add(embed.image?.url, embed.image);
     if (chosen.get(discordMediaKey(embed.video?.url))?.type !== 'video') add(embed.thumbnail?.url, embed.thumbnail);
     add(embed.url);
@@ -280,6 +290,14 @@ export function validBridgeOperation(packet, scope, room, now = Date.now()) {
     packet.timestamp <= now + 30000 && packet.timestamp > now - 120000 && Number.isSafeInteger(packet.expiresAt) &&
     packet.expiresAt > now && packet.expiresAt <= packet.timestamp + 120000 && ['edit', 'delete', 'reaction'].includes(packet.operation) &&
     (packet.operation !== 'reaction' || REACTION_EMOJI.includes(packet.emoji) && typeof packet.active === 'boolean');
+}
+/** Applied body and individual toggles are independent; a deletion supersedes every domain. */
+export function bridgeOperationApplied(metadata, packet) {
+  if (!metadata) return false;
+  if (metadata.deletedRevision !== undefined) return true;
+  if (packet.operation === 'edit') return (metadata.bodyRevision ?? 0) >= packet.revision;
+  if (packet.operation === 'reaction') return (metadata.reactionRevisions?.[packet.emoji] ?? 0) >= packet.revision;
+  return false;
 }
 /** Event identity must use the Discord session/sequence, or an otherwise stable source revision. */
 export function discordOperation(event, message, previous, id, guild, channel, ownBot) {
@@ -346,6 +364,10 @@ export class DeliveryReceipts {
     return !!value && typeof value === 'object' && !Array.isArray(value) && ['friends', 'testing', GLOBAL_ROOM].includes(value.room) &&
       snowflake.test(value.channelId ?? '') && snowflake.test(value.authorId ?? '') &&
       (value.revision === undefined || Number.isSafeInteger(value.revision) && value.revision >= 0) &&
+      ['bodyRevision', 'reactionSummaryRevision', 'deletedRevision'].every(key => value[key] === undefined ||
+        Number.isSafeInteger(value[key]) && value[key] >= (key === 'deletedRevision' ? 1 : 0) && value[key] <= (value.revision ?? 0)) &&
+      (value.reactionRevisions === undefined || value.reactionRevisions && typeof value.reactionRevisions === 'object' && !Array.isArray(value.reactionRevisions) &&
+        Object.entries(value.reactionRevisions).every(([emoji, revision]) => REACTION_EMOJI.includes(emoji) && Number.isSafeInteger(revision) && revision >= 1 && revision <= (value.revision ?? 0))) &&
       (value.name === undefined || typeof value.name === 'string' && value.name.length <= 64 && !/[\x00-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/u.test(value.name));
   }
   prune(maps = this) {
@@ -368,18 +390,29 @@ export class DeliveryReceipts {
     return this.persist(maps => maps.entries.set(id, { discordId, expires: this.now() + (metadata ? 900000 : this.receiptTtlMs), ...(metadata ? this.cleanMetadata(metadata) : {}) }));
   }
   cleanMetadata(value) {
-    return { room: value.room, channelId: value.channelId, authorId: value.authorId, revision: value.revision ?? 0, ...(value.name ? { name: value.name } : {}) };
+    return { room: value.room, channelId: value.channelId, authorId: value.authorId, revision: value.revision ?? 0, ...(value.name ? { name: value.name } : {}),
+      ...Object.fromEntries(['bodyRevision', 'reactionSummaryRevision', 'deletedRevision'].filter(key => value[key] !== undefined).map(key => [key, value[key]])),
+      ...(value.reactionRevisions !== undefined ? { reactionRevisions: { ...value.reactionRevisions } } : {}) };
   }
   async rememberSource(id, metadata) {
     if (!snowflake.test(id) || !this.validMetadata(metadata)) throw new Error('Invalid Discord source metadata');
     return this.persist(maps => maps.sources.set(id, { ...this.cleanMetadata(metadata), expires: this.now() + 900000 }));
   }
-  async recordOperation(id, messageId, revision, discordId) {
-    if (!packetId.test(id) || !packetId.test(messageId) || !Number.isSafeInteger(revision) || revision < 1 || !snowflake.test(discordId)) throw new Error('Invalid operation receipt');
+  async recordOperation(id, messageId, revision, discordId, operation = 'edit', emoji) {
+    if (!packetId.test(id) || !packetId.test(messageId) || !Number.isSafeInteger(revision) || revision < 1 || !snowflake.test(discordId) ||
+        !['edit', 'delete', 'reaction'].includes(operation) || operation === 'reaction' && !REACTION_EMOJI.includes(emoji)) throw new Error('Invalid operation receipt');
     return this.persist(maps => {
       maps.operations.set(id, { messageId, revision, discordId, expires: this.now() + 900000 });
-      const message = maps.entries.get(messageId); if (message?.discordId === discordId) message.revision = Math.max(message.revision ?? 0, revision);
-      const source = maps.sources.get(discordId); if (source) source.revision = Math.max(source.revision ?? 0, revision);
+      const advance = value => {
+        if (!value) return;
+        value.revision = Math.max(value.revision ?? 0, revision);
+        if (operation === 'edit') value.bodyRevision = Math.max(value.bodyRevision ?? 0, revision);
+        if (operation !== 'delete') value.reactionSummaryRevision = Math.max(value.reactionSummaryRevision ?? 0, revision);
+        if (operation === 'reaction') value.reactionRevisions = { ...value.reactionRevisions, [emoji]: Math.max(value.reactionRevisions?.[emoji] ?? 0, revision) };
+        if (operation === 'delete') value.deletedRevision = Math.max(value.deletedRevision ?? 0, revision);
+      };
+      const message = maps.entries.get(messageId); if (message?.discordId === discordId) advance(message);
+      advance(maps.sources.get(discordId));
     });
   }
   setCard(id, packet) { if (!packetId.test(id)) return; this.cards.set(id, { packet, expires: this.now() + 900000 }); this.prune(); }

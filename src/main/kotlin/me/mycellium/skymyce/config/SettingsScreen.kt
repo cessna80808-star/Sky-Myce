@@ -120,8 +120,11 @@ internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = se
         .filter { it.isHidden && it.id() in MenuCatalog.themeColorTitles.keys + MenuCatalog.themeFlagTitles.keys + MenuCatalog.themeNumberTitles.keys }
         .map { SettingRow("Theme & Appearance/${it.id()}", it) }
 
-internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>, category: MenuCategory, query: String): List<SettingRow> {
-    if (query.isBlank()) return rows.filter { MenuCatalog.settingLocation(it.path).category == category }
+internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>, category: MenuCategory, query: String, featureId: String? = null): List<SettingRow> {
+    if (query.isBlank()) return rows.filter {
+        val owner = catalog.featureForPath(it.path)
+        if (featureId != null) owner?.id == featureId else MenuCatalog.settingLocation(it.path).category == category
+    }
     val matches = catalog.search(query).mapNotNull { it.settingPath }.toSet()
     return rows.filter { it.path in matches }
 }
@@ -143,6 +146,7 @@ class SettingsScreen @JvmOverloads constructor(
     settingPath: String? = null,
     private val onPinSetting: (String) -> Unit = { MenuShortcuts.togglePin(it) },
 ) : MenuScreen(Component.literal("Sky-Myce Settings")) {
+    private var featureScoped = featureId != null || settingPath != null || dungeonFriend != null
     private val rows by lazy { settingRows(SkyMyce.config) }
     private val commandRows by lazy { commandCenterRows(SkyMyce.config) }
     private val catalog by lazy { MenuCatalog(rows) }
@@ -161,14 +165,14 @@ class SettingsScreen @JvmOverloads constructor(
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
     private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
-    public override val menuParent get() = parent.takeIf { it is MenuScreen || it is WidgetEditorScreen }
+    public override val menuParent get() = parent.takeIf { it is WidgetEditorScreen } ?: menuCategoryScreen(category)
     override val menuCategory get() = category
     override val settingsCategory get() = tab
     public override fun selectSettings(tab: SettingsTab) {
         val destination = legacySettingsFeature(tab)
         if (destination == featureId) return
         val direction = if (tab.ordinal < this.tab.ordinal) -1 else 1
-        this.tab = tab; featureId = destination; category = catalog.findFeature(destination)!!.category; query = ""; editingDungeonFriend = null; friendDraft = null; availabilityDraft = null; keyCapture = null
+        this.tab = tab; featureId = destination; featureScoped = true; category = catalog.findFeature(destination)!!.category; query = ""; editingDungeonFriend = null; friendDraft = null; availabilityDraft = null; keyCapture = null
         pendingSetting = catalog.findFeature(destination)?.settings?.firstOrNull()?.path
         rebuildMenu(direction)
     }
@@ -224,9 +228,13 @@ class SettingsScreen @JvmOverloads constructor(
     private fun populate(animate: Boolean = true) {
         if (animate) contentChanged()
         controls.clear(); body.clearChildren()
-        heading.text(Component.literal(if (query.isBlank()) category.title else "Search results"))
-        val matches = commandCenterSettings(catalog, commandRows, category, query)
-        val results = if (query.isBlank()) MenuCatalog.extraSettings.filter { it.category == category } else catalog.search(query)
+        heading.text(Component.literal(if (query.isBlank()) {
+            if (featureScoped) catalog.findFeature(featureId)?.breadcrumb ?: category.title else category.title
+        } else "Search results"))
+        val matches = commandCenterSettings(catalog, commandRows, category, query, featureId.takeIf { featureScoped })
+        val results = if (query.isBlank()) MenuCatalog.extraSettings.filter {
+            if (featureScoped) it.featureId == featureId else it.category == category
+        } else catalog.search(query)
         val extraPaths = results.mapNotNull { it.settingPath }.toSet()
         catalog.features.forEach { owner ->
             val settings = matches.filter { MenuCatalog.settingLocation(it.path).let { location ->
@@ -234,7 +242,7 @@ class SettingsScreen @JvmOverloads constructor(
             } }
             val availability = owner.id == "party-finder" && "Dungeons/Dungeon Friends/availability" in extraPaths
             val preferences = owner.id == "party-finder" && extraPaths.any { it in setOf("Dungeons/Dungeon Friends/messageTemplate", "Dungeons/Dungeon Friends/titleNotifications") }
-            val hud = owner.id == "settings-hud" && (query.isBlank() && category == MenuCategory.SETTINGS || query.isNotBlank() && results.any { it.featureId == owner.id })
+            val hud = owner.id == "settings-hud" && (query.isBlank() && category == MenuCategory.SETTINGS && (!featureScoped || featureId == owner.id) || query.isNotBlank() && results.any { it.featureId == owner.id })
             if (settings.isEmpty() && !availability && !preferences && !hud) return@forEach
             body.child(label(owner.breadcrumb, MenuTheme.ACCENT, 11f))
             if (settings.isNotEmpty()) body.child(button("Reset section", 88, "Restore defaults for these displayed settings") {
@@ -309,7 +317,7 @@ class SettingsScreen @JvmOverloads constructor(
             child(settingsRow().apply {
                 child(label("Title notifications").horizontalSizing(Sizing.expand()))
                 child(SettingsButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
-                    toggled = { draft.titles }; sizing(Sizing.fixed(32), Sizing.fixed(22))
+                    toggled = { draft.titles }; sizing(Sizing.fixed(64), Sizing.fixed(22))
                     tip("Show invitations and joining players as titles")
                 }.also { controls["Dungeons/Dungeon Friends/titleNotifications"] = it })
             })
@@ -360,7 +368,7 @@ class SettingsScreen @JvmOverloads constructor(
         if (setting.entry.setBoolean(!setting.entry.boolean)) edited()
         b.message = Component.literal(if (setting.entry.boolean) "On" else "Off")
     }.apply {
-        toggled = { setting.entry.boolean }; sizing(Sizing.fixed(32), Sizing.fixed(22)); tip(setting.tip)
+        toggled = { setting.entry.boolean }; sizing(Sizing.fixed(64), Sizing.fixed(22)); tip(setting.tip)
     }
 
     private fun editor(setting: SettingRow): FlowLayout = column().apply {
@@ -545,7 +553,7 @@ class SettingsScreen @JvmOverloads constructor(
         }
         super.removed()
     }
-    override fun onClose() { keyCapture = null; closeMenuTo(parent) }
+    override fun onClose() { keyCapture = null; closeMenuTo(menuParent) }
     private fun edited() {
         changed = true; PartyFinder.invalidateMatcher()
         heading.color(Color.ofRgb(MenuTheme.ACCENT))

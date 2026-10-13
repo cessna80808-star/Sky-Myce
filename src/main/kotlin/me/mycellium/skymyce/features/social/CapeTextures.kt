@@ -7,9 +7,11 @@ import me.mycellium.skymyce.community.readCommunityBody
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.minecraft.client.renderer.texture.DynamicTexture
+import net.minecraft.client.renderer.entity.state.AvatarRenderState
 import net.minecraft.core.ClientAsset
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.player.PlayerSkin
+import net.minecraft.world.item.ItemStack
 import java.net.URI
 import java.net.http.*
 import java.security.MessageDigest
@@ -24,6 +26,10 @@ object CapeTextures {
     private val values = linkedMapOf<String, Cached>()
     private val pending = mutableSetOf<String>()
     private val failed = linkedMapOf<String, Long>()
+    private val localValues = linkedMapOf<String, Identifier>()
+    private val localPending = mutableSetOf<String>()
+    private val localFailed = linkedMapOf<String, Long>()
+    private var localOwner: java.util.UUID? = null
     // Private Studio previews never populate the public active-cape cache.
     private val previewValues = linkedMapOf<CapePreviewRequest, Cached>()
     private val previewPending = mutableSetOf<CapePreviewRequest>()
@@ -40,11 +46,13 @@ object CapeTextures {
         ClientLifecycleEvents.CLIENT_STOPPING.register {
             stopping = true; worker.shutdownNow(); clearPreviews()
             values.values.forEach { MC.instance.textureManager.release(it.texture) }; values.clear()
+            localValues.values.forEach { MC.instance.textureManager.release(it) }; localValues.clear()
         }
     }
     fun selected(profile: CosmeticProfile): Identifier? {
         if (stopping) return null
         profile.capePreset?.let { if (it in presets) return Identifier.fromNamespaceAndPath("skymyce", "textures/capes/$it.png") }
+        if (profile.localCape) return local(profile)
         val asset = profile.capeAsset ?: return null
         val key = "${asset.id}:${asset.sha256}"
         values[key]?.let {
@@ -84,10 +92,36 @@ object CapeTextures {
         if (owner != previewOwner) { clearPreviews(); previewOwner = owner }
         val selected = when {
             profile.capePreset == "none" -> null
+            profile.localCape -> local(profile)
             profile.capeAsset == null -> selected(profile)
             else -> preview(profile, owner)
         }
         return applyCosmeticCape(skin, profile, selected)
+    }
+    private fun local(profile: CosmeticProfile): Identifier? {
+        val asset = profile.capeAsset ?: return null
+        val uuid = MC.instance.user.profileId
+        if (localOwner != uuid) {
+            localValues.values.forEach { MC.instance.textureManager.release(it) }; localValues.clear(); localFailed.clear(); localOwner = uuid
+        }
+        if (profile.uuid != uuid || asset !in LocalCosmetics.assets) return null
+        val key = "$uuid:${asset.sha256}"
+        localValues[key]?.let { return it }
+        if (localPending.size >= 8 || key in localPending || (localFailed[key] ?: 0) > System.currentTimeMillis()) return null
+        localPending += key
+        worker.submit {
+            val decoded = runCatching { NativeImage.read(LocalCosmetics.localBytes(profile)) }
+            MC.instance.execute {
+                localPending.remove(key)
+                if (stopping || MC.instance.user.profileId != uuid || asset !in LocalCosmetics.assets) { decoded.getOrNull()?.close(); return@execute }
+                decoded.fold({ pixels ->
+                    val id = Identifier.fromNamespaceAndPath("skymyce", "local-capes/${asset.id}-${++textureSerial}")
+                    MC.instance.textureManager.register(id, DynamicTexture({ "Sky-Myce local cape" }, pixels)); localValues[key] = id
+                    while (localValues.size > 8) MC.instance.textureManager.release(localValues.remove(localValues.keys.first())!!)
+                }, { localFailed[key] = System.currentTimeMillis() + 60000; while (localFailed.size > 16) localFailed.remove(localFailed.keys.first()) })
+            }
+        }
+        return null
     }
     fun clearPreviews() {
         previewEpoch++; previewOwner = null
@@ -164,6 +198,14 @@ internal fun applyCosmeticCape(skin: PlayerSkin, profile: CosmeticProfile, selec
     profile.capePreset == "none" -> PlayerSkin(skin.body(), null, skin.elytra(), skin.model(), skin.secure())
     selected == null -> skin
     else -> PlayerSkin(skin.body(), ClientAsset.ResourceTexture(selected, selected), skin.elytra(), skin.model(), skin.secure())
+}
+
+/** GUI render state only: invisibility and equipped wings must not conceal the cape being edited. */
+internal fun prepareCosmeticPreview(state: AvatarRenderState) {
+    state.isInvisible = false
+    state.showCape = true
+    state.chestEquipment = ItemStack.EMPTY
+    state.capeFlap = 0f; state.capeLean = 0f; state.capeLean2 = 0f
 }
 
 internal fun validateCapeDownload(bytes: ByteArray, asset: CapeAsset) {

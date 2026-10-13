@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
 import { ExpiringIds, RateLimit, limits } from './config.mjs';
-import { GLOBAL_ROOM, globalDiscordPacket, globalMinecraftContent, minecraftCard, validBridgeOperation, REACTION_EMOJI } from './global-chat.mjs';
+import { GLOBAL_ROOM, globalDiscordPacket, globalMinecraftContent, minecraftCard, validBridgeOperation, bridgeOperationApplied, REACTION_EMOJI } from './global-chat.mjs';
 
 export function bridgeHeaders(secret, room, timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex')) {
   return { 'X-SkyMyce-Timestamp': timestamp, 'X-SkyMyce-Nonce': nonce,
@@ -122,7 +122,8 @@ export class RelayBridge {
           if (known) { this.acknowledge(packet.id, known); return; }
           const message = await this.onMessage(content);
           if (!/^\d{17,20}$/.test(message?.id ?? '')) throw new Error('Discord delivery did not return its ID');
-          await this.receipts.record(packet.id, message.id, this.richChatVersion === 1 ? { room: this.room, channelId: this.channelId, authorId: this.ownBotId, name: packet.from, revision: packet.revision ?? 0 } : undefined);
+          await this.receipts.record(packet.id, message.id, this.richChatVersion === 1 ? { room: this.room, channelId: this.channelId, authorId: this.ownBotId, name: packet.from, revision: packet.revision ?? 0,
+            ...(packet.revision > 0 ? { bodyRevision: packet.revision } : {}) } : undefined);
           this.receipts.setCard?.(packet.id, packet);
           this.acknowledge(packet.id, message.id);
         }).catch(() => console.warn(JSON.stringify({ event: 'discord_delivery_unavailable', room: this.room })))
@@ -196,8 +197,8 @@ export class RelayBridge {
         return;
       }
       const latest = this.receipts.metadata(packet.messageId) ?? this.receipts.source(packet.discordMessageId, this.room);
-      if (!latest || (latest.revision ?? 0) < packet.revision) await this.onOperation(packet, { owned, authorId: owned ? this.ownBotId : source.authorId });
-      await this.receipts.recordOperation(packet.id, packet.messageId, packet.revision, packet.discordMessageId);
+      if (!bridgeOperationApplied(latest, packet)) await this.onOperation(packet, { owned, authorId: owned ? this.ownBotId : source.authorId });
+      await this.receipts.recordOperation(packet.id, packet.messageId, packet.revision, packet.discordMessageId, packet.operation, packet.emoji);
       this.receiptOperation(packet);
     }).catch(error => {
       if (['message_deleted', 'message_expired', 'not_authorized', 'invalid_operation'].includes(error?.message) && this.ready && this.socket?.readyState === WebSocket.OPEN) {

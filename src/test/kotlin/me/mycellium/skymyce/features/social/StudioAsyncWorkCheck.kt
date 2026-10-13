@@ -70,5 +70,21 @@ internal fun studioAsyncWorkChecks() {
     owner.set(captured); writeGuard.check(); val grants = 1
     owner.set(captured.copy(generation = 8))
     check(runCatching { writeGuard.check(); httpCalls.incrementAndGet() }.isFailure && grants == 1 && httpCalls.get() == 0)
+    val cape = CapeAsset("b".repeat(32), "c".repeat(64), 128)
+    var screenOpen = true; var uploaded = 0; var published = 0
+    val publishGuard = StudioRequestGuard(true, { owner.get() == captured }, { screenOpen })
+    owner.set(captured)
+    check(capturedStudioPublish(publishGuard, { uploaded++; screenOpen = false; cape }) {
+        check(it === cape); published++; "published"
+    } == "published")
+    check(uploaded == 1 && published == 1) // Closing after upload retains the accepted explicit Publish intent.
+    owner.set(captured); uploaded = 0; published = 0
+    check(runCatching { capturedStudioPublish(publishGuard, {
+        uploaded++; owner.set(captured.copy(generation = 8)); cape
+    }) { published++ } }.exceptionOrNull() is CommunityFailure)
+    check(uploaded == 1 && published == 0) // Session change between upload and profile save cannot publish under stale authority.
+    uploaded = 0
+    check(runCatching { capturedStudioPublish(publishGuard, { uploaded++; cape }) { published++ } }.isFailure)
+    check(uploaded == 0 && published == 0) // Stale queued work cannot begin the upload either.
     println("Studio async checks passed: bounded accepted jobs, single native chooser, closed read suppression, preserved writes and pre-HTTP owner guards")
 }

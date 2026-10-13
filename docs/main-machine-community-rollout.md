@@ -1,4 +1,4 @@
-# Main-machine rollout: Sky-Myce 2.5.0
+# Main-machine rollout: Sky-Myce 2.5.1
 
 This is a manual operator handoff for the existing Discord applications and
 Cloudflare account. These changes have not been deployed or registered from the
@@ -192,18 +192,40 @@ building a JAR does not configure a live Worker binding automatically.
    This repository contains the Node-hosted runtime. Earlier deployment reports
    describe a Cloudflare-hosted Gateway in the separate `D:\Code\Cessna fork\relay`
    checkout, unavailable on this laptop. If that is still the live sole Gateway,
-   do not launch a competing Node process: either deliberately stop the old
-   Gateway using its existing operator control and replace that host with this
-   single supervised Node runtime, or integrate the `community-feed.mjs` delivery
-   and `global-chat.mjs` reply changes into that existing service on the main
-   machine. Preserve its authentication, claims/receipts and channel isolation.
+   do not launch a competing Node process. The preferred update is to deliberately
+   stop the old Gateway using its existing operator control, then replace that
+   host with the complete matching `discord-user-bot/` runtime and its dependencies
+   as one supervised process. Retain private settings and keep the Node receipt
+   files on durable storage across subsequent restarts. Preserve the old host's
+   stored receipts; its SQLite state is not automatically a Node receipt file.
+   If the operator keeps the external host instead, adapt the complete matching
+   behavior together: `user-bot.mjs` / `native-create.mjs` pending-create ordering;
+   `relay.mjs` / `global-chat.mjs` independent body, per-emoji and reaction-summary
+   progress, durable deletion and canonical normalization; `chat-operations.mjs`
+   native mutation handling; and `community-feed.mjs` with its shared RNG helpers.
+   Port the caller wiring and durable storage semantics too, preserving that
+   host's authentication, claims/receipts and channel isolation. Copying only
+   presentation helpers leaves the confirmed edit/reaction and create/delete
+   ordering bugs unresolved. Run the matching regression fixtures against the
+   adapted host before enabling live delivery.
    Registering commands or deploying the account Worker alone does not update
    the external Gateway implementation. Verify which one process owns each
-   channel before enabling RNG or testing replies.
+   channel before enabling RNG or testing replies. The matching relay now enriches
+   a delayed embed in place, rather than allocating a second `:embeds` message.
+   Fragment-only old adapters retain the original body and enrich media before
+   a complete edit; unversioned fragments after a complete edit are ignored.
+   The current adapter sends a complete replacement snapshot. Do not infer that the
+   unavailable historical checkout or a live Gateway was updated by these edits.
+   After the source/coordinated checks pass, verify native-chat Reply preserves
+   an existing draft, previews/cancels the selected parent, and reaches the same
+   Discord parent ID. Verify inline React add/remove/counts, joined Unicode and
+   custom-emoji readable fallbacks, then one GIF across create/delayed-preview/
+   edit/retry/reconnect. Perform live channel checks only with approved real
+   participants; the local fixtures do not post public messages or prove rollout.
 6. Publish and verify the signed standalone mod release as below. Distribute
    that normal Fabric JAR through the existing release channel. Users remove the
    old Sky-Myce Loader and old Sky-Myce JAR from their selected instance's `mods/`
-   after closing Minecraft, then install the single standalone Sky-Myce 2.5.0
+   after closing Minecraft, then install the single standalone Sky-Myce 2.5.1
    JAR alongside its normal Fabric dependencies. Retain unrelated mods and local
    settings. Do not copy two Sky-Myce JARs into one instance.
 
@@ -285,7 +307,7 @@ From the repository root, substitute actual private paths and create a fresh
 manifest output (the script will not overwrite a previous output):
 
 ```powershell
-node relay/scripts/release.mjs sign-community "<built-jar>" "<operator-private.pem>" production-20260927 26.1.2 2.5.0 "<release-notes.txt-or->" "<new-manifest.json>"
+node relay/scripts/release.mjs sign-community "<built-jar>" "<operator-private.pem>" production-20260927 26.1.2 2.5.1 "<release-notes.txt-or->" "<new-manifest.json>"
 ```
 
 For empty notes, use the literal `-` as the notes argument. From `relay/`, upload
@@ -295,12 +317,12 @@ is shown below; check it against the preserved live `PRIVATE_ARTIFACTS` binding
 before running these commands:
 
 ```powershell
-npx wrangler r2 object put "sky-myce-private-artifacts/releases/Sky-Myce-2.5.0.jar" --file "<built-jar>" --content-type application/java-archive --remote --env backend
+npx wrangler r2 object put "sky-myce-private-artifacts/releases/Sky-Myce-2.5.1.jar" --file "<built-jar>" --content-type application/java-archive --remote --env backend
 npx wrangler r2 object put "sky-myce-private-artifacts/releases/community-current.json" --file "<new-manifest.json>" --content-type application/json --remote --env backend
 ```
 
 Keep the bucket private. The Worker exposes only the selected, valid signed Fabric
-release at `/community/release` and `/community/artifact?version=2.5.0`, without an
+release at `/community/release` and `/community/artifact?version=2.5.1`, without an
 account/Loader requirement. Check the live envelope signature with the pinned
 public key, manifest product `sky-myce`, protocol `4`, installation `fabric`,
 Minecraft/version, artifact size and SHA-256; download that selected artifact and

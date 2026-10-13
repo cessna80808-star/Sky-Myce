@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import { RelayBridge, discordPacket } from '../src/relay.mjs';
 
 const guild = '11111111111111111', channel = '22222222222222222', author = '33333333333333333';
 const discordId = '44444444444444444';
+const mediaId = url => `media-${createHash('sha256').update(discordMediaKey(url)).digest('hex').slice(0, 32)}`;
 const message = () => ({ id: '55555555555555555', guildId: guild, channelId: channel, content: 'hello',
   author: { id: author, username: 'Unlinked user', bot: false } });
 const minecraft = (id = 'a'.repeat(32), timestamp = 1000) => ({ type: 'irc_message', scope: 'global', room: GLOBAL_ROOM,
@@ -112,15 +114,16 @@ test('long Discord content truncates clearly without breaking a surrogate pair; 
   assert.ok(packet.from.length <= 64); assert.equal(packet.mentions.length, 100);
 });
 
-test('late human link previews send one embed continuation without replaying text, attachments, replies or mentions', t => {
+test('late human link previews send a full canonical replacement without new replies or mentions', t => {
   const previous = { ...message(), content: 'https://example.com/page', embeds: [] };
   const next = { ...previous, embeds: [{ title: 'Preview title', description: 'Preview description', url: previous.content }],
     attachments: [{ name: 'Never repeat attachment', url: 'https://example.com/file' }],
     reference: { messageId: discordId, channelId: channel }, mentions: { users: new Map([[discordId, { id: discordId, username: 'Mentioned' }]]) } };
   const packet = globalEmbedPacket(previous, next, guild, channel);
   assert.equal(packet.id, previous.id); assert.equal(packet.message_id, previous.id); assert.equal(packet.part, 'embeds');
-  assert.equal(packet.text, 'Preview title\nPreview description');
-  assert.deepEqual(packet.mentions, []); assert.equal(packet.reply, undefined); assert.ok(!packet.text.includes('attachment'));
+  assert.equal(packet.replacement, true);
+  assert.equal(packet.text, 'https://example.com/page\nPreview title\nPreview description\nNever repeat attachment: https://example.com/file');
+  assert.deepEqual(packet.mentions, []); assert.equal(packet.reply, undefined);
   const results = [];
   const f = fakeBridge({ onResult: (...args) => results.push(args) }); t.after(() => f.bridge.close());
   assert.equal(f.bridge.send(globalDiscordPacket(previous, guild, channel)), true);
@@ -286,7 +289,7 @@ test('signed attachment identity produces one structured GIF while preserving un
   assert.ok(discordBody({ ...message(), content: `${unsigned}?ex=1&is=1&hm=invalid` }).includes('?ex=1'), 'expired media retains its ordinary link fallback');
   const previous = { ...input, embeds: [] };
   assert.equal(globalEmbedPacket(previous, input, guild, channel), null);
-  assert.equal(globalEmbedPacket(previous, { ...input, embeds: [{ title: 'New caption', image: { url: signed } }] }, guild, channel).text, 'New caption');
+  assert.equal(globalEmbedPacket(previous, { ...input, embeds: [{ title: 'New caption', image: { url: signed } }] }, guild, channel).text, `${signed}\nNew caption`);
 });
 
 test('gifv previews select the supplied animated GIF once from the original message and delayed embeds', () => {
@@ -295,7 +298,7 @@ test('gifv previews select the supplied animated GIF once from the original mess
   const video = 'https://media.tenor.com/sampleAAAPo/sample.mp4';
   const embed = { type: 'gifv', url: page, video: { url: video, width: 400, height: 300 },
     thumbnail: { url: gif, width: 400, height: 300 } };
-  const expected = [{ id: 'media-0', type: 'gif', url: gif, width: 400, height: 300 }];
+  const expected = [{ id: mediaId(gif), type: 'gif', url: gif, sourceUrl: page, width: 400, height: 300 }];
   const previous = { ...message(), content: page, embeds: [] };
   for (const preview of [embed, { data: embed }]) {
     const input = { ...previous, embeds: [preview] };
@@ -303,32 +306,62 @@ test('gifv previews select the supplied animated GIF once from the original mess
     assert.equal(packet.text, `${page}\n${gif}`, 'original content contains only the view page; embed supplies the GIF');
     assert.deepEqual(packet.media, expected);
     const continuation = globalEmbedPacket(previous, input, guild, channel);
-    assert.equal(continuation.text, gif);
+    assert.equal(continuation.text, `${page}\n${gif}`);
     assert.deepEqual(continuation.media, expected);
     assert.deepEqual(discordMedia({ ...input, content: gif }), expected, 'a direct GIF link and its embed remain one item');
   }
   assert.deepEqual(discordMedia({ embeds: [{ ...embed, type: 'video' }] }),
-    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: gif, width: 400, height: 300 }],
+    [{ id: mediaId(video), type: 'video', url: video, thumbnailUrl: gif, width: 400, height: 300 }],
     'ordinary videos keep their video URL and poster even when the poster is a GIF');
   for (const invalid of ['http://media1.tenor.com/sample.gif', 'https://localhost/sample.gif',
     'https://user:password@media1.tenor.com/sample.gif'])
     assert.deepEqual(discordMedia({ embeds: [{ ...embed, thumbnail: { url: invalid } }] }),
-      [{ id: 'media-0', type: 'video', url: video, width: 400, height: 300 }], 'unsafe GIF thumbnails cannot replace a video');
+      [{ id: mediaId(video), type: 'video', url: video, sourceUrl: page, width: 400, height: 300 }], 'unsafe GIF thumbnails cannot replace a video');
   const poster = 'https://media1.tenor.com/sample.png';
   assert.deepEqual(discordMedia({ embeds: [{ ...embed, thumbnail: { url: poster } }] }),
-    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: poster, width: 400, height: 300 }],
+    [{ id: mediaId(video), type: 'video', url: video, thumbnailUrl: poster, sourceUrl: page, width: 400, height: 300 }],
     'gifv without an actual GIF retains browser playback and its poster');
 });
 
 test('video previews carry one poster and preserve bounded attachment metadata', () => {
   const video = 'https://example.com/movie.mp4', poster = 'https://example.com/poster.png';
   assert.deepEqual(discordMedia({ content: video, embeds: [{ video: { url: video, width: 1280, height: 720 }, thumbnail: { url: poster } }] }),
-    [{ id: 'media-0', type: 'video', url: video, thumbnailUrl: poster, width: 1280, height: 720 }]);
+    [{ id: mediaId(video), type: 'video', url: video, thumbnailUrl: poster, width: 1280, height: 720 }]);
   const withAttachment = discordMedia({ attachments: [{ id: author, url: video, name: 'a'.repeat(200), contentType: 'video/mp4' }],
     embeds: [{ video: { url: video }, thumbnail: { url: poster } }] });
   assert.equal(withAttachment.length, 1); assert.equal(withAttachment[0].name.length, 80);
   assert.equal(withAttachment[0].thumbnailUrl, poster);
-  assert.deepEqual(discordMedia({ embeds: [{ thumbnail: { url: poster } }] }), [{ id: 'media-0', type: 'image', url: poster }], 'a separate image thumbnail is preserved');
+  assert.deepEqual(discordMedia({ embeds: [{ thumbnail: { url: poster } }] }), [{ id: mediaId(poster), type: 'image', url: poster }], 'a separate image thumbnail is preserved');
+});
+
+test('Unicode joined sequences and custom emoji IDs survive creation, edits and reply snapshots', () => {
+  const text = '👩🏽‍💻 👨‍👩‍👧‍👦 🇸🇪 ❤️ <:blob:123456789012345678> <a:dance:234567890123456789>';
+  const original = { ...message(), content: text };
+  assert.equal(globalDiscordPacket(original, guild, channel).text, text);
+  const edited = { ...original, content: `${text} changed` };
+  assert.equal(discordOperation('MESSAGE_UPDATE', edited, original, 'b'.repeat(32), guild, channel, discordId).text, edited.content);
+  const answer = { ...message(), id: '66666666666666666', content: 'answer', reference: { messageId: original.id, channelId: channel },
+    referencedMessage: original };
+  const reply = globalDiscordPacket(answer, guild, channel);
+  assert.equal(reply.reply.message_id, original.id); assert.equal(reply.reply.text, text);
+  for (const cluster of ['👩🏽‍💻', '👨‍👩‍👧‍👦', '🇸🇪', '❤️', '<a:dance:234567890123456789>']) {
+    const suffix = ' … [truncated]', prefix = 'x'.repeat(4096 - suffix.length - 1);
+    const truncated = discordBody({ ...message(), content: `${prefix}${cluster}${'y'.repeat(40)}` });
+    assert.equal(truncated, prefix + suffix, 'truncation omits the complete boundary cluster/token rather than a broken fragment');
+  }
+});
+
+test('media identity remains stable when late embeds reorder resources or renew Discord signatures', () => {
+  const first = 'https://example.com/one.gif', second = 'https://example.com/two.png';
+  const before = discordMedia({ content: `${first} ${second}` });
+  const after = discordMedia({ embeds: [{ image: { url: second } }, { image: { url: first } }] });
+  assert.deepEqual(new Map(before.map(item => [item.url, item.id])), new Map(after.map(item => [item.url, item.id])));
+  const base = `https://cdn.discordapp.com/attachments/${channel}/${author}/one.gif`;
+  const original = discordMedia({ content: `${base}?ex=7fffffff&is=1&hm=a` });
+  const refreshed = discordMedia({ content: `${base.replace('cdn.discordapp.com', 'media.discordapp.net')}?ex=7fffffff&is=2&hm=b` });
+  assert.equal(original[0].id, refreshed[0].id); assert.notEqual(original[0].url, refreshed[0].url);
+  assert.equal(discordMedia({ content: base, attachments: [{ id: author, url: refreshed[0].url, contentType: 'image/gif' }],
+    embeds: [{ image: { url: original[0].url } }] }).length, 1);
 });
 
 test('rich cards keep trusted sender identity, compact replies and media in both scopes with no fabricated presence', () => {

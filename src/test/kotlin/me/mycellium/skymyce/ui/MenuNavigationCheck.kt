@@ -76,6 +76,13 @@ private fun checkStableCardEdges(layout: MenuLayout) {
 }
 
 fun main() {
+    repeat(1000) { iteration ->
+        val category = MenuCategory.entries[iteration % MenuCategory.entries.size]
+        check(menuBackTarget(category) == MenuBackTarget.Category(category))
+        check(menuBackTarget(category, categoryRoot = true) == MenuBackTarget.Home)
+        check(menuBackTarget(null) == MenuBackTarget.Home) // Search, Quick, Favorites and Recent
+        check(menuBackTarget(null, home = true) == MenuBackTarget.Game)
+    }
     measureNavigationGeometry()
     check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     for (index in MenuCategory.entries.indices) for (width in listOf(110, 140, 220, 400)) {

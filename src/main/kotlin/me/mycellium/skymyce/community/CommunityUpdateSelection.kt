@@ -7,6 +7,7 @@ internal class CommunityUpdateSelection {
     private var deferredVersion = ""
 
     fun approve(): Long = ++generation
+    fun cancel(): Long = ++generation
     fun defer(version: String): Boolean {
         if (deferredGeneration == generation && deferredVersion == version) return false
         deferredVersion = version; deferredGeneration = ++generation

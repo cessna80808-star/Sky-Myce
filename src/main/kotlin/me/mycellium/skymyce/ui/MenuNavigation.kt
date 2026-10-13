@@ -19,6 +19,8 @@ internal data class MenuRect(val x: Double, val y: Double, val width: Double, va
 }
 
 internal val menuSectionTitles = MenuCategory.entries.map { it.title }
+private fun homeActionWidths(layout: MenuLayout) = if (layout.contentWidth - 24 >= 396) listOf(64, 108, 102, 98) else listOf(64, 90)
+internal fun menuHomeFooterRows(layout: MenuLayout) = menuActionRows(homeActionWidths(layout), (layout.contentWidth - 24).coerceAtLeast(1), 8)
 private val menuSectionPreviews = MenuCategory.entries.map { category ->
     MenuCatalog.definitions.filter { it.category == category }.map { it.subcategory }.distinct().take(3).joinToString(" · ")
 }
@@ -51,7 +53,8 @@ internal fun menuNavigationRect(layout: MenuLayout, index: Int, progress: Double
     val gap = minOf(12.0, layout.width / 20.0, layout.height / 40.0)
     val top = minOf(68.0, layout.height * .2)
     val w = ((layout.width - margin * 2 - gap * (columns - 1)) / columns).coerceAtLeast(1.0)
-    val h = ((layout.height - top - minOf(56.0, layout.height * .2) - gap * (rows - 1)) / rows).coerceAtLeast(1.0)
+    val footer = maxOf(56.0, menuHomeFooterRows(layout).size * 32.0 + 16).coerceAtMost(layout.height * .38)
+    val h = ((layout.height - top - footer - gap * (rows - 1)) / rows).coerceAtLeast(1.0)
     val card = MenuRect(margin + index % columns * (w + gap), top + index / columns * (h + gap), w, h)
     val step = ((layout.height - 140.0) / count).coerceIn(1.0, 40.0)
     val mini = MenuRect(8.0.coerceAtMost(layout.sidebar / 5.0), 64 + index * step,
@@ -281,13 +284,29 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override val home get() = true
     override val menuCategory get() = null
     override fun buildContent(root: FlowLayout) {
-        root.child(io.wispforest.owo.ui.container.UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-            gap(8); horizontalAlignment(HorizontalAlignment.CENTER)
-            positioning(Positioning.absolute(0, menuHeight - 38))
-            listOf("Search" to MenuDirectoryView.SEARCH, "Quick Settings" to MenuDirectoryView.QUICK).forEach { (title, view) ->
-                child(MenuButton(Component.literal(title)) { navigateMenu(MenuDirectoryScreen(view = view, parent = this@MenuHomeScreen)) }
-                    .apply { sizing(Sizing.fixed(if (view == MenuDirectoryView.QUICK) 108 else 64), Sizing.fixed(24)) })
-            }
+        val widths = homeActionWidths(menuLayout)
+        val actions = if (widths.size == 4) listOf(
+            MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
+            MenuButton(Component.literal("Quick Settings")) { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
+            MenuButton(Component.literal("Community")) { openMenuFeature("community") },
+            MenuButton(Component.literal("Global Chat")) { openMenuFeature("global-chat") },
+        ) else listOf(
+            MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
+            MenuButton(Component.literal("Shortcuts")) { anchor -> openMenuDropdown(anchor) { dropdown ->
+                dropdown.button(Component.literal("Quick Settings")) { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) }
+                dropdown.button(Component.literal("Community")) { openMenuFeature("community") }
+                dropdown.button(Component.literal("Global Chat")) { openMenuFeature("global-chat") }
+            } },
+        )
+        val rows = menuHomeFooterRows(menuLayout)
+        root.child(io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(8); positioning(Positioning.absolute(0, menuHeight - rows.size * 32 - 8))
+            rows.forEach { indices -> child(io.wispforest.owo.ui.container.UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+                gap(8); horizontalAlignment(HorizontalAlignment.CENTER)
+                indices.forEach { index -> child(actions[index].apply {
+                    sizing(Sizing.fixed(widths[index].coerceAtMost((menuWidth - 24).coerceAtLeast(1))), Sizing.fixed(24))
+                }) }
+            }) }
         })
     }
 }
