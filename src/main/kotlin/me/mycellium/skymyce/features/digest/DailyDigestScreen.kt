@@ -38,7 +38,9 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private val expanded = mutableSetOf<String>()
     private val cards = mutableMapOf<String, FlowLayout>()
     private val clocks = mutableListOf<Pair<String?, () -> Unit>>()
-    private lateinit var results: ScrollContainer<FlowLayout>
+    private lateinit var results: MenuScroll<FlowLayout>
+    private lateinit var resultsSwap: MenuSwap
+    private lateinit var activityFilter: ButtonComponent
     private lateinit var context: LabelComponent
     private lateinit var footer: LabelComponent
     private lateinit var refresh: ButtonComponent
@@ -90,9 +92,9 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (page == "news") child(newsFilters())
             if (page == "rng") {
                 child(row().apply {
-                    child(button("Local history", 96) { if (community) { community = false; historyPage = 0; rebuildMenu(-1) } }
+                    child(button("Local history", 96) { if (community) { community = false; historyPage = 0; updateContent(resetScroll = true) } }
                         .apply { navigation = true; selected = { !community } })
-                    child(button("Community", 96) { if (!community) { community = true; historyPage = 0; rebuildMenu(1) } }
+                    child(button("Community", 96) { if (!community) { community = true; historyPage = 0; updateContent(resetScroll = true) } }
                         .apply { navigation = true; selected = { community } }
                         .tip("Opt-in community reports are unverified. Enable receiving in Daily Digest settings."))
                 })
@@ -101,23 +103,26 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                         setMaxLength(80); text(search); setHint(Component.literal("Search drop or player..."))
                         onChanged().subscribe { search = it; resetList() }
                     })
-                    child(button(activity.ifEmpty { "All activities" }.take(17), 100) {
+                    activityFilter = button(activity.ifEmpty { "All activities" }.take(17), 100) {
                         val options = listOf("") + previous.cards.firstOrNull { it.id == "rng" }?.entries.orEmpty()
                             .map { it.activity }.filter { it.isNotEmpty() }.distinct().sorted()
                         activity = options[(options.indexOf(activity) + 1) % options.size]
-                        rebuild()
-                    }.tip("Cycle activity filter: dungeons, slayer and other detected sources"))
+                        activityFilter.message = Component.literal(activity.ifEmpty { "All activities" }.take(17))
+                        historyPage = 0; updateContent()
+                    }.tip("Cycle activity filter: dungeons, slayer and other detected sources")
+                    child(activityFilter)
                 })
             }
             results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(accent)))
                 scrollbarThiccness(2); padding(Insets.right(4)); scrollStep(20)
             }
-            child(results)
+            resultsSwap = MenuSwap("daily-digest-results", Sizing.fill(), Sizing.expand()).apply { child(results) }
+            child(resultsSwap)
             footer = label(footerText(previous), MenuTheme.MUTED)
             child(footer)
         })
-        updateContent()
+        updateContent(animate = false)
     }
 
     override fun tick() {
@@ -152,9 +157,10 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         }
     }
 
-    private fun updateContent(animate: Boolean = true) {
+    private fun updateContent(animate: Boolean = true, resetScroll: Boolean = false) {
         if (!::results.isInitialized) return
-        if (animate) contentChanged()
+        if (animate) resultsSwap.change()
+        if (resetScroll) results.scrollBy(-results.scrollTarget, true, false)
         cards.clear()
         clocks.clear()
         results.child(column().apply {
@@ -317,7 +323,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").chunked(if (menuWidth < 280) 2 else 3).forEach { filters -> child(row().apply {
         filters.forEach { (value, title) ->
             child(button(title, if (value.isEmpty()) 34 else 96) {
-                if (newsFilter != value) { newsFilter = value; historyPage = 0; rebuild() }
+                if (newsFilter != value) { newsFilter = value; historyPage = 0; updateContent() }
             }.apply { navigation = true; selected = { newsFilter == value } })
         }
         }) }

@@ -19,6 +19,9 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), Me
     private var feedback = "Use your current view or enter coordinates. No dungeon viewpoint is guessed."
     private lateinit var status: MenuLabel
     private lateinit var feedbackLabel: MenuLabel
+    private lateinit var savedLabel: MenuLabel
+    private lateinit var previewButton: MenuButton
+    private val viewButtons = linkedMapOf<String, MenuButton>()
     private val fields = linkedMapOf<String, MenuTextBox>()
 
     override fun buildContent(root: FlowLayout) {
@@ -29,25 +32,29 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), Me
         val content = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7) }
         root.child(menuScroll(Sizing.fill(), Sizing.expand(), content))
         content.child(label("VIEWPOINT", MenuTheme.SECONDARY))
+        viewButtons.clear()
         content.child(row().apply {
-            child(button(if (selected == "purple") "Purple ✓" else "Purple", 49) { selected = "purple"; rebuildMenu() })
-            child(button(if (selected == "yellow") "Yellow ✓" else "Yellow", 49) { selected = "yellow"; rebuildMenu() })
+            listOf("purple" to "Purple", "yellow" to "Yellow").forEach { (stage, name) ->
+                child(button(if (selected == stage) "$name ✓" else name, 49) {
+                    if (selected != stage) { selected = stage; updateViewpoint() }
+                }.also { viewButtons[stage] = it })
+            }
         })
         val saved = CameraViewpoints.get(selected)
-        content.child(label(if (saved == null) "No $selected view saved in this world/server." else
-            "Saved $selected view · X ${number(saved.x)} · Y ${number(saved.y)} · Z ${number(saved.z)}", MenuTheme.MUTED))
+        savedLabel = label(savedDescription(saved), MenuTheme.MUTED); content.child(savedLabel)
         content.child(row().apply {
             child(button("Use my current view", 49) {
-                if (CameraViewpoints.capture(selected)) { feedback = "Saved $selected camera position and direction. It will stay fixed."; rebuildMenu() }
+                if (CameraViewpoints.capture(selected)) { say("Saved $selected camera position and direction. It will stay fixed."); updateViewpoint() }
                 else say("Join a world before capturing a view.")
             })
-            child(button("Preview $selected on HUD", 49) {
+            previewButton = button("Preview $selected on HUD", 49) {
                 if (HealerCrushCameraHud.startPreview(selected)) navigateMenu(null)
                 else say("Join a world before starting preview.")
-            })
+            }
+            child(previewButton)
         })
         content.child(label("Manual preview lasts up to five minutes. It does not activate or simulate dungeon mechanics.", MenuTheme.MUTED))
-        val values = mapOf("X" to saved?.x, "Y" to saved?.y, "Z" to saved?.z, "Yaw" to saved?.yaw?.toDouble(), "Pitch" to saved?.pitch?.toDouble())
+        val values = viewValues(saved)
         fields.clear()
         content.child(row().apply {
             values.forEach { (name, value) ->
@@ -63,7 +70,7 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), Me
             val yaw = values.getValue("Yaw")!!
             val view = SavedCameraView(values.getValue("X")!!, values.getValue("Y")!!, values.getValue("Z")!!,
                 normalizedCameraYaw(yaw), values.getValue("Pitch")!!.toFloat())
-            if (CameraViewpoints.set(selected, view)) { feedback = "Saved $selected viewpoint."; rebuildMenu() }
+            if (CameraViewpoints.set(selected, view)) { say("Saved $selected viewpoint."); updateViewpoint() }
             else say("Join a world and use coordinates within world bounds, Y −2048…2048 and pitch −90…90.")
         })
         feedbackLabel = label(feedback, MenuTheme.MUTED); content.child(feedbackLabel)
@@ -83,6 +90,20 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), Me
         updateStatus()
     }
 
+    private fun updateViewpoint() {
+        val saved = CameraViewpoints.get(selected)
+        viewButtons.forEach { (stage, button) ->
+            val name = if (stage == "purple") "Purple" else "Yellow"
+            button.message = Component.literal(if (selected == stage) "$name ✓" else name)
+        }
+        savedLabel.text(Component.literal(savedDescription(saved)))
+        previewButton.message = Component.literal("Preview $selected on HUD")
+        viewValues(saved).forEach { (name, value) -> fields[name]?.text(value?.let(::number).orEmpty()) }
+    }
+    private fun savedDescription(saved: SavedCameraView?) = if (saved == null) "No $selected view saved in this world/server." else
+        "Saved $selected view · X ${number(saved.x)} · Y ${number(saved.y)} · Z ${number(saved.z)}"
+    private fun viewValues(saved: SavedCameraView?) = mapOf("X" to saved?.x, "Y" to saved?.y, "Z" to saved?.z,
+        "Yaw" to saved?.yaw?.toDouble(), "Pitch" to saved?.pitch?.toDouble())
     private fun say(value: String) { feedback = value; feedbackLabel.text(Component.literal(value)) }
     private fun updateStatus() {
         status.text(Component.literal(if (HealerCrushCameraHud.previewing) "Manual HUD preview active · ${HealerCrushCameraHud.activeStage()}" else HealerCrushCamera.status))

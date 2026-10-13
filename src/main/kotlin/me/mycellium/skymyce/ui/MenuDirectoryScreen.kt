@@ -30,6 +30,10 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     private var filter = 0
     private var section: String? = null
     private var limit = 50
+    private lateinit var heading: MenuLabel
+    private lateinit var description: MenuLabel
+    private lateinit var viewContent: MenuSwap
+    private var viewButton: ButtonComponent? = null
     private lateinit var results: FlowLayout
     private lateinit var search: MenuTextBox
     private var observedRevision = -1L
@@ -45,21 +49,50 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     override fun buildContent(root: FlowLayout) {
         root.padding(Insets.of(14, 14, 18, 18)); root.gap(9)
         root.child(row().apply {
-            child(label(category?.title ?: view.title, MenuTheme.TEXT, 16f).horizontalSizing(Sizing.expand()))
+            heading = label(category?.title ?: view.title, MenuTheme.TEXT, 16f)
+            if (category == null) heading.verticalSizing(Sizing.fixed(MenuDirectoryView.entries.maxOf {
+                val lines = menuTextLines(Component.literal(it.title), (menuWidth - 36 - 48 - 6).coerceAtLeast(1), heading.fontSize.toDouble()).size
+                lines * heading.lineHeight() + (lines - 1).coerceAtLeast(0) * heading.lineSpacing()
+            }))
+            child(heading.horizontalSizing(Sizing.expand()))
             child(button("Back", 48) { onClose() })
         })
-        root.child(label(category?.description ?: view.description, MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
+        description = label(category?.description ?: view.description, MenuTheme.MUTED)
+        if (category == null) description.verticalSizing(Sizing.fixed(MenuDirectoryView.entries.maxOf {
+            val lines = menuTextLines(Component.literal(it.description), (menuWidth - 36).coerceAtLeast(1)).size
+            lines * description.lineHeight() + (lines - 1).coerceAtLeast(0) * description.lineSpacing()
+        }))
+        root.child(description.horizontalSizing(Sizing.fill()))
+        viewButton = null
         if (category == null) {
             if (menuWidth < 350) root.child(button(view.title, minOf(150, menuWidth - 36)) { anchor ->
                 openMenuDropdown(anchor) { dropdown -> MenuDirectoryView.entries.forEach { tab -> dropdown.button(Component.literal(tab.title)) {
-                    if (view != tab) { view = tab; query = ""; limit = 50; focusSearch = tab == MenuDirectoryView.SEARCH; rebuildMenu() }
+                    selectView(tab)
                 } } }
-            }) else MenuDirectoryView.entries.chunked(if (menuWidth < 390) 2 else 4).forEach { tabs -> root.child(row().apply {
+            }.also { viewButton = it }) else MenuDirectoryView.entries.chunked(if (menuWidth < 390) 2 else 4).forEach { tabs -> root.child(row().apply {
                 tabs.forEach { tab -> child(button(tab.title, if (tab == MenuDirectoryView.QUICK) 100 else 70) {
-                    if (view != tab) { view = tab; query = ""; limit = 50; focusSearch = view == MenuDirectoryView.SEARCH; rebuildMenu() }
+                    selectView(tab)
                 }.apply { navigation = true; selected = { view == tab } }) }
             }) }
-        }
+            viewContent = MenuSwap("directory/views", Sizing.fill(), Sizing.expand()).apply {
+                gap(9); margins(Insets.of(-9, 0, -18, -18)); padding(Insets.of(9, 0, 18, 18))
+            }
+            root.child(viewContent)
+            buildViewContent(viewContent)
+        } else buildViewContent(root)
+    }
+
+    private fun selectView(next: MenuDirectoryView) {
+        if (view == next || category != null) return
+        viewContent.change()
+        view = next; query = ""; limit = 50; focusSearch = next == MenuDirectoryView.SEARCH
+        heading.text(Component.literal(next.title)); description.text(Component.literal(next.description))
+        viewButton?.message = Component.literal(next.title)
+        viewContent.clearChildren()
+        buildViewContent(viewContent)
+    }
+
+    private fun buildViewContent(root: FlowLayout) {
         if (category != null || view == MenuDirectoryView.SEARCH) {
             root.child(row().apply {
                 search = MenuTextBox(Sizing.expand()).apply {
@@ -194,7 +227,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
 
     private fun showQuick() {
         results.child(actions(listOf(
-            button("Add controls", 98) { view = MenuDirectoryView.SEARCH; query = ""; focusSearch = true; rebuildMenu() },
+            button("Add controls", 98) { selectView(MenuDirectoryView.SEARCH) },
             button("Reset defaults", 105) { MenuShortcuts.resetPins(); populate() }), menuDirectoryContentWidth(menuWidth)))
         results.child(label("${MenuShortcuts.pins.size}/8 pinned • values come from their original controls", MenuTheme.MUTED).horizontalSizing(Sizing.fill()))
         MenuShortcuts.pins.forEachIndexed { index, path ->
@@ -251,7 +284,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
     override fun tick() {
         super.tick()
         if (menuClosing) return
-        if (focusSearch && ::search.isInitialized) {
+        if (focusSearch && (category != null || view == MenuDirectoryView.SEARCH) && ::search.isInitialized) {
             search.focusHandler()?.focus(search, UIComponent.FocusSource.KEYBOARD_CYCLE); focusSearch = false
         }
         if (observedRevision != MenuShortcuts.revision) populate()
