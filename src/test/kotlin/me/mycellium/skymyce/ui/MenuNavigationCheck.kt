@@ -185,12 +185,14 @@ fun main() {
         check(layout.sidebar <= 52 && layout.contentWidth >= layout.width * .66)
         val home = menuSectionTitles.indices.map { menuNavigationRect(layout, it, 0.0) }
         val mini = menuSectionTitles.indices.map { menuNavigationRect(layout, it, 1.0) }
+        val footerTop = maxOf(260, layout.height) - menuHomeFooterRows(layout).size * 32 - 8
         for (index in home.indices) {
             for (r in listOf(home[index], mini[index])) {
                 check(r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0)
                 check(r.x + r.width <= layout.width && r.y + r.height <= layout.height)
             }
             check(home[index].y + home[index].height <= layout.height - minOf(56.0, layout.height * .2))
+            check(home[index].y + home[index].height <= footerTop - 8) { "Home cards overlap wrapped footer buttons" }
             check(mini[index].y + mini[index].height < layout.height - 64)
             for (other in home.indices.filter { it != index }) {
                 check(!home[other].contains(home[index].x + home[index].width / 2, home[index].y + home[index].height / 2))

@@ -2,6 +2,7 @@ package me.mycellium.skymyce.ui
 
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.core.*
+import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -20,7 +21,7 @@ internal data class MenuRect(val x: Double, val y: Double, val width: Double, va
 }
 
 internal val menuSectionTitles = MenuCategory.entries.map { it.title }
-private fun homeActionWidths(layout: MenuLayout) = if (layout.contentWidth - 24 >= 312) listOf(64, 108, 124) else listOf(64, 124)
+private fun homeActionWidths(layout: MenuLayout) = if (layout.contentWidth - 24 >= 312) listOf(64, 72, 108, 124) else listOf(64, 72, 124)
 internal fun menuHomeFooterRows(layout: MenuLayout) = menuActionRows(homeActionWidths(layout), (layout.contentWidth - 24).coerceAtLeast(1), 8)
 internal fun menuHomeFeature(index: Int, ids: List<String> = defaultMenuHomeTools): MenuFeature =
     MenuCatalog.definitions.first { it.id == ids[index] }
@@ -364,12 +365,14 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override val menuCategory get() = null
     override fun buildContent(root: FlowLayout) {
         val widths = homeActionWidths(menuLayout)
-        val actions = if (widths.size == 3) listOf(
+        val actions = if (widths.size == 4) listOf(
             MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
+            MenuButton(Component.literal("Settings")) { navigateMenu(SettingsScreen()) },
             MenuButton(Component.literal("Quick Settings")) { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
             MenuButton(Component.literal("Customize Home")) { navigateMenu(MenuHomeShortcutsScreen()) },
         ) else listOf(
             MenuButton(Component.literal("Search")) { navigateMenu(MenuDirectoryScreen()) },
+            MenuButton(Component.literal("Settings")) { navigateMenu(SettingsScreen()) },
             MenuButton(Component.literal("Customize Home")) { navigateMenu(MenuHomeShortcutsScreen()) },
         )
         val rows = menuHomeFooterRows(menuLayout)
