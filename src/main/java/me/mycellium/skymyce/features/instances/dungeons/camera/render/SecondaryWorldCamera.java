@@ -30,6 +30,7 @@ import net.minecraft.client.renderer.state.GameRenderState;
 import net.minecraft.client.renderer.state.OptionsRenderState;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
+import org.joml.Matrix4fc;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,6 +58,8 @@ public final class SecondaryWorldCamera {
     }
 
     private static final Logger LOG = LoggerFactory.getLogger("Sky-Myce Secondary Camera");
+    private static final ThreadLocal<Integer> renderDistance = new ThreadLocal<>();
+    private static final ThreadLocal<Matrix4fc> projectionMatrix = new ThreadLocal<>();
     private static Pipeline pipeline;
     private static boolean requested;
     private static boolean rendering;
@@ -66,6 +69,40 @@ public final class SecondaryWorldCamera {
     private SecondaryWorldCamera() { }
 
     public static Status status() { return status; }
+
+    public static int effectiveRenderDistance(int vanilla) {
+        Integer distance = renderDistance.get();
+        return distance == null ? vanilla : distance;
+    }
+
+    public static Object eventInvoker(Object vanilla) {
+        return renderDistance.get() == null ? vanilla : SecondaryRenderEvents.invoker(vanilla);
+    }
+
+    public static Matrix4fc projectionMatrix(Matrix4fc vanilla) {
+        Matrix4fc projection = projectionMatrix.get();
+        return projection == null ? vanilla : projection;
+    }
+
+    static void withProjection(Matrix4fc projection, Runnable action) {
+        Matrix4fc previous = projectionMatrix.get();
+        projectionMatrix.set(projection);
+        try { action.run(); }
+        finally {
+            if (previous == null) projectionMatrix.remove();
+            else projectionMatrix.set(previous);
+        }
+    }
+
+    static void withRenderDistance(int distance, Runnable action) {
+        Integer previous = renderDistance.get();
+        renderDistance.set(distance);
+        try { action.run(); }
+        finally {
+            if (previous == null) renderDistance.remove();
+            else renderDistance.set(previous);
+        }
+    }
 
     /** Called by GameRenderer before HUD extraction; hidden/removed HUDs cannot keep rendering. */
     public static void beginFrame() { requested = false; }
@@ -80,12 +117,14 @@ public final class SecondaryWorldCamera {
             double poseScale = Math.max(Math.hypot(graphics.pose().m00(), graphics.pose().m01()),
                 Math.hypot(graphics.pose().m10(), graphics.pose().m11()));
             int[] size = CameraMath.targetSize(width, height, client.getWindow().getGuiScale() * poseScale);
-            if (pipeline == null || pipeline.level != client.level) {
-                retire();
-                pipeline = new Pipeline(client, view, size[0], size[1]);
-                status = Status.PREPARING;
-            }
-            pipeline.extract(client, view, size[0], size[1]);
+            withRenderDistance(view.renderDistance(), () -> {
+                if (pipeline == null || pipeline.level != client.level) {
+                    retire();
+                    pipeline = new Pipeline(client, view, size[0], size[1]);
+                    status = Status.PREPARING;
+                }
+                pipeline.extract(client, view, size[0], size[1]);
+            });
             int color = (Math.round(Math.clamp(opacity, 0f, 1f) * 255) << 24) | 0xFFFFFF;
             // Texture-target images have bottom-left origin. The GUI extractor preserves native pose/scissor/layering.
             ((SecondaryCameraGuiInvoker) graphics).skyMyce$cameraBlit(RenderPipelines.GUI_TEXTURED,
@@ -101,7 +140,7 @@ public final class SecondaryWorldCamera {
         if (pipeline == null) return;
         if (!requested || Minecraft.getInstance().level != pipeline.level) { stop(); return; }
         if (!pipeline.prepared) return;
-        try { pipeline.render(ticks); }
+        try { withRenderDistance(pipeline.renderer.distance(), () -> pipeline.render(ticks)); }
         catch (RuntimeException error) { fail(error); }
     }
 
@@ -238,9 +277,10 @@ public final class SecondaryWorldCamera {
                 RenderSystem.setProjectionMatrix(projection.getBuffer(state.levelRenderState.cameraRenderState.projectionMatrix), ProjectionType.PERSPECTIVE);
                 fog.updateBuffer(state.levelRenderState.cameraRenderState.fogData);
                 GpuBufferSlice worldFog = fog.getBuffer(FogRenderer.FogMode.WORLD);
-                renderer.renderLevel(pool, ticks, false, state.levelRenderState.cameraRenderState,
-                    state.levelRenderState.cameraRenderState.viewRotationMatrix, worldFog,
-                    state.levelRenderState.cameraRenderState.fogData.color, true, state.levelRenderState.chunkSectionsToRender);
+                withProjection(state.levelRenderState.cameraRenderState.projectionMatrix, () ->
+                    renderer.renderLevel(pool, ticks, false, state.levelRenderState.cameraRenderState,
+                        state.levelRenderState.cameraRenderState.viewRotationMatrix, worldFog,
+                        state.levelRenderState.cameraRenderState.fogData.color, true, state.levelRenderState.chunkSectionsToRender));
                 status = renderer.countRenderedSections() > 0 ? Status.LIVE : Status.PREPARING;
             } finally {
                 // Vanilla normally pops this itself; an interrupted world pass must unwind it too.

@@ -5,7 +5,6 @@ import me.mycellium.skymyce.features.instances.dungeons.camera.render.SecondaryW
 import me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraMath;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.PostChain;
@@ -28,12 +27,6 @@ public abstract class SecondaryCameraLevelRendererMixin {
         int vanilla = ARGB.colorFromFloat(alpha, red, green, blue);
         // Vanilla clears a main world frame with alpha zero. A GUI-composited second frame needs its own backdrop.
         return (Object) this instanceof SecondaryLevelRenderer ? CameraMath.opaqueColor(vanilla) : vanilla;
-    }
-
-    @Redirect(method = {"allChanged", "cullTerrain", "extractLevel", "extractVisibleEntities"},
-        at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Options;getEffectiveRenderDistance()I"))
-    private int skyMyce$boundedDistance(Options options) {
-        return (Object) this instanceof SecondaryLevelRenderer secondary ? secondary.distance() : options.getEffectiveRenderDistance();
     }
 
     @Redirect(method = "allChanged", at = @At(value = "INVOKE",
