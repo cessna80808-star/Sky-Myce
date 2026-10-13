@@ -51,7 +51,7 @@ public final class LoaderRestart {
         return "REQUEST";
     }
 
-    static void reportFailure(Exception failure) {
+    public static void reportFailure(Throwable failure) {
         System.err.println("Sky-Myce restart failed at " + preparationStage + " (" + failure.getClass().getSimpleName() + ").");
         try {
             var output = new DataOutputStream(System.out);

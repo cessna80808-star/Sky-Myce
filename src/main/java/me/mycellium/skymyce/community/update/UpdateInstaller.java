@@ -18,11 +18,14 @@ public final class UpdateInstaller {
     public static void writeHelper(Path destination) throws Exception {
         var types = new ArrayList<>(List.of(UpdateInstaller.class, LoaderRestart.class, RestartNatives.class));
         types.addAll(List.of(LoaderRestart.class.getDeclaredClasses()));
+        var resources = new ArrayList<>(types.stream().map(type -> type.getName().replace('.', '/') + ".class").toList());
+        // Anonymous file-tree visitors are executable helper code, but getDeclaredClasses() omits them.
+        for (var suffix : List.of("1", "2"))
+            resources.add(RestartNatives.class.getName().replace('.', '/') + "$" + suffix + ".class");
         try (var jar = new JarOutputStream(Files.newOutputStream(destination))) {
-            for (var type : types) {
-                var resource = type.getName().replace('.', '/') + ".class";
+            for (var resource : resources) {
                 jar.putNextEntry(new JarEntry(resource));
-                try (var input = type.getResourceAsStream("/" + resource)) {
+                try (var input = UpdateInstaller.class.getResourceAsStream("/" + resource)) {
                     if (input == null) throw new java.io.IOException("Restart helper unavailable");
                     input.transferTo(jar);
                 }
@@ -77,7 +80,8 @@ public final class UpdateInstaller {
                 }
                 return null;
             });
-        } catch (Exception failure) {
+        } catch (Throwable failure) {
+            LoaderRestart.reportFailure(failure);
             if (planPath != null) try { Files.writeString(planPath.resolveSibling("result.txt"), "Update/restart could not finish. Start Minecraft from your launcher; inspect mods and .sky-myce-updates.\n"); } catch (Exception ignored) {}
             System.exit(1);
         }
