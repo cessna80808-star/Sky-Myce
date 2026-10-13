@@ -16,7 +16,7 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     }
     var graphicsQuality by enum(GuiQuality.MEDIUM) {
         name = TranslatableValue.literal("GUI Graphics Quality")
-        description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls raster detail, shadows and ambient effects while keeping essential interaction feedback.")
+        description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls rendering resolution, shadows and ambient effects while keeping essential interaction feedback.")
     }
     var animationMode by enum(GuiMotion.MEDIUM) {
         name = TranslatableValue.literal("GUI Animations")

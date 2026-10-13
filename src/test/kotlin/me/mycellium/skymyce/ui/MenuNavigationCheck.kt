@@ -94,6 +94,15 @@ fun main() {
         if (width == 400) check(descriptions.joinToString(" ") == MenuCategory.entries[index].description)
     }
     val actionSets = listOf(listOf(90, 24, 24, 60), listOf(98, 105), listOf(94, 54), listOf(76, 76))
+    for (available in listOf(160, 300, 579, 580, 900, 1048)) {
+        val columns = menuFeatureColumns(available)
+        val width = (available - (columns - 1) * 8) / columns
+        check(columns in 1..2 && width > 0 && width * columns + (columns - 1) * 8 <= available)
+        if (columns == 2) check(width >= 286) { "Feature controls were squeezed into narrow cards" }
+        check(menuActionRows(listOf(76, 76, 64), width - 20).all { indices ->
+            indices.sumOf { listOf(76, 76, 64)[it] } + (indices.size - 1) * 6 <= width - 20
+        })
+    }
     for (available in listOf(80, 139, 163, 240, 400)) for (widths in actionSets) {
         val rows = menuActionRows(widths, available)
         check(rows.flatten() == widths.indices.toList())

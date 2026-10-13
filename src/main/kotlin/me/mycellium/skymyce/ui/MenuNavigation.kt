@@ -24,12 +24,13 @@ internal fun menuHomeFooterRows(layout: MenuLayout) = menuActionRows(homeActionW
 private val menuSectionPreviews = MenuCategory.entries.map { category ->
     MenuCatalog.definitions.filter { it.category == category }.map { it.subcategory }.distinct().take(3).joinToString(" · ")
 }
-private val descriptionLines = arrayOfNulls<Pair<Int, List<String>>>(MenuCategory.entries.size)
+private val descriptionLines = arrayOfNulls<Triple<Int, Boolean, List<String>>>(MenuCategory.entries.size)
 
 /** Card descriptions use measured text advances and a bounded second line, including during the home-to-sidebar morph. */
 internal fun menuNavigationDescription(index: Int, width: Int): List<String> {
     val available = width.coerceAtLeast(1)
-    descriptionLines[index]?.takeIf { it.first == available }?.let { return it.second }
+    val nativeMetrics = SkijaMenuFonts.active
+    descriptionLines[index]?.takeIf { it.first == available && it.second == nativeMetrics }?.let { return it.third }
     val wrapped = menuTextLines(Component.literal(MenuCategory.entries[index].description), available, 9.0).map { line ->
         buildString { line.accept { _, _, codepoint -> appendCodePoint(codepoint); true } }
     }
@@ -40,7 +41,7 @@ internal fun menuNavigationDescription(index: Int, width: Int): List<String> {
             last = last.dropLast(Character.charCount(last.codePointBefore(last.length))).trimEnd()
         lines[lines.lastIndex] = if (MenuCanvas.textWidth("$last…", size = 9.0) <= available) "$last…" else ""
     }
-    return lines.also { descriptionLines[index] = available to it }
+    return lines.also { descriptionLines[index] = Triple(available, nativeMetrics, it) }
 }
 
 /** The same surfaces travel between these two arrangements; content never changes their geometry. */
@@ -103,49 +104,59 @@ internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: 
                                      homeRect: MenuRect = rect) {
     val profile = ThemeConfig.animationMode.profile
     val expansion = 1 - compact.coerceIn(0.0, 1.0)
-    fun rounded(r: MenuRect, color: Int, radius: Double = 4.0) {
+    fun rounded(r: MenuRect, color: Int, radius: Double = 10.0 - compact * 4) {
         val corner = if (MenuTheme.ROUNDED) minOf(radius, r.width / 2, r.height / 2) else 0.0
-        canvas.fill(r.x + corner, r.y, r.width - corner * 2, r.height, color)
-        canvas.fill(r.x, r.y + corner, corner, r.height - corner * 2, color)
-        canvas.fill(r.x + r.width - corner, r.y + corner, corner, r.height - corner * 2, color)
-        if (corner > 0) {
-            canvas.arc(r.x + corner, r.y + corner, corner, 0.0, 90.0, color)
-            canvas.arc(r.x + r.width - corner, r.y + corner, corner, 90.0, 180.0, color)
-            canvas.arc(r.x + r.width - corner, r.y + r.height - corner, corner, 180.0, 270.0, color)
-            canvas.arc(r.x + corner, r.y + r.height - corner, corner, 270.0, 360.0, color)
+        canvas.roundedRect(r.x, r.y, r.width, r.height, corner, color)
+    }
+    val radius = if (MenuTheme.ROUNDED) 10.0 - compact * 4 else 0.0
+    if (MenuTheme.SHADOW) {
+        val qualityLayers = ThemeConfig.graphicsQuality.shadowLayers
+        val depth = 1 + hover * profile.cardLift * expansion
+        if (SkijaMenuFonts.active && qualityLayers >= 2 && profile.glowStrength > 0.0) {
+            canvas.shadow(rect.x, rect.y + depth, rect.width, rect.height, radius, if (profile.ambient) 4.0 else 3.0,
+                MenuTheme.alpha(0x06040C, ((14 + hover * 12) * profile.shadowStrength).toInt()))
+        } else for (layer in (if (profile.glowStrength > 0.0) qualityLayers else minOf(qualityLayers, 1)) downTo 1) {
+            rounded(MenuRect(rect.x - layer, rect.y + depth, rect.width + layer * 2, rect.height + layer),
+                MenuTheme.alpha(0x06040C, ((3 + hover * 6) * profile.shadowStrength).toInt()))
         }
     }
-    if (MenuTheme.SHADOW) for (layer in ThemeConfig.graphicsQuality.shadowLayers downTo 1) {
-        val depth = 1 + hover * profile.cardLift * expansion
-        rounded(MenuRect(rect.x - layer, rect.y + depth, rect.width + layer * 2, rect.height + layer),
-            MenuTheme.alpha(0x06040C, ((3 + hover * 6) * profile.shadowStrength).toInt()))
+    if (ThemeConfig.graphicsQuality.glow && profile.glowStrength > 0.0 && hover + chosen > 0) {
+        if (SkijaMenuFonts.active) canvas.shadow(rect.x, rect.y, rect.width, rect.height, radius, if (profile.ambient) 5.0 else 4.0,
+            MenuTheme.alpha(MenuTheme.ACCENT, ((hover + chosen) * profile.glowStrength * 12).toInt()))
+        else rounded(MenuRect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2),
+            MenuTheme.alpha(MenuTheme.ACCENT, ((hover + chosen) * profile.glowStrength * 8).toInt()))
     }
-    if (ThemeConfig.graphicsQuality.glow && hover + chosen > 0) rounded(
-        MenuRect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2),
-        MenuTheme.alpha(MenuTheme.ACCENT, ((hover + chosen) * profile.glowStrength * 8).toInt()))
     val border = MenuTheme.blend(MenuTheme.BORDER, if (chosen > 0 || focused) MenuTheme.ACCENT else MenuTheme.TEXT,
         if (focused) 100 else (hover * 22 + chosen * 78).toInt())
-    if (MenuTheme.BORDERS || focused || chosen > 0) rounded(rect, MenuTheme.alpha(border))
-    rounded(MenuRect(rect.x + 1, rect.y + 1, (rect.width - 2).coerceAtLeast(1.0), (rect.height - 2).coerceAtLeast(1.0)),
-        MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (chosen * 12 + hover * 5).toInt()), MenuTheme.OPACITY))
+    rounded(rect, MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (chosen * 12 + hover * 5).toInt()), MenuTheme.OPACITY))
+    if (MenuTheme.BORDERS || focused || chosen > 0) canvas.roundedBorder(rect.x, rect.y, rect.width, rect.height,
+        if (MenuTheme.ROUNDED) 10.0 - compact * 4 else 0.0, 1.0, MenuTheme.alpha(border))
+    if (expansion > .7 && ThemeConfig.graphicsQuality.glow && profile.glowStrength > 0) {
+        canvas.gradient(rect.x + 10, rect.y + 2, (rect.width - 20).coerceAtLeast(1.0), minOf(50.0, rect.height - 4),
+            MenuTheme.alpha(MenuTheme.ACCENT, ((3 + hover * 4) * profile.glowStrength).toInt()),
+            MenuTheme.alpha(MenuTheme.SECONDARY, ((2 + hover * 3) * profile.glowStrength).toInt()), 0, 0)
+    }
     // Typography keeps its home arrangement until it fades, rather than reflowing mid-morph.
-    val roomy = homeRect.height > 65 && homeRect.width > 135
+    val roomy = homeRect.height > 110 && homeRect.width > 180
     val iconSize = (if (roomy) 20.0 else 15.0) * expansion + 14 * compact
     val iconX = rect.x + 15 * expansion + (rect.width - iconSize) / 2 * compact
-    val iconY = rect.y + if (roomy) 17 * expansion + (rect.height - iconSize) / 2 * compact else (rect.height - iconSize) / 2
+    val iconY = rect.y + if (roomy) 20 * expansion + (rect.height - iconSize) / 2 * compact else (rect.height - iconSize) / 2
+    if (roomy && expansion > 0) rounded(MenuRect(iconX - 6 * expansion, iconY - 6 * expansion,
+        iconSize + 12 * expansion, iconSize + 12 * expansion),
+        MenuTheme.alpha(MenuTheme.ACCENT, ((7 + hover * 5) * expansion).toInt()), 8.0)
     paintMenuIcon(canvas, MenuCategory.entries[index].iconId, iconX, iconY, iconSize, MenuTheme.alpha(if (chosen > 0 || hover > .2) MenuTheme.ACCENT else MenuTheme.MUTED))
     val textAlpha = (1 - compact / .42).coerceIn(0.0, 1.0)
     if (textAlpha > 0) {
         val opacity = canvas.opacity
         canvas.opacity *= textAlpha
         val left = rect.x + if (roomy) 15.0 else 39.0
-        val titleTop = if (roomy) rect.y + 45 else rect.y + (rect.height - MenuCanvas.lineHeight(11.0)) / 2
+        val titleTop = if (roomy) rect.y + 55 else rect.y + (rect.height - MenuCanvas.lineHeight(11.0)) / 2
         val oldClip = canvas.clip
         val textClip = MenuCanvas.Clip(left.toInt(), rect.y.toInt(), (rect.x + rect.width - left - 10).toInt().coerceAtLeast(0), rect.height.toInt())
         canvas.clip = oldClip?.let { intersectMenuClip(it, textClip) } ?: textClip
-        canvas.text(listOf(MenuCanvas.Run(menuSectionTitles[index], MenuTheme.alpha(MenuTheme.TEXT), bold = true)), left, titleTop, if (roomy) 13.0 else 11.0)
-        if (roomy && homeRect.height > 95) menuNavigationDescription(index, (homeRect.width - 25).toInt()).forEachIndexed { line, text ->
-            canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 22 + line * MenuCanvas.lineHeight(9.0), 9.0)
+        canvas.text(listOf(MenuCanvas.Run(menuSectionTitles[index], MenuTheme.alpha(MenuTheme.TEXT), bold = true)), left, titleTop, if (roomy) 15.0 else 11.0)
+        if (roomy) menuNavigationDescription(index, (homeRect.width - 25).toInt()).forEachIndexed { line, text ->
+            canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.alpha(MenuTheme.MUTED))), left, titleTop + 24 + line * MenuCanvas.lineHeight(9.0), 9.0)
         }
         if (roomy && homeRect.height > 140) canvas.text(listOf(MenuCanvas.Run(menuSectionPreviews[index], MenuTheme.alpha(MenuTheme.ACCENT))),
             left, rect.y + rect.height - 26, 9.0)

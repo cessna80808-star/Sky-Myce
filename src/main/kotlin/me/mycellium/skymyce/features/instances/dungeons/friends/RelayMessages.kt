@@ -180,7 +180,7 @@ object RelayMessages {
     fun selectParty() = selectIrc("party")
     fun sendParty(text: String) = sendIrc("party", text)
 
-    fun chatHelp() = notice("/sm irc — global Minecraft/Discord chat; /sm party — Minecraft-only Party IRC. Add a message to send once. Click ⋯ for replies, reactions and your own edit/delete controls. /sm ircstatus shows status; /sm chat exits.")
+    fun chatHelp() = notice("/sm irc — global Minecraft/Discord chat; /sm party — Minecraft-only Party IRC. Add a message to send once. Click ↩ to reply, + to react, or ⋯ to edit/delete your own message. /sm ircstatus shows status; /sm chat exits.")
 
     private fun enableGlobal() {
         if (GlobalChatConfig.enabled) return

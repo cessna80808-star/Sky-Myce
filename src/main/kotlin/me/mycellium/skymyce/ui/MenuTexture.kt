@@ -60,10 +60,31 @@ internal fun menuTexturePixels(image: BufferedImage, target: IntArray, region: R
 
 /** Minecraft only composites the finished custom canvas; it paints no menu widgets or text. */
 class MenuTexture : AutoCloseable {
+    private var skija: SkijaMenuTexture? = null
     private var texture: DynamicTexture? = null
     private var pixels = IntArray(0)
     private var nativePixels: IntBuffer? = null
     private var uploadedRevision: Long? = null
+    private var gpuAvailable = false
+
+    /** Layout must use the same font metrics as the renderer that will paint this frame. */
+    fun prepareFrame(): Boolean {
+        val available = SkijaMenuTexture.available()
+        val changed = gpuAvailable && !available
+        gpuAvailable = available
+        SkijaMenuFonts.active = available
+        if (changed) { skija?.close(); skija = null }
+        return changed
+    }
+
+    fun render(graphics: GuiGraphicsExtractor, canvas: MenuCanvas, logicalWidth: Int, logicalHeight: Int, scale: Double,
+               canvasWidth: Int = logicalWidth, canvasHeight: Int = logicalHeight) {
+        if (SkijaMenuTexture.available()) {
+            val target = skija ?: SkijaMenuTexture().also { skija = it }
+            if (target.render(graphics, canvas.finishFrame(canvasWidth, canvasHeight, scale), logicalWidth, logicalHeight)) return
+        }
+        render(graphics, canvas.finish(canvasWidth, canvasHeight, scale), logicalWidth, logicalHeight, canvas.revision, canvas.dirtyRegion)
+    }
 
     fun render(graphics: GuiGraphicsExtractor, image: BufferedImage, logicalWidth: Int, logicalHeight: Int,
                revision: Long? = null, dirtyRegion: Rectangle? = null) {
@@ -98,6 +119,7 @@ class MenuTexture : AutoCloseable {
     }
 
     override fun close() {
+        skija?.close(); skija = null
         texture?.let { RenderSystem.assertOnRenderThread(); retirement.retire(it) }
         texture = null
         pixels = IntArray(0)

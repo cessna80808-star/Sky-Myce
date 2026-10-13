@@ -62,9 +62,12 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private val pageOpening = MotionValue(0.0)
     private var pageDirection = 1
     private var outgoing: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
     private var outgoingSize: Pair<Int, Int>? = null
     private var modalUnderlay: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
     private var closingContent: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
     private var closingShellAlpha = 1.0
     private val contentExit = MotionValue(1.0)
     private var navigationMotion = emptyMap<String, MenuButton>()
@@ -115,7 +118,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
 
     internal fun prepareNavigation(destination: MenuScreen) {
         destination.outgoing = if (modal || destination.modal) null else canvas.snapshot("content")
-        destination.modalUnderlay = if (destination.modal) modalUnderlay ?: canvas.snapshot() else null
+        destination.modalUnderlay = if (destination.modal) modalUnderlay?.retain() ?: canvas.snapshot() else null
         destination.outgoingSize = width to height
         destination.pageDirection = if ((destination.menuCategory?.ordinal ?: -1) < (menuCategory?.ordinal ?: -1)) -1 else 1
         if (!modal && !destination.modal) {
@@ -177,6 +180,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
     override fun init() {
+        val rendererChanged = texture.prepareFrame()
         val window = MC.instance.window
         val previousViewport = if (::viewport.isInitialized) viewport else null
         viewport = MenuViewport.fit(window.width, window.height, window.guiScaledWidth, window.guiScaledHeight)
@@ -205,6 +209,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         }
         navigationButtons().forEach { button -> navigationMotion[button.message.string]?.let(button::inheritMotion) }
         navigationMotion = emptyMap()
+        if (rendererChanged && !invalid) recoverRenderer()
     }
     final override fun build(root: FlowLayout) {
         closeMenuDropdown()
@@ -256,6 +261,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     final override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
         RuntimeProfiler.measure(RuntimeProfiler.Area.GUI) {
         if (invalid) { onClose(); return }
+        if (texture.prepareFrame()) recoverRenderer()
         val mode = ThemeConfig.animationMode
         opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, mode)
         sidebarOpening.animateTo(if (closing) 0.0 else 1.0, 200, mode = mode)
@@ -301,7 +307,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             canvas.group = null
         }
         val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
-        texture.render(g, canvas.finish(width, height, scale), viewport.screenWidth, viewport.screenHeight, canvas.revision, canvas.dirtyRegion)
+        texture.render(g, canvas, viewport.screenWidth, viewport.screenHeight, scale, width, height)
         if (!closing && dropdown == null && closingDropdown == null && pageProgress >= 1.0 && paintedShell.alpha >= .999 && paintedShell.scale >= .999) {
             extractNativeContent(g, viewport.screenWidth.toFloat() / width, viewport.screenHeight.toFloat() / height, partialTicks)
         }
@@ -400,13 +406,30 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     // The adapter tooltip is already painted into the same canvas above the content.
     final override fun drawComponentTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {}
+    private fun releaseCollapsibleMotion(component: UIComponent) {
+        if (component is MenuCollapsible) component.releaseMotion()
+        if (component is ParentUIComponent) component.children().forEach(::releaseCollapsibleMotion)
+    }
+    /** Retain editable controls and scroll state while discarding paint tied to the failed GPU. */
+    private fun recoverRenderer() {
+        closeMenuDropdown(); closingDropdown = null
+        val root = uiAdapter.rootComponent
+        val focused = root.focusHandler()?.focused()
+        outgoing = null; modalUnderlay = null; closingContent = null; outgoingSize = null
+        tooltip.clear(); releaseCollapsibleMotion(root); canvas.close()
+        opening.snap(if (closing) 0.0 else 1.0)
+        sidebarOpening.snap(if (closing) 0.0 else 1.0)
+        pageOpening.snap(if (closing) 0.0 else 1.0)
+        contentExit.snap(if (closing) 0.0 else 1.0)
+        navigationProgress.snap(if (home) 0.0 else 1.0)
+        navigationSelection.cancel()
+        uiAdapter.inflateAndMount()
+        if (focused != null && menuComponentAttached(root, focused))
+            root.focusHandler()?.focus(focused, UIComponent.FocusSource.KEYBOARD_CYCLE)
+    }
     override fun removed() {
         dropdown?.parent()?.removeChild(dropdown); dropdown = null; closingDropdown = null; dropdownAnchor = null
-        fun release(component: UIComponent) {
-            if (component is MenuCollapsible) component.releaseMotion()
-            if (component is ParentUIComponent) component.children().forEach(::release)
-        }
-        uiAdapter?.rootComponent?.let(::release)
+        uiAdapter?.rootComponent?.let(::releaseCollapsibleMotion)
         outgoing = null; modalUnderlay = null; navigationMotion = emptyMap()
         closingContent = null; contentExit.cancel()
         opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); navigationProgress.cancel(); navigationSelection.cancel(); tooltip.clear(); toasts.clear()

@@ -1,9 +1,17 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
+import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.ui.MenuButton
+import me.mycellium.skymyce.ui.MenuCanvas
+import me.mycellium.skymyce.ui.MenuGraphics
 import me.mycellium.skymyce.ui.MenuTexture
+import me.mycellium.skymyce.ui.MenuTheme
+import me.mycellium.skymyce.ui.SkijaMenuFonts
+import me.mycellium.skymyce.ui.menuTextLines
+import me.mycellium.skymyce.ui.menuTextRuns
+import me.mycellium.skymyce.ui.menuTextWidth
 import net.minecraft.client.gui.GuiGraphicsExtractor
-import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.ConfirmLinkScreen
@@ -13,10 +21,21 @@ import net.minecraft.util.Util
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-/** One explicit viewer owns one GPU texture; chat thumbnails use the shared decoded asset cache. */
+/** Shared menu chrome surrounds native media composition; the existing decoded asset cache owns GIF frames. */
 internal class IrcMediaViewerScreen(private val previous: Screen?, private val media: IrcMedia,
     private val sender: String, private val context: String, internal val messageKey: IrcKey? = null) : Screen(Component.literal("IRC media")) {
     private var texture = MenuTexture()
+    private val chrome = MenuCanvas()
+    private val chromeTexture = MenuTexture()
+    private data class Header(val source: String, val available: Int, val color: Int, val size: Double,
+                              val native: Boolean, val runs: List<MenuCanvas.Run>, val width: Double)
+    private val headers = arrayOfNulls<Header>(5)
+    private var detailText: String? = null
+    private var detailWidth = -1
+    private var detailColor = 0
+    private var detailNative = false
+    private var detailRuns = emptyList<List<MenuCanvas.Run>>()
+    private var detailWidths = emptyList<Double>()
     private var paintedAsset: IrcGif? = null
     private var zoom = 1.0
     private var panX = 0.0
@@ -27,18 +46,19 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     private var preference = GlobalChatConfig.animateGifs
     private val generation = IrcMediaAssets.generation
     private var browserDisabled = false
-    private lateinit var pauseButton: Button
-    private lateinit var fitButton: Button
-    private lateinit var minusButton: Button
-    private lateinit var plusButton: Button
-    private lateinit var retryButton: Button
+    private lateinit var pauseButton: MenuButton
+    private lateinit var fitButton: MenuButton
+    private lateinit var minusButton: MenuButton
+    private lateinit var plusButton: MenuButton
+    private lateinit var retryButton: MenuButton
     private val imageTop get() = 58
     private val imageBottom get() = (height - 76).coerceAtLeast(imageTop + 1)
 
     override fun init() {
+        if (chromeTexture.prepareFrame()) chrome.close()
         if (!current()) return
-        fun button(label: String, x: Int, y: Int, size: Int, action: () -> Unit): Button =
-            addRenderableWidget(Button.builder(Component.literal(label)) { action() }.bounds(x, y, size, 20).build())
+        fun button(label: String, x: Int, y: Int, size: Int, action: () -> Unit): MenuButton =
+            addRenderableWidget(MenuButton(Component.literal(label)) { action() }.apply { setRectangle(size, 20, x, y) })
         val start = (width - 250) / 2
         val row = height - 54
         fitButton = button("Fit", start, row, 52) { fit() }
@@ -87,16 +107,21 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     }
 
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float) {
-        output.fill(0, 0, width, height, 0xf2111419.toInt())
+        if (chromeTexture.prepareFrame()) chrome.close()
+        chrome.begin()
+        val graphics = MenuGraphics(chrome, mouseX, mouseY, width, height)
+        graphics.fill(0, 0, width, height, MenuTheme.alpha(MenuTheme.PANEL, 95))
         if (!current()) {
             discardTexture()
-            output.centeredText(font, "This media is no longer available.", width / 2, height / 2, 0xffbcc4d0.toInt())
+            centerLine(graphics, 4, "This media is no longer available.", height / 2, MenuTheme.alpha(MenuTheme.MUTED))
+            renderChrome(output)
             return
         }
-        output.centeredText(font, font.plainSubstrByWidth("${media.name ?: media.type.uppercase()} · $sender", width - 24), width / 2, 12, 0xffffffff.toInt())
-        output.centeredText(font, font.plainSubstrByWidth(context.replace('\n', ' '), width - 24), width / 2, 27, 0xffbcc4d0.toInt())
-        output.centeredText(font, media.url.host.orEmpty(), width / 2, 42, 0xff8f9eb1.toInt())
-        output.fill(16, imageTop, width - 16, imageBottom, 0xff080a0d.toInt())
+        centerLine(graphics, 0, "${media.name ?: media.type.uppercase()} · $sender", 10, MenuTheme.alpha(MenuTheme.TEXT), 12.0)
+        centerLine(graphics, 1, context.replace('\n', ' '), 27, MenuTheme.alpha(MenuTheme.MUTED), 9.0)
+        centerLine(graphics, 2, media.url.host.orEmpty(), 42, MenuTheme.alpha(MenuTheme.ACCENT), 9.0)
+        MenuTheme.box(graphics, 15, imageTop - 1, (width - 30).coerceAtLeast(1), imageBottom - imageTop + 2,
+            MenuTheme.CARD)
         val state = IrcMediaAssets.view(media, true)
         val asset = state.asset
         if (asset !== paintedAsset) {
@@ -114,30 +139,13 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         lastTickNanos = now
         if (asset != null) {
             clampPan()
-            val scale = minOf((width - 32).coerceAtLeast(1).toDouble() / asset.width,
-                (imageBottom - imageTop).toDouble() / asset.height) * zoom
-            val drawWidth = (asset.width * scale).roundToInt().coerceAtLeast(1)
-            val drawHeight = (asset.height * scale).roundToInt().coerceAtLeast(1)
-            val x = ((width - drawWidth) / 2.0 + panX).toFloat()
-            val y = (imageTop + (imageBottom - imageTop - drawHeight) / 2.0 + panY).toFloat()
-            val index = asset.frameIndexAt(elapsedNanos / 1_000_000)
-            output.enableScissor(16, imageTop, width - 16, imageBottom)
-            output.pose().pushMatrix()
-            output.pose().translate(x, y)
-            texture.render(output, asset.frames[index].image, drawWidth, drawHeight, index.toLong())
-            output.pose().popMatrix()
-            output.disableScissor()
         } else {
             val detail = when (state.status) {
                 IrcMediaAssetStatus.IDLE -> "Media session changed. Return to chat and open it again."
                 IrcMediaAssetStatus.LOADING -> "Loading media…"
                 else -> state.detail ?: "Media is unavailable. Open it in your browser."
             }
-            val lines = font.split(Component.literal(detail), (width - 64).coerceAtLeast(1))
-            val y = imageTop + (imageBottom - imageTop - lines.size * font.lineHeight) / 2
-            lines.forEachIndexed { index, line ->
-                output.text(font, line, (width - font.width(line)) / 2, y + index * font.lineHeight, 0xffd2d9e3.toInt())
-            }
+            drawDetail(graphics, detail)
         }
         val animated = asset?.frames?.size?.let { it > 1 } == true && media.type != "video"
         pauseButton.active = animated
@@ -147,8 +155,55 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         val status = if (browserDisabled) "Enable Chat Links in Minecraft settings to open the browser." else if (media.type == "video") "Video · Open browser to play" else if (asset != null)
             "${asset.width} × ${asset.height} · ${(zoom * 100).roundToInt()}% of fit · Scroll to zoom, drag to pan"
             else if (state.status == IrcMediaAssetStatus.LOADING) "Downloading safely…" else "Open browser for the original"
-        output.centeredText(font, font.plainSubstrByWidth(status, width - 24), width / 2, height - 69, 0xffa7b5c8.toInt())
-        super.extractRenderState(output, mouseX, mouseY, partialTicks)
+        centerLine(graphics, 3, status, height - 69, MenuTheme.alpha(MenuTheme.MUTED), 9.0)
+        super.extractRenderState(graphics, mouseX, mouseY, partialTicks)
+        renderChrome(output)
+        if (asset != null) {
+            val scale = minOf((width - 32).coerceAtLeast(1).toDouble() / asset.width,
+                (imageBottom - imageTop).toDouble() / asset.height) * zoom
+            val drawWidth = (asset.width * scale).roundToInt().coerceAtLeast(1)
+            val drawHeight = (asset.height * scale).roundToInt().coerceAtLeast(1)
+            val x = ((width - drawWidth) / 2.0 + panX).toFloat()
+            val y = (imageTop + (imageBottom - imageTop - drawHeight) / 2.0 + panY).toFloat()
+            val index = asset.frameIndexAt(elapsedNanos / 1_000_000)
+            output.enableScissor(16, imageTop, width - 16, imageBottom)
+            output.pose().pushMatrix()
+            try {
+                output.pose().translate(x, y)
+                texture.render(output, asset.frames[index].image, drawWidth, drawHeight, index.toLong())
+            } finally { output.pose().popMatrix(); output.disableScissor() }
+        }
+    }
+
+    private fun renderChrome(output: GuiGraphicsExtractor) {
+        val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        chromeTexture.render(output, chrome, width, height, scale)
+    }
+    private fun centerLine(graphics: MenuGraphics, slot: Int, text: String, y: Int, color: Int, size: Double = 10.0) {
+        val available = (width - 24).coerceAtLeast(1)
+        val native = SkijaMenuFonts.active
+        var header = headers[slot]
+        if (header == null || header.source != text || header.available != available || header.color != color ||
+            header.size != size || header.native != native) {
+            val shown = ircMediaTextEllipsis(text, available.toDouble(), size)
+            header = Header(text, available, color, size, native, listOf(MenuCanvas.Run(shown, color)), MenuCanvas.textWidth(shown, size = size))
+            headers[slot] = header
+        }
+        graphics.styledText(header.runs, (width - header.width) / 2, y.toDouble(), size)
+    }
+    private fun drawDetail(graphics: MenuGraphics, text: String) {
+        val available = (width - 64).coerceAtLeast(1)
+        val color = MenuTheme.alpha(MenuTheme.TEXT)
+        if (detailText != text || detailWidth != available || detailColor != color || detailNative != SkijaMenuFonts.active) {
+            detailText = text; detailWidth = available; detailColor = color; detailNative = SkijaMenuFonts.active
+            val lines = menuTextLines(Component.literal(text), available)
+            detailRuns = lines.map { menuTextRuns(it, color) }; detailWidths = lines.map { menuTextWidth(it) }
+        }
+        val lineHeight = MenuCanvas.lineHeight()
+        val top = imageTop + (imageBottom - imageTop - detailRuns.size * lineHeight) / 2
+        detailRuns.forEachIndexed { index, runs ->
+            graphics.styledText(runs, (width - detailWidths[index]) / 2, (top + index * lineHeight).toDouble())
+        }
     }
 
     override fun mouseDragged(event: MouseButtonEvent, dx: Double, dy: Double): Boolean {
@@ -168,7 +223,10 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     private fun discardTexture() { texture.close(); texture = MenuTexture(); paintedAsset = null }
     override fun removed() {
         texture.close(); paintedAsset = null
+        chrome.close(); chromeTexture.close()
+        headers.fill(null); detailText = null; detailRuns = emptyList(); detailWidths = emptyList()
         if (generation == IrcMediaAssets.generation) IrcMediaAssets.cancel(media, true)
+        super.removed()
     }
     private fun closeExpired() {
         if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen()
@@ -180,4 +238,21 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         else minecraft.setScreen(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous)
     }
     override fun isPauseScreen() = false
+}
+
+/** Truncate using the same glyph advances as the shared renderer, without splitting surrogate pairs. */
+internal fun ircMediaTextEllipsis(text: String, available: Double, size: Double = 10.0): String {
+    if (MenuCanvas.textWidth(text, size = size) <= available) return text
+    val suffix = "…"
+    val limit = available - MenuCanvas.textWidth(suffix, size = size)
+    if (limit < 0) return ""
+    var width = 0.0
+    var end = 0
+    while (end < text.length) {
+        val codepoint = text.codePointAt(end)
+        val advance = MenuCanvas.textWidth(codepoint, false, false, size)
+        if (width + advance > limit) break
+        width += advance; end += Character.charCount(codepoint)
+    }
+    return text.substring(0, end).trimEnd() + suffix
 }
