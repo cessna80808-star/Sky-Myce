@@ -53,6 +53,22 @@ class RoomTransform(val origin: GridCell, val quarterTurns: Int) {
 @ConsistentCopyVisibility
 data class RoomRoute internal constructor(val targetOrder: List<String>, val path: List<GridCell>, val cost: Int)
 
+/** A live snapshot may drop or move a target before the replacement route is ready. */
+internal fun RoomRoute.targetStops(targets: Map<String, GridCell>): List<Int>? {
+    if (path.isEmpty()) return null
+    val stops = ArrayList<Int>(targetOrder.size + 1)
+    var from = 0
+    for (id in targetOrder) {
+        val target = targets[id] ?: return null
+        val index = path.subList(from, path.size).indexOf(target)
+        if (index < 0) return null
+        from += index
+        stops.add(from)
+    }
+    stops.add(path.lastIndex)
+    return stops
+}
+
 /** Selects a nearby route suffix only through a caller-validated connector, before the next target. */
 fun RoomRoute.liveStart(
     previousCursor: Int,
@@ -60,7 +76,7 @@ fun RoomRoute.liveStart(
     canConnect: (GridCell) -> Boolean,
     distanceSquared: (GridCell) -> Double
 ): Int? {
-    if (path.isEmpty()) return null
+    if (path.isEmpty() || targetOrder.any { it !in targets }) return null
     val end = if (targetOrder.isEmpty()) path.lastIndex else path.indexOf(targets[targetOrder.first()] ?: return null)
     if (end < 0) return null
     val cursor = previousCursor.coerceIn(0, end)

@@ -147,12 +147,12 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
             }
             drawDetail(graphics, detail)
         }
-        val animated = asset?.frames?.size?.let { it > 1 } == true && media.type != "video"
+        val animated = asset?.frames?.size?.let { it > 1 } == true
         pauseButton.active = animated
         pauseButton.message = Component.literal(if (paused) "Play GIF" else "Pause GIF")
         fitButton.active = asset != null; minusButton.active = asset != null && zoom > 0.25; plusButton.active = asset != null && zoom < 16
         retryButton.active = state.status == IrcMediaAssetStatus.FAILED
-        val status = if (browserDisabled) "Enable Chat Links in Minecraft settings to open the browser." else if (media.type == "video") "Video · Open browser to play" else if (asset != null)
+        val status = if (browserDisabled) "Enable Chat Links in Minecraft settings to open the browser." else if (media.type == "video" && !animated) "Video · Open browser to play" else if (asset != null)
             "${asset.width} × ${asset.height} · ${(zoom * 100).roundToInt()}% of fit · Scroll to zoom, drag to pan"
             else if (state.status == IrcMediaAssetStatus.LOADING) "Downloading safely…" else "Open browser for the original"
         centerLine(graphics, 3, status, height - 69, MenuTheme.alpha(MenuTheme.MUTED), 9.0)

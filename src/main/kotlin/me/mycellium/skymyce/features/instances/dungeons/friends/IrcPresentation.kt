@@ -1,28 +1,36 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
 import java.net.URI
+import com.google.gson.JsonParser
 
 private val ircGrapheme = Regex("\\X")
 private val customIrcEmoji = Regex("<a?:([A-Za-z0-9_]{1,32}):([0-9]{17,20})>")
 internal val IRC_REACTION_NAMES = listOf("Like", "Love", "Laugh", "Celebrate", "Eyes", "Fire")
-internal data class IrcReadableText(val text: String, val original: String? = null)
+internal data class IrcReadableText(val text: String, val original: String? = null, val emoji: Boolean = false)
 
-/** Native chat has no shaping support for Discord's joined/color emoji. Keep the wire text intact. */
+private val ircEmojiGlyphs by lazy {
+    val resource = "/assets/skymyce/font/irc_emoji_index.json"
+    requireNotNull(IrcReadableText::class.java.getResourceAsStream(resource)).bufferedReader().use { reader ->
+        JsonParser.parseReader(reader).asJsonArray.mapIndexed { index, key ->
+            key.asString to (0xE000 + index).toChar().toString()
+        }.toMap()
+    }
+}
+
+/** One bundled bitmap glyph per joined emoji; only presentation changes, never the wire text. */
 internal fun ircReadableText(text: String): List<IrcReadableText> {
     val output = arrayListOf<IrcReadableText>()
     fun unicode(value: String) {
         for (match in ircGrapheme.findAll(value)) {
             val cluster = match.value
+            if (cluster.all { it.code < 128 }) { output.add(IrcReadableText(cluster)); continue }
             val points = cluster.codePoints().toArray()
-            val emoji = points.any { it in 0x1F000..0x1FAFF || it in 0x2600..0x27BF || it == 0x20E3 } ||
-                points.any { it == 0xFE0F }
-            if (!emoji) output.add(IrcReadableText(cluster))
+            val key = points.filter { it != 0xFE0F }.joinToString("-") { it.toString(16) }
+            val glyph = if (0xFE0E in points) null else ircEmojiGlyphs[key]
+            if (glyph != null) output.add(IrcReadableText(glyph, cluster, emoji = true))
+            else if (0xFE0E in points || points.none { it in 0x1F000..0x1FAFF || it == 0x200D || it == 0xFE0F }) output.add(IrcReadableText(cluster))
             else {
-                val common = IRC_REACTIONS.indexOf(cluster).takeIf { it >= 0 }?.let { IRC_REACTION_NAMES[it].lowercase() }
-                val names = common ?: points.filter { it !in listOf(0x200D, 0xFE0E, 0xFE0F) }.joinToString(" + ") {
-                    (Character.getName(it) ?: "U+${it.toString(16).uppercase()}").lowercase().replace('_', ' ')
-                }
-                output.add(IrcReadableText("[$names]", cluster))
+                output.add(IrcReadableText("[emoji]", cluster))
             }
         }
     }

@@ -33,6 +33,11 @@ internal class IrcMode {
         send(text)
         return false
     }
+    fun composer(text: String, localFeedback: Boolean, send: (String) -> Unit): Boolean {
+        if (!selected || text.startsWith("/")) return true
+        if (!localFeedback && text.isNotBlank()) send(text)
+        return false
+    }
 
     private companion object { val spaces = Regex("\\s+") }
 }

@@ -23,7 +23,7 @@ private const val MAX_GIF_WORKING_BYTES = 40L * 1024 * 1024
 internal fun trustedIrcGifUrl(uri: URI): Boolean {
     if (!uri.scheme.equals("https", true) || uri.isOpaque || uri.userInfo != null || uri.fragment != null ||
         uri.port !in listOf(-1, 443) || uri.toASCIIString().length > 4096) return false
-    if (uri.host?.lowercase() !in setOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com", "media1.tenor.com")) return false
+    if (uri.host?.lowercase() !in setOf("cdn.discordapp.com", "media.discordapp.net", "media.giphy.com", "i.giphy.com", "media.tenor.com", "media1.tenor.com", "static.klipy.com")) return false
     val path = uri.path ?: return false
     return path.endsWith(".gif", true) && path.none { it.isISOControl() || it == '\\' || it == '%' }
 }
@@ -149,12 +149,12 @@ internal fun decodeIrcGif(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bool
     fun timely() = require(System.nanoTime() - deadline < 0)
     return try {
         val layout = gifLayout(bytes, deadline)
-        val sourceFrames = if (thumbnail) 1 else layout.frames
+        val sourceFrames = layout.frames
         val stride = maxOf(1, (sourceFrames - 1 + MAX_GIF_FRAMES - 2) / (MAX_GIF_FRAMES - 1))
         val retainedFrames = if (sourceFrames == 1) 1 else (sourceFrames - 2) / stride + 2
         val canvasBytes = layout.width.toLong() * layout.height * 4
         // Composite every source frame; budget the decode and optional disposal canvas before stored snapshots.
-        val workingCanvases = if (!thumbnail && layout.restorePrevious) 3 else 2
+        val workingCanvases = if (layout.restorePrevious) 3 else 2
         val storedLimit = minOf(MAX_GIF_FRAME_BYTES, MAX_GIF_WORKING_BYTES - canvasBytes * workingCanvases)
         require(storedLimit >= retainedFrames * 4L)
         val scale = minOf(1.0, kotlin.math.sqrt(storedLimit.toDouble() / (retainedFrames * canvasBytes)),
@@ -222,7 +222,7 @@ internal fun decodeIrcGif(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bool
                             extension = extension.nextSibling
                         }
                         val disposal = control?.attribute("disposalMethod") ?: "none"
-                        if (!thumbnail && disposal == "restoreToPrevious") {
+                        if (disposal == "restoreToPrevious") {
                             val previous = restore ?: BufferedImage(layout.width, layout.height, BufferedImage.TYPE_INT_ARGB).also { restore = it }
                             val previousGraphics = previous.createGraphics()
                             try { previousGraphics.composite = AlphaComposite.Src; previousGraphics.drawImage(canvas, 0, 0, null) }
@@ -242,7 +242,7 @@ internal fun decodeIrcGif(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bool
                         } else {
                             frames[frames.lastIndex] = frames.last().let { it.copy(durationMillis = it.durationMillis + duration) }
                         }
-                        if (!thumbnail) when (disposal) {
+                        when (disposal) {
                             "restoreToBackgroundColor" -> {
                                 graphics.composite = AlphaComposite.Src
                                 graphics.color = Color(background, true)

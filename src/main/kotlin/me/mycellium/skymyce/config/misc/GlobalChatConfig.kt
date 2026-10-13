@@ -14,7 +14,7 @@ object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
     }
     val mediaPreviews by boolean(true) {
         name = TranslatableValue.literal("Chat thumbnails")
-        description = TranslatableValue.literal("Show static image and GIF previews inside chat. Click a preview for the media viewer. Downloads use a bounded memory cache; nothing is saved to disk.")
+        description = TranslatableValue.literal("Show image and GIF previews inside chat. Click a preview for the media viewer. Downloads use a bounded memory cache; nothing is saved to disk.")
     }
     val previewSize by int(100) {
         name = TranslatableValue.literal("Chat preview size (%)")
@@ -23,8 +23,8 @@ object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
         slider = true
     }
     val animateGifs by boolean(true) {
-        name = TranslatableValue.literal("Animate GIFs in viewer")
-        description = TranslatableValue.literal("Play GIFs in the media viewer. Chat thumbnails stay static. The viewer also has a pause button.")
+        name = TranslatableValue.literal("Animate GIFs")
+        description = TranslatableValue.literal("Play GIFs in chat previews and the media viewer. The viewer also has a pause button.")
     }
     val mentionHighlight by boolean(true) {
         name = TranslatableValue.literal("Highlight mentions")

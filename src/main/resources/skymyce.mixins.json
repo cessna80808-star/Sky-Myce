@@ -22,6 +22,7 @@
     "SecondaryCameraEventMixin",
     "RelayChatPrivacyMixin",
     "ChatPatchesIrcMixin",
+    "IrcComposerMixin",
     "IrcChatAccessor",
     "IrcChatScreenAccessor",
     "AvatarCosmeticsMixin",

@@ -95,6 +95,7 @@ object RelayMessages {
     fun init() {
         IrcChatRendering.init()
         ClientSendMessageEvents.ALLOW_CHAT.register { text ->
+            if (suppressChatLog() || IrcChatRendering.addingMessage()) return@register false
             session()
             if (!irc.chat(text) { if (irc.party) sendParty(it) else sendGlobal(it) }) return@register false
             conversations.allowChat(text, ::send)
@@ -121,6 +122,12 @@ object RelayMessages {
             conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset(); partySubscription.reset()
             verifiedParty = null; verifiedPartyAt = 0; activeParty = ""; partySubscribedId = ""; partySubscribedUntil = 0
             clearRichHistory(""); richSessionBoundary = ""
+        }
+    }
+    @JvmStatic fun selectedIrcComposer(): Boolean { session(); return irc.selected }
+    @JvmStatic fun allowComposerChat(text: String): Boolean {
+        return irc.composer(text, suppressChatLog() || IrcChatRendering.addingMessage()) {
+            if (irc.party) sendParty(it) else sendGlobal(it)
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)
@@ -329,6 +336,7 @@ object RelayMessages {
 
     fun sendGlobal(text: String) = sendIrc("global", text)
     private fun sendIrc(scope: String, text: String) {
+        if (suppressChatLog() || IrcChatRendering.addingMessage()) return
         val problem = ircClientMessageError(scope, text)
         if (problem != null) { notice(problem, true); return }
         if (!CommunityClient.connected) { notice("Connect Discord in Community settings to use IRC.", true); return }
