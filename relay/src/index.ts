@@ -21,9 +21,10 @@ import type { SharingState, SharingDecision, SharingCategory } from "./community
 import { takeTrafficCredit, type TrafficCredit } from "./traffic";
 export { AccountStore } from "./accounts";
 
-type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
+type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED" | "GLOBAL_CHAT_GATEWAY_CONTROL"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
   SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string; COSMETIC_ASSETS?: R2Bucket;
   COMMUNITY_SERVICES_ENABLED?: string;
+  GLOBAL_CHAT_GATEWAY_CONTROL?: { wake(): Promise<void> };
   ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; RELAY_ROOMS: DurableObjectNamespace<RelayRoom>;
 };
 const legacyRelay = (env: RelayEnv) => env.SKYMYCE_ENVIRONMENT === "development" && env.ALLOW_LEGACY_RELAY === "true";
@@ -159,6 +160,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly rngForward: RngForwardQueue;
   private rngCapacityDiagnosticAt = 0;
   private trafficDiagnosticAt = 0;
+  private gatewaySignalAt = 0;
   private readonly incomingBudgets = new WeakMap<WebSocket, TrafficCredit>();
   private readonly cosmetics: PlayerCosmetics;
   private readonly irc: RoomIrc;
@@ -394,7 +396,11 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     }
     if (data.type === "irc_send" || data.type === "irc_subscribe" || data.type === "irc_operation") {
       if (!session.accountId || encoder.encode(raw).length > (data.scope === "global" || data.scope === "party" ? 8192 : 2048)) { ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "not_authorized", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}) })); return; }
-      try { await this.irc.message(ws, session, data, subscription); }
+      try {
+        await this.irc.message(ws, session, data, subscription);
+        if (!session.bridge && data.type === "irc_subscribe" && data.scope === "global" &&
+            currentIrcSession(ws, session)?.globalChatSubscribed) this.signalGateway();
+      }
       catch { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "irc_result", id: data.id, error: "temporarily_unavailable", ...(data.scope === "global" || data.scope === "party" ? { scope: data.scope } : {}), ...(data.part === "embeds" ? { part: "embeds" } : {}) })); }
       return;
     }
@@ -796,6 +802,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     console.warn({ event });
   }
 
+  private signalGateway(): void {
+    if (!this.env.GLOBAL_CHAT_GATEWAY_CONTROL || Date.now() < this.gatewaySignalAt) return;
+    this.gatewaySignalAt = Date.now() + 25_000;
+    this.ctx.waitUntil(this.env.GLOBAL_CHAT_GATEWAY_CONTROL.wake().catch(() => console.warn({ event: "gateway_wake_unavailable" })));
+  }
+
   /** Binding-only revocation push. Current state is still checked on every protected request. */
   async invalidateAccount(accountId: string): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) {
@@ -891,11 +903,15 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     await this.irc.flushGlobal();
     await this.rngForward.drain();
     let next = Infinity;
+    let globalListener = false;
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
       if (session.bridge || ws.readyState !== WebSocket.OPEN) continue;
       if (session.name) {
-        if (!legacyRelay(this.env) && await this.authorized(ws, session)) next = Math.min(next, Date.now() + 30_000, session.leaseExpiresAt!);
+        if (!legacyRelay(this.env) && await this.authorized(ws, session)) {
+          next = Math.min(next, Date.now() + 30_000, session.leaseExpiresAt!);
+          if (currentIrcSession(ws, session)?.globalChatSubscribed) globalListener = true;
+        }
         continue;
       }
       if (session.expires <= Date.now()) {
@@ -904,6 +920,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       }
       else next = Math.min(next, session.expires);
     }
+    if (globalListener) this.signalGateway();
     next = Math.min(next, this.irc.nextGlobalAlarm() ?? Infinity);
     next = Math.min(next, this.rngForward.nextAlarm() ?? Infinity);
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);

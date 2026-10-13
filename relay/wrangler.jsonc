@@ -116,6 +116,9 @@
     "backend": {
       "name": "sky-myce-backend",
       "compatibility_date": "2026-09-27",
+      "services": [
+        { "binding": "GLOBAL_CHAT_GATEWAY_CONTROL", "service": "skyblock-relay", "entrypoint": "GatewayControl" }
+      ],
       "vars": {
         "ROOMS": "friends,testing",
         "SKYMYCE_ENVIRONMENT": "production",

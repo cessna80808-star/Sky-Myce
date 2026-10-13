@@ -7,7 +7,12 @@ export async function checkGlobalChat(script, proof) {
   // Expose alarm state only in this in-memory fixture bundle, never in production code.
   const anchor = 'async globalChatMinecraft(sender, input) {';
   assert.equal(script.split(anchor).length, 2, 'Exactly one production coordinator method is instrumented');
-  script = script.replace(anchor, `async testOnlyGlobalAlarm(remove = false) {
+  script = script.replace(anchor, `async testOnlyGatewayWake() {
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS test_gateway_wakes (at INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("INSERT INTO test_gateway_wakes VALUES (?)", Date.now());
+  }
+  async testOnlyGatewayHeartbeat() { this.gatewaySignalAt = 0; await this.alarm(); }
+  async testOnlyGlobalAlarm(remove = false) {
     if (remove) await this.ctx.storage.deleteAlarm();
     return await this.ctx.storage.getAlarm();
   }
@@ -37,6 +42,7 @@ export async function checkGlobalChat(script, proof) {
   script = script.replace(roomFetchAnchor, `${roomFetchAnchor}
     if (new URL(request.url).pathname === "/test-only-global-chat") {
       const { method, args } = await request.json();
+      if (method === "heartbeat") { await this.testOnlyGatewayHeartbeat(); return Response.json(null); }
       if (method === "deliver") { await this.globalChatDeliver(args[0]); return Response.json(null); }
       const result = method === "session" ? this.testOnlyGlobalSession(args[0]) :
         method === "watches" ? this.testOnlyGlobalWatches(args[0], args[1]) : this.testOnlyGlobalPadding(args[0], args[1]);
@@ -79,6 +85,10 @@ export async function checkGlobalChat(script, proof) {
   }\n  ${ircAuthorityAnchor}`);
   script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").canUseIrc(',
     'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCanUseIrc(');
+  script += `\nimport { WorkerEntrypoint as TestWorkerEntrypoint } from "cloudflare:workers";
+    export class GatewayWakeFixture extends TestWorkerEntrypoint {
+      async wake() { await this.env.RELAY_ROOMS.getByName("global-chat").testOnlyGatewayWake(); }
+    }`;
   const signing = generateKeyPairSync('ed25519'), secret = 'global-chat-test-only-bridge-secret-32bytes';
   const channelId = '100000000000000001';
   const publicKey = key => key.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
@@ -89,6 +99,7 @@ export async function checkGlobalChat(script, proof) {
       GLOBAL_CHAT_GLOBAL_BURST: '200', GLOBAL_CHAT_GLOBAL_REFILL_MS: '10',
       DRM_KEY_ID: 'test', DRM_PUBLIC_KEYS: JSON.stringify({ test: publicKey(signing) }) },
     durableObjects: { RELAY_ROOMS: { className: 'RelayRoom', useSQLite: true }, ACCOUNT_STORE: { className: 'AccountStore', useSQLite: true } },
+    serviceBindings: { GLOBAL_CHAT_GATEWAY_CONTROL: { name: 'global-chat-check', entrypoint: 'GatewayWakeFixture' } },
     outboundService: () => { throw new Error('Global chat fixtures never contact Discord or Minecraft services'); } });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: 'rate-limit', namespace: '7112032', simple: { limit: 1000, period: 60 } };
@@ -208,7 +219,23 @@ export async function checkGlobalChat(script, proof) {
     assert.equal((await mf.dispatchFetch('http://localhost/websocket?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 403);
     assert.equal((await mf.dispatchFetch('http://localhost/discord/bridge?room=global-chat', { headers: { Upgrade: 'websocket' } })).status, 401);
     const alice = await connect('Alice', 'friends', { packet: { cosmetics: true } }), bob = await connect('Bob', 'testing'), otherAlice = await connect('Alice', 'testing');
+    assert.equal((await globalSql.exec("SELECT name FROM sqlite_master WHERE name='test_gateway_wakes'")).length,0,'unauthenticated and unsubscribed sockets never wake Discord');
     await subscribe(alice); await subscribe(bob); await subscribe(otherAlice);
+    const demandHeartbeat=async room=>{
+      const namespace=await mf.getDurableObjectNamespace('RELAY_ROOMS');
+      const response=await namespace.getByName(room).fetch('http://localhost/test-only-global-chat',{method:'POST',body:JSON.stringify({method:'heartbeat',args:[]})});
+      await response.json();
+    };
+    await demandHeartbeat('friends');await demandHeartbeat('testing');
+    const wakeCount = async () => (await globalSql.exec("SELECT name FROM sqlite_master WHERE name='test_gateway_wakes'")).length
+      ? (await globalSql.exec('SELECT COUNT(*) AS count FROM test_gateway_wakes'))[0].count : 0;
+    const wakeDeadline=Date.now()+4000;
+    while(await wakeCount()<4&&Date.now()<wakeDeadline)await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(await wakeCount()>=4,'verified Global listeners renew the private gateway lease across rooms');
+    await subscribe(alice,false);await subscribe(bob,false);await subscribe(otherAlice,false);
+    const stoppedWakes=await wakeCount();await demandHeartbeat('friends');await demandHeartbeat('testing');
+    assert.equal(await wakeCount(),stoppedWakes,'no Global listeners means no demand renewals');
+    await subscribe(alice);await subscribe(bob);await subscribe(otherAlice);
     const headers = bridgeHeaders(); let bot = await bridge(headers);
     assert.equal((await mf.dispatchFetch('http://localhost/discord/bridge?room=global-chat', { headers })).status, 401);
     const partyId = id();
