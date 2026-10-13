@@ -14,10 +14,10 @@ Community services retain verified Minecraft proofs and explicit identity blackl
 | Signed selection | `releases/community-current.json`, protocol 4, installation `fabric` |
 | Signing key | Existing pin `production-20260927`, unchanged |
 | Metadata expiry | 19 October 2026, 12:27:22 UTC |
-| Backend version | `69944696-37c9-483c-af94-5884f331c558` |
+| Backend version | `450de6b7-95d5-4c9e-9ada-5ced63981305` |
 | Staging version | `7f56c01c-f9bc-4d4d-a364-3a962467a59d` |
 | Backend/staging module SHA-256 | `d1a10b8f32720f16b05b978818cc15fdd3aa81383b6ca8893650704f3196fcde` |
-| Existing Gateway version | `9c68abea-8302-4e04-a323-6101849f5340` |
+| Existing Gateway version | `4dc5a75e-182c-4366-b1c6-4d22486c41e6` |
 | Gateway module SHA-256 | `4eabcc34296dda4729f803b39b65b7a19fcd5e3e63c08eaac944f5949398b300` |
 
 The artifact was uploaded before the selected manifest. Private R2 readbacks,
@@ -74,11 +74,14 @@ the complete confirmation list before changing receipts. Successful cancellation
 clears its local mapping before acknowledging deletion, so a lost deletion response
 cannot leave an immortal receipt. The account Worker was updated before consumers.
 
-RNG channel activation is pending: neither existing bot has Manage Channels and
-the requested `#rng-feed` does not yet exist. The user was asked to create it under
-the existing IRC category. Once available, verify the User Bot's View/Send/Embed/
-Read History permissions, set the same `DISCORD_RNG_CHANNEL_ID` on backend and sole
-Gateway, redeploy both, and verify feed health. Keep it separate from chat channels.
+RNG delivery was activated on 13 October 2026 after the user created `#rng-feed`
+(`1559452547901562980`) under the existing IRC category. The User Bot's View Channel,
+Send Messages, Embed Links and Read Message History permissions were verified.
+Backend and sole Gateway now share that `DISCORD_RNG_CHANNEL_ID`, distinct from
+every chat channel; staging remains disabled. The version table reflects these
+configuration-only deployments. Module bytes, all 41 prior backend bindings and
+all 18 prior Gateway bindings, including secrets and namespaces, remained unchanged.
+The selected release's live signature and artifact hash were verified again.
 
 ## Verification and migration
 
@@ -95,6 +98,14 @@ Gateway, redeploy both, and verify feed health. Keep it separate from chat chann
   Private cape preview requires a session; missing assets are unavailable.
 - Controlled restart of the existing Gateway passed 75 consecutive sampled seconds
   with Discord and backend transports ready, rich chat version 1 and no new messages.
+- RNG activation rechecked both relay type checks, the full backend suite, the exact
+  production Gateway package and the Gateway runtime/forwarding/feed checks. The
+  companion full suite stops at an existing wrong-guild response assertion in
+  `test/discord-admin.mjs:224`; those unrelated admin worktree changes are excluded
+  from the deployed Gateway package.
+- The activation restart passed another 75 consecutive sampled seconds with RNG
+  configured, no RNG feed error, both transports ready and rich chat version 1.
+  No synthetic drop or retraction was published.
 
 The selected Prism instance was migrated while closed. Only the checked old mod and
 Loader JARs moved to private backup; the checked standalone JAR is the sole installed
