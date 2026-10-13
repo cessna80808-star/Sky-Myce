@@ -78,6 +78,7 @@ internal object IrcInlineControls {
         canvas.begin()
         val graphics = MenuGraphics(canvas, mouseX, mouseY, screen.width, screen.height)
         val font = MC.instance.font
+        val emojiLabels = arrayListOf<Pair<Component, IrcControlBounds>>()
         reply?.let { message ->
             val cancel = cancelBounds(screen)
             val y = screen.height - 40
@@ -103,15 +104,21 @@ internal object IrcInlineControls {
                         MenuTheme.rounded(graphics, cell.x + 1, cell.y, cell.width - 2, cell.height, MenuTheme.CARD, 3)
                         output.setTooltipForNextFrame(Component.literal("${if (reaction?.mine == true) "Remove" else "Add"} ${IRC_REACTION_NAMES[index]} reaction"), mouseX, mouseY)
                     }
-                    val text = "${if (reaction?.mine == true) "✓ " else ""}${IRC_REACTION_NAMES[index]}${reaction?.count?.takeIf { it > 0 }?.let { " $it" }.orEmpty()}"
-                    graphics.text(font, fit(text, cell.width - 12), cell.x + 6, cell.y + 4,
-                        MenuTheme.alpha(if (reaction?.mine == true) MenuTheme.ACCENT else MenuTheme.TEXT), false)
+                    val color = MenuTheme.alpha(if (reaction?.mine == true) MenuTheme.ACCENT else MenuTheme.TEXT)
+                    val text = ircDisplayText("${if (reaction?.mine == true) "✓ " else ""}$emoji${reaction?.count?.takeIf { it > 0 }?.let { " $it" }.orEmpty()}", color)
+                    emojiLabels += text to cell
                 }
             }
         }
         output.nextStratum()
         val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / screen.width.coerceAtLeast(1), 1440.0 / screen.height.coerceAtLeast(1))
         texture.render(output, canvas, screen.width, screen.height, scale)
+        if (emojiLabels.isNotEmpty()) output.nextStratum()
+        for ((text, cell) in emojiLabels) {
+            output.enableScissor(cell.x, cell.y, cell.x + cell.width, cell.y + cell.height)
+            output.text(font, text, cell.x + 6, cell.y + 5, 0xFFFFFFFF.toInt(), false)
+            output.disableScissor()
+        }
     }
     private fun fit(text: String, width: Int): String {
         var end = 0

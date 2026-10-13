@@ -37,17 +37,29 @@ fun main() {
         sequence.tick(26_999); check(sequence.stage == null)
         sequence.stormStarted(26_999) // Duplicate entry cannot restart the timer.
         sequence.tick(27_000); check(sequence.stage == CrushStage.PURPLE)
-        sequence.crushed(1, 27_100); check(sequence.stage == CrushStage.YELLOW)
-        sequence.crushed(1, 27_200); check(sequence.stage == CrushStage.YELLOW)
-        sequence.crushed(2, 28_000); check(sequence.stage == CrushStage.YELLOW)
+        sequence.crushed(1, 27_100); check(sequence.stage == CrushStage.PURPLE)
+        sequence.crushed(1, 27_200); check(sequence.stage == CrushStage.PURPLE)
+        sequence.crushed(2, 28_000); check(sequence.stage == CrushStage.PURPLE)
+        sequence.tick(28_099); check(sequence.stage == CrushStage.PURPLE)
+        sequence.tick(28_100); check(sequence.stage == CrushStage.YELLOW)
+        sequence.crushed(3, 28_200); check(sequence.stage == CrushStage.YELLOW)
         sequence.context(validContext.copy(floor = floor), 400_000); check(sequence.stage == CrushStage.YELLOW)
         sequence.reset("Storm died"); check(sequence.stage == null && !sequence.stormActive)
         sequence.tick(500_000); check(sequence.stage == null)
         sequence.stormStarted(500_000); sequence.tick(526_000); check(sequence.stage == CrushStage.PURPLE)
+        sequence.tick(537_999); check(sequence.stage == CrushStage.PURPLE)
+        sequence.tick(538_000); check(sequence.stage == CrushStage.YELLOW)
+        sequence.crushed(1, 538_100); check(sequence.stage == CrushStage.YELLOW)
     }
     val earlyCrush = readySequence().apply { crushed(1, 20_000); tick(26_999) }
     check(earlyCrush.stage == null)
     earlyCrush.tick(27_000); check(earlyCrush.stage == CrushStage.YELLOW)
+    val lateCrush = readySequence().apply { tick(38_500); crushed(1, 38_500) }
+    lateCrush.tick(39_000); check(lateCrush.stage == CrushStage.PURPLE)
+    lateCrush.tick(39_499); check(lateCrush.stage == CrushStage.PURPLE)
+    lateCrush.tick(39_500); check(lateCrush.stage == CrushStage.YELLOW)
+    val endedDuringDelay = readySequence().apply { crushed(1, 27_000); reset("Storm died"); tick(28_000) }
+    check(endedDuringDelay.stage == null && !endedDuringDelay.stormActive)
     val unconfigured = readySequence().apply { context(validContext.copy(viewpointsReady = false), 27_000) }
     check(unconfigured.stage == null && unconfigured.stormActive)
     unconfigured.context(validContext, 28_000); check(unconfigured.stage == CrushStage.PURPLE)
@@ -126,5 +138,5 @@ fun main() {
     check(observedCrushColumn(calibration) { world[it] ?: air } == 46 to 54)
     world[CrushBlockCell(10, 48, 20)] = air
     check(observedCrushColumn(calibration) { world[it] ?: air } == null)
-    println("Crush Camera class toggles, 26-second timing, Storm cleanup and measured pillar checks passed")
+    println("Crush Camera class toggles, 26/38-second timing, delayed switching, Storm cleanup and measured pillar checks passed")
 }

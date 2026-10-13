@@ -15,6 +15,7 @@ import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.Proxy
 import java.net.URI
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.concurrent.ScheduledFuture
 import java.util.zip.CRC32
@@ -27,8 +28,16 @@ import kotlin.math.roundToInt
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-internal enum class IrcMediaAssetStatus { IDLE, LOADING, READY, FAILED, UNSUPPORTED }
+internal enum class IrcMediaAssetStatus { IDLE, LOADING, READY, FAILED, UNSUPPORTED, UNAVAILABLE }
 internal data class IrcMediaAssetState(val status: IrcMediaAssetStatus, val asset: IrcGif? = null, val detail: String? = null)
+internal fun compactIrcMedia(status: IrcMediaAssetStatus) = when (status) {
+    IrcMediaAssetStatus.FAILED, IrcMediaAssetStatus.UNSUPPORTED, IrcMediaAssetStatus.UNAVAILABLE -> true
+    else -> false
+}
+internal fun unavailableIrcKlipyMedia(uri: URI, bytes: ByteArray): Boolean = trustedIrcMediaUrl(uri) &&
+    uri.host.lowercase() == "static.klipy.com" && bytes.size == 78534 &&
+    MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } ==
+        "e7324db306981c0e40cfa2bc1e2cfd0a5b52163689961f073804d2db2f74794e"
 
 internal fun ircMediaViewerCurrent(capturedGeneration: Long, generation: Long, media: IrcMedia,
     key: IrcKey?, message: GlobalChatMessage?, currentChannel: Boolean): Boolean = capturedGeneration == generation &&
@@ -83,9 +92,12 @@ internal fun ircDiscordThumbnail(uri: URI): URI? {
 internal fun ircKlipyGif(uri: URI): URI? {
     if (!trustedIrcMediaUrl(uri) || uri.host.lowercase() != "static.klipy.com" ||
         !uri.path.matches(klipyVideoPath)) return null
-    // Klipy publishes the same animation as GIF, so no video codec is needed in Minecraft.
+    // Try a GIF alternative before falling back to Klipy's supplied thumbnail.
     return URI("https://static.klipy.com${uri.rawPath.dropLast(4)}.gif${uri.rawQuery?.let { "?$it" }.orEmpty()}")
 }
+internal fun ircKlipyPoster(media: IrcMedia, status: IrcMediaAssetStatus?): URI? =
+    if (media.type == "video" && ircKlipyGif(media.url) != null && status == IrcMediaAssetStatus.UNAVAILABLE)
+        media.thumbnailUrl?.takeIf(::trustedIrcMediaUrl) else null
 
 private fun imageFormat(bytes: ByteArray): String? = when {
     bytes.size >= 8 && bytes.take(8).map { it.toInt() and 255 } == listOf(137, 80, 78, 71, 13, 10, 26, 10) -> "png"
@@ -182,7 +194,7 @@ internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
     } catch (_: Exception) { null }
 }
 
-/** Discord can return WebP for a .gif URL; validate bounds before asking the bundled CPU codec for pixels. */
+/** Discord can return animated WebP for a .gif URL; keep native composition and snapshots bounded. */
 private fun decodeIrcWebp(bytes: ByteArray, deadline: Long, thumbnail: Boolean): IrcGif? = try {
     fun timely() = require(System.nanoTime() - deadline < 0)
     val declared = (0..3).fold(0L) { value, index -> value or ((bytes[4 + index].toLong() and 255) shl (index * 8)) }
@@ -190,39 +202,79 @@ private fun decodeIrcWebp(bytes: ByteArray, deadline: Long, thumbnail: Boolean):
     Data.makeFromBytes(bytes).use { data ->
         Codec.makeFromData(data).use { codec ->
             val info = codec.imageInfo
-            require(codec.encodedImageFormat == EncodedImageFormat.WEBP && codec.frameCount <= 1)
+            require(codec.encodedImageFormat == EncodedImageFormat.WEBP)
             require(info.width in 1..MAX_IMAGE_DIMENSION && info.height in 1..MAX_IMAGE_DIMENSION &&
                 info.width.toLong() * info.height * 4 <= MAX_IMAGE_DECODED_BYTES)
+            val sourceFrames = codec.frameCount.coerceAtLeast(1)
+            require(sourceFrames <= 2000)
+            val animated = sourceFrames > 1
+            val metadata = if (animated) codec.framesInfo else emptyArray()
+            require(!animated || metadata.size == sourceFrames)
+            metadata.forEachIndexed { index, frame ->
+                require(frame.isFullyReceived && frame.requiredFrame in -1 until index && frame.duration in 0..0xffffff)
+            }
+            val stride = maxOf(1, (sourceFrames - 1 + 120 - 2) / (120 - 1))
+            val retainedFrames = if (sourceFrames == 1) 1 else (sourceFrames - 2) / stride + 2
             timely()
-            // Native pixels, the copied byte buffer and the retained image share the decode budget.
-            val scale = minOf(1.0, kotlin.math.sqrt(MAX_IMAGE_DECODED_BYTES.toDouble() /
-                (3 * info.width.toLong() * info.height * 4)), if (thumbnail)
+            val sourceBytes = info.width.toLong() * info.height * 4
+            val snapshotBudget = if (animated) MAX_IMAGE_DECODED_BYTES - 2 * sourceBytes else MAX_IMAGE_DECODED_BYTES / 3
+            require(snapshotBudget >= retainedFrames * 4L)
+            val scale = minOf(1.0, kotlin.math.sqrt(snapshotBudget.toDouble() /
+                (retainedFrames * sourceBytes)), if (thumbnail)
                 minOf(IRC_MEDIA_THUMBNAIL_WIDTH.toDouble() / info.width, IRC_MEDIA_THUMBNAIL_HEIGHT.toDouble() / info.height) else 1.0)
             val width = (info.width * scale).toInt().coerceAtLeast(1)
             val height = (info.height * scale).toInt().coerceAtLeast(1)
-            val rgba = ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL)
+            require(width.toLong() * height * 4 * retainedFrames <= snapshotBudget)
+            // Skia requires source-sized canvases for correct animated WebP blend/disposal.
+            val decodeWidth = if (animated) info.width else width
+            val decodeHeight = if (animated) info.height else height
+            val rgba = ImageInfo(decodeWidth, decodeHeight, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL)
             Bitmap().use { bitmap ->
                 require(bitmap.allocPixels(rgba))
-                codec.readPixels(bitmap)
-                timely()
-                val pixels = requireNotNull(bitmap.readPixels())
-                require(pixels.size.toLong() == width.toLong() * height * 4)
-                val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
-                var retained = false
+                val frames = ArrayList<IrcGifFrame>(retainedFrames)
+                var completed = false
                 try {
                     val row = IntArray(width)
-                    for (y in 0 until height) {
+                    for (index in 0 until sourceFrames) {
                         timely()
-                        for (x in 0 until width) {
-                            val offset = (y * width + x) * 4
-                            row[x] = ((pixels[offset + 3].toInt() and 255) shl 24) or
-                                ((pixels[offset].toInt() and 255) shl 16) or
-                                ((pixels[offset + 1].toInt() and 255) shl 8) or (pixels[offset + 2].toInt() and 255)
+                        val frame = metadata.getOrNull(index)
+                        val prior = if (index > 0 && frame != null && frame.requiredFrame >= 0 &&
+                            metadata[index - 1].disposalMethod != io.github.humbleui.skija.AnimationDisposalMode.RESTORE_PREVIOUS) index - 1 else -1
+                        codec.readPixels(bitmap, index, prior)
+                        timely()
+                        val duration = frame?.duration?.toLong()?.takeIf { it > 0 } ?: 100L
+                        if (index % stride != 0 && index != sourceFrames - 1) {
+                            frames[frames.lastIndex] = frames.last().let { it.copy(durationMillis = it.durationMillis + duration) }
+                            continue
                         }
-                        image.setRGB(0, y, width, 1, row, 0, width)
+                        val pixels = requireNotNull(bitmap.readPixels())
+                        require(pixels.size.toLong() == decodeWidth.toLong() * decodeHeight * 4)
+                        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+                        var retained = false
+                        try {
+                            for (y in 0 until height) {
+                                timely()
+                                val sourceY = y.toLong() * decodeHeight / height
+                                for (x in 0 until width) {
+                                    val sourceX = x.toLong() * decodeWidth / width
+                                    val offset = ((sourceY * decodeWidth + sourceX) * 4).toInt()
+                                    row[x] = ((pixels[offset + 3].toInt() and 255) shl 24) or
+                                        ((pixels[offset].toInt() and 255) shl 16) or
+                                        ((pixels[offset + 1].toInt() and 255) shl 8) or (pixels[offset + 2].toInt() and 255)
+                                }
+                                image.setRGB(0, y, width, 1, row, 0, width)
+                            }
+                            frames += IrcGifFrame(image, duration); retained = true
+                        } finally { if (!retained) image.flush() }
                     }
-                    IrcGif(width, height, listOf(IrcGifFrame(image, 100)), -1).also { retained = true }
-                } finally { if (!retained) image.flush() }
+                    timely()
+                    val repetitions = codec.repetitionCount
+                    require(repetitions >= -1)
+                    val loopCount = if (!animated || repetitions == 0) -1 else if (repetitions == -1) 0 else repetitions
+                    IrcGif(width, height, frames, loopCount).also { completed = true }
+                } finally {
+                    if (!completed) frames.forEach { it.image.flush() }
+                }
             }
         }
     }
@@ -237,9 +289,11 @@ internal class IrcMediaCache(private val maximumBytes: Long = 48L * 1024 * 1024,
     private data class Entry(val token: Long, var state: IrcMediaAssetState, var touched: Long)
     private val entries = LinkedHashMap<String, Entry>()
     private var sequence = 0L
+    var revision = 0L
+        private set
     internal val decodedBytes get() = entries.values.sumOf { it.state.asset?.decodedBytes() ?: 0L }
     internal val size get() = entries.size
-    private fun remove(key: String) { entries.remove(key)?.state?.asset?.release() }
+    private fun remove(key: String) { entries.remove(key)?.let { it.state.asset?.release(); revision++ } }
     private fun expire(now: Long) = entries.filterValues {
         it.state.status != IrcMediaAssetStatus.LOADING && now - it.touched >= ttlNanos
     }.keys.toList().forEach(::remove)
@@ -256,6 +310,7 @@ internal class IrcMediaCache(private val maximumBytes: Long = 48L * 1024 * 1024,
         }
         val token = ++sequence
         entries[key] = Entry(token, IrcMediaAssetState(IrcMediaAssetStatus.LOADING), now)
+        revision++
         return token
     }
     fun complete(key: String, token: Long, state: IrcMediaAssetState, now: Long): Boolean {
@@ -275,6 +330,7 @@ internal class IrcMediaCache(private val maximumBytes: Long = 48L * 1024 * 1024,
             entry.state = state
         }
         entry.touched = now
+        revision++
         return true
     }
     fun failExpired(key: String, token: Long, deadline: Long, now: Long): Boolean = now - deadline >= 0 &&
@@ -330,9 +386,22 @@ internal object IrcMediaAssets {
     private var identity: String? = null
     @Volatile internal var generation = 0L
         private set
+    val revision get() = synchronized(lock) { cache.revision }
+    private fun source(media: IrcMedia, full: Boolean): MediaSource? {
+        val primary = mediaSource(media, full) ?: return null
+        if (media.type != "video" || ircKlipyGif(media.url) == null) return primary
+        val status = synchronized(lock) {
+            val now = System.nanoTime()
+            cache.view(primary.key, now).status.takeUnless { it == IrcMediaAssetStatus.IDLE } ?:
+                cache.view("${if (full) "thumbnail" else "full"}:${primary.uri.toASCIIString()}", now).status
+        }
+        val poster = ircKlipyPoster(media, status) ?: return primary
+        return MediaSource(if (full) poster else ircDiscordThumbnail(poster) ?: poster, full,
+            if (trustedIrcGifUrl(poster)) IRC_GIF_MAX_BYTES else if (full) FULL_IMAGE_BYTES else THUMBNAIL_BYTES)
+    }
 
     fun view(media: IrcMedia, full: Boolean): IrcMediaAssetState {
-        val source = mediaSource(media, full) ?: return IrcMediaAssetState(IrcMediaAssetStatus.UNSUPPORTED, detail = when (media.type) {
+        val source = source(media, full) ?: return IrcMediaAssetState(IrcMediaAssetStatus.UNSUPPORTED, detail = when (media.type) {
             "gif" -> if (full) "This GIF host is unsupported. Open it in your browser." else "Open to load GIF"
             "video" -> "Video playback is available in your browser."
             else -> "This media host or format is unsupported. Open it in your browser."
@@ -341,7 +410,7 @@ internal object IrcMediaAssets {
     }
 
     fun request(media: IrcMedia, full: Boolean) {
-        val source = mediaSource(media, full) ?: return
+        val source = source(media, full) ?: return
         synchronized(lock) {
             val now = System.nanoTime()
             val token = cache.begin(source.key, now) ?: return
@@ -366,9 +435,16 @@ internal object IrcMediaAssets {
         }
     }
 
-    fun retry(media: IrcMedia, full: Boolean) { cancel(media, full); request(media, full) }
+    fun retry(media: IrcMedia, full: Boolean) {
+        source(media, full)?.let(::cancelSource)
+        request(media, full)
+    }
     fun cancel(media: IrcMedia, full: Boolean) {
-        val source = mediaSource(media, full) ?: return
+        val source = source(media, full) ?: return
+        if (full && !source.full) return // A viewer never owns the shared inline thumbnail.
+        cancelSource(source)
+    }
+    private fun cancelSource(source: MediaSource) {
         synchronized(lock) {
             cache.cancel(source.key)
             val iterator = queued.iterator()
@@ -422,13 +498,19 @@ internal object IrcMediaAssets {
                 connection.readTimeout = 4000
                 connection.setRequestProperty("Accept", "image/png,image/jpeg,image/gif,image/webp")
                 connection.setRequestProperty("User-Agent", "Sky-Myce IRC media")
-                require(connection.responseCode == 200)
+                val status = connection.responseCode
+                if (status == 404 || status == 410) return IrcMediaAssetState(IrcMediaAssetStatus.UNAVAILABLE,
+                    detail = "This preview is unavailable from its host. You can open the original link in your browser.")
+                require(status == 200)
                 val mime = connection.contentType.orEmpty().substringBefore(';').trim().lowercase()
                 require(mime in setOf("image/png", "image/jpeg", "image/gif", "image/webp", "application/octet-stream"))
                 val bytes = connection.inputStream.use {
                     readIrcMediaBytes(it, connection.contentLengthLong, deadline, load.source.maximumBytes) { load.cancelled }
                 }
                 require(!load.cancelled)
+                // This exact provider GIF is a takedown banner, not the requested animation.
+                if (unavailableIrcKlipyMedia(load.source.uri, bytes)) return IrcMediaAssetState(IrcMediaAssetStatus.UNAVAILABLE,
+                    detail = "Klipy's GIF preview is unavailable. You can open the original link in your browser.")
                 val format = imageFormat(bytes)
                 require(mime == "application/octet-stream" || mime == "image/$format")
                 val decodeDeadline = minOf(deadline, System.nanoTime() + 2_000_000_000L)

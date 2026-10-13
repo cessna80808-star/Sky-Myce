@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
+import me.mycellium.mixin.IrcChatAccessor
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.ui.MenuButton
@@ -11,6 +12,7 @@ import me.mycellium.skymyce.ui.SkijaMenuFonts
 import me.mycellium.skymyce.ui.menuTextLines
 import me.mycellium.skymyce.ui.menuTextRuns
 import me.mycellium.skymyce.ui.menuTextWidth
+import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.ChatScreen
@@ -43,6 +45,7 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     private var elapsedNanos = 0L
     private var lastTickNanos = System.nanoTime()
     private var paused = !GlobalChatConfig.animateGifs
+    private val previousChatScroll = if (previous is ChatScreen) (MC.instance.gui.chat as IrcChatAccessor).`skymyce$getScroll`() else null
     private var preference = GlobalChatConfig.animateGifs
     private val generation = IrcMediaAssets.generation
     private var browserDisabled = false
@@ -235,7 +238,15 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     override fun tick() { if (!current()) closeExpired() else super.tick() }
     override fun onClose() {
         if (!current()) closeExpired()
-        else minecraft.setScreen(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous)
+        else {
+            val returned = if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous
+            minecraft.setScreen(returned)
+            if (returned is ChatScreen && previousChatScroll != null) {
+                // ChatScreen.init resets scrolling; restore the captured position after reopening it.
+                (minecraft.gui.chat as IrcChatAccessor).`skymyce$setScroll`(previousChatScroll)
+                minecraft.gui.chat.scrollChat(0)
+            }
+        }
     }
     override fun isPauseScreen() = false
 }

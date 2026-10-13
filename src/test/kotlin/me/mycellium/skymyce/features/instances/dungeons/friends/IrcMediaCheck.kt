@@ -6,6 +6,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.InetAddress
 import java.net.URI
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.zip.CRC32
 import io.github.humbleui.skija.ColorAlphaType
 import io.github.humbleui.skija.ColorType
@@ -33,14 +35,38 @@ private fun pngWidth(bytes: ByteArray, width: Int): ByteArray = bytes.clone().al
     for (index in 0..3) it[29 + index] = (crc ushr (24 - index * 8)).toByte()
 }
 
-private fun webpFixture(): ByteArray {
-    val rgba = ByteArray(256 * 128 * 4)
+private fun webpFixture(width: Int = 256, height: Int = 128, color: Int = 0xffef2311.toInt()): ByteArray {
+    val rgba = ByteArray(width * height * 4)
     for (pixel in rgba.indices step 4) {
-        rgba[pixel] = 0xef.toByte(); rgba[pixel + 1] = 0x23; rgba[pixel + 2] = 0x11; rgba[pixel + 3] = 0xff.toByte()
+        rgba[pixel] = (color ushr 16).toByte(); rgba[pixel + 1] = (color ushr 8).toByte()
+        rgba[pixel + 2] = color.toByte(); rgba[pixel + 3] = (color ushr 24).toByte()
     }
-    return Image.makeRasterFromBytes(ImageInfo(256, 128, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL), rgba, 256L * 4).use { image ->
+    return Image.makeRasterFromBytes(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL), rgba, width.toLong() * 4).use { image ->
         requireNotNull(image.encodeToData(EncodedImageFormat.WEBP, 100)).use { it.bytes }
     }
+}
+
+private fun animatedWebpFixture(loopCount: Int = 0, frames: Int = 3): ByteArray {
+    fun little(value: Int, size: Int) = ByteArray(size) { (value ushr (8 * it)).toByte() }
+    fun chunk(tag: String, payload: ByteArray) = tag.toByteArray(Charsets.US_ASCII) + little(payload.size, 4) +
+        payload + ByteArray(payload.size and 1)
+    val body = ByteArrayOutputStream()
+    body.write("WEBP".toByteArray(Charsets.US_ASCII))
+    body.write(chunk("VP8X", byteArrayOf(0x12, 0, 0, 0) + little(3, 3) + little(1, 3)))
+    body.write(chunk("ANIM", ByteArray(4) + little(loopCount, 2)))
+    val images = listOf(webpFixture(4, 2, 0xffff0000.toInt()), webpFixture(2, 2, 0xff00ff00.toInt()),
+        webpFixture(2, 2, 0xff0000ff.toInt()))
+    for (index in 0 until frames) {
+        val partial = frames == 3 && index > 0
+        val duration = if (frames == 3) listOf(40, 70, 90)[index] else 10
+        val flags = if (!partial) 2 else if (index == 1) 1 else 0
+        val header = little(if (partial && index == 2) 1 else 0, 3) + little(0, 3) +
+            little(if (partial) 1 else 3, 3) + little(1, 3) + little(duration, 3) + byteArrayOf(flags.toByte())
+        val image = images[if (partial) index else 0]
+        body.write(chunk("ANMF", header + image.copyOfRange(12, image.size)))
+    }
+    val payload = body.toByteArray()
+    return "RIFF".toByteArray(Charsets.US_ASCII) + little(payload.size, 4) + payload
 }
 
 fun checkIrcMedia() {
@@ -89,6 +115,16 @@ fun checkIrcMedia() {
     val klipyGif = requireNotNull(ircKlipyGif(klipy))
     check(klipyGif.toASCIIString() == klipy.toASCIIString().replace(".mp4?", ".gif?"))
     check(ircMediaThumbnailUrl(IrcMedia("video", "video", klipy)) == klipyGif)
+    val klipyVideo = IrcMedia("klipy-video", "video", klipy, poster)
+    check(ircKlipyPoster(klipyVideo, IrcMediaAssetStatus.UNAVAILABLE) == poster)
+    for (status in IrcMediaAssetStatus.entries.filter { it != IrcMediaAssetStatus.UNAVAILABLE })
+        check(ircKlipyPoster(klipyVideo, status) == null)
+    check(ircKlipyPoster(klipyVideo.copy(thumbnailUrl = URI("https://private.invalid/poster.png")), IrcMediaAssetStatus.UNAVAILABLE) == null)
+    check(ircKlipyPoster(klipyVideo.copy(type = "gif"), IrcMediaAssetStatus.UNAVAILABLE) == null)
+    check(ircKlipyPoster(klipyVideo.copy(url = URI("https://cdn.discordapp.com/video.mp4")), IrcMediaAssetStatus.UNAVAILABLE) == null)
+    for (status in IrcMediaAssetStatus.entries) check(compactIrcMedia(status) ==
+        (status in listOf(IrcMediaAssetStatus.FAILED, IrcMediaAssetStatus.UNSUPPORTED, IrcMediaAssetStatus.UNAVAILABLE)))
+    check(!unavailableIrcKlipyMedia(klipyGif, imageFixture("png")))
     for (url in listOf("https://static.klipy.com.evil.invalid/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.mp4",
         "https://static.klipy.com/other.mp4", "https://static.klipy.com/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.webm",
         "https://static.klipy.com/ii/4493325008d34b7bf8cd6813cd5c1619/28/c9/id.gif")) check(ircKlipyGif(URI(url)) == null)
@@ -144,6 +180,27 @@ fun checkIrcMedia() {
     check(requireNotNull(decode(webp, true)).let { it.width == 192 && it.height == 96 })
     for (length in listOf(0, 12, webp.size - 1, webp.size / 2)) check(decode(webp.copyOf(length)) == null)
     check(decode(webp.clone().also { it[4] = (it[4].toInt() xor 1).toByte() }) == null)
+    val animatedWebp = animatedWebpFixture()
+    for (preview in listOf(false, true)) {
+        val animation = requireNotNull(decode(animatedWebp, preview))
+        check(animation.width == 4 && animation.height == 2 && animation.frames.size == 3 && animation.loopCount == 0)
+        check(animation.frames.map { it.durationMillis } == listOf(40L, 70L, 90L))
+        check((animation.frames[0].image.getRGB(0, 0) ushr 16 and 255) > 240)
+        check((animation.frames[1].image.getRGB(0, 0) ushr 8 and 255) > 240)
+        check((animation.frames[1].image.getRGB(3, 0) ushr 16 and 255) > 240)
+        check(animation.frames[2].image.getRGB(0, 0) ushr 24 == 0) { "WebP disposal must clear the previous partial frame" }
+        check((animation.frames[2].image.getRGB(3, 0) and 255) > 240)
+        check(animation.frameIndexAt(200) == 0)
+        animation.frames.forEach { it.image.flush() }
+    }
+    val finiteWebp = requireNotNull(decode(animatedWebpFixture(loopCount = 2)))
+    check(finiteWebp.loopCount == 1 && finiteWebp.frameIndexAt(200) == 0 && finiteWebp.frameIndexAt(400) == 2)
+    val sampledWebp = requireNotNull(decode(animatedWebpFixture(frames = 130)))
+    check(sampledWebp.frames.size <= 120 && sampledWebp.frames.sumOf { it.durationMillis } == 1300L)
+    check(decode(animatedWebpFixture(frames = 2001)) == null)
+    check(decode(animatedWebp.copyOf(animatedWebp.size - 1)) == null)
+    check(decodeIrcImage(animatedWebp, System.nanoTime() - 1, false) == null)
+    finiteWebp.frames.forEach { it.image.flush() }; sampledWebp.frames.forEach { it.image.flush() }
 
     // Caller limits also apply independently of a declared Content-Length.
     check(ByteArrayInputStream(png).use {
@@ -157,8 +214,10 @@ fun checkIrcMedia() {
     fun ready() = IrcMediaAssetState(IrcMediaAssetStatus.READY, asset())
     val cache = IrcMediaCache(maximumBytes = 128, maximumEntries = 3, ttlNanos = 100)
     val a = requireNotNull(cache.begin("a", 0)); check(cache.begin("a", 1) == null)
+    check(cache.revision == 1L)
     check(cache.view("a", 2).status == IrcMediaAssetStatus.LOADING)
     check(cache.complete("a", a, ready(), 3)); check(cache.decodedBytes == 64L)
+    check(cache.revision == 2L)
     val b = requireNotNull(cache.begin("b", 4)); check(cache.complete("b", b, ready(), 5))
     cache.view("a", 6)
     val c = requireNotNull(cache.begin("c", 7)); check(cache.complete("c", c, ready(), 8))
@@ -204,11 +263,34 @@ fun main(args: Array<String>) {
         val file = File(path)
         check(file.length() in 1..IRC_GIF_MAX_BYTES.toLong())
         val bytes = file.readBytes()
+        val removed = unavailableIrcKlipyMedia(URI("https://static.klipy.com/provider.gif"), bytes)
+        if (removed) {
+            check(!unavailableIrcKlipyMedia(URI("https://cdn.discordapp.com/provider.gif"), bytes))
+            check(!unavailableIrcKlipyMedia(URI("https://static.klipy.com.evil.invalid/provider.gif"), bytes))
+            check(!unavailableIrcKlipyMedia(URI("https://static.klipy.com/provider.gif"), bytes.clone().also { it[0] = (it[0].toInt() xor 1).toByte() }))
+            println("${file.name}: recognized exact Klipy unavailable banner")
+            continue
+        }
         val gif = bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII) in setOf("GIF87a", "GIF89a")
         for (thumbnail in listOf(false, true)) {
             val deadline = System.nanoTime() + 2_000_000_000L
             val asset = requireNotNull(if (gif) decodeIrcGif(bytes, deadline, thumbnail) else decodeIrcImage(bytes, deadline, thumbnail)) {
                 "${file.name} could not be decoded (thumbnail=$thumbnail)"
+            }
+            if (file.name == "klipy-unavailable-poster.webp") {
+                check(asset.frames.size == 27 && asset.loopCount == 0 && asset.frames.all { it.durationMillis == 100L })
+                check(asset.width == if (thumbnail) 192 else 498)
+                check(asset.height == if (thumbnail) 105 else 274)
+                fun imageHash(frame: IrcGifFrame): ByteArray {
+                    val image = frame.image
+                    val pixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+                    val buffer = ByteBuffer.allocate(pixels.size * 4)
+                    buffer.asIntBuffer().put(pixels)
+                    return MessageDigest.getInstance("SHA-256").digest(buffer.array())
+                }
+                check(!imageHash(asset.frames.first()).contentEquals(imageHash(asset.frames.last()))) {
+                    "The actual Klipy WebP poster must animate in both the viewer and chat preview"
+                }
             }
             println("${file.name}: thumbnail=$thumbnail ${asset.width}x${asset.height}, ${asset.frames.size} frames")
             asset.frames.forEach { it.image.flush() }

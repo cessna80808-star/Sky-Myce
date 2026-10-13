@@ -85,7 +85,7 @@ class HealerCrushCameraScreen : MenuScreen(Component.literal("Crush Camera"), Me
             child(button("Reset presentation", 49) { HealerCrushCameraHud.resetPresentation(); say("Window, orientation adjustments and appearance reset. Saved viewpoints remain.") })
         })
         content.child(label("AUTOMATIC ACTIVATION", MenuTheme.SECONDARY))
-        content.child(label("Save both viewpoints, then choose your classes in settings. The camera opens 26 seconds after Storm's phase starts, switches to yellow after the first Storm crush, and stays visible until Storm dies. Automatic mode requires a living player in F7/M7 on Hypixel.", MenuTheme.MUTED))
+        content.child(label("Save both viewpoints, then choose your classes in settings. The camera opens 26 seconds after Storm's phase starts, switches to yellow one second after the first crush (or at 38 seconds if its notice is missed), and stays visible until Storm dies. Automatic mode requires a living player in F7/M7 on Hypixel.", MenuTheme.MUTED))
         root.child(button("Done", 100) { onClose() })
         updateStatus()
     }

@@ -175,6 +175,17 @@ fun checkIrcChatModel() {
     captured.accept(net.minecraft.client.gui.TextAlignment.LEFT, 0, 1000, parameters, mediaRow("body [GIF 1]", 0))
     check(captured.anchors.getValue(mediaAction).visibleBottom == 91)
     check(ircMessageHeader(global, false).string == "Alice: ")
+    for (emoji in IRC_REACTIONS) {
+        val reaction = ircReactionText(IrcReaction(emoji, 12))
+        check(reaction.string == ircReadableText(emoji).single().text + " 12")
+        var imageGlyph = false
+        reaction.visualOrderText.accept { _, style, codepoint ->
+            if (codepoint in 0xE000..0xF8FF) imageGlyph = style.font == net.minecraft.network.chat.FontDescription.Resource(
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("skymyce", "irc_emoji")) && style.color?.value == 0xFFFFFF
+            true
+        }
+        check(imageGlyph)
+    }
     check(ircMessageHeader(global.copy(source = "discord"), false).string == "@Alice: ")
     val replied = global.copy(reply = GlobalChatReply("Bob", "https://cdn.discordapp.com/attachments/1/2/clip.gif?signature=${"x".repeat(180)}"))
     val replyHeader = ircMessageHeader(replied, false)
