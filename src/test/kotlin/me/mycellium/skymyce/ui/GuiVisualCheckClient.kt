@@ -14,6 +14,14 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerFilter
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerPage
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerScope
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerView
+import me.mycellium.skymyce.features.instances.dungeons.tracker.LootOrder
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionArchive
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
+import me.mycellium.skymyce.features.instances.dungeons.tracker.ChestReceipt
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
+import me.mycellium.skymyce.features.instances.dungeons.tracker.RunLoot
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.social.CosmeticsScreen
@@ -53,6 +61,7 @@ class GuiVisualCheckClient : ClientModInitializer {
         }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)
+        var trackerHistoryFixture: GuiVisualTrackerHistoryFixture? = null
         val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
@@ -61,7 +70,13 @@ class GuiVisualCheckClient : ClientModInitializer {
                 DungeonScreen()
             },
             Scene("dungeon-tracker-loot", ThemePreset.SIGNATURE) {
-                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = true))
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
+            },
+            Scene("dungeon-tracker-filter-return", ThemePreset.SIGNATURE) {
+                trackerHistoryFixture = GuiVisualTrackerHistoryFixture()
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.MUSEUM, floor = "M7", query = "shadow warp",
+                    scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = true, sort = LootOrder.NAME, ascending = true, oldestFirst = true))
                 DungeonScreen()
             },
             Scene("settings-signature", ThemePreset.SIGNATURE) { SettingsScreen(null, SettingsTab.PARTY) },
@@ -96,19 +111,23 @@ class GuiVisualCheckClient : ClientModInitializer {
             val field = BaseOwoScreen::class.java.getDeclaredField("uiAdapter").apply { isAccessible = true }
             return field.get(screen) as OwoUIAdapter<*>
         }
-        fun press(title: String) {
+        fun press(title: String, navigation: Boolean = false) {
             val screen = checkNotNull(net.minecraft.client.Minecraft.getInstance().screen)
             val ui = adapter(screen)
             val components = ArrayList<UIComponent>()
             ui.rootComponent.collectDescendants(components)
             val control = components.first { component -> when (component) {
-                is MenuButton -> !component.navigation && component.message.string == title
+                is MenuButton -> component.navigation == navigation && component.message.string == title
                 is MenuLabel -> component.text().string == title && component.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE)
                 else -> false
             } }
             checkNotNull(ui.rootComponent.focusHandler()).focus(control, UIComponent.FocusSource.KEYBOARD_CYCLE)
             screen.keyPressed(KeyEvent(GLFW.GLFW_KEY_ENTER, 0, 0))
         }
+        fun trackerFilter() = DungeonScreen::class.java.getDeclaredField("filter").apply { isAccessible = true }
+            .get(checkNotNull(Minecraft.getInstance().screen) as DungeonScreen) as TrackerFilter
+        fun trackerView() = DungeonScreen::class.java.getDeclaredField("view").apply { isAccessible = true }
+            .get(checkNotNull(Minecraft.getInstance().screen) as DungeonScreen) as TrackerView
         fun leaderboardState(screen: LeaderboardScreen) = listOf("category", "metric", "period", "page", "query").map { name ->
             LeaderboardScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen)
         }
@@ -187,15 +206,92 @@ class GuiVisualCheckClient : ClientModInitializer {
                     }
                 }
             }
-            if (ticks >= 25) {
+            if (current.name == "dungeon-tracker-filter-return") when (ticks) {
+                5 -> press("History")
+                7 -> {
+                    check(trackerFilter().let { it.page == TrackerPage.TIMELINE && it.query == "SHADOW_WARP_SCROLL" })
+                    check(AcquisitionRepository.preferences.let { it.page == TrackerPage.MUSEUM && it.query == "shadow warp" })
+                    press("Back to Museum")
+                    check(trackerFilter().let { it.page == TrackerPage.MUSEUM && it.query == "shadow warp" && it.floor == "M7" })
+                }
+                9 -> press("History")
+                11 -> {
+                    press("Loot", navigation = true)
+                    check(trackerFilter().query == "shadow warp") { "Item history search leaked into Loot" }
+                }
+                13 -> {
+                    press("Clear filters")
+                    check(trackerFilter().let { it.query.isEmpty() && it.floor == null && it.scope == TrackerScope.ALL_LOCAL_PROFILES &&
+                        it.legacyTotals && it.sort == LootOrder.NAME && it.ascending && it.oldestFirst }) { "Clearing constraints changed the loot source or sorting" }
+                    val components = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    check(components.filterIsInstance<MenuButton>().none { it.message.string in listOf("Show historical totals", "Show new tracking") })
+                    checkNotNull(trackerHistoryFixture).checkIntact()
+                }
+                17 -> {
+                    check(trackerView().loot.single { it.item == "GUI_FIXTURE_UNPRICED" }.value == null) {
+                        "Loot market values fell back to an old recorded amount for an unpriced item"
+                    }
+                    val labels = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(labels)
+                    check(labels.filterIsInstance<MenuLabel>().any { it.text().string.contains("Market value (estimated)") })
+                    check(labels.filterIsInstance<MenuLabel>().any { it.text().string.startsWith("All saved loot") })
+                    press("RNG Museum", navigation = true)
+                    val components = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    components.filterIsInstance<MenuTextBox>().single().text("shadow warp")
+                }
+                21 -> press("History")
+                23 -> navigateMenu(MenuDirectoryScreen(MenuCategory.DUNGEONS))
+                25 -> {
+                    check(AcquisitionRepository.preferences.let { it.page == TrackerPage.MUSEUM && it.query == "shadow warp" }) {
+                        "Leaving item history through category navigation persisted its item search"
+                    }
+                    navigateMenu(DungeonScreen())
+                }
+                28 -> {
+                    check(trackerFilter().let { it.page == TrackerPage.MUSEUM && it.query == "shadow warp" &&
+                        it.scope == TrackerScope.ALL_LOCAL_PROFILES && it.legacyTotals })
+                    checkNotNull(trackerHistoryFixture).checkIntact()
+                    println("Visual tracker filter check passed: item history returns, clearing preserves source, no saved loot changes")
+                }
+            }
+            if (ticks >= if (current.name == "dungeon-tracker-filter-return") 30 else 25) {
                 pending = true
                 Screenshot.takeScreenshot(client.mainRenderTarget) { image ->
                     image.use { it.writeToFile(output.resolve("${current.name}.png")) }
-                    client.execute { scene++; ticks = 0; pending = false }
+                    client.execute {
+                        if (current.name == "dungeon-tracker-filter-return") {
+                            checkNotNull(trackerHistoryFixture).restore(); trackerHistoryFixture = null
+                        }
+                        scene++; ticks = 0; pending = false
+                    }
                 }
             }
         }
     }
+}
+
+/** Synthetic in-memory records exercise the real controls without editing the acquisition archive. */
+private class GuiVisualTrackerHistoryFixture {
+    private val stateField = AcquisitionRepository.javaClass.getDeclaredField("state").apply { isAccessible = true }
+    private val previous = AcquisitionRepository.state
+    private val previousPreferences = AcquisitionRepository.preferences
+    private val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Fixture")
+    private val time = 1_792_003_200_000L
+    private val state = AcquisitionArchive(events = listOf(
+        AcquisitionEvent("1".repeat(32), "SHADOW_WARP_SCROLL", time, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
+        AcquisitionEvent("2".repeat(32), "SHADOW_WARP_SCROLL", time + 1000, "dungeon", context, "M7", "BEDROCK", run = "fixture-run")),
+        runs = listOf(DungeonRunRecord("fixture-run", "fixture-session", context, "M7", time, time + 1000, 1000,
+            chests = listOf(ChestReceipt("fixture-chest", time + 1000, "BEDROCK", 0.0, listOf(
+                RunLoot("SHADOW_WARP_SCROLL", 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))))
+    init { stateField.set(AcquisitionRepository, state) }
+    fun checkIntact() {
+        check(AcquisitionRepository.state === state && state.events.size == 2 && state.runs.size == 1) {
+            "A tracker viewing control modified saved acquisitions"
+        }
+    }
+    fun restore() { checkIntact(); stateField.set(AcquisitionRepository, previous); AcquisitionRepository.remember(previousPreferences) }
 }
 
 private fun checkImmediateSendFailure(client: Minecraft) {

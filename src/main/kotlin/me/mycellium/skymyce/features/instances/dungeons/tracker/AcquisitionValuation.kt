@@ -1,5 +1,13 @@
 package me.mycellium.skymyce.features.instances.dungeons.tracker
 
+/** Display estimate only; this never changes the recorded acquisition value or profit. */
+internal fun estimatedLootMarketValue(count: Long, unitPrice: Double?): Double? {
+    if (count < 0) return null
+    if (count == 0L) return 0.0
+    val price = unitPrice?.takeIf { it.isFinite() && it > 0.0 && it <= 1e12 } ?: return null
+    return (price * count).takeIf { it.isFinite() && it in 0.0..1e16 }
+}
+
 private fun DungeonRunRecord.valuationScope(account: String, server: String) = trackingVersion == 2 &&
     context?.let { it.account == account && it.server == server } == true
 

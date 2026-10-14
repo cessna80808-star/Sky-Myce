@@ -26,8 +26,7 @@ data class TrackerView(val summary: TrackerSummary = TrackerSummary(), val loot:
 
 /** Runs only when data or filters change, on the background scheduler. */
 fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filter: TrackerFilter, context: AcquisitionContext?, includeDetails: Boolean = true): TrackerView {
-    val legacyMode = filter.legacyTotals && !filter.needsRecords &&
-        (filter.page != TrackerPage.OVERVIEW || filter.scope == TrackerScope.UNSCOPED_LEGACY)
+    val legacyMode = filter.scope == TrackerScope.UNSCOPED_LEGACY && !filter.needsRecords
     val events = if (includeDetails) filter.events(archive.events, context, archive.runs) else emptyList()
     val inheritedProfit = archive.legacyProfit.filterKeys(filter::floorMatches).values.sum()
     val trackedLifetimeProfit = summarizeRuns(archive.runs.filter { it.trackingVersion == 2 && filter.floorMatches(it.floor) }, null, false).first.net
@@ -41,9 +40,17 @@ fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filt
     }
     val runs = filter.runs(archive.runs, context)
     val (selectedSummary, loot) = summarizeRuns(runs, filter.chest, includeDetails)
-    val summary = if (filter.page == TrackerPage.OVERVIEW && filter.scope == TrackerScope.ALL_LOCAL_PROFILES && !filter.needsRecords)
+    val combined = filter.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT) &&
+        filter.scope == TrackerScope.ALL_LOCAL_PROFILES && !filter.needsRecords
+    val summary = if (combined)
         dungeonTrackerLifetimeSummary(archive, legacy, filter.floor, filter.mode, filter.chest) else selectedSummary
-    return TrackerView(summary, sortedLoot(loot, filter), events, false, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
+    val savedLoot = if (combined && includeDetails) {
+        (summarizeLegacy(floors, filter.chest).second + loot).groupBy { it.item }.map { (item, rows) ->
+            TrackerLootRow(item, rows.sumOf { it.count }, if (rows.any { it.value == null }) null else rows.sumOf { it.value!! },
+                if (rows.any { it.acquiredChests == null }) null else rows.sumOf { it.acquiredChests!! }, rows.sumOf { it.sampledChests })
+        }
+    } else loot
+    return TrackerView(summary, sortedLoot(savedLoot, filter), events, false, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
 }
 
 /** Frozen aggregates and v2 receipts describe separate periods; v1 receipts already belong to the aggregates. */

@@ -12,6 +12,7 @@ fun checkTracker() {
     checkChestTracking()
     checkAcquisitionValuations()
     checkLifetimeDungeonSummary()
+    checkCombinedDungeonLoot()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val other = context.copy(profileId = "c".repeat(32), profileName = "Pear")
@@ -50,7 +51,9 @@ fun checkTracker() {
     val imported = importLegacyAcquisitions(AcquisitionArchive(), raw, digest)
     check(imported.events.size == 3 && imported.events.count { it.context == null } == 2)
     check(TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = true).events(imported.events, null, emptyList()).size == 3)
-    check(TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES).events(imported.events, null, emptyList()).isEmpty())
+    check(TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES).events(imported.events, null, emptyList()).size == 3)
+    check(TrackerFilter(scope = TrackerScope.UNSCOPED_LEGACY).events(imported.events, null, emptyList()).size == 2)
+    check(TrackerFilter().events(imported.events, context, emptyList()).isEmpty())
     check(imported.events.map { it.id }.distinct().size == 3) // Two same-time acquisitions stay distinct.
     check(importLegacyAcquisitions(imported, raw, digest) == imported)
     check(imported.events.none { it.player == "Other" }) // Community claims never increase the collection.
@@ -91,11 +94,96 @@ fun checkTracker() {
         check(parseTrackerPreferences(datedPreferences) == selected) // Migration cannot attach legacy totals to a profile/date/session.
     }
     check(runCatching { parseTrackerPreferences(oldPreferences.deepCopy().apply { addProperty("overviewVersion", -1) }) }.isFailure)
+    checkTrackerPreferenceUpgrade()
     check(parseTrackerPreferences(null).scope == TrackerScope.ALL_LOCAL_PROFILES)
     val entrance = cutoverAcquisitions(AcquisitionArchive(version = 1), JsonParser.parseString("""{"E":{"chests":{}}}"""), time)
     check(parseAcquisitionArchive(Gson().toJsonTree(entrance)).legacyProfit.keys == setOf("E"))
     check(raw.toString().contains("$time,$time")) // Import did not mutate the original save.
     println("Tracker checks passed: dungeon profile continuity, visible historical totals, scoped filters, safe partial rates, legacy preservation, repeat drops, shared receipts, permanent museum and offline access")
+}
+
+private fun checkTrackerPreferenceUpgrade() {
+    val saved = TrackerFilter(page = TrackerPage.LOOT, floor = "M7", legacyTotals = true,
+        sort = LootOrder.NAME, ascending = true)
+    val historical = saved.copy(scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = false)
+    for (version in listOf<Int?>(null, 1)) {
+        val json = Gson().toJsonTree(saved).asJsonObject.apply {
+            if (version == null) remove("overviewVersion") else addProperty("overviewVersion", version)
+        }
+        val migrated = parseTrackerPreferences(json)
+        check(migrated == historical) // The old historical toggle ignored its misleading Current profile scope.
+        check(parseTrackerPreferences(Gson().toJsonTree(migrated)) == historical)
+        check(Gson().toJsonTree(migrated).asJsonObject.get("overviewVersion").asInt == 2)
+        for (selected in listOf(saved.copy(from = "2026-09-24"), saved.copy(until = "2026-09-24"),
+            saved.copy(session = "selected-session"), saved.copy(legacyTotals = false), saved.copy(scope = TrackerScope.UNSCOPED_LEGACY))) {
+            val preserved = Gson().toJsonTree(selected).asJsonObject.apply {
+                if (version == null) remove("overviewVersion") else addProperty("overviewVersion", version)
+            }
+            check(parseTrackerPreferences(preserved) == selected)
+        }
+    }
+    check(parseTrackerPreferences(Gson().toJsonTree(saved)) == saved) // A new explicit Current profile choice stays scoped.
+    for (invalid in listOf("3", "1.1", "2.0", "\"1\"", "\"2\"", "null")) {
+        val json = Gson().toJsonTree(saved).asJsonObject.apply { add("overviewVersion", JsonParser.parseString(invalid)) }
+        check(runCatching { parseTrackerPreferences(json) }.isFailure)
+    }
+}
+
+private fun checkCombinedDungeonLoot() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val other = context.copy(profileName = "Pear")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 12), mapOf(
+        "BEDROCK" to listOf(TrackerLootRow("IMPLOSION_SCROLL", 4, 4000.0, null, 10),
+            TrackerLootRow("DYE_NECRON", 3, 3000.0, null, 10), TrackerLootRow("SHADOW_WARP_SCROLL", 4, 4000.0, null, 10)),
+        "DIAMOND" to listOf(TrackerLootRow("RECOMBOBULATOR_3000", 2, 200.0, null, 2))),
+        emptyMap(), emptyMap(), mapOf("BEDROCK" to 10, "DIAMOND" to 2))
+    val normal = historical.copy(floor = "F7", loot = mapOf("BEDROCK" to listOf(TrackerLootRow("NECRON_HANDLE", 7, 7000.0, null, 7))))
+    val first = DungeonRunRecord("new", "first-session", context, "M7", time - 60000, time, 60000,
+        chests = listOf(ChestReceipt("new-chest", time, "BEDROCK", 0.0,
+            listOf(RunLoot("IMPLOSION_SCROLL", 1, 1000.0), RunLoot("DYE_NECRON", 1), RunLoot("NECRON_HANDLE", 1, 5000.0)))))
+    val second = first.copy(id = "other", session = "second-session", context = other, completedAt = time + 86400000,
+        chests = listOf(ChestReceipt("other-chest", time + 86400000, "DIAMOND", 0.0, listOf(RunLoot("RECOMBOBULATOR_3000", 1, 100.0)))))
+    val archive = AcquisitionArchive(runs = listOf(first.copy(id = "duplicated-old", trackingVersion = 1), first, second),
+        legacyProfit = mapOf("M7" to 9000.0))
+    val legacy = listOf(historical, normal)
+    val filter = TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun view(selected: TrackerFilter = filter) = trackerView(archive, legacy, selected, null)
+    val saved = view()
+    val items = saved.loot.associateBy { it.item }
+    check(items.getValue("IMPLOSION_SCROLL").let { it.count == 5L && it.value == 5000.0 && it.acquiredChests == null && it.observedRate == null })
+    check(items.getValue("DYE_NECRON").let { it.count == 4L && it.value == null && it.observedRate == null })
+    check(items.getValue("SHADOW_WARP_SCROLL").count == 4L)
+    check(items.getValue("NECRON_HANDLE").let { it.count == 1L && it.observedRate == 0.5 }) // This row has only recorded receipts.
+    check(items.getValue("RECOMBOBULATOR_3000").let { it.count == 3L && it.observedRate == null })
+    check(!saved.usingLegacy && saved.summary == dungeonTrackerLifetimeSummary(archive, legacy, "M7"))
+    check(view(filter.copy(legacyTotals = true)).loot == saved.loot) // A persisted old toggle cannot hide either period.
+    check(view(filter.copy(query = "shadow warp")).loot.single().item == "SHADOW_WARP_SCROLL")
+    check(view(filter.copy(query = "shadow warp").clearConstraints()).loot.any { it.item == "IMPLOSION_SCROLL" && it.count == 5L })
+    check(view(filter.copy(chest = "BEDROCK")).loot.none { it.item == "RECOMBOBULATOR_3000" })
+    check(view(filter.copy(chest = "DIAMOND")).loot.single().count == 3L)
+    check(view(filter.copy(chest = "WOOD")).loot.isEmpty())
+    check(view(filter.copy(floor = "F7")).loot.single().let { it.item == "NECRON_HANDLE" && it.count == 7L })
+    check(view(filter.copy(floor = null, mode = "M")).loot == saved.loot)
+    val dated = view(filter.copy(from = "2026-09-24", until = "2026-09-24", legacyTotals = true)).loot.associateBy { it.item }
+    check(dated.getValue("IMPLOSION_SCROLL").let { it.count == 1L && it.observedRate == 1.0 })
+    check(dated.getValue("DYE_NECRON").count == 1L && "SHADOW_WARP_SCROLL" !in dated && "RECOMBOBULATOR_3000" !in dated)
+    check(view(filter.copy(from = "2026-09-26", legacyTotals = true)).loot.isEmpty())
+    check(view(filter.copy(session = "second-session", legacyTotals = true)).loot.single().let { it.count == 1L && it.observedRate == 1.0 })
+    val scoped = trackerView(archive, legacy, filter.copy(scope = TrackerScope.CURRENT_PROFILE, legacyTotals = true), context).loot.associateBy { it.item }
+    check(scoped.getValue("IMPLOSION_SCROLL").count == 1L && scoped.getValue("DYE_NECRON").count == 1L && "SHADOW_WARP_SCROLL" !in scoped)
+    check(trackerView(archive, legacy, filter.copy(scope = TrackerScope.CURRENT_PROFILE), null).loot.isEmpty())
+    val unscoped = view(filter.copy(scope = TrackerScope.UNSCOPED_LEGACY))
+    check(unscoped.usingLegacy && unscoped.loot.first { it.item == "IMPLOSION_SCROLL" }.count == 4L)
+    check(view(filter.copy(scope = TrackerScope.UNSCOPED_LEGACY, from = "2026-09-24", legacyTotals = true)).loot.isEmpty())
+    val constraints = filter.copy(mode = "M", chest = "BEDROCK", query = "shadow warp", rareOnly = true, valuableOnly = true,
+        from = "2026-09-24", until = "2026-09-24", session = "first-session", activity = "dungeon", legacyTotals = true,
+        sort = LootOrder.NAME, ascending = true, oldestFirst = true)
+    check(constraints.clearConstraints() == TrackerFilter(page = TrackerPage.LOOT, scope = TrackerScope.ALL_LOCAL_PROFILES,
+        legacyTotals = true, sort = LootOrder.NAME, ascending = true, oldestFirst = true))
+    check(constraints.copy(scope = TrackerScope.CURRENT_PROFILE).clearConstraints().scope == TrackerScope.CURRENT_PROFILE)
+    val imported = AcquisitionEvent("e".repeat(32), "SHADOW_WARP_SCROLL", time, "dungeon", null, "M7", origin = "legacy-tracker")
+    check(trackerView(archive.copy(events = listOf(imported)), legacy, constraints.clearConstraints(), null).events == listOf(imported))
 }
 
 private fun checkLifetimeDungeonSummary() {

@@ -90,7 +90,7 @@ object AcquisitionRepository : SkyMyceModule() {
             val restoredView = runCatching {
                 val json = viewFile.read()
                 parseTrackerPreferences(json).also {
-                    migratedPreferences = json?.isJsonObject == true && !json.asJsonObject.has("overviewVersion")
+                    migratedPreferences = json?.isJsonObject == true && json.asJsonObject.get("overviewVersion")?.asString != "2"
                 }
             }.getOrElse { viewFile.preserveOriginal(); TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES) }
                 .let { if (cutover && !migrationError) it.copy(legacyTotals = false) else it }
@@ -180,13 +180,16 @@ internal fun parseTrackerPreferences(json: com.google.gson.JsonElement?): Tracke
     if (json == null) return TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES)
     require(json.isJsonObject)
     val overviewVersion = json.asJsonObject.get("overviewVersion")
-    require(overviewVersion == null || overviewVersion.isJsonPrimitive && overviewVersion.asJsonPrimitive.isNumber && overviewVersion.asString == "1")
+    require(overviewVersion == null || overviewVersion.isJsonPrimitive && overviewVersion.asJsonPrimitive.isNumber && overviewVersion.asString in listOf("1", "2"))
     val filter = Gson().fromJson(json, TrackerFilter::class.java)
     require(filter.page in TrackerPage.entries && filter.sort in LootOrder.entries && filter.scope in TrackerScope.entries)
     require(filter.query.length <= 100 && filter.floor?.matches(Regex("[FM][1-7]|E|ENTRANCE")) != false && filter.mode in listOf(null, "F", "M"))
     if (filter.from.isNotEmpty()) java.time.LocalDate.parse(filter.from)
     if (filter.until.isNotEmpty()) java.time.LocalDate.parse(filter.until)
     require(filter.chest?.length?.let { it <= 16 } != false && filter.session?.length?.let { it <= 40 } != false && filter.activity?.length?.let { it <= 30 } != false)
-    return if (overviewVersion == null && filter.page == TrackerPage.OVERVIEW && !filter.needsRecords && filter.scope == TrackerScope.CURRENT_PROFILE)
-        filter.copy(scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = false) else filter
+    val oldDefaultOverview = overviewVersion == null && filter.page == TrackerPage.OVERVIEW
+    val oldHistoricalLoot = overviewVersion?.asString != "2" && filter.page == TrackerPage.LOOT && filter.legacyTotals
+    return if ((oldDefaultOverview || oldHistoricalLoot) && !filter.needsRecords && filter.scope == TrackerScope.CURRENT_PROFILE)
+        filter.copy(scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = false, overviewVersion = 2)
+    else filter.copy(overviewVersion = 2)
 }
