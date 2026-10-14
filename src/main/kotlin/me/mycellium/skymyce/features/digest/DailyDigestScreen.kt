@@ -85,9 +85,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (!mergedHeader) child(row().apply {
                 child(refreshButton())
                 child(settingsButton())
-                if (page == "rng" && menuWidth >= 280) child(button("Clear local", 76) { confirmClear() })
             })
-            if (page == "rng" && menuWidth < 280) child(button("Clear local", 76) { confirmClear() })
             if (page == "rng") {
                 child(row().apply {
                     child(button("Local history", 96) { if (community) { community = false; historyPage = 0; updateContent(resetScroll = true) } }
@@ -235,14 +233,16 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private fun details(target: FlowLayout, state: DigestCardState?) {
         if (state == null) { target.child(empty("Waiting for information", "This source will appear when available.")); return }
         if (page != "rng") target.child(label(digestText(state.summary, 500)))
-        if (state.status.isNotBlank()) target.child(label(digestText(state.status, 300), tone(state.tone)))
-        state.updatedAt?.let { stamp -> target.child(clock(MenuTheme.MUTED) {
+        if (state.status.isNotBlank() && (page != "rng" || community && DailyDigestConfig.receiveRng))
+            target.child(label(digestText(state.status, 300), tone(state.tone)))
+        state.updatedAt?.takeIf { page != "rng" }?.let { stamp -> target.child(clock(MenuTheme.MUTED) {
             "Last successful update ${digestRelativeTime(stamp, System.currentTimeMillis())}  •  ${timestamp(stamp)}"
         }) }
         if (page == "rng") {
-            target.child(label(if (community) "Community-reported • unverified" else "Detected on this account and profile • stored locally", MenuTheme.PURPLE))
+            target.child(label(if (community) "Community reports • unverified" else "Saved local RNG history", MenuTheme.PURPLE))
             if (community && !DailyDigestConfig.receiveRng) {
-                target.child(empty("Community feed is off", "Enable receiving in Settings → Social & Sharing. Sharing your own drops is a separate option."))
+                target.child(label("Community feed is off", MenuTheme.MUTED))
+                target.child(button("View local history", 116) { community = false; historyPage = 0; updateContent(resetScroll = true) })
                 return
             }
         }
@@ -314,13 +314,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                 menu.button(Component.literal("Copy report")) { MC.instance.keyboardHandler.clipboard = report; menu.parent()?.removeChild(menu) }
             }
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
-    }
-
-    private fun confirmClear() {
-        navigateMenu(MenuConfirmScreen(this, "Clear local RNG history?",
-            "Remove the history saved for this account and profile. Already shared community reports are unaffected.", "Clear history") {
-            DailyDigest.clearHistory()
-        })
     }
 
     private fun refreshButton() = button("Refresh", if (mergedHeader) 54 else 64) { DailyDigest.refresh(page) }

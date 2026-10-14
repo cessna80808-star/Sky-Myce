@@ -2,6 +2,8 @@ package me.mycellium.skymyce.ui
 
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
+import me.mycellium.skymyce.config.settingRows
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.community.CommunityScreen
 import me.mycellium.skymyce.community.LeaderboardScreen
@@ -25,6 +27,7 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
 import me.mycellium.skymyce.features.instances.dungeons.tracker.RunLoot
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
+import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.features.social.CosmeticsScreen
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.ThemeEditorScreen
@@ -45,6 +48,12 @@ import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.sounds.SoundSource
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.component.DataComponentMap
+import net.minecraft.core.Holder
+import net.minecraft.resources.Identifier
+import net.minecraft.world.item.Items
+import net.minecraft.world.item.ItemStack
 import org.lwjgl.glfw.GLFW
 import java.nio.file.Files
 import java.nio.file.Path
@@ -63,15 +72,40 @@ class GuiVisualCheckClient : ClientModInitializer {
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)
         var trackerHistoryFixture: GuiVisualTrackerHistoryFixture? = null
+        var rngArchiveSnapshot: AcquisitionArchive? = null
+        var savedReceiveRng: Boolean? = null
+        fun receiveRngEntry() = settingRows(SkyMyce.config).single { it.element.id() == "receiveRng" }.entry
+        fun trackerScreen(page: TrackerPage): DungeonScreen {
+            if (page in listOf(TrackerPage.MUSEUM, TrackerPage.TIMELINE) && AcquisitionRepository.state.events.none { it.floor == "M7" })
+                trackerHistoryFixture = GuiVisualTrackerHistoryFixture()
+            AcquisitionRepository.remember(TrackerFilter(page = page, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
+            return DungeonScreen()
+        }
         val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-tracker-overview", ThemePreset.SIGNATURE) {
-                AcquisitionRepository.remember(TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES))
-                DungeonScreen()
+                trackerScreen(TrackerPage.OVERVIEW)
             },
+            Scene("dungeon-tracker-overview-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.OVERVIEW) },
             Scene("dungeon-tracker-loot", ThemePreset.SIGNATURE) {
                 AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
+            },
+            Scene("dungeon-tracker-museum", ThemePreset.SIGNATURE) { trackerScreen(TrackerPage.MUSEUM) },
+            Scene("dungeon-tracker-museum-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { trackerScreen(TrackerPage.MUSEUM) },
+            Scene("dungeon-tracker-museum-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.MUSEUM) },
+            Scene("dungeon-tracker-timeline-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { trackerScreen(TrackerPage.TIMELINE) },
+            Scene("dungeon-tracker-timeline-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.TIMELINE) },
+            Scene("dungeon-tracker-timeline-load-older", ThemePreset.SIGNATURE) {
+                trackerHistoryFixture = GuiVisualTrackerHistoryFixture(timelineCount = 120)
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
+            },
+            Scene("dungeon-tracker-personal-rate-tooltip", ThemePreset.SIGNATURE) {
+                if (AcquisitionRepository.state.personalRateSamples.none { it.floor == "M7" && "SHADOW_WARP_SCROLL" in it.itemCounts })
+                    trackerHistoryFixture = GuiVisualTrackerHistoryFixture()
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.LOOT, floor = "M7", query = "shadow warp", scope = TrackerScope.ALL_LOCAL_PROFILES))
                 DungeonScreen()
             },
             Scene("dungeon-tracker-filter-return", ThemePreset.SIGNATURE) {
@@ -88,6 +122,14 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
+            Scene("daily-rng-local-history", ThemePreset.SIGNATURE) {
+                if (AcquisitionRepository.state.events.none { it.item == "IMPLOSION_SCROLL" })
+                    trackerHistoryFixture = GuiVisualTrackerHistoryFixture("IMPLOSION_SCROLL")
+                rngArchiveSnapshot = AcquisitionRepository.state
+                receiveRngEntry().let { savedReceiveRng = it.boolean; check(it.setBoolean(false)) }
+                DailyDigest.screenClosed()
+                DailyDigestScreen("rng")
+            },
             Scene("home-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("home-keyboard-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { ThemeEditorScreen(null) },
@@ -108,6 +150,12 @@ class GuiVisualCheckClient : ClientModInitializer {
         var leaderboardOrigin: LeaderboardScreen? = null
         var communityOrigin: CommunityScreen? = null
         var leaderboardView = emptyList<Any?>()
+        var previousMouse: Pair<Double, Double>? = null
+        fun testMouse(client: Minecraft, x: Double, y: Double) {
+            // The hidden test window has no OS hover events; feed its native cursor cache directly.
+            for ((name, value) in listOf("xpos" to x, "ypos" to y))
+                client.mouseHandler.javaClass.getDeclaredField(name).apply { isAccessible = true }.setDouble(client.mouseHandler, value)
+        }
         fun adapter(screen: Screen): OwoUIAdapter<*> {
             val field = BaseOwoScreen::class.java.getDeclaredField("uiAdapter").apply { isAccessible = true }
             return field.get(screen) as OwoUIAdapter<*>
@@ -136,6 +184,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             if (!started) {
                 if (client.screen == null || client.overlay != null) return@register
                 checkImmediateSendFailure(client)
+                checkMenuItemModels(client)
                 started = true
                 client.options.pauseOnLostFocus = false
                 ThemeConfig.animationMode = GuiMotion.MEDIUM
@@ -207,6 +256,33 @@ class GuiVisualCheckClient : ClientModInitializer {
                     }
                 }
             }
+            if (current.name == "daily-rng-local-history") when (ticks) {
+                5 -> {
+                    val components = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    components.filterIsInstance<MenuTextBox>().single().text("implosion")
+                }
+                8, 16 -> {
+                    val components = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    check(components.filterIsInstance<MenuLabel>().any { it.text().string.contains("Implosion") }) {
+                        "Saved Implosion was missing from offline RNG Activity"
+                    }
+                    check(components.filterIsInstance<MenuButton>().none { it.message.string.startsWith("Clear local") })
+                    check(AcquisitionRepository.state === rngArchiveSnapshot && client.player == null && client.connection == null && !CommunityClient.connected)
+                    if (ticks == 8) press("Community", navigation = true)
+                }
+                12 -> press("View local history")
+            }
+            if (current.name == "dungeon-tracker-timeline-load-older" && ticks in listOf(10, 15)) {
+                val components = arrayListOf<UIComponent>()
+                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                val records = components.count { it.id()?.startsWith("timeline-event-") == true }
+                check(records == if (ticks == 10) 100 else 120) { "Continuous timeline loaded $records records at tick $ticks" }
+                checkNotNull(trackerHistoryFixture).checkIntact()
+                if (ticks == 10) press("Load older (20)")
+                else check(components.filterIsInstance<MenuButton>().none { it.message.string.startsWith("Load older") })
+            }
             if (current.name == "dungeon-tracker-filter-return") when (ticks) {
                 5 -> press("History")
                 7 -> {
@@ -261,13 +337,59 @@ class GuiVisualCheckClient : ClientModInitializer {
                     println("Visual tracker filter check passed: item history returns, clearing preserves source, no saved loot changes")
                 }
             }
-            if (ticks >= if (current.name == "dungeon-tracker-filter-return") 30 else 25) {
+            if (current.name.startsWith("dungeon-tracker-") && client.screen is DungeonScreen && ticks == 24) {
+                val components = arrayListOf<UIComponent>()
+                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                if (trackerFilter().page in listOf(TrackerPage.OVERVIEW, TrackerPage.MUSEUM, TrackerPage.TIMELINE)) {
+                    check(components.filterIsInstance<MenuButton>().none { it.message.string in listOf("‹", "›") }) {
+                        "A tracker overview, museum or continuous timeline still showed page arrows"
+                    }
+                }
+                if (current.name.startsWith("dungeon-tracker-museum")) {
+                    val cards = components.filterIsInstance<FlowLayout>().filter { it.id()?.startsWith("museum-card-") == true }
+                    check(cards.isNotEmpty()) { "Museum capture contained no collection cards" }
+                    cards.groupBy { it.parent() }.values.forEach { row ->
+                        check(row.map { it.height() }.distinct().size == 1 && row.map { it.y() }.distinct().size == 1) {
+                            "Museum cards in one row had mismatched heights or vertical alignment"
+                        }
+                    }
+                }
+            }
+            if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == 18) {
+                check(trackerView().loot.single { it.item == "SHADOW_WARP_SCROLL" }.rateSample != null)
+                val screen = checkNotNull(client.screen)
+                val components = arrayListOf<UIComponent>()
+                adapter(screen).rootComponent.collectDescendants(components)
+                val rate = components.filterIsInstance<MenuLabel>().single { it.text().string.endsWith("%") }
+                previousMouse = client.mouseHandler.xpos() to client.mouseHandler.ypos()
+                val x = (rate.x() + rate.width() / 2.0) / screen.width
+                val y = (rate.y() + rate.height() / 2.0) / screen.height
+                testMouse(client, x * client.window.screenWidth, y * client.window.screenHeight)
+                screen.mouseMoved(x * client.window.guiScaledWidth, y * client.window.guiScaledHeight)
+            }
+            val captureTick = when (current.name) {
+                "dungeon-tracker-filter-return" -> 30
+                "dungeon-tracker-personal-rate-tooltip" -> 40
+                else -> 25
+            }
+            if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == captureTick) {
+                val tooltip = MenuScreen::class.java.getDeclaredField("tooltip").apply { isAccessible = true }.get(client.screen)
+                check(MenuTooltipMotion::class.java.getDeclaredField("key").apply { isAccessible = true }.get(tooltip) != null) {
+                    "Personal-rate screenshot did not show its hover tooltip"
+                }
+            }
+            if (ticks >= captureTick) {
                 pending = true
                 Screenshot.takeScreenshot(client.mainRenderTarget) { image ->
                     image.use { it.writeToFile(output.resolve("${current.name}.png")) }
                     client.execute {
-                        if (current.name == "dungeon-tracker-filter-return") {
-                            checkNotNull(trackerHistoryFixture).restore(); trackerHistoryFixture = null
+                        if (current.name.startsWith("dungeon-tracker-") || current.name == "daily-rng-local-history") {
+                            trackerHistoryFixture?.restore(); trackerHistoryFixture = null
+                            previousMouse?.let { (x, y) -> testMouse(client, x, y) }; previousMouse = null
+                        }
+                        if (current.name == "daily-rng-local-history") {
+                            check(receiveRngEntry().setBoolean(checkNotNull(savedReceiveRng)))
+                            savedReceiveRng = null; rngArchiveSnapshot = null; DailyDigest.screenClosed()
                         }
                         scene++; ticks = 0; pending = false
                     }
@@ -278,27 +400,52 @@ class GuiVisualCheckClient : ClientModInitializer {
 }
 
 /** Synthetic in-memory records exercise the real controls without editing the acquisition archive. */
-private class GuiVisualTrackerHistoryFixture {
+private class GuiVisualTrackerHistoryFixture(item: String = "SHADOW_WARP_SCROLL", private val timelineCount: Int = 2) {
     private val stateField = AcquisitionRepository.javaClass.getDeclaredField("state").apply { isAccessible = true }
     private val previous = AcquisitionRepository.state
     private val previousPreferences = AcquisitionRepository.preferences
     private val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Fixture")
     private val time = 1_792_003_200_000L
-    private val state = AcquisitionArchive(events = listOf(
-        AcquisitionEvent("1".repeat(32), "SHADOW_WARP_SCROLL", time, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
-        AcquisitionEvent("2".repeat(32), "SHADOW_WARP_SCROLL", time + 1000, "dungeon", context, "M7", "BEDROCK", run = "fixture-run")),
+    private val state = AcquisitionArchive(events = if (timelineCount == 2) listOf(
+        AcquisitionEvent("1".repeat(32), item, time, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
+        AcquisitionEvent("2".repeat(32), item, time + 1000, "dungeon", context, "M7", "BEDROCK", run = "fixture-run"))
+        else List(timelineCount) { index -> AcquisitionEvent((index + 1).toString(16).padStart(32, '0'), item,
+            time + index * 1000L, "dungeon", floor = "M7", origin = "legacy-tracker") },
         runs = listOf(DungeonRunRecord("fixture-run", "fixture-session", context, "M7", time, time + 1000, 1000,
             chests = listOf(ChestReceipt("fixture-chest", time + 1000, "BEDROCK", 0.0, listOf(
-                RunLoot("SHADOW_WARP_SCROLL", 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))),
+                RunLoot(item, 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))),
         personalRateSamples = listOf(PersonalRateSample("M7", time - 86400000, time, 20,
-            mapOf("SHADOW_WARP_SCROLL" to 2L))))
+            mapOf(item to 2L))))
     init { stateField.set(AcquisitionRepository, state) }
     fun checkIntact() {
-        check(AcquisitionRepository.state === state && state.events.size == 2 && state.runs.size == 1) {
+        check(AcquisitionRepository.state === state && state.events.size == timelineCount && state.runs.size == 1) {
             "A tracker viewing control modified saved acquisitions"
         }
     }
     fun restore() { checkIntact(); stateField.set(AcquisitionRepository, previous); AcquisitionRepository.remember(previousPreferences) }
+}
+
+private fun checkMenuItemModels(client: Minecraft) {
+    fun sprites(stack: ItemStack) = menuItemModelTextures(stack).map { it.first.contents().name() }.toSet()
+    val defaults = DataComponentMap.builder().addAll(DataComponents.COMMON_ITEM_COMPONENTS)
+        .set(DataComponents.ITEM_MODEL, Identifier.parse("minecraft:paper")).build()
+    val holder = Holder.direct(Items.PAPER, defaults)
+    fun model(name: String) = ItemStack(holder, 1).apply { set(DataComponents.ITEM_MODEL, Identifier.parse(name)) }
+    val paper = setOf(Identifier.parse("minecraft:item/paper"))
+    check(sprites(model("minecraft:paper")) == paper)
+    check(sprites(model("minecraft:writable_book")) == setOf(Identifier.parse("minecraft:item/writable_book")))
+    val missing = model("skymyce:gui_fixture_missing_model")
+    check(sprites(missing) == paper && missing.get(DataComponents.ITEM_MODEL) == Identifier.parse("skymyce:gui_fixture_missing_model")) {
+        "A missing icon model changed the original item stack instead of its display copy"
+    }
+    if (client.resourceManager.getResource(Identifier.parse("hypixel_skyblock:items/item/combat_1/tarantula_catalyst.json")).isPresent) {
+        check(sprites(model("hypixel_skyblock:item/combat_1/tarantula_catalyst")) == setOf(Identifier.parse("hypixel_skyblock:item/combat_1/tarantula_catalyst")))
+        check(sprites(model("hypixel_skyblock:item/uncategorized/titanium_drill_dr_x655")) == setOf(
+            Identifier.parse("hypixel_skyblock:item/uncategorized/titanium_drill_dr_x655_head"),
+            Identifier.parse("hypixel_skyblock:item/uncategorized/titanium_drill_dr_x655_handle")))
+        check(sprites(model("hypixel_skyblock:item/great_spook/ghoul_buster")) == setOf(Identifier.parse("hypixel_skyblock:item/great_spook/ghoul_buster")))
+    }
+    println("Visual item model check passed: selected item model, safe missing-model fallback and available pack GUI/composite layers")
 }
 
 private fun checkImmediateSendFailure(client: Minecraft) {

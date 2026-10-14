@@ -17,6 +17,7 @@ import me.mycellium.skymyce.community.CommunityFailure
 
 /** Runs with the existing dungeonFriendsCheck task, entirely offline and without a Minecraft window. */
 fun checkDigestLifecycleAndNews() {
+    checkLocalRngHistory()
     val account = "00000000-0000-0000-0000-000000000001"
     val other = "00000000-0000-0000-0000-000000000002"
     val day = LocalDate.of(2026, 9, 24)
@@ -276,4 +277,29 @@ fun checkDigestLifecycleAndNews() {
         Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
     println("Daily Digest checks passed: local day, delayed consent, profile isolation, asynchronous cache, corruption recovery and bounded history")
+}
+
+private fun checkLocalRngHistory() {
+    val now = 1_000_000L
+    val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
+    val confirmed = AcquisitionEvent("1".repeat(32), "IMPLOSION_SCROLL", 900000, "dungeon", context, "M7", player = "Player")
+    val imported = confirmed.copy(id = "2".repeat(32), item = "NECRON_HANDLE", occurredAt = 1000,
+        context = null, player = null, origin = "legacy-tracker", quantity = 2)
+    val otherProfile = confirmed.copy(id = "3".repeat(32), context = context.copy(profileId = "c".repeat(32), profileName = "Pear"))
+    val events = listOf(confirmed, imported, otherProfile, confirmed.copy(id = "4".repeat(32), item = "DIRT"),
+        confirmed.copy(id = "5".repeat(32), occurredAt = now + 60001))
+    val cached = DigestRngEntry(confirmed.id, confirmed.item, confirmed.activity, 899000, "Player")
+    val recent = listOf(cached, cached, cached.copy(id = "6".repeat(32), item = "SHADOW_WARP_SCROLL"),
+        cached.copy(id = "7".repeat(32), community = true))
+    val offline = digestLocalRngHistory(events, recent, null, now)
+    check(offline.size == 4 && offline.map { it.id }.distinct().size == offline.size && offline.none { it.community })
+    check(offline.single { it.id == confirmed.id }.timestamp == confirmed.occurredAt) // The permanent journal wins the same cached receipt ID.
+    check(offline.single { it.id == imported.id }.let { it.title.endsWith("×2") && it.meta == "Saved local record" })
+    check(offline.zipWithNext().all { (first, second) -> first.timestamp!! >= second.timestamp!! })
+    val scoped = digestLocalRngHistory(events, recent, context, now)
+    check(scoped.map { it.id }.toSet() == setOf(confirmed.id, "6".repeat(32)))
+    check(digestLocalRngHistory(events, emptyList(), context.copy(account = "d".repeat(32)), now).isEmpty())
+    check(digestLocalRngHistory(events, emptyList(), context.copy(server = "alpha"), now).isEmpty())
+    check(digestLocalRngHistory(events, emptyList(), null, now).any { it.id == imported.id }) // Old local records need no game or community connection.
+    check(events.size == 5 && recent.size == 4 && recent.last().community) // Rendering cannot clear archives or turn a received report into a personal one.
 }

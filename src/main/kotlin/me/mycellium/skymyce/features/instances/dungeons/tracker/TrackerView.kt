@@ -45,7 +45,7 @@ fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filt
     }
     val runs = filter.runs(archive.runs, context)
     val (selectedSummary, loot) = summarizeRuns(runs, filter.chest, includeDetails)
-    val combined = filter.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT) &&
+    val combined = filter.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT, TrackerPage.MUSEUM) &&
         filter.scope == TrackerScope.ALL_LOCAL_PROFILES && !filter.needsRecords
     val summary = if (combined)
         dungeonTrackerLifetimeSummary(archive, legacy, filter.floor, filter.mode, filter.chest) else selectedSummary
