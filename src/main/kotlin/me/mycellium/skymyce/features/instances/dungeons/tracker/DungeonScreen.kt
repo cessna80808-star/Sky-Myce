@@ -32,6 +32,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private var itemHistoryReturn: TrackerFilter? = null
     private var view = TrackerView()
     private var page = 0
+    private var timelineLimit = 100
     private var more = false
     private var closed = false
     private var generation = 0L
@@ -48,6 +49,9 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private lateinit var results: MenuScroll<FlowLayout>
     private lateinit var status: LabelComponent
     private lateinit var pageLabel: LabelComponent
+    private lateinit var pagination: FlowLayout
+    private lateinit var previousPage: ButtonComponent
+    private lateinit var nextPage: ButtonComponent
     private lateinit var tabs: FlowLayout
     private lateinit var closeButton: ButtonComponent
     private var tabRows = emptyList<FlowLayout>()
@@ -89,14 +93,14 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     itemHistoryReturn = null; change(previous.copy(page = tab)); rebuild(resetScroll = true)
                 }
                     .apply { navigation = true; selected = { filter.page == tab } }
-                    .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
+                    .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Runs, profit and time"; TrackerPage.LOOT -> "Your saved loot"; TrackerPage.TIMELINE -> "Drops by date"; TrackerPage.MUSEUM -> "Your rare-drop collection" })))
             } } }
             tabs = column(); child(tabs)
             child(row().apply {
                 floorButton = button(filter.floor ?: "All tracked floors", minOf(113, bodyWidth - 84)) { b -> menu(b) { d ->
                     d.button(Component.literal("All tracked floors")) { change(filter.copy(floor = null)); rebuild() }
                     DungeonFloor.entries.forEach { floor -> d.button(Component.literal(floor.name)) { change(filter.copy(floor = floor.name, mode = null)); rebuild() } }
-                } }.wrappedTooltip(Component.literal("Select a viewing floor. This never changes an ongoing run's recording floor.")); child(floorButton)
+                } }.wrappedTooltip(Component.literal("Filter by floor")); child(floorButton)
                 modeButton = button(when (filter.mode) { "F" -> "Normal"; "M" -> "Master"; else -> "Both modes" }, 80) {
                     change(filter.copy(mode = when (filter.mode) { null -> "F"; "F" -> "M"; else -> null }, floor = null)); rebuild()
                 }; child(modeButton)
@@ -106,12 +110,12 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     else if (filter.legacyTotals && !filter.needsRecords) "Show new tracking" else "Show historical totals", minOf(180, bodyWidth)) {
                     change(filter.copy(legacyTotals = !filter.legacyTotals, from = "", until = "", session = null,
                         scope = if (history && !filter.legacyTotals) TrackerScope.ALL_LOCAL_PROFILES else filter.scope)); rebuild()
-                }.wrappedTooltip(Component.literal("Saved aggregate reports have no profile, date or session. Date and session filters use recorded acquisitions."))
+                }.wrappedTooltip(Component.literal("Include older saved reports"))
             }; child(historyHost)
             filterActions = row().apply {
                 moreButton = button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() }; child(moreButton)
                 child(button("Clear filters", 80) { change(filter.clearConstraints()); rebuild() }
-                    .wrappedTooltip(Component.literal("Clear search and viewing filters. Your saved loot, source and sorting stay unchanged.")))
+                    .wrappedTooltip(Component.literal("Reset filters. Saved loot stays.")))
             }; child(filterActions)
             oldestButton = button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() }
             search = MenuTextBox(Sizing.fill()).apply {
@@ -128,11 +132,12 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); scrollStep(24)
                 }; child(results)
             }; child(resultSwap)
-            child(row().apply {
-                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView() })
+            pagination = row().apply {
+                id("tracker-pagination")
+                previousPage = button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderView() }
                 pageLabel = label("").apply { horizontalSizing(Sizing.expand()) }; child(pageLabel)
-                child(button("›", 28) { page++; renderView() })
-            })
+                nextPage = button("›", 28) { page++; renderView() }
+            }; child(pagination)
         })
         refreshControls()
         renderView(animate = false)
@@ -166,7 +171,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun filters() = column().apply {
         child(button("Scope: ${filter.scope.name.replace('_', ' ')}", (bodyWidth - 8).coerceAtMost(280)) { b -> menu(b) { d ->
             TrackerScope.entries.forEach { scope -> d.button(Component.literal(scope.name.replace('_', ' '))) { change(filter.copy(scope = scope, legacyTotals = filter.legacyTotals || scope == TrackerScope.UNSCOPED_LEGACY)); rebuild() } }
-        } }.wrappedTooltip(Component.literal("Current profile uses your account and profile. All local profiles shows your saved loot, including older totals without dates or sessions. Offline: choose All local profiles.")))
+        } }.wrappedTooltip(Component.literal("All local profiles includes saved totals and works offline.")))
         child(button(filter.chest ?: "All chest types", 145) { b -> menu(b) { d ->
             (listOf<String?>(null) + DungeonChest.entries.map { it.name }).forEach { chest -> d.button(Component.literal(chest ?: "All chest types")) { change(filter.copy(chest = chest)); rebuild() } }
         } })
@@ -178,13 +183,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             AcquisitionRepository.state.runs.asReversed().asSequence().filter { it.trackingVersion == 2 && filter.scopeMatches(it.context, seenContext) }.map { it.session }.distinct().take(20).forEach { session ->
                 d.button(Component.literal(session.take(8))) { change(filter.copy(session = session, legacyTotals = false)); rebuild() }
             }
-        } }.wrappedTooltip(Component.literal("Recent local sessions. A new session starts on account/profile change or disconnect. Legacy aggregates have no sessions.")))
+        } }.wrappedTooltip(Component.literal("Filter by play session")))
         if (filter.page != TrackerPage.OVERVIEW) child(row().apply {
-            child(button(if (filter.rareOnly) "RNG only ✓" else "RNG only", 86) { change(filter.copy(rareOnly = !filter.rareOnly)); rebuild() }.wrappedTooltip(Component.literal("Only maintained rare-item catalog IDs; market price alone does not define RNG.")))
+            child(button(if (filter.rareOnly) "RNG only ✓" else "RNG only", 86) { change(filter.copy(rareOnly = !filter.rareOnly)); rebuild() }.wrappedTooltip(Component.literal("Show catalogued rare drops")))
             child(button(if (filter.valuableOnly) "1m+ ✓" else "1m+ value", 86) { change(filter.copy(valuableOnly = !filter.valuableOnly)); rebuild() }
                 .wrappedTooltip(Component.literal(if (filter.page == TrackerPage.LOOT)
-                    "Only cached market estimates of at least one million coins. Items without a usable price do not qualify."
-                    else "Only recorded values of at least one million coins. Unknown historical values do not qualify.")))
+                    "Market value of at least 1M coins"
+                    else "Recorded value of at least 1M coins")))
         })
         if (filter.page == TrackerPage.LOOT) child(row().apply {
             child(button("Sort: ${filter.sort.name.replace('_', ' ')}", minOf(140, bodyWidth - 64)) { change(filter.copy(sort = LootOrder.entries[(filter.sort.ordinal + 1) % LootOrder.entries.size])); rebuild() })
@@ -198,7 +203,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun dateField(start: Boolean) = MenuTextBox(Sizing.fill(48)).apply {
         setMaxLength(10); text(if (start) this@DungeonScreen.filter.from else this@DungeonScreen.filter.until); setHint(Component.literal(if (start) "From YYYY-MM-DD" else "To YYYY-MM-DD"))
-        wrappedTooltip(Component.literal("Inclusive local calendar date. Date filters require timestamped records; old aggregate totals stay available separately."))
+        wrappedTooltip(Component.literal("Local date, inclusive. Dated records only."))
         onChanged().subscribe { value ->
             if (value.isBlank() || runCatching { LocalDate.parse(value) }.isSuccess) {
                 val next = if (start) this@DungeonScreen.filter.copy(from = value, legacyTotals = false) else this@DungeonScreen.filter.copy(until = value, legacyTotals = false)
@@ -209,7 +214,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun change(next: TrackerFilter) {
         if (next == filter) return
-        preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis()
+        preferencesEdited = true; filter = next; page = 0; timelineLimit = 100; generation++; changedAt = System.currentTimeMillis()
         // An item-history detour must not replace the collection's saved view, including on category exit.
         AcquisitionRepository.remember(itemHistoryReturn ?: filter)
     }
@@ -261,14 +266,15 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             TrackerScope.CURRENT_PROFILE -> "Current profile loot"
             TrackerScope.UNSCOPED_LEGACY -> "Saved totals"
         } else when (filter.scope) {
-            TrackerScope.ALL_LOCAL_PROFILES -> "All saved reports"
-            TrackerScope.CURRENT_PROFILE -> "Current profile reports"
-            TrackerScope.UNSCOPED_LEGACY -> "Saved unscoped reports"
+            TrackerScope.ALL_LOCAL_PROFILES -> "All saved drops"
+            TrackerScope.CURRENT_PROFILE -> "Current profile drops"
+            TrackerScope.UNSCOPED_LEGACY -> "Older saved drops"
         }
         status.text(Component.literal("$source${if (filters.isEmpty()) " • no filters" else " • ${filters.joinToString(" / ")}"}").withColor(MenuTheme.MUTED))
+        pagination.clearChildren()
         if (more && height < 340) {
             status.text(Component.literal("Filters • changes apply immediately").withColor(MenuTheme.MUTED))
-            results.child(filters()); pageLabel.text(Component.literal("Collapse filters for results").withColor(MenuTheme.MUTED)); return
+            results.child(filters()); return
         }
         val content = column()
         when (filter.page) {
@@ -280,28 +286,32 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         results.child(content)
     }
     private fun overview(content: FlowLayout) {
-        pageLabel.text(Component.literal("Overview").withColor(MenuTheme.MUTED))
         val s = view.summary
-        val values = listOf("Runs" to s.runs.toString(), "Profit (estimated)" to
-            "${money(s.knownNet)}${if (s.profitIncomplete) " + ?" else ""}")
         val columns = (bodyWidth / 180).coerceIn(1, 2)
-        values.chunked(columns).forEach { group -> content.child(row().apply { group.forEach { (name, value) ->
-            child(column().apply { horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns)); surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
-                child(label(name, MenuTheme.MUTED)); child(label(value, MenuTheme.ACCENT))
-                if (name == "Profit (estimated)") wrappedTooltip(Component.literal(
-                    "Recorded value: ${money(s.gross)}${if (s.incompleteValues) " + ?" else ""}\n" +
-                    "Chest costs: ${money(s.chestCost)}${if (s.incompleteCosts) " + ?" else ""}\n" +
-                    "Reroll costs: ${money(s.knownRerollCost)}${if (s.rerollCost == null) " + ?" else ""}\n" +
-                    "Values are estimates. ? marks missing prices or costs; their known amounts remain included."))
-            })
-        } }) }
-        val time = if (s.timedRuns == 0L && s.runs > 0) "Unknown" else
-            "${if (s.timedRuns < s.runs) "≥ " else ""}${duration(s.time)}"
-        content.child(label("Time: $time  •  Average run: ${s.average?.toLong()?.let(::duration) ?: "Unknown"}", MenuTheme.SECONDARY)
-            .wrappedTooltip(Component.literal("Time measured for ${s.timedRuns}/${s.runs} runs. The average uses those timed runs.")))
-        content.child(label("Chests: ${s.chests}  •  Rerolls: ${s.rerolls}", MenuTheme.SECONDARY))
-        content.child(label("Catacombs XP: ${money(s.cataXp)}", MenuTheme.SECONDARY)
-            .wrappedTooltip(Component.literal(s.classXp.entries.joinToString("\n") { (name, xp) -> "$name XP: ${money(xp)}" })))
+        val cardWidth = (bodyWidth - (columns - 1) * 6) / columns
+        fun stat(name: String, value: String, detail: String, primary: Boolean = false,
+                 color: Int = MenuTheme.ACCENT, hint: String? = null) = column().apply {
+            sizing(Sizing.fixed(cardWidth), Sizing.fixed(if (primary) 76 else 66))
+            surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING)); gap(4)
+            child(label(name, MenuTheme.MUTED))
+            child(label(value, color).apply { fontSize = if (primary) 21f else 16f; text(text().copy().withStyle { it.withBold(true) }) })
+            child(label(detail, MenuTheme.MUTED).apply { fontSize = 9f })
+            if (!hint.isNullOrBlank()) wrappedTooltip(Component.literal(hint))
+        }
+        val cards = listOf(
+            stat("Runs", s.runs.toString(), "Completed runs", primary = true),
+            stat("Profit (estimated)", money(s.knownNet), if (s.profitIncomplete) "Partial • missing prices or costs" else "After chest and reroll costs",
+                primary = true, color = if (s.knownNet < 0) MenuTheme.RED else MenuTheme.GREEN,
+                hint = "Chest costs: ${money(s.chestCost)}${if (s.incompleteCosts) " (partial)" else ""}\n" +
+                    "Rerolls: ${money(s.knownRerollCost)}${if (s.rerollCost == null) " (partial)" else ""}"),
+            stat("Average run", s.average?.toLong()?.let(::duration) ?: "—", "${s.timedRuns} timed runs"),
+            stat("Tracked time", if (s.timedRuns == 0L && s.runs > 0) "—" else duration(s.time), "${s.timedRuns} of ${s.runs} runs timed"),
+            stat("Chests opened", s.chests.toString(), "${s.rerolls} rerolls"),
+            stat("Catacombs XP", money(s.cataXp), "Recorded XP", hint = s.classXp.entries.joinToString("\n") { (name, xp) -> "$name: ${money(xp)}" })
+        )
+        cards.chunked(columns).forEach { group -> content.child(row().apply {
+            gap(6); verticalAlignment(VerticalAlignment.TOP); group.forEach { child(it) }
+        }) }
         if (AcquisitionRepository.status.contains("paused") || AcquisitionRepository.status.contains("failed") || AcquisitionRepository.status.contains("capacity"))
             content.child(label(AcquisitionRepository.status, MenuTheme.YELLOW))
         if (DungeonTracker.storageStatus.contains("unreadable")) content.child(label(DungeonTracker.storageStatus, MenuTheme.YELLOW))
@@ -311,78 +321,106 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         content.child(label("Item  /  Count  /  Market value (estimated)  /  Personal rate", MenuTheme.SECONDARY))
         val samples = visible.mapNotNull { it.rateSample }.distinct()
         samples.singleOrNull()?.let { sample -> content.child(label(
-            "Personal rates: ${sample.completedRuns} completed ${sample.floor} runs • ${date(sample.from)} through ${date(sample.until - 1)}", MenuTheme.MUTED)) }
-        if (samples.size > 1) content.child(label("Personal rates use dated samples; each rate's tooltip shows its dates and runs.", MenuTheme.MUTED))
+            "Rates: ${sample.completedRuns} ${sample.floor} runs • ${date(sample.from)} – ${date(sample.until - 1)}", MenuTheme.MUTED)
+            .wrappedTooltip(Component.literal("Dated drops only; loot counts include all saved totals."))) }
+        if (samples.size > 1) content.child(label("Rates use separate dated samples", MenuTheme.MUTED))
         if (visible.isEmpty()) content.child(label(if (filter.scope == TrackerScope.CURRENT_PROFILE && seenContext == null)
-            "No current profile is available. Choose All local profiles in Filters to view your saved loot offline."
+            "Choose All local profiles to see saved loot offline."
             else "No saved loot matches these filters.", MenuTheme.MUTED))
         if (filter.needsRecords && filter.scope == TrackerScope.ALL_LOCAL_PROFILES)
-            content.child(label("Date and session filters use recorded chests; older totals have no dates or sessions.", MenuTheme.MUTED))
+            content.child(label("Dated records only", MenuTheme.MUTED))
         visible.forEach { item -> content.child(column().apply {
             surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
             child(row().apply { child(icon(item.item)); child(label(itemName(item.item)).apply { horizontalSizing(Sizing.expand()) }) })
             child(row().apply {
                 child(label("× ${item.count}").horizontalSizing(Sizing.fill(25)))
                 child(label(money(item.value), MenuTheme.GREEN).horizontalSizing(Sizing.fill(35))
-                    .wrappedTooltip(Component.literal("Cached market price: ${money(item.value?.div(item.count.toDouble()))} × ${item.count}.\nThis estimate does not change recorded dungeon profit. Prices unavailable in the cache stay unknown.")))
+                    .wrappedTooltip(Component.literal("${money(item.value?.div(item.count.toDouble()))} each × ${item.count}\nCached market estimate")))
                 child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "—", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
                     .wrappedTooltip(Component.literal(item.rateSample?.let { sample ->
-                        "${sample.itemCounts[item.item]} dated drops / ${sample.completedRuns} completed ${sample.floor} runs.\n" +
-                            "Sample: ${date(sample.from)} through ${date(sample.until - 1)}. Newer and undated drops are excluded.\n" +
-                            "Your recorded acquisitions per completed run; not an official or per-chest drop probability."
-                    } ?: if (item.observedRate == null) "Saved totals do not contain a dated run sample or complete item-by-chest observations, so a personal rate cannot be calculated." else
-                        "Observed in ${item.acquiredChests} of ${item.sampledChests} confirmed chests in this tracked sample. This is not an official drop chance.")))
+                        "${sample.itemCounts[item.item]} drops / ${sample.completedRuns} ${sample.floor} runs\nDated sample, per run"
+                    } ?: if (item.observedRate == null) "Not enough recorded runs or chests" else
+                        "${item.acquiredChests} drops / ${item.sampledChests} recorded chests")))
             })
         }) }
     }
     private fun timeline(content: FlowLayout) {
-        val visible = slice(view.events)
-        if (visible.isEmpty()) content.child(label("No acquisitions match. Offline, choose All local profiles; older tracker events are under Unscoped legacy.", MenuTheme.MUTED))
+        val visible = view.events.take(timelineLimit)
+        if (visible.isEmpty()) content.child(label("No drops match these filters.", MenuTheme.MUTED))
         var date = ""
         visible.forEach { event ->
             val local = Instant.ofEpochMilli(event.occurredAt).atZone(ZoneId.systemDefault())
-            if (date != local.toLocalDate().toString()) { date = local.toLocalDate().toString(); content.child(label(date, MenuTheme.SECONDARY)) }
+            if (date != local.toLocalDate().toString()) {
+                date = local.toLocalDate().toString()
+                content.child(label(date, MenuTheme.SECONDARY).apply { margins(Insets.top(8)); fontSize = 11f })
+            }
             content.child(column().apply {
-                surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
-                child(row().apply { child(icon(event.item)); child(label("${itemName(event.item)} ×${event.quantity}", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) }) })
-                child(label("${local.format(DateTimeFormatter.ofPattern("HH:mm:ss"))} • ${event.floor ?: event.activity} • ${event.chest ?: "Chest unknown"}", MenuTheme.MUTED))
-                child(label("${event.player ?: "Player not recorded"} • ${event.context?.profileName ?: "Unscoped legacy"} • ${event.origin}", MenuTheme.MUTED))
-                child(label("Recorded value: ${money(event.value)} • Chest cost: ${money(event.chestCost)}", MenuTheme.MUTED))
-                if (event.rerollCost != null) child(label("Reroll estimate: ${money(event.rerollCost)}", MenuTheme.MUTED))
-                if (event.run != null) child(label("Linked run ${event.run.take(8)}", MenuTheme.MUTED))
-                if (event.origin.startsWith("legacy")) child(label("Legacy report • no matching receipt to reconcile across old sources", MenuTheme.YELLOW))
+                id("timeline-event-${event.id}"); gap(2); padding(Insets.vertical(3))
+                child(row().apply {
+                    child(label(local.format(DateTimeFormatter.ofPattern("HH:mm")), MenuTheme.MUTED).horizontalSizing(Sizing.fixed(34)))
+                    child(icon(event.item))
+                    child(label("${itemName(event.item)} ×${event.quantity}", MenuTheme.TEXT).horizontalSizing(Sizing.expand()))
+                })
+                val context = listOfNotNull(event.floor ?: event.activity, event.chest?.lowercase()?.replaceFirstChar(Char::uppercase),
+                    event.value?.let { "${money(it)} est." }, if (event.origin.startsWith("legacy")) "Imported" else null)
+                child(label(context.joinToString(" • "), MenuTheme.MUTED).apply { margins(Insets.left(38)); fontSize = 9f })
+                wrappedTooltip(Component.literal(listOfNotNull(
+                    "Value: ${money(event.value)} • Chest: ${money(event.chestCost)}",
+                    event.rerollCost?.let { "Reroll: ${money(it)}" },
+                    listOfNotNull(event.player, event.context?.profileName).joinToString(" • ").takeIf(String::isNotBlank)
+                ).joinToString("\n")))
             })
         }
+        if (view.events.size > visible.size) content.child(button("Load ${if (filter.oldestFirst) "newer" else "older"} (${view.events.size - visible.size})", minOf(150, bodyWidth)) {
+            timelineLimit += 100; renderView(animate = false)
+        })
     }
     private fun museum(content: FlowLayout) {
         val grouped = view.events.filter { it.item in DigestRngParser.catalog }.groupBy { it.item }
+        val counts = view.loot.associate { it.item to it.count }
+        fun obtained(item: String) = counts[item] ?: grouped[item].orEmpty().sumOf { it.quantity.toLong() }
         val catalog = DigestRngParser.catalog.filter { (item, entry) -> (filter.activity == null || entry.activity == filter.activity) &&
-            (filter.query.isBlank() || "$item ${entry.name}".contains(filter.query, true)) && (!filter.valuableOnly || item in grouped) }
-            .keys.sortedWith(compareByDescending<String> { AcquisitionRepository.pinned(it, seenContext) }.thenBy { itemName(it) })
-        content.child(label("Personal rare-drop collection • not Hypixel's donation Museum", MenuTheme.MUTED))
+            (filter.query.isBlank() || "$item ${entry.name}".contains(filter.query, true)) && (!filter.valuableOnly || item in grouped) &&
+            (filter.floor == null && filter.mode == null || obtained(item) > 0) }
+            .keys.sortedWith(compareByDescending<String> { AcquisitionRepository.pinned(it, seenContext) }
+                .thenByDescending { obtained(it) > 0 }.thenBy { itemName(it) })
+        if (catalog.isEmpty()) content.child(label("No rare drops match these filters.", MenuTheme.MUTED))
         val columns = (bodyWidth / 260).coerceIn(1, 3)
-        slice(catalog).chunked(columns).forEach { group -> content.child(row().apply { group.forEach { item ->
+        val cardWidth = (bodyWidth - (columns - 1) * 8) / columns
+        catalog.chunked(columns).forEach { group -> content.child(row().apply {
+            gap(8); verticalAlignment(VerticalAlignment.TOP)
+            group.forEach { item ->
             val events = grouped[item].orEmpty()
             child(column().apply {
-                horizontalSizing(Sizing.fixed((bodyWidth - (columns - 1) * 4) / columns))
+                id("museum-card-$item"); sizing(Sizing.fixed(cardWidth), Sizing.fixed(102)); gap(6)
                 surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
-                child(row().apply { child(icon(item)); child(label(itemName(item), if (events.isEmpty()) MenuTheme.MUTED else MenuTheme.SECONDARY).apply { horizontalSizing(Sizing.expand()) }) })
-                child(label(if (events.isEmpty()) "Not recorded" else "Obtained: ${events.sumOf { it.quantity }} • ${events.mapNotNull { it.floor }.distinct().joinToString().ifEmpty { events.first().activity }}", MenuTheme.MUTED))
-                if (events.isNotEmpty()) child(label("First: ${date(events.minOf { it.occurredAt })} • Latest: ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED))
+                child(row().apply {
+                    child(icon(item)); child(label(itemName(item), if (obtained(item) == 0L) MenuTheme.MUTED else MenuTheme.TEXT).apply { horizontalSizing(Sizing.expand()) })
+                })
+                child(label(if (obtained(item) == 0L) "Not collected" else "× ${obtained(item)} collected", if (obtained(item) == 0L) MenuTheme.MUTED else MenuTheme.ACCENT)
+                    .apply { fontSize = 13f })
+                child(label(if (events.isEmpty()) "No dated history" else "Last recorded ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED)
+                    .apply { fontSize = 9f }
+                    .wrappedTooltip(Component.literal(if (events.isEmpty()) "Older totals have no dates" else
+                        "${events.sumOf { it.quantity }} dated drops • ${date(events.minOf { it.occurredAt })} – ${date(events.maxOf { it.occurredAt })}")))
                 child(row().apply {
                     child(button("History", 68) {
                         itemHistoryReturn = filter
                         change(filter.copy(page = TrackerPage.TIMELINE, query = item, valuableOnly = false)); rebuild(resetScroll = true)
                     }.apply { active(events.isNotEmpty()) })
                     child(button(if (AcquisitionRepository.pinned(item, seenContext)) "Unpin" else "Pin", 55) { AcquisitionRepository.pin(item, seenContext); renderView() }
-                        .wrappedTooltip(Component.literal("Pins and personal collection entries are permanent local records, independent of community-feed retention.")))
+                        .wrappedTooltip(Component.literal("Keep this item at the top")))
                 })
             })
         } }) }
     }
     private fun <T> slice(values: List<T>): List<T> {
         val pages = ((values.size + 19) / 20).coerceAtLeast(1); page = page.coerceIn(0, pages - 1)
-        pageLabel.text(Component.literal("${page + 1} / $pages • ${values.size} entries").withColor(MenuTheme.MUTED))
+        if (pages > 1) {
+            pagination.child(previousPage); pagination.child(pageLabel); pagination.child(nextPage)
+            pageLabel.text(Component.literal("${page + 1} / $pages • ${values.size} entries").withColor(MenuTheme.MUTED))
+            previousPage.active(page > 0); nextPage.active(page < pages - 1)
+        }
         return values.drop(page * 20).take(20)
     }
     private fun itemName(item: String) = DigestRngParser.catalog[item]?.name ?: item.substringAfter(':').replace('_', ' ').take(100)
@@ -398,7 +436,11 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         }
     }
     private fun money(value: Double?) = value?.takeIf(Double::isFinite)?.let(NumberUtils::condense) ?: "Unknown"
-    private fun duration(value: Long) = "${value / 3600000}h ${value / 60000 % 60}m ${value / 1000 % 60}s"
+    private fun duration(value: Long) = buildList {
+        if (value >= 3600000) add("${value / 3600000}h")
+        if (value >= 60000) add("${value / 60000 % 60}m")
+        add("${value / 1000 % 60}s")
+    }.joinToString(" ")
     private fun date(value: Long) = Instant.ofEpochMilli(value).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     private fun menu(button: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(button, options)
     private fun rebuild(resetScroll: Boolean = false) {

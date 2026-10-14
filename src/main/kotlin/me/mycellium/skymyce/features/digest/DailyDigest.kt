@@ -6,6 +6,7 @@ import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.network.chat.Component
@@ -35,6 +36,8 @@ object DailyDigest : SkyMyceModule() {
     private var savedGlobal: GlobalDigest? = null
     private var snapshot = DigestView()
     private var revision = 0L
+    private var acquisitionRevision = -1L
+    private var acquisitionContext: AcquisitionContext? = null
     private var nextStateChange = Long.MAX_VALUE
     private var wake: ScheduledFuture<*>? = null
     private var generation = 0L
@@ -248,8 +251,6 @@ object DailyDigest : SkyMyceModule() {
         if (contextReady()) { DigestActivities.manual(id, complete); changed() }
     }
 
-    fun clearHistory() { if (contextReady()) { history.clear(); changed() } }
-
     private fun enabledNews(): List<NewsSource> = if (DailyDigestConfig.news) listOf(NewsSource.GAME) else emptyList()
 
     private fun updateSubscription() {
@@ -361,12 +362,15 @@ object DailyDigest : SkyMyceModule() {
     }
 
     fun view(): DigestView {
-        if (System.currentTimeMillis() >= nextStateChange) rebuildView()
+        if (System.currentTimeMillis() >= nextStateChange || acquisitionRevision != AcquisitionRepository.revision ||
+            acquisitionContext != AcquisitionRepository.currentContext()) rebuildView()
         return snapshot
     }
 
     private fun rebuildView() {
         val now = System.currentTimeMillis()
+        acquisitionRevision = AcquisitionRepository.revision
+        acquisitionContext = AcquisitionRepository.currentContext()
         val cards = listOf(
             runCatching { newsCard(now) }.getOrElse { failedCard("news", "Daily News") },
             runCatching { globalCard(now) }.getOrElse { failedCard("global", "Global Status") },
@@ -434,13 +438,15 @@ object DailyDigest : SkyMyceModule() {
     }
 
     private fun rngCard(): DigestCardState {
-        val entries = history.entries.filter { !it.community || DailyDigestConfig.receiveRng }.map { entry ->
+        val local = digestLocalRngHistory(AcquisitionRepository.state.events,
+            history.entries.takeIf { acquisitionContext == null || currentProfileKey() == profileKey }.orEmpty(),
+            acquisitionContext, System.currentTimeMillis())
+        val community = history.entries.filter { it.community && DailyDigestConfig.receiveRng }.map { entry ->
             DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
-                if (entry.community) "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name."
-                else "Detected locally from a supported game confirmation. Sharing is ${if (me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.RNG)) "enabled for new drops" else "off or waiting for preference synchronization"}.",
-                DigestTone.SPECIAL, if (entry.community) "Community · unverified" else "Your drop", entry.occurredAt,
-                community = entry.community, activity = entry.activity)
+                "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name.",
+                DigestTone.SPECIAL, "Community · unverified", entry.occurredAt, community = true, activity = entry.activity)
         }
+        val entries = (local + community).sortedWith(compareByDescending<DigestEntry> { it.timestamp }.thenBy { it.id })
         return DigestCardState("rng", "RNG Activity", entries.firstOrNull()?.title ?: "Your next rare find starts here", rngStatus,
             if (entries.isEmpty()) DigestTone.MUTED else DigestTone.SPECIAL, entries, entries.firstOrNull()?.timestamp)
     }

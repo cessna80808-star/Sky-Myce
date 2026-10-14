@@ -13,6 +13,7 @@ fun checkTracker() {
     checkAcquisitionValuations()
     checkLifetimeDungeonSummary()
     checkCombinedDungeonLoot()
+    checkMuseumLootCounts()
     checkPersonalRateSamples()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
@@ -101,6 +102,31 @@ fun checkTracker() {
     check(parseAcquisitionArchive(Gson().toJsonTree(entrance)).legacyProfit.keys == setOf("E"))
     check(raw.toString().contains("$time,$time")) // Import did not mutate the original save.
     println("Tracker checks passed: dungeon profile continuity, visible historical totals, scoped filters, safe partial rates, legacy preservation, repeat drops, shared receipts, permanent museum and offline access")
+}
+
+private fun checkMuseumLootCounts() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 5), mapOf("BEDROCK" to listOf(
+        TrackerLootRow("IMPLOSION_SCROLL", 4, 4000.0, null, 5), TrackerLootRow("NECRON_HANDLE", 5, 5000.0, null, 5))),
+        emptyMap(), emptyMap(), mapOf("BEDROCK" to 5))
+    val run = DungeonRunRecord("new", "new-session", context, "M7", time - 60000, time, 60000,
+        chests = listOf(ChestReceipt("new-chest", time, "BEDROCK", 0.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 1000.0)))))
+    val archive = AcquisitionArchive(runs = listOf(run.copy(id = "old-copy", trackingVersion = 1), run), events = listOf(
+        AcquisitionEvent("e".repeat(32), "IMPLOSION_SCROLL", time - 86400000, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
+        AcquisitionEvent("f".repeat(32), "NECRON_HANDLE", time - 86400000, "dungeon", floor = "M7", origin = "legacy-tracker"),
+        AcquisitionEvent("g".repeat(32), "IMPLOSION_SCROLL", time, "dungeon", context, "M7", "BEDROCK", run = run.id)))
+    val filter = TrackerFilter(page = TrackerPage.MUSEUM, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    val museum = trackerView(archive, listOf(historical), filter, null)
+    check(museum.loot == trackerView(archive, listOf(historical), filter.copy(page = TrackerPage.LOOT), null).loot)
+    check(museum.loot.first { it.item == "IMPLOSION_SCROLL" }.count == 5L && museum.events.filter { it.item == "IMPLOSION_SCROLL" }.sumOf { it.quantity } == 3)
+    check(museum.loot.first { it.item == "NECRON_HANDLE" }.count == 5L && museum.events.filter { it.item == "NECRON_HANDLE" }.sumOf { it.quantity } == 1)
+    for (selected in listOf(filter.copy(from = "2026-09-24", until = "2026-09-24"), filter.copy(session = "new-session"),
+        filter.copy(scope = TrackerScope.CURRENT_PROFILE))) {
+        val scoped = trackerView(archive, listOf(historical), selected, context)
+        check(scoped.loot.single().let { it.item == "IMPLOSION_SCROLL" && it.count == 1L })
+        check(scoped.events.single().origin == "confirmed")
+    }
 }
 
 private fun checkPersonalRateSamples() {

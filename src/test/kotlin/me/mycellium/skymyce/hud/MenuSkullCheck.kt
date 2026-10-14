@@ -1,6 +1,7 @@
 package me.mycellium.skymyce.hud
 
 import me.mycellium.skymyce.ui.menuSkullArt
+import me.mycellium.skymyce.ui.menuItemTextureArt
 import java.awt.Color
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -8,6 +9,17 @@ import java.io.File
 import javax.imageio.ImageIO
 
 internal fun checkMenuSkullArt() {
+    val spriteSheet = BufferedImage(4, 8, BufferedImage.TYPE_INT_ARGB).apply {
+        for (y in 0 until height) for (x in 0 until width) setRGB(x, y, if (y < 4) 0xFFFF0000.toInt() else 0x8080FF40.toInt())
+    }
+    val firstSprite = checkNotNull(menuItemTextureArt(spriteSheet, 4, 4, 0, -1))
+    val secondSprite = checkNotNull(menuItemTextureArt(spriteSheet, 4, 4, 1, 0xFF80FF80.toInt()))
+    check(firstSprite.width == 4 && firstSprite.height == 4 && firstSprite.getRGB(2, 2) == 0xFFFF0000.toInt())
+    check(secondSprite.getRGB(2, 2) == 0x8040FF20.toInt()) { "Item sprite frame or Minecraft tint was lost" }
+    check(spriteSheet.getRGB(2, 6) == 0x8080FF40.toInt()) { "Menu tint changed a shared resource image" }
+    check(menuItemTextureArt(spriteSheet, 4, 4, 2, -1) == null)
+    check(menuItemTextureArt(spriteSheet, 3, 4, 0, -1) == null)
+    check(menuItemTextureArt(spriteSheet, 0, 4, 0, -1) == null)
     fun pixels(image: BufferedImage) = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
     fun sheet(height: Int = 64) = BufferedImage(64, height, BufferedImage.TYPE_INT_ARGB).apply {
         val faces = listOf(Triple(0, 8, 0xFF40DE50.toInt()), Triple(8, 8, 0xFFEF3040.toInt()),
