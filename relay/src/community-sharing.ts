@@ -106,7 +106,7 @@ export class CommunitySharingStore {
     this.merge(sourceId, targetId);
   }
   mergeUuid(uuid: string, targetAccountId: string): void {
-    if (uuidPattern.test(uuid)) {
+    if (uuidPattern.test(uuid) && this.hooks.owner(uuid)?.accountId !== targetAccountId) {
       this.merge(`uuid:${uuid}`, targetAccountId);
       this.sql.exec("DELETE FROM community_contributions WHERE uuid=?", uuid);
     }

@@ -132,6 +132,31 @@ export async function checkCommunity(script, proof) {
     assert.equal((await dungeonRanking('dungeon_run_time')).entries[0].sampleSize, 1, 'Untimed completions do not enter the average denominator');
     assert.equal((await post('/community/contributions', { ...completion, expectedUuid: bob.identity.uuid }, alice.credentials.accessToken)).body.error,
       'session_identity_changed', 'A session cannot submit another linked Minecraft identity\'s run');
+    for (const [metric, value] of [['dungeon_profit', 12500], ['networth', 1200000]]) {
+      const measurement = { ...completion, contribution: { ...completion.contribution,
+        id: createHash('sha256').update(metric + '/synthetic-measurement').digest('hex').slice(0, 32), metric, value, verification: 'estimated' } };
+      assert.equal((await post('/community/contributions', measurement, alice.credentials.accessToken)).body.ok, true);
+    }
+    const sharedBeforeRenewal = await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid);
+    const renewalChallenge = await challenge('refresh');
+    const renewed = await post('/community/session/refresh', { challengeId: renewalChallenge.challengeId,
+      minecraftProof: proof('Alice', renewalChallenge.nonce), refreshToken: alice.credentials.refreshToken, modVersion: oldVersion });
+    assert.equal(renewed.body.ok, true);
+    assert.notEqual(renewed.body.credentials.accessToken, alice.credentials.accessToken);
+    alice.credentials = renewed.body.credentials;
+    assert.deepEqual(await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid), sharedBeforeRenewal,
+      'Automatic token renewal preserves every run-count, duration, profit and wealth observation and its dedup ID');
+    assert.equal((await dungeonRanking()).entries[0].value, 2);
+    assert.equal((await dungeonRanking('dungeon_run_time')).entries[0].value, 300001);
+    assert.equal((await dungeonRanking('dungeon_profit')).entries[0].value, 12500);
+    const renewedWealth = await mf.dispatchFetch('https://community.test/community/leaderboard?category=economy&metric=networth',
+      { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
+    assert.equal((await renewedWealth.json()).entries[0].value, 1200000);
+    await connect('Alice', first, physical);
+    assert.deepEqual(await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid), sharedBeforeRenewal,
+      'Reconnecting the same Minecraft/Discord association preserves previously shared observations');
+    const renewedPolicy = await mf.dispatchFetch('https://community.test/community/sharing', { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
+    assert.deepEqual((await renewedPolicy.json()).policy, initialPolicy.policy, 'Same-owner refresh and reconnect preserve consent revision and historical cutoffs');
     const savedCosmetic = await post('/community/cosmetics', { expectedAccountId: alice.identity.accountId, expectedUuid: alice.identity.uuid,
       revision: 0, profile: { name: { text: 'Old client', color: 'gold' }, scaleX: 1.25, scaleY: 1.5, scaleZ: 0.75,
         nametagScale: 0.8, capePreset: 'forest', capeAsset: null } }, alice.credentials.accessToken);
