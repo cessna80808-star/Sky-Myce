@@ -7,7 +7,7 @@ import io.wispforest.owo.ui.core.Sizing
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import net.minecraft.client.gui.GuiGraphicsExtractor
 
-/** Shared Sky-Hawk palette used by retained owo HUD components and menus. */
+/** Shared palette used by retained owo HUD components and menus. */
 object HudTheme {
     private var widget: ThemeOverrides? = null
     var revision = 0L
@@ -36,6 +36,7 @@ object HudTheme {
     val ROUNDED get() = flag(widget?.rounded, ThemeConfig.rounded, base.rounded)
     val SHADOW get() = flag(widget?.shadow, ThemeConfig.shadow, base.shadow)
     val BORDERS get() = flag(widget?.borders, ThemeConfig.borders, base.borders)
+    val STYLE get() = base.style
     val PURPLE get() = SECONDARY
 
     fun alpha(rgb: Int, percent: Int = OPACITY) = (percent.coerceIn(0, 100) * 255 / 100 shl 24) or (rgb and 0xFFFFFF)
@@ -49,31 +50,43 @@ object HudTheme {
     fun rounded(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int, color: Int) {
         if (width <= 0 || height <= 0) return
         if (!ROUNDED || width < 6 || height < 6) { g.fill(x, y, x + width, y + height, color); return }
-        g.fill(x + 2, y, x + width - 2, y + 1, color)
+        if (g is me.mycellium.skymyce.ui.MenuGraphics) {
+            g.roundedRect(x, y, width, height, STYLE.radius.coerceAtLeast(2).toDouble(), color)
+            return
+        }
+        val corner = STYLE.radius.coerceIn(1, 3)
+        g.fill(x + corner, y, x + width - corner, y + 1, color)
         g.fill(x + 1, y + 1, x + width - 1, y + 2, color)
         g.fill(x, y + 2, x + width, y + height - 2, color)
         g.fill(x + 1, y + height - 2, x + width - 1, y + height - 1, color)
-        g.fill(x + 2, y + height - 1, x + width - 2, y + height, color)
+        g.fill(x + corner, y + height - 1, x + width - corner, y + height, color)
     }
 
     fun panel(card: Boolean = false): Surface = Surface { g, c ->
         rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(if (card) CARD else PANEL))
         if (BORDERS && c.width() > 5 && c.height() > 5) {
-            val x = c.x(); val y = c.y(); val w = c.width(); val h = c.height(); val inset = if (ROUNDED) 2 else 0
+            val x = c.x(); val y = c.y(); val w = c.width(); val h = c.height()
+            val inset = if (ROUNDED) STYLE.radius.coerceIn(1, 3) else 0
             // Opaque, one-pixel outline; the panel interior retains exactly the selected opacity.
             val border = alpha(BORDER, 100)
-            g.fill(x + inset, y, x + w - inset, y + 1, border)
-            g.fill(x + inset, y + h - 1, x + w - inset, y + h, border)
-            g.fill(x, y + inset, x + 1, y + h - inset, border)
-            g.fill(x + w - 1, y + inset, x + w, y + h - inset, border)
+            if (g is me.mycellium.skymyce.ui.MenuGraphics) {
+                g.roundedBorder(x, y, w, h, if (ROUNDED) STYLE.radius.coerceAtLeast(2).toDouble() else 0.0, STYLE.borderWidth, border)
+            } else {
+                val line = STYLE.borderWidth.toInt().coerceIn(1, 2)
+                g.fill(x + inset, y, x + w - inset, y + line, border)
+                g.fill(x + inset, y + h - line, x + w - inset, y + h, border)
+                g.fill(x, y + inset, x + line, y + h - inset, border)
+                g.fill(x + w - line, y + inset, x + w, y + h - inset, border)
+            }
         }
     }
     fun tintedPanel(color: () -> Int): Surface = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(color())) }
-    val backdrop = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(0x090D12, 55)) }
+    val backdrop = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(blend(PANEL, 0, 35), 55)) }
     val buttonRenderer = ButtonComponent.Renderer { g, b, _ ->
         val hover = b.isHovered || b.isFocused
         rounded(g, b.x, b.y, b.width, b.height, alpha(blend(CARD, if (b.isFocused) SECONDARY else ACCENT,
-            if (!b.active) 2 else if (hover) 35 else 12)))
+            if (!b.active) 2 else if (hover) STYLE.hoverWeight else 5)))
+        if (b.isFocused) g.outline(b.x, b.y, b.width, b.height, alpha(ACCENT, 100))
     }
 }
 

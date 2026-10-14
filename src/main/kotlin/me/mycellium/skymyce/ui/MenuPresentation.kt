@@ -92,7 +92,7 @@ internal fun menuSwapTransitionActive(component: UIComponent): Boolean {
     return false
 }
 
-/** First viewport reveal and elevation share one pose, without changing retained layout. */
+/** Cards reveal and highlight in place; only the shared page transition moves their controls. */
 internal class MenuRevealCard(private val key: String, horizontal: Sizing, vertical: Sizing,
                               algorithm: FlowLayout.Algorithm = FlowLayout.Algorithm.VERTICAL) : FlowLayout(horizontal, vertical, algorithm) {
     private val hover = MotionValue(0.0)
@@ -113,23 +113,23 @@ internal class MenuRevealCard(private val key: String, horizontal: Sizing, verti
         if (!visible) return
         hover.animateTo(if (logicalHover ||
             menuComponentAttached(this, focusHandler()?.focused())) 1.0 else 0.0, 120, profile.hoverEasing, mode)
-        val lift = hover.sample().coerceIn(0.0, 1.04)
-        painted = MotionPose(alpha = reveal, y = (1 - reveal) * profile.revealOffset - lift * profile.cardLift,
-            scale = 1 + lift * profile.hoverScale, pivotX = x() + width() / 2.0, pivotY = y() + height() / 2.0)
-        g.layer(painted.alpha, painted.x, painted.y, painted.scale, painted.pivotX, painted.pivotY) {
+        val emphasis = hover.sample().coerceIn(0.0, 1.0)
+        painted = MotionPose(alpha = reveal)
+        g.layer(alpha = painted.alpha) {
             super.draw(graphics, mouseX, mouseY, partialTicks, delta)
+            if (emphasis > 0) g.roundedBorder(x(), y(), width(), height(), MenuTheme.RADIUS.toDouble(),
+                MenuTheme.style.borderWidth, MenuTheme.alpha(MenuTheme.ACCENT, (emphasis * 45).toInt()))
         }
     }
     fun pointer(x: Double, y: Double): Pair<Double, Double>? {
         logicalHover = painted.alpha >= .01 && paintedClip?.contains(x, y) != false && isInBoundingBox(x, y)
         if (painted.alpha < .01 || paintedClip?.contains(x, y) == false) return null
-        val px = painted.inverseX(x); val py = painted.inverseY(y)
-        return if (isInBoundingBox(px, py)) px to py else null
+        return if (isInBoundingBox(x, y)) x to y else null
     }
     fun vacated(x: Double, y: Double) = paintedClip?.contains(x, y) != false && isInBoundingBox(x, y)
 }
 
-/** Resolve the visible surface first; its old layout strip must not activate hidden controls. */
+/** Unrevealed or clipped cards cannot activate their retained controls. */
 internal fun menuCardPointer(root: UIComponent, x: Double, y: Double): Pair<Double, Double>? {
     var vacated = false
     var hit: Pair<Double, Double>? = null

@@ -501,6 +501,25 @@ val skijaGpuCheck by tasks.registering(JavaExec::class) {
     doFirst { workingDir.mkdirs() }
 }
 tasks.check { dependsOn(skijaRendererCheck) }
+
+// Test-only Fabric entrypoint captures real screens in an isolated, offline client.
+val guiVisualCheckMod by tasks.registering(Jar::class) {
+    dependsOn(tasks.testClasses)
+    archiveFileName = "gui-visual-check.jar"
+    destinationDirectory = layout.buildDirectory.dir("gui-visual-check")
+    from(sourceSets.test.get().output) { include("me/mycellium/skymyce/ui/GuiVisual*.class") }
+    from("src/test/resources/gui-visual-check")
+}
+loom.runs.register("guiVisualCheck") {
+    client()
+    runDirectory = layout.buildDirectory.dir("gui-visual-check/client")
+    generateRunConfig = false
+    systemProperties.put("fabric.addMods", layout.buildDirectory.file("gui-visual-check/gui-visual-check.jar").get().asFile.absolutePath)
+    systemProperties.put("devauth.enabled", "false")
+    jvmArguments.add("--enable-native-access=ALL-UNNAMED")
+    programArguments.addAll("--width", "1280", "--height", "800", "--username", "GuiReview")
+}
+tasks.named("runGuiVisualCheck") { dependsOn(guiVisualCheckMod) }
 val dungeonRoutingCheck by tasks.registering {
     group = "verification"
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"

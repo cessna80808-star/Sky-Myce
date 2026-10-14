@@ -166,7 +166,8 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
                     Anchor.entries.forEach { anchor ->
                         val x = widget.renderX + (anchor.x * widget.width).toInt()
                         val y = widget.renderY + (anchor.y * widget.height).toInt()
-                        graphics.fill(x - 2, y - 2, x + 2, y + 2, if (selectedAnchor == anchor) 0xFF55FF55.toInt() else if (widget.anchor == anchor) 0xFFFFFF55.toInt() else 0xFFFF5555.toInt())
+                        graphics.fill(x - 2, y - 2, x + 2, y + 2, MenuTheme.alpha(
+                            if (selectedAnchor == anchor) MenuTheme.ACCENT else if (widget.anchor == anchor) MenuTheme.YELLOW else MenuTheme.MUTED))
                     }
                 }
             }

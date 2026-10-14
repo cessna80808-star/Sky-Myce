@@ -67,7 +67,7 @@ fun main() {
     check(previewRange.min == 50.0 && previewRange.max == 200.0)
     check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
-    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "General Settings"))
+    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)
     MenuPage.entries.forEach { check(catalog.findFeature(it.featureId) != null) }
     check(catalog.features.map { it.category }.toSet() == MenuCategory.entries.toSet())

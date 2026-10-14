@@ -25,7 +25,7 @@ internal fun currentThemeEditorDocument(widget: Widget? = null) = ThemeDocument(
 
 /** One editor for the shared palette and nullable widget overrides. Clipboard imports are data only. */
 class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget? = null, focusKey: String? = null) :
-    MenuScreen(Component.literal("Sky-Hawk Theme")) {
+    MenuScreen(Component.literal("Sky-Myce Appearance")) {
     override val menuCategory get() = MenuCategory.SETTINGS
     override val menuParent get() = if (parent is SettingsScreen) parent.menuParent else parent
     override val settingsCategory get() = SettingsTab.THEME
@@ -63,25 +63,22 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
         targetsByKey.clear()
         root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         root.child(column().apply {
-            sizing(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight))
+            sizing(Sizing.fill(), Sizing.expand())
             padding(Insets.of(8)); surface(MenuTheme.panel())
             child(row().apply {
-                child(label(if (widget == null) "SHARED THEME" else "WIDGET / ${widget.title}", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
+                child(label(if (widget == null) "APPEARANCE / ${draft.preset.title}" else "WIDGET / ${widget.title}", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
                 child(button("Done", 48) { onClose() })
             })
-            preview = column(); child(preview)
             val controls = column()
             controlsScroll = menuScroll(Sizing.fill(), Sizing.expand(), controls).apply { scrollbarThiccness(2); scrollStep(20) }
             child(controlsScroll)
-            if (widget == null) controls.child(button("Preset: ${draft.preset.title}", 190) { b ->
-                openMenuDropdown(b) { d ->
-                    ThemePreset.entries.forEach { preset -> d.button(Component.literal(preset.title)) {
-                        draft = draft.copy(preset = preset); applyDraft(); rebuild()
-                    } }
-                }
-            }.wrappedTooltip(Component.literal("Change the inherited base palette. Existing overrides stay in place; Reset removes them."))
-                .also { controlsByKey["preset"] = it })
+            if (widget == null) {
+                controls.child(label("Choose your atmosphere", MenuTheme.TEXT))
+                controls.child(label("Eight palettes with their own surfaces, geometry and highlights. Applying one keeps your overrides.", MenuTheme.MUTED))
+                controls.child(presetSelector())
+            }
             pinControl("preset")?.let { controls.child(it) }
+            preview = column(); controls.child(preview)
             controls.child(row().apply {
                 child(button("Reset", 55) { draft = draft.copy(overrides = ThemeOverrides()); applyDraft(); rebuild() }
                     .wrappedTooltip(Component.literal(if (widget == null) "Reset all global overrides to the selected preset." else "Use the global theme for every widget value. Layout and scale stay unchanged.")))
@@ -103,9 +100,41 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
                 }.wrappedTooltip(Component.literal("Cycle inherited, enabled and disabled. Uses the renderer's supported pixel-rounded corners."))
                     .also { targetsByKey[key] = it })
             }.also { controlsByKey[key] = it })
-            notice = label("Live preview • changes save when this screen closes", MenuTheme.MUTED); child(notice)
+            notice = label("Changes apply immediately and save when this screen closes", MenuTheme.MUTED); child(notice)
         })
         updatePreview()
+    }
+    private fun presetSelector(): FlowLayout {
+        val available = (menuWidth - 16).coerceAtLeast(1)
+        val columns = themeSelectorColumns(available)
+        val cardWidth = ((available - (columns - 1) * 6) / columns).coerceAtLeast(1)
+        return column().apply {
+            gap(6)
+            themeSelectorPresets.chunked(columns).forEach { presets -> child(row().apply {
+                gap(6)
+                presets.forEach { preset -> child(column().apply {
+                    sizing(Sizing.fixed(cardWidth), Sizing.content()); padding(Insets.of(6))
+                    surface(MenuTheme.panel(true))
+                    child(label(preset.title, if (preset == draft.preset) MenuTheme.ACCENT else MenuTheme.TEXT))
+                    val sample = ThemePreview(preset.palette)
+                    child(column().apply {
+                        verticalSizing(Sizing.fixed(68))
+                        surface(Surface { g, c -> (g as MenuGraphics).layer {
+                            sample.paint(g.canvas, c.x().toDouble(), c.y().toDouble(), c.width().toDouble(), c.height().toDouble())
+                        } })
+                        wrappedTooltip(Component.literal(preset.description))
+                    })
+                    child(button(if (preset == draft.preset) "Active theme" else "Apply theme", (cardWidth - 12).coerceAtLeast(1)) {
+                        if (draft.preset != preset) { draft = draft.copy(preset = preset); applyDraft(); rebuild() }
+                    }.apply {
+                        selected = { ThemeConfig.preset == preset }
+                        intent = if (preset == draft.preset) MenuButtonIntent.PRIMARY else MenuButtonIntent.SECONDARY
+                        wrappedTooltip(Component.literal("${preset.title}: ${preset.description} Your overrides stay in place."))
+                        if (preset == draft.preset) targetsByKey["preset"] = this
+                    })
+                }) }
+            }) }
+        }.also { controlsByKey["preset"] = it }
     }
     private fun resolved() = resolveTheme(draft.preset, if (widget == null) draft.overrides else ThemeConfig.overrides(), if (widget == null) null else draft.overrides)
     private fun colorControl(key: String, name: String) = MenuCollapsible(Sizing.fill(), Sizing.content(), Component.literal(name).withColor(MenuTheme.TEXT), key in expandedColors).apply {
@@ -194,13 +223,16 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
     private fun updatePreview() {
         preview.clearChildren()
         val palette = resolved()
+        val sample = ThemePreview(palette)
         preview.child(column().apply {
-            padding(Insets.of(palette.padding))
-            surface(Surface { g, c -> HudTheme.withWidget(if (widget == null) null else draft.overrides) {
-                HudTheme.rounded(g, c.x(), c.y(), c.width(), c.height(), HudTheme.alpha(palette.card, palette.opacity))
-                if (palette.borders) g.outline(c.x(), c.y(), c.width(), c.height(), MenuTheme.alpha(palette.border, 100))
-            } })
-            child(label("${if (widget == null) draft.preset.title else widget.title} • Live preview", palette.primary).shadow(palette.shadow))
+            padding(Insets.of(6)); surface(MenuTheme.panel(true))
+            child(label("${if (widget == null) draft.preset.title else widget.title} • Your current styling", palette.primary).shadow(palette.shadow))
+            child(column().apply {
+                verticalSizing(Sizing.fixed(72))
+                surface(Surface { g, c -> (g as MenuGraphics).layer {
+                    sample.paint(g.canvas, c.x().toDouble(), c.y().toDouble(), c.width().toDouble(), c.height().toDouble())
+                } })
+            })
             child(label("Primary text  /  12 tracked runs", palette.text).shadow(palette.shadow))
             child(label("Secondary text • inherited values update together", palette.muted).shadow(palette.shadow))
             child(label("✓ Ready", palette.success).apply {
@@ -235,5 +267,7 @@ class ThemeEditorScreen(private val parent: Screen?, private val widget: Widget?
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(5); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()); shadow(MenuTheme.SHADOW) }
-    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).themed().apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
+    private fun button(text: String, width: Int, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply {
+        themed(); sizing(Sizing.fixed(width), Sizing.fixed(20))
+    }
 }
