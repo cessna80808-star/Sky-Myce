@@ -109,7 +109,8 @@ class MenuItem(stack: ItemStack) : ItemComponent(stack) {
                     val texture = Identifier.fromNamespaceAndPath(id.namespace, "textures/${id.path}.png")
                     MC.instance.resourceManager.getResource(texture).orElse(null)?.open()?.use(ImageIO::read)?.let { source ->
                         // shortcut: menu icons are static; use a sprite frame until animated previews are requested.
-                        menuItemTextureArt(source, contents.width(), contents.height(), contents.getUniqueFrames().firstOrNull() ?: 0, tint)
+                        val frame = if (contents.isAnimated) contents.getUniqueFrames().firstOrNull() ?: 0 else 0
+                        menuItemTextureArt(source, contents.width(), contents.height(), frame, tint)
                     }
                 }.getOrNull()?.also { itemIcons[key] = it }
             }

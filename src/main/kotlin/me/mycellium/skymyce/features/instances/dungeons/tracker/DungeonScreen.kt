@@ -14,7 +14,6 @@ import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
-import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.Items
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
@@ -247,9 +246,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     }
                     val selected = trackerView(archive, legacy, selectedFilter, context)
                     if (!marketView) selected else {
-                        val pricedLoot = selected.loot.map { item ->
-                        item.copy(value = estimatedLootMarketValue(item.count, itemId(item.item)?.getPriceOrNull(bazaar, auction)))
-                        }
+                        val pricedLoot = marketValuedLoot(selected.loot) { cachedLootUnitPrice(it, bazaar, auction) }
                         selected.copy(summary = if (query.page == TrackerPage.OVERVIEW) marketValuedTrackerSummary(selected.summary, pricedLoot) else selected.summary,
                             loot = sortedLoot(pricedLoot, selectedFilter.copy(valuableOnly = query.page == TrackerPage.LOOT && query.valuableOnly)))
                     }
@@ -300,26 +297,25 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         val s = view.summary
         val columns = (bodyWidth / 180).coerceIn(1, 2)
         val cardWidth = (bodyWidth - (columns - 1) * 6) / columns
-        fun stat(name: String, value: String, detail: String, primary: Boolean = false,
+        fun stat(name: String, value: String, primary: Boolean = false,
                  color: Int = MenuTheme.ACCENT, hint: String? = null) = column().apply {
-            sizing(Sizing.fixed(cardWidth), Sizing.fixed(if (primary) 76 else 66))
+            sizing(Sizing.fixed(cardWidth), Sizing.fixed(if (primary) 64 else 54))
             surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING)); gap(4)
             child(label(name, MenuTheme.MUTED))
             child(label(value, color).apply { fontSize = if (primary) 21f else 16f; text(text().copy().withStyle { it.withBold(true) }) })
-            child(label(detail, MenuTheme.MUTED).apply { fontSize = 9f })
             if (!hint.isNullOrBlank()) wrappedTooltip(Component.literal(hint))
         }
         val cards = listOf(
-            stat("Runs", s.runs.toString(), "Completed runs", primary = true),
-            stat("Profit (estimated)", money(s.knownNet), if (s.profitIncomplete) "Loot value − recorded costs • partial" else "Loot value − chest and reroll costs",
+            stat("Runs", s.runs.toString(), primary = true),
+            stat("Profit (estimated)", money(s.knownNet),
                 primary = true, color = if (s.knownNet < 0) MenuTheme.RED else MenuTheme.GREEN,
                 hint = "Loot value: ${money(s.gross)}${if (s.incompleteValues) " (partial)" else ""}\n" +
                     "Chest costs: ${money(s.chestCost)}${if (s.incompleteCosts) " (partial)" else ""}\n" +
                     "Rerolls: ${money(s.knownRerollCost)}${if (s.rerollCost == null) " (partial)" else ""}"),
-            stat("Average run", s.average?.toLong()?.let(::duration) ?: "—", "${s.timedRuns} timed runs"),
-            stat("Tracked time", if (s.timedRuns == 0L && s.runs > 0) "—" else duration(s.time), "${s.timedRuns} of ${s.runs} runs timed"),
-            stat("Chests opened", s.chests.toString(), "${s.rerolls} rerolls"),
-            stat("Catacombs XP", money(s.cataXp), "Recorded XP", hint = s.classXp.entries.joinToString("\n") { (name, xp) -> "$name: ${money(xp)}" })
+            stat("Average run", s.average?.toLong()?.let(::duration) ?: "—"),
+            stat("Tracked time", if (s.timedRuns == 0L && s.runs > 0) "—" else duration(s.time)),
+            stat("Chests / rerolls", "${s.chests} / ${s.rerolls}"),
+            stat("Catacombs XP", money(s.cataXp), hint = s.classXp.entries.joinToString("\n") { (name, xp) -> "$name: ${money(xp)}" })
         )
         cards.chunked(columns).forEach { group -> content.child(row().apply {
             gap(6); verticalAlignment(VerticalAlignment.TOP); group.forEach { child(it) }
@@ -441,7 +437,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         else SkyBlockId.item(item)
     }.getOrNull()
     private fun icon(item: String): UIComponent {
-        val stack = runCatching { itemId(item)?.toItem() }.getOrNull()
+        val stack = runCatching { itemId(item)?.let(me.mycellium.skymyce.utils.ItemUtils::displayItem) }.getOrNull()
         val display = stack?.takeUnless { it.isEmpty } ?: runCatching { Items.PAPER.defaultInstance }.getOrDefault(net.minecraft.world.item.ItemStack.EMPTY)
         return MenuItem(me.mycellium.skymyce.utils.ItemUtils.displayStack(display)).apply {
             if (stack != null && !stack.isEmpty) setTooltipFromStack(true) else wrappedTooltip(Component.literal("$item • item definition unavailable"))
