@@ -186,7 +186,7 @@ class SettingsScreen @JvmOverloads constructor(
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
     private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
-    public override val menuParent get() = parent.takeIf { it is WidgetEditorScreen } ?: super.menuParent
+    public override val menuParent get() = parent ?: super.menuParent
     override val menuCategory get() = category
     override val settingsCategory get() = tab
     public override fun selectSettings(tab: SettingsTab) {

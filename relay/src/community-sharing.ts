@@ -143,6 +143,7 @@ export class CommunitySharingStore {
       typeof value.id !== "string" || !/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value.id) || typeof value.value !== "number" || !Number.isFinite(value.value) ||
       Math.abs(value.value) > Number.MAX_SAFE_INTEGER || value.value < 0 && !metric.negative || value.complete !== true ||
       metric.integer && !Number.isSafeInteger(value.value) ||
+      value.metric === "dungeon_run_time" && (value.value <= 0 || value.value > 86_400_000) ||
       !Number.isSafeInteger(value.observedAt) || Number(value.observedAt) <= Date.now() - 300_000 || Number(value.observedAt) > Date.now() + 60_000 ||
       !["client-observation", "public-api-client"].includes(String(value.source)) || !["unverified", "estimated"].includes(String(value.verification)) ||
       !/^[A-Za-z0-9_]{1,16}$/.test(name)) return { ok: false, error: "invalid_contribution" };
@@ -160,6 +161,7 @@ export class CommunitySharingStore {
 /** New metrics declare their privacy category and units. Client observations never become verified leaderboard scores. */
 export const contributionMetrics: Record<string, { category: SharingCategory; unit: string; negative?: boolean; integer?: boolean }> = {
   dungeon_runs: { category: "dungeons", unit: "runs", integer: true }, dungeon_profit: { category: "dungeons", unit: "coins", negative: true },
+  dungeon_run_time: { category: "dungeons", unit: "milliseconds", integer: true },
   networth: { category: "economy", unit: "coins" }, purse: { category: "economy", unit: "coins" }, bank: { category: "economy", unit: "coins" },
   rng_drops: { category: "rng", unit: "drops", integer: true }, completed_tasks: { category: "activity", unit: "tasks", integer: true },
 };

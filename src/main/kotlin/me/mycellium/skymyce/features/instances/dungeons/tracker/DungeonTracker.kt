@@ -143,6 +143,10 @@ object DungeonTracker : SkyMyceModule() {
             AcquisitionRepository.run(run!!)
             me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-count/${active.id}"), "dungeon_runs", 1.0, now,
                 me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
+            duration?.let {
+                me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-time/${active.id}"), "dungeon_run_time", it.toDouble(), now,
+                    me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
+            }
         }
         xpRegex.matchEntire(event.text)?.let { match ->
             val amount = match.groupValues[1].replace(",", "").toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1e12 } ?: return

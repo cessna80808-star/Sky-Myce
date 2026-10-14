@@ -165,7 +165,7 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         controls.child(label("COMMUNITY SYNC", MenuTheme.SECONDARY))
         controls.child(label("Optional. Publishing changes what other Sky-Myce users see; local preference stays equipped.", MenuTheme.MUTED))
         save = button("Publish appearance to community") { publish() }.apply { intent = MenuButtonIntent.PRIMARY }; controls.child(save)
-        connect = button("Connect Discord for community sync") { navigateMenu(CommunityScreen()) }; controls.child(connect)
+        connect = button("Connect Discord for community sync") { navigateMenu(CommunityScreen(this@CosmeticsScreen)) }; controls.child(connect)
         updateCapeLabel()
         populating = false
     }

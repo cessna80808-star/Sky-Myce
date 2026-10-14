@@ -15,6 +15,19 @@ fun leaderboardChecks() {
     val parsed = parseLeaderboard(result)
     check(parsed.entries.map { it.rank } == listOf(1, 1, 3) && parsed.entries.last().value == -4.0)
     check(parsed.unit == "coins" && parsed.start == null && parsed.entries.first().player == "Anonymous")
+    check(formatLeaderboardValue(300001.5, "milliseconds") == "5:00.002")
+    check(formatLeaderboardValue(999.5, "milliseconds") == "0:01.000")
+    check(formatLeaderboardValue(3599999.5, "milliseconds") == "1:00:00.000")
+    check(formatLeaderboardValue(86400000.0, "milliseconds") == "24:00:00.000")
+    check(formatLeaderboardValue(12.5, "coins") == "12.5 coins")
+    val timings = result.deepCopy().apply {
+        addProperty("unit", "milliseconds")
+        getAsJsonArray("entries").remove(2)
+        getAsJsonArray("entries")[0].asJsonObject.addProperty("value", 300001.5)
+    }
+    check(parseLeaderboard(timings).entries.first().value == 300001.5)
+    for (invalid in listOf(0.0, -1.0, 86400001.0))
+        check(runCatching { parseLeaderboard(timings.deepCopy().apply { getAsJsonArray("entries")[0].asJsonObject.addProperty("value", invalid) }) }.isFailure)
     val absent = result.deepCopy().apply { addProperty("available", false); addProperty("reason", "No real publisher"); add("entries", com.google.gson.JsonArray()) }
     check(parseLeaderboard(absent).unavailable == "No real publisher")
     for (bad in listOf(result.deepCopy().apply { getAsJsonArray("entries")[0].asJsonObject.addProperty("rank", 0) },

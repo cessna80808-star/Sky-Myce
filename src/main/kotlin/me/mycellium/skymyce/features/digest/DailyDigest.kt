@@ -46,7 +46,7 @@ object DailyDigest : SkyMyceModule() {
     private var rngRetryAt = 0L
     private lateinit var writer: DigestStateWriter
     private val news = DigestNewsRepository(
-        { DungeonFriendRelay.digestRequest("digest_news_get", mapOf("source" to it.wire)) },
+        ::requestDigestNews,
         { MC.instance.execute(it) }, { changed() },
     )
 
@@ -385,12 +385,12 @@ object DailyDigest : SkyMyceModule() {
         val sources = enabledNews()
         val states = sources.map(news::state)
         val items = states.flatMap { it.items }.sortedByDescending { it.publishedAt }
-        val failure = states.firstNotNullOfOrNull { it.failure }
+        val failure = sources.zip(states).firstNotNullOfOrNull { (source, state) -> state.failure?.let { "${source.label}: ${it.label}" } }
         val entries = items.map { item -> DigestEntry("${item.source.wire}:${item.id}", item.title,
             item.content.replace('\n', ' ').take(160), item.content + if (item.truncated) "\n\nOpen the original update for the remaining text." else "",
             if (item.source == NewsSource.ALPHA) DigestTone.SPECIAL else DigestTone.INFO, item.source.label, item.publishedAt, url = item.url) }
         return DigestCardState("news", "Daily News", items.firstOrNull()?.title ?: if (sources.isEmpty()) "News is disabled" else "No cached updates yet",
-            when { sources.isEmpty() -> "Enable news in settings"; failure != null -> "${failure.label}${if (items.isNotEmpty()) " · showing saved updates" else ""}";
+            when { sources.isEmpty() -> "Enable news in settings"; failure != null -> "$failure${if (items.isNotEmpty()) " · available updates retained" else ""}";
                 states.any { it.loading } -> "Refreshing in the background"; states.any { it.fetchedAt > 0 && now - it.fetchedAt > 300000 } -> "Saved updates · refresh when connected";
                 items.isEmpty() -> "Latest Game and Alpha updates will appear here"; else -> "${items.size} recent Game / Alpha updates" },
             if (failure != null || items.isEmpty()) DigestTone.MUTED else DigestTone.INFO, entries,

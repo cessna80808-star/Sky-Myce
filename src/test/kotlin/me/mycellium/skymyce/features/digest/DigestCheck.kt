@@ -10,6 +10,10 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.CompletionException
+import java.net.http.HttpTimeoutException
+import java.io.IOException
+import me.mycellium.skymyce.community.CommunityFailure
 
 /** Runs with the existing dungeonFriendsCheck task, entirely offline and without a Minecraft window. */
 fun checkDigestLifecycleAndNews() {
@@ -119,6 +123,12 @@ fun checkDigestLifecycleAndNews() {
     connected = true
     connecting.refresh(listOf(NewsSource.GAME))
     check(connecting.state(NewsSource.GAME).loading) // No fake cooldown for requests never transmitted.
+    check(digestNewsFailure(HttpTimeoutException("timed out")) == DigestFailure.TIMEOUT)
+    check(digestNewsFailure(CompletionException(IOException("offline"))) == DigestFailure.OFFLINE)
+    check(digestNewsFailure(CommunityFailure("rate_limited")) == DigestFailure.RATE_LIMITED)
+    check(digestNewsFailure(CommunityFailure("news_unavailable")) == DigestFailure.OFFLINE)
+    check(digestNewsFailure(CommunityFailure("invalid_source")) == DigestFailure.INVALID)
+    check(digestNewsFailure(IllegalArgumentException("malformed JSON")) == DigestFailure.INVALID)
     val drop = DetectedRng("a".repeat(32), "NECRON_HANDLE", "dungeon", now)
     check(digestRngSubmission(drop, false, true, now) == null)
     val privateReport = digestRngSubmission(drop, true, false, now)!!

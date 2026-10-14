@@ -1,22 +1,55 @@
 package me.mycellium.skymyce.features.digest
 
 import com.google.gson.JsonObject
+import me.mycellium.skymyce.community.CommunityClient
+import me.mycellium.skymyce.community.CommunityFailure
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import java.io.IOException
 import java.net.URI
+import java.net.http.HttpTimeoutException
 import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeoutException
+import kotlin.time.Duration.Companion.milliseconds
 
 enum class NewsSource(val label: String, val wire: String) { GAME("Game Updates", "game"), ALPHA("Alpha Updates", "alpha") }
 enum class DigestFailure(val label: String) {
     OFFLINE("Offline"), TIMEOUT("Connection timed out"), INVALID("Update unavailable"),
-    AUTHENTICATION("News connection unavailable"), RATE_LIMITED("Waiting before retrying"),
+    AUTHENTICATION("News provider permissions unavailable"), RATE_LIMITED("Waiting before retrying"),
     UNCONFIGURED("News bridge not configured"), UNSUPPORTED("Service not available yet")
 }
 data class DigestNewsItem(val id: String, val source: NewsSource, val title: String, val content: String,
                           val publishedAt: Long, val url: String? = null, val truncated: Boolean = false)
 data class DigestNewsState(val items: List<DigestNewsItem> = emptyList(), val fetchedAt: Long = 0,
                           val loading: Boolean = false, val failure: DigestFailure? = null, val retryAt: Long = 0)
+
+/** Public announcements use the compiled HTTPS backend without transmitting a community session. */
+internal fun requestDigestNews(source: NewsSource): CompletableFuture<JsonObject?> {
+    val response = CompletableFuture<JsonObject?>()
+    val work = Scheduling.schedule(0.milliseconds) {
+        if (!response.isDone) runCatching {
+            CommunityClient.exchange("/community/news?source=${source.wire}", null, "GET")
+        }.onSuccess { response.complete(it) }.onFailure { response.completeExceptionally(it) }
+    }
+    response.whenComplete { _, _ -> if (response.isCancelled) work.cancel(true) }
+    return response
+}
+
+internal fun digestNewsFailure(error: Throwable): DigestFailure {
+    val cause = if (error is CompletionException) error.cause ?: error else error
+    return when (cause) {
+        is TimeoutException, is HttpTimeoutException -> DigestFailure.TIMEOUT
+        is IOException -> DigestFailure.OFFLINE
+        is CommunityFailure -> when (cause.code) {
+            "rate_limited" -> DigestFailure.RATE_LIMITED
+            "authentication" -> DigestFailure.AUTHENTICATION
+            "invalid_source" -> DigestFailure.INVALID
+            else -> DigestFailure.OFFLINE
+        }
+        else -> DigestFailure.INVALID
+    }
+}
 
 internal fun safeDigestUrl(value: String?): String? = value?.takeIf { it.length <= 512 }?.let {
     runCatching { URI(it) }.getOrNull()?.takeIf { uri ->
@@ -118,8 +151,7 @@ class DigestNewsRepository(
                         else DigestNewsState(items, fetchedAt, failure = failure, retryAt = retryAt)
                     }
                 } catch (error: Exception) {
-                    val cause = if (error is CompletionException) error.cause else error
-                    current.copy(loading = false, failure = if (cause is TimeoutException) DigestFailure.TIMEOUT else DigestFailure.INVALID)
+                    current.copy(loading = false, failure = digestNewsFailure(error))
                 }
                 changed()
             } }
