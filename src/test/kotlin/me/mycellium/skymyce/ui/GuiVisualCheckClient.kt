@@ -150,6 +150,7 @@ class GuiVisualCheckClient : ClientModInitializer {
         var leaderboardOrigin: LeaderboardScreen? = null
         var communityOrigin: CommunityScreen? = null
         var leaderboardView = emptyList<Any?>()
+        var trackerArchiveSnapshot: AcquisitionArchive? = null
         var previousMouse: Pair<Double, Double>? = null
         fun testMouse(client: Minecraft, x: Double, y: Double) {
             // The hidden test window has no OS hover events; feed its native cursor cache directly.
@@ -206,7 +207,9 @@ class GuiVisualCheckClient : ClientModInitializer {
                 ThemeConfig.preset = current.theme
                 ThemeConfig.apply(ThemeOverrides())
                 HudTheme.changed()
-                navigateMenu(current.screen())
+                val next = current.screen()
+                trackerArchiveSnapshot = if (next is DungeonScreen) AcquisitionRepository.state else null
+                navigateMenu(next)
             }
             if (current.name == "home-keyboard-narrow" && ticks in listOf(12, 14)) {
                 val screen = client.screen as MenuScreen
@@ -261,6 +264,22 @@ class GuiVisualCheckClient : ClientModInitializer {
                     val components = arrayListOf<UIComponent>()
                     adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
                     components.filterIsInstance<MenuTextBox>().single().text("implosion")
+                }
+                6 -> {
+                    val components = arrayListOf<UIComponent>()
+                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    val buttons = components.filterIsInstance<MenuButton>()
+                    val tabs = buttons.filter { it.message.string in listOf("Local history", "Community") }
+                    check(tabs.size == 2 && tabs.all { it.navigation && it.centeredNavigation }) {
+                        "RNG Activity tabs lost their centered navigation style"
+                    }
+                    check(buttons.filter { it.navigation && it !in tabs }.all { !it.centeredNavigation }) {
+                        "Centering RNG tabs changed the sidebar navigation style"
+                    }
+                    press("All activities")
+                    check(buttons.any { it.message.string == "Dungeon" } && buttons.none { it.message.string == "dungeon" }) {
+                        "RNG activity captions exposed their raw lowercase keys"
+                    }
                 }
                 8, 16 -> {
                     val components = arrayListOf<UIComponent>()
@@ -340,6 +359,16 @@ class GuiVisualCheckClient : ClientModInitializer {
             if (current.name.startsWith("dungeon-tracker-") && client.screen is DungeonScreen && ticks == 24) {
                 val components = arrayListOf<UIComponent>()
                 adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                check(AcquisitionRepository.state === trackerArchiveSnapshot) { "A tracker view changed the acquisition archive" }
+                if (trackerFilter().page == TrackerPage.OVERVIEW) {
+                    val view = trackerView()
+                    val expectedGross = view.loot.sumOf { it.value ?: 0.0 }
+                    check(kotlin.math.abs(view.summary.gross - expectedGross) <= maxOf(1e-6, kotlin.math.abs(expectedGross) * 1e-12)) {
+                        "Overview gross did not use the displayed cached loot estimates"
+                    }
+                    check(view.summary.knownNet == view.summary.gross - view.summary.chestCost - view.summary.knownRerollCost &&
+                        view.summary.preservedProfit == 0.0) { "Overview reused preserved profit instead of its current loot valuation" }
+                }
                 if (trackerFilter().page in listOf(TrackerPage.OVERVIEW, TrackerPage.MUSEUM, TrackerPage.TIMELINE)) {
                     check(components.filterIsInstance<MenuButton>().none { it.message.string in listOf("‹", "›") }) {
                         "A tracker overview, museum or continuous timeline still showed page arrows"
@@ -360,6 +389,9 @@ class GuiVisualCheckClient : ClientModInitializer {
                 val screen = checkNotNull(client.screen)
                 val components = arrayListOf<UIComponent>()
                 adapter(screen).rootComponent.collectDescendants(components)
+                check(components.filterIsInstance<MenuLabel>().any { it.text().string.startsWith("Rate sample:") }) {
+                    "Loot did not label its separate dated rate sample"
+                }
                 val rate = components.filterIsInstance<MenuLabel>().single { it.text().string.endsWith("%") }
                 previousMouse = client.mouseHandler.xpos() to client.mouseHandler.ypos()
                 val x = (rate.x() + rate.width() / 2.0) / screen.width

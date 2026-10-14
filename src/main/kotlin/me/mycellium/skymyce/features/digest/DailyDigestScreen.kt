@@ -89,23 +89,23 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (page == "rng") {
                 child(row().apply {
                     child(button("Local history", 96) { if (community) { community = false; historyPage = 0; updateContent(resetScroll = true) } }
-                        .apply { navigation = true; selected = { !community } })
+                        .apply { navigation = true; centeredNavigation = true; selected = { !community } })
                     child(button("Community", 96) { if (!community) { community = true; historyPage = 0; updateContent(resetScroll = true) } }
-                        .apply { navigation = true; selected = { community } }
-                        .tip("Opt-in community reports are unverified. Enable receiving in Daily Digest settings."))
+                        .apply { navigation = true; centeredNavigation = true; selected = { community } }
+                        .tip("Unverified reports from other players"))
                 })
                 child(row().apply {
                     child(MenuTextBox(Sizing.expand()).apply {
                         setMaxLength(80); text(search); setHint(Component.literal("Search drop or player..."))
                         onChanged().subscribe { search = it; resetList() }
                     })
-                    activityFilter = button(activity.ifEmpty { "All activities" }.take(17), 100) {
+                    activityFilter = button(activity.ifEmpty { "All activities" }.replaceFirstChar(Char::uppercase).take(17), 100) {
                         val options = listOf("") + previous.cards.firstOrNull { it.id == "rng" }?.entries.orEmpty()
                             .map { it.activity }.filter { it.isNotEmpty() }.distinct().sorted()
                         activity = options[(options.indexOf(activity) + 1) % options.size]
-                        activityFilter.message = Component.literal(activity.ifEmpty { "All activities" }.take(17))
+                        activityFilter.message = Component.literal(activity.ifEmpty { "All activities" }.replaceFirstChar(Char::uppercase).take(17))
                         historyPage = 0; updateContent()
-                    }.tip("Cycle activity filter: dungeons, slayer and other detected sources")
+                    }.tip("Filter by activity")
                     child(activityFilter)
                 })
             }

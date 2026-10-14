@@ -24,6 +24,10 @@ data class TrackerView(val summary: TrackerSummary = TrackerSummary(), val loot:
     val lifetimeProfit get() = trackedLifetimeProfit?.let { inheritedProfit + it }
 }
 
+/** Market presentation replaces frozen recorded values; it never changes the saved profit ledger. */
+internal fun marketValuedTrackerSummary(recorded: TrackerSummary, marketLoot: List<TrackerLootRow>) = recorded.copy(
+    gross = marketLoot.sumOf { it.value ?: 0.0 }, incompleteValues = marketLoot.any { it.value == null }, preservedProfit = 0.0)
+
 /** Runs only when data or filters change, on the background scheduler. */
 fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filter: TrackerFilter, context: AcquisitionContext?, includeDetails: Boolean = true): TrackerView {
     val legacyMode = filter.scope == TrackerScope.UNSCOPED_LEGACY && !filter.needsRecords
@@ -44,7 +48,10 @@ fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filt
             sortedLoot(sampledLoot(loot), filter), events, true, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
     }
     val runs = filter.runs(archive.runs, context)
-    val (selectedSummary, loot) = summarizeRuns(runs, filter.chest, includeDetails)
+    val (recordedSummary, loot) = summarizeRuns(runs, filter.chest, includeDetails)
+    val selectedSummary = recordedSummary.copy(incompleteCosts = recordedSummary.incompleteCosts || runs.any { run ->
+        run.trackingVersion == 1 && floors.any { it.floor == run.floor && it.summary.incompleteCosts }
+    })
     val combined = filter.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT, TrackerPage.MUSEUM) &&
         filter.scope == TrackerScope.ALL_LOCAL_PROFILES && !filter.needsRecords
     val summary = if (combined)
@@ -90,7 +97,8 @@ private fun summarizeLegacy(floors: List<LegacyFloorView>, chest: String?): Pair
     return TrackerSummary(summaries.sumOf { it.runs }, summaries.sumOf { it.time }, summaries.sumOf { it.timedRuns },
         loot.sumOf { it.value ?: 0.0 }, floors.sumOf { floor -> floor.chestCosts.filterKeys { chest == null || chest == it }.values.sum() },
         floors.sumOf { floor -> floor.rerollCosts.filterKeys { chest == null || chest == it }.values.sum() },
-        summaries.sumOf { it.cataXp }, mergeXp(summaries.map { it.classXp }), denominator, summaries.sumOf { it.rerolls }) to loot
+        summaries.sumOf { it.cataXp }, mergeXp(summaries.map { it.classXp }), denominator, summaries.sumOf { it.rerolls },
+        incompleteCosts = summaries.any { it.incompleteCosts }) to loot
 }
 
 private fun summarizeRuns(runs: List<DungeonRunRecord>, chest: String?, includeLoot: Boolean): Pair<TrackerSummary, List<TrackerLootRow>> {
@@ -116,7 +124,8 @@ fun legacyTrackerView(totals: Map<DungeonFloor, FloorTracker> = DungeonTracker.p
     fun Double.safe() = takeIf { it.isFinite() && it >= 0 } ?: 0.0
     LegacyFloorView(floor.name, TrackerSummary(data.totalRuns.coerceAtLeast(0).toLong(), if (data.invalidTime) 0 else data.totalTimeMillis,
         data.timedRunCount.toLong(), cataXp = data.totalXp.safe(),
-        classXp = data.classXp.mapKeys { it.key.name }.mapValues { it.value.safe() }, rerolls = data.totalRerolled.coerceAtLeast(0)),
+        classXp = data.classXp.mapKeys { it.key.name }.mapValues { it.value.safe() }, rerolls = data.totalRerolled.coerceAtLeast(0),
+        incompleteCosts = data.incompleteCosts),
         data.chests.mapKeys { it.key.name }.mapValues { (_, chest) -> chest.trackedItems.map { (id, loot) ->
             TrackerLootRow(canonicalItemId(id.id), loot.count.coerceAtLeast(0).toLong(), loot.value.safe(), null, chest.chestCount.coerceAtLeast(0)) } },
         data.chests.mapKeys { it.key.name }.mapValues { it.value.chestCost.safe() },

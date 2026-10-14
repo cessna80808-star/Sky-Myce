@@ -196,7 +196,9 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     }
     val needsRecords get() = from.isNotEmpty() || until.isNotEmpty() || session != null
     fun runs(values: List<DungeonRunRecord>, current: AcquisitionContext?) = values.filter {
-        it.trackingVersion == 2 && floorMatches(it.floor) && scopeMatches(it.context, current) && dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
+        (it.trackingVersion == 2 || needsRecords && it.trackingVersion == 1) && floorMatches(it.floor) &&
+            (scopeMatches(it.context, current) || needsRecords && it.trackingVersion == 1 && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) &&
+            dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
     }
     fun events(values: List<AcquisitionEvent>, current: AcquisitionContext?, runs: List<DungeonRunRecord>): List<AcquisitionEvent> {
         val sessionRuns = if (session == null) emptySet() else runs.filter { it.session == session }.mapTo(hashSetOf()) { it.id }
