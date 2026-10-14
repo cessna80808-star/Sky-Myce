@@ -303,6 +303,7 @@ fun checkIrcChatModel() {
     }.isFailure)
     check(!IrcChatRendering.addingMessage())
     checkIrcRefresh()
+    checkIrcHistoryUpdates()
     check(relayPacketSizeAllowed(65536, "irc_update") && !relayPacketSizeAllowed(65537, "irc_update"))
     val mode = IrcMode(); mode.selectParty(); check(mode.selected && mode.party && !mode.global)
     mode.command("chat global"); check(mode.global && !mode.party); mode.selectParty(); check(mode.party && !mode.global)
@@ -352,6 +353,48 @@ private fun checkIrcRefresh() {
     check(IrcChatRendering.snapshotForRefresh(messages) === messages)
     check(runCatching { IrcChatRendering.withRefreshMessages { error("test refresh failure") } }.isFailure)
     check(IrcChatRendering.snapshotForRefresh(messages) === messages && messages == listOf(incoming, oldest))
+}
+
+private fun checkIrcHistoryUpdates() {
+    fun message(text: String) = net.minecraft.client.multiplayer.chat.GuiMessage(0,
+        net.minecraft.network.chat.Component.literal(text), null,
+        net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT, null)
+    val largeHistory = java.util.LinkedList(List(9494) { message("history $it") })
+    val first = largeHistory.first; val last = largeHistory.last; val renderedFirst = message("rendered first")
+    var rendered = 0
+    check(updateIrcHistory(largeHistory) { previous ->
+        rendered++
+        if (previous === first) { largeHistory.removeLast(); renderedFirst } else previous
+    })
+    check(rendered == 9494 && largeHistory.size == 9493 && largeHistory.first === renderedFirst && last !in largeHistory)
+
+    val ordinary = message("ordinary"); val original = message("original"); val withdrawn = message("withdrawn")
+    val edited = message("edited"); val dropped = message("dropped"); val incoming = message("incoming")
+    val newerEdit = message("newer edit"); val renderedOriginal = message("rendered original")
+    val history = java.util.LinkedList(listOf(ordinary, original, withdrawn, edited, dropped))
+    check(updateIrcHistory(history) { previous ->
+        when {
+            previous === original -> {
+                history.addFirst(incoming); history.remove(dropped); history[history.indexOf(edited)] = newerEdit
+                renderedOriginal
+            }
+            previous === withdrawn -> null
+            previous === edited || previous === dropped -> message("obsolete rendering")
+            else -> previous
+        }
+    })
+    check(history == listOf(incoming, ordinary, renderedOriginal, newerEdit))
+    check(!updateIrcHistory(history) { it } && history.first === incoming)
+
+    check(!updateIrcHistory(history) { previous ->
+        if (previous === renderedOriginal) {
+            check(updateIrcHistory(history) { if (it === renderedOriginal) null else it })
+            message("must not resurrect")
+        } else previous
+    })
+    check(history == listOf(incoming, ordinary, newerEdit))
+    check(!updateIrcHistory(history) { previous -> history.clear(); message("must stay cleared") })
+    check(history.isEmpty())
 }
 
 private fun checkIrcEmojiFont() {
