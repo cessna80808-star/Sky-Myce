@@ -64,6 +64,7 @@ fun checkGlobalChat() {
     check(userMessageError("Party", "bidi\u202e") != null && userMessageError("Party", "isolate\u2066") != null)
     check("already sent" in globalDeliveryError("duplicate_text"))
     check("not configured" in globalDeliveryError("not_configured"))
+    check(globalDeliveryError("private message / secret-token\nforged log") == globalDeliveryError(null))
     for (reason in listOf("receipt_timeout", "connection_lost")) check("unconfirmed" in globalDeliveryError(reason))
 
     val account = UUID.randomUUID()

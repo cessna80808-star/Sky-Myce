@@ -5,6 +5,9 @@ import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.community.CommunityScreen
 import me.mycellium.skymyce.community.LeaderboardScreen
+import me.mycellium.skymyce.community.CommunityClient
+import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
+import me.mycellium.skymyce.features.instances.dungeons.friends.RelayRetry
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.social.CosmeticsScreen
@@ -18,18 +21,29 @@ import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import net.fabricmc.api.ClientModInitializer
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.client.Screenshot
+import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
+import net.minecraft.sounds.SoundSource
 import org.lwjgl.glfw.GLFW
 import java.nio.file.Files
 import java.nio.file.Path
+import java.net.http.WebSocket
+import java.lang.reflect.Proxy
+import java.util.concurrent.CompletableFuture
+import java.io.IOException
 
 /** Only loaded by runGuiVisualCheck; no world, community session or user profile is used. */
 class GuiVisualCheckClient : ClientModInitializer {
     override fun onInitializeClient() {
+        ClientLifecycleEvents.CLIENT_STARTED.register { client ->
+            client.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0)
+            client.soundManager.updateCategoryVolume(SoundSource.MASTER, 0f)
+        }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)
         val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
@@ -85,6 +99,7 @@ class GuiVisualCheckClient : ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             if (!started) {
                 if (client.screen == null || client.overlay != null) return@register
+                checkImmediateSendFailure(client)
                 started = true
                 client.options.pauseOnLostFocus = false
                 ThemeConfig.animationMode = GuiMotion.MEDIUM
@@ -165,6 +180,43 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
         }
     }
+}
+
+private fun checkImmediateSendFailure(client: Minecraft) {
+    check(client.options.getSoundSourceOptionInstance(SoundSource.MASTER).get() == 0.0) { "Test client audio must be muted" }
+    val relay = DungeonFriendRelay
+    fun field(name: String) = relay.javaClass.getDeclaredField(name).apply { isAccessible = true }
+    val fields = listOf("socket", "sending", "connected", "generation", "status", "stage").associateWith(::field)
+    val saved = fields.mapValues { (_, field) -> field.get(relay) }
+    val retry = field("retry").get(relay) as RelayRetry
+    check(client.player == null && client.connection == null && !CommunityClient.connected && !CommunityClient.hasSavedSession)
+    check(saved["socket"] == null && saved["connected"] == false && relay.diagnostics().values.all { it == 0L })
+    check(retry.nextAttempt == 0L && retry.delay == 1000L)
+    var inline = false; client.execute { inline = true }; check(inline)
+    val packet = relay.javaClass.getDeclaredMethod("packet", Any::class.java).apply { isAccessible = true }
+    val writes = arrayListOf<String>(); var aborts = 0
+    fun socket(fail: Boolean) = Proxy.newProxyInstance(WebSocket::class.java.classLoader, arrayOf(WebSocket::class.java)) { proxy, method, args ->
+        when (method.name) {
+            "sendText" -> { writes += args!![0].toString()
+                if (fail) CompletableFuture.failedFuture<WebSocket>(IOException("Synthetic immediate send failure"))
+                else CompletableFuture.completedFuture(proxy as WebSocket) }
+            "abort" -> { aborts++; null }
+            else -> error("Unexpected test WebSocket call: ${method.name}")
+        }
+    } as WebSocket
+    try {
+        fields.getValue("socket").set(relay, socket(true)); fields.getValue("connected").setBoolean(relay, true)
+        packet.invoke(relay, "test-only")
+        val recovered = fields.getValue("sending").get(relay) as CompletableFuture<*>
+        check(recovered.isDone && !recovered.isCompletedExceptionally && !relay.connected && aborts == 1)
+        check(fields.getValue("socket").get(relay) == null)
+        fields.getValue("socket").set(relay, socket(false))
+        packet.invoke(relay, "fresh test-only")
+        check(writes == listOf("test-only", "fresh test-only") && aborts == 1)
+    } finally {
+        fields.forEach { (name, field) -> field.set(relay, saved[name]) }; retry.reset()
+    }
+    println("Visual fixture relay check passed: immediate send failure resets inline, fresh socket writes once, no replay or network")
 }
 
 /** Shared production controls mounted together, with an open scrollable dropdown for visual review. */

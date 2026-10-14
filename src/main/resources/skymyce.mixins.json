@@ -23,6 +23,7 @@
     "RelayChatPrivacyMixin",
     "ChatPatchesIrcMixin",
     "IrcComposerMixin",
+    "IrcChatRefreshMixin",
     "IrcChatAccessor",
     "IrcChatScreenAccessor",
     "AvatarCosmeticsMixin",

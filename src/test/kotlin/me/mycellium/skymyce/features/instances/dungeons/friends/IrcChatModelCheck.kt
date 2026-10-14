@@ -302,6 +302,7 @@ fun checkIrcChatModel() {
         }
     }.isFailure)
     check(!IrcChatRendering.addingMessage())
+    checkIrcRefresh()
     check(relayPacketSizeAllowed(65536, "irc_update") && !relayPacketSizeAllowed(65537, "irc_update"))
     val mode = IrcMode(); mode.selectParty(); check(mode.selected && mode.party && !mode.global)
     mode.command("chat global"); check(mode.global && !mode.party); mode.selectParty(); check(mode.party && !mode.global)
@@ -319,6 +320,38 @@ fun checkIrcChatModel() {
         else check(shown.isEmpty() || shown.endsWith("…"))
     }
     println("IRC model checks passed")
+}
+
+private fun checkIrcRefresh() {
+    fun message(text: String) = net.minecraft.client.multiplayer.chat.GuiMessage(0,
+        net.minecraft.network.chat.Component.literal(text), null,
+        net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT, null)
+    val newest = message("newest"); val oldest = message("oldest"); val incoming = message("incoming")
+    val messages = java.util.LinkedList(listOf(newest, oldest))
+    check(IrcChatRendering.snapshotForRefresh(messages) === messages)
+    val liveIterator = com.google.common.collect.Lists.reverse(messages).iterator()
+    check(liveIterator.next() === oldest)
+    messages.addFirst(incoming)
+    check(runCatching { liveIterator.next() }.exceptionOrNull() is java.util.ConcurrentModificationException)
+    messages.removeFirst()
+
+    val seen = arrayListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+    IrcChatRendering.withRefreshMessages {
+        val snapshot = IrcChatRendering.snapshotForRefresh(messages)
+        check(snapshot !== messages && snapshot == messages)
+        for (entry in com.google.common.collect.Lists.reverse(snapshot)) {
+            seen += entry
+            if (entry === oldest) { messages.addFirst(incoming); messages.remove(newest) }
+        }
+        check(seen == listOf(oldest, newest) && messages == listOf(incoming, oldest))
+        IrcChatRendering.withRefreshMessages { check(IrcChatRendering.snapshotForRefresh(messages) !== messages) }
+        check(IrcChatRendering.snapshotForRefresh(messages) !== messages)
+        check(runCatching { IrcChatRendering.withRefreshMessages { error("test nested refresh failure") } }.isFailure)
+        check(IrcChatRendering.snapshotForRefresh(messages) !== messages)
+    }
+    check(IrcChatRendering.snapshotForRefresh(messages) === messages)
+    check(runCatching { IrcChatRendering.withRefreshMessages { error("test refresh failure") } }.isFailure)
+    check(IrcChatRendering.snapshotForRefresh(messages) === messages && messages == listOf(incoming, oldest))
 }
 
 private fun checkIrcEmojiFont() {

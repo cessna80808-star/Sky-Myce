@@ -66,6 +66,13 @@ internal fun relayErrorDetail(error: Throwable?): String = generateSequence(erro
         cause.javaClass.name + (cause.stackTrace.firstOrNull()?.let { " at ${it.className}.${it.methodName}:${it.lineNumber}" } ?: "")
     }
 
+/** Incoming broadcasts must not keep a stalled outgoing write alive indefinitely. */
+internal fun sendRelayPacket(previous: CompletableFuture<*>, ws: WebSocket, text: String, current: () -> Boolean,
+    timeoutMillis: Long = 10000): CompletableFuture<WebSocket> = previous.thenCompose {
+    if (current()) ws.sendText(text, true).orTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+    else CompletableFuture.completedFuture(ws)
+}
+
 internal fun closeRelaySocket(ws: WebSocket, sending: CompletableFuture<*>, timeoutMillis: Long = 2000) {
     sending.handle { _, _ -> null }.thenCompose { ws.sendClose(WebSocket.NORMAL_CLOSURE, "Client disconnected") }
         .orTimeout(timeoutMillis, TimeUnit.MILLISECONDS).whenComplete { _, error -> if (error != null) ws.abort() }
@@ -188,6 +195,7 @@ object DungeonFriendRelay {
         private set
     fun diagnostics(): Map<String, Long> = mapOf("relay.socket" to if (socket != null) 1L else 0L,
         "relay.connecting" to if (connecting) 1L else 0L, "relay.deliveries" to deliveries.size.toLong(),
+        "relay.writePending" to if (sending.isDone) 0L else 1L,
         "relay.statsRequests" to statsRequests.size.toLong(), "relay.digestRequests" to digestRequests.size.toLong(),
         "relay.cosmeticsRequests" to cosmeticsRequests.size.toLong(), "relay.globalRequests" to globalRequests.size.toLong(),
         "relay.partyPolicies" to partyPolicies.size.toLong())
@@ -661,9 +669,8 @@ object DungeonFriendRelay {
         val token = generation
         val text = if (data is String) data else gson.toJson(data)
         if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.RELAY_SEND, text.toByteArray(Charsets.UTF_8).size.toLong())
-        sending = sending.thenCompose {
-            if (token == generation) ws.sendText(text, true) else CompletableFuture.completedFuture(ws)
-        }.whenComplete { _, error ->
+        sending = sendRelayPacket(sending, ws, text, { token == generation })
+        sending.whenComplete { _, error ->
             if (error != null) MC.instance.execute { if (token == generation) failed("Relay send failed; reconnecting", error) }
         }
     }
