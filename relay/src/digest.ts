@@ -1,9 +1,9 @@
-export type NewsSource = "game" | "alpha";
+export type NewsSource = "game";
 export type NewsItem = { id: string; title: string; content: string; publishedAt: number; url?: string; truncated?: true };
 export type NewsResult = { source: NewsSource; items: NewsItem[]; fetchedAt: number; retryAt: number;
   status: "ready" | "stale" | "unavailable"; error?: string };
 export type DigestConfig = { DISCORD_NEWS_TOKEN?: string; DISCORD_BACKEND_BOT_TOKEN?: string;
-  DIGEST_GAME_CHANNEL?: string; DIGEST_ALPHA_CHANNEL?: string };
+  DIGEST_GAME_CHANNEL?: string };
 type NewsRow = { items: string; fetched_at: number; retry_at: number; last_id: string; failures: number; error: string };
 const snowflake = /^\d{17,20}$/;
 const identifier = /^[a-f0-9]{32}$/;
@@ -104,7 +104,7 @@ export class DigestNews {
       status: row?.fetched_at && row.fetched_at > now - NEWS_TTL && !row.error ? "ready" : items.length ? "stale" : "unavailable",
       ...(row?.error ? { error: row.error } : {}) };
     if (row && row.retry_at > now) return result;
-    const channel = source === "game" ? this.config.DIGEST_GAME_CHANNEL : this.config.DIGEST_ALPHA_CHANNEL;
+    const channel = this.config.DIGEST_GAME_CHANNEL;
     const token = this.config.DISCORD_NEWS_TOKEN ?? this.config.DISCORD_BACKEND_BOT_TOKEN;
     if (!token || !channel || !snowflake.test(channel)) {
       return { ...result, retryAt: now + NEWS_TTL, error: "not_configured" };

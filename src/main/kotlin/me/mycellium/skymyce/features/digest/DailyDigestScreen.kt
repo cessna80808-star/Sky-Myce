@@ -29,7 +29,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private var previous = DigestView()
     private var lastSecond = -1L
     private var displayedDate = LocalDate.now()
-    private var newsFilter = ""
     private var community = false
     private var search = ""
     private var activity = ""
@@ -89,7 +88,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                 if (page == "rng" && menuWidth >= 280) child(button("Clear local", 76) { confirmClear() })
             })
             if (page == "rng" && menuWidth < 280) child(button("Clear local", 76) { confirmClear() })
-            if (page == "news") child(newsFilters())
             if (page == "rng") {
                 child(row().apply {
                     child(button("Local history", 96) { if (community) { community = false; historyPage = 0; updateContent(resetScroll = true) } }
@@ -250,7 +248,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         }
         val entries = when (page) {
             "rng" -> digestHistory(state.entries, community, activity, search)
-            "news" -> state.entries.filter { newsFilter.isEmpty() || it.activity.contains(newsFilter, true) || it.meta.contains(newsFilter, true) }
             else -> state.entries
         }
         if (entries.isEmpty()) {
@@ -317,16 +314,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
                 menu.button(Component.literal("Copy report")) { MC.instance.keyboardHandler.clipboard = report; menu.parent()?.removeChild(menu) }
             }
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
-    }
-
-    private fun newsFilters() = column().apply {
-        listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").chunked(if (menuWidth < 280) 2 else 3).forEach { filters -> child(row().apply {
-        filters.forEach { (value, title) ->
-            child(button(title, if (value.isEmpty()) 34 else 96) {
-                if (newsFilter != value) { newsFilter = value; historyPage = 0; updateContent() }
-            }.apply { navigation = true; selected = { newsFilter == value } })
-        }
-        }) }
     }
 
     private fun confirmClear() {

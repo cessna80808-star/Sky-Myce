@@ -6,6 +6,7 @@ import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.community.CommunityScreen
 import me.mycellium.skymyce.community.LeaderboardScreen
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
+import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.social.CosmeticsScreen
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.ThemeEditorScreen
@@ -40,6 +41,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
+            Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
             Scene("home-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("home-keyboard-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { ThemeEditorScreen(null) },

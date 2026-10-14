@@ -97,7 +97,7 @@ export default {
       if (url.pathname === "/community/news") {
         if (request.method !== "GET") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET" } });
         const source = url.searchParams.get("source");
-        if (source !== "game" && source !== "alpha") return Response.json({ ok: false, error: "invalid_source" }, { status: 400 });
+        if (source !== "game") return Response.json({ ok: false, error: "invalid_source" }, { status: 400 });
         try {
           const result = await env.RELAY_ROOMS.getByName("public-news").publicNews(source);
           return Response.json(result, { headers: { "Cache-Control": "no-store" } });
@@ -212,7 +212,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   /** Public announcements only; callers cannot select arbitrary Discord channels or access room/user state. */
   publicNews(source: NewsSource): Promise<NewsResult> {
-    if (source !== "game" && source !== "alpha" || this.env.COMMUNITY_SERVICES_ENABLED === "false") throw Error("news_unavailable");
+    if (source !== "game") throw Error("invalid_source");
+    if (this.env.COMMUNITY_SERVICES_ENABLED === "false") throw Error("news_unavailable");
     return this.news.get(source);
   }
 
@@ -481,7 +482,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       ws.serializeAttachment(session);
       if (!allowed) { ws.send(JSON.stringify({ type, id: data.id, error: "rate_limited", retryAt: now + 5000 })); return; }
       if (data.type === "digest_news_get") {
-        if (data.source !== "game" && data.source !== "alpha") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_source" })); return; }
+        if (data.source !== "game") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_source" })); return; }
         const result = await this.news.get(data.source);
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, id: data.id, ...result }));
       } else if (data.type === "rng_subscribe") {

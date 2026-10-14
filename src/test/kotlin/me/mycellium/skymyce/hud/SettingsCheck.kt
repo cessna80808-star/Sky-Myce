@@ -46,6 +46,10 @@ fun checkSettings() {
     var saves = 0
     val wrapped = SavingConfig(delegate) { saves++ }
     val rows = settingRows(wrapped) // Use the same saving wrapper as the live settings screen.
+    check(rows.count { it.path == "General/Daily Digest/news" } == 1)
+    check(rows.none { it.path in setOf("General/Daily Digest/gameUpdates", "General/Daily Digest/alphaUpdates") }) {
+        "A single normal-news feed must expose only its master News switch"
+    }
     check(rows.map { it.path } == settingRows(delegate).map { it.path }) { "Saving wrapper lost settings" }
     check(wrapped.version() == 7 && wrapped.id() == delegate.id() && wrapped.info() === delegate.info())
     check(wrapped.categories() === delegate.categories())

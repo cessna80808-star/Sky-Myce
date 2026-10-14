@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
 
-enum class NewsSource(val label: String, val wire: String) { GAME("Game Updates", "game"), ALPHA("Alpha Updates", "alpha") }
+enum class NewsSource(val label: String, val wire: String) { GAME("Game Updates", "game") }
 enum class DigestFailure(val label: String) {
     OFFLINE("Offline"), TIMEOUT("Connection timed out"), INVALID("Update unavailable"),
     AUTHENTICATION("News provider permissions unavailable"), RATE_LIMITED("Waiting before retrying"),
