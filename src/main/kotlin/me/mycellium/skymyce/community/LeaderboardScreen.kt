@@ -4,6 +4,8 @@ import com.google.gson.JsonObject
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import me.mycellium.skymyce.features.instances.dungeons.friends.formatDungeonTime
+import me.mycellium.skymyce.features.instances.dungeons.tracker.MAX_DUNGEON_RUN_MILLIS
 import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
@@ -13,6 +15,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
+import kotlin.math.roundToLong
 
 data class LeaderboardRow(val rank: Int, val player: String, val value: Double, val samples: Long, val updatedAt: Long)
 data class LeaderboardResult(val label: String, val description: String, val unit: String, val source: String, val coverage: String,
@@ -21,19 +24,28 @@ data class LeaderboardResult(val label: String, val description: String, val uni
 fun parseLeaderboard(json: JsonObject): LeaderboardResult {
     require(json["ok"].asBoolean && json["version"].asInt == 1)
     fun text(key: String, max: Int) = json[key].asString.also { require(it.length <= max && it.none { c -> c == '\u0000' }) }
+    val unit = text("unit", 30)
     val rows = json.getAsJsonArray("entries").also { require(it.size() <= 25) }.map {
         val row = it.asJsonObject
         val rank = row["rank"].asInt.also { value -> require(value > 0) }
         val player = row["player"].asString.also { value -> require(value.length in 1..100 && value.none { c -> c < ' ' }) }
         val value = row["value"].asDouble.also { value -> require(value.isFinite()) }
+        if (unit == "milliseconds") require(value in 1.0..MAX_DUNGEON_RUN_MILLIS.toDouble())
         val samples = row["sampleSize"].asLong.also { value -> require(value >= 0) }
         LeaderboardRow(rank, player, value, samples, row["updatedAt"].asLong.also { value -> require(value >= 0) })
     }
     require(rows.zipWithNext().all { (a, b) -> a.rank <= b.rank })
-    return LeaderboardResult(text("metricLabel", 100), text("description", 1500), text("unit", 30), text("source", 1000), text("coverage", 1000),
+    return LeaderboardResult(text("metricLabel", 100), text("description", 1500), unit, text("source", 1000), text("coverage", 1000),
         json["startAt"].takeUnless { it.isJsonNull }?.asLong, json["endAt"].asLong, json["updatedAt"].asLong,
         json["total"].asInt.also { require(it >= 0) }, rows, json["hasNext"].asBoolean,
         json["available"]?.takeIf { !it.asBoolean }?.let { text("reason", 1000) })
+}
+
+internal fun formatLeaderboardValue(value: Double, unit: String): String {
+    if (unit != "milliseconds") return "${java.text.NumberFormat.getNumberInstance(java.util.Locale.ROOT).format(value)} $unit"
+    val millis = value.roundToLong()
+    return if (millis < 3_600_000) formatDungeonTime(millis)
+    else "${millis / 3_600_000}:${formatDungeonTime(millis % 3_600_000).padStart(9, '0')}"
 }
 
 /** The in-game and Discord views query the same consent-filtered persisted ranking service. */
@@ -60,9 +72,9 @@ class LeaderboardScreen : MenuScreen(Component.literal("Community Leaderboards")
             Thread(it, "Sky-Myce leaderboards").apply { isDaemon = true }
         })
     }
-    private val metrics = linkedMapOf("networth" to "Net worth", "purse" to "Purse", "bank" to "Bank", "dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
+    private val metrics = linkedMapOf("networth" to "Net worth", "purse" to "Purse", "bank" to "Bank", "dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "dungeon_run_time" to "Average Run Time", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
     private val periods = linkedMapOf("all-time" to "All time", "weekly" to "This week • UTC", "monthly" to "This month • UTC")
-    private fun categoryMetrics() = when (category) { "economy" -> listOf("networth", "purse", "bank"); "dungeons" -> listOf("dungeon_runs", "dungeon_profit"); "rng" -> listOf("rng_drops"); else -> listOf("completed_tasks") }
+    private fun categoryMetrics() = when (category) { "economy" -> listOf("networth", "purse", "bank"); "dungeons" -> listOf("dungeon_runs", "dungeon_profit", "dungeon_run_time"); "rng" -> listOf("rng_drops"); else -> listOf("completed_tasks") }
     override fun init() { closed = false; super.init() }
     override fun buildContent(root: FlowLayout) {
         root.surface(Surface.BLANK).padding(Insets.of(10)); root.gap(8)
@@ -91,7 +103,7 @@ class LeaderboardScreen : MenuScreen(Component.literal("Community Leaderboards")
         root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(6); child(button("Previous") { if (page > 1 && !busy) { page--; request() } }.horizontalSizing(Sizing.fill(31)))
             child(button("Next") { if (result?.hasNext == true && !busy) { page++; request() } }.horizontalSizing(Sizing.fill(31)))
-            child(button("Connect Discord") { navigateMenu(CommunityScreen()) }.horizontalSizing(Sizing.fill(31)))
+            child(button("Connect Discord") { navigateMenu(CommunityScreen(this@LeaderboardScreen)) }.horizontalSizing(Sizing.fill(31)))
         })
         paint(); request()
     }
@@ -138,7 +150,7 @@ class LeaderboardScreen : MenuScreen(Component.literal("Community Leaderboards")
             gap(8); padding(Insets.of(7)); surface(MenuTheme.panel())
             child(label("#${entry.rank}", MenuTheme.ACCENT).horizontalSizing(Sizing.fixed(38)))
             child(label(entry.player).horizontalSizing(Sizing.expand()))
-            child(label("${java.text.NumberFormat.getNumberInstance(java.util.Locale.ROOT).format(entry.value)} ${data.unit}").horizontalSizing(Sizing.content()))
+            child(label(formatLeaderboardValue(entry.value, data.unit)).horizontalSizing(Sizing.content()))
         }); rows.child(label("${entry.samples} samples • ${utc(entry.updatedAt)}", MenuTheme.MUTED)) }
         rows.child(label("Source: ${data.source}", MenuTheme.MUTED)); rows.child(label(data.coverage, MenuTheme.MUTED))
     }

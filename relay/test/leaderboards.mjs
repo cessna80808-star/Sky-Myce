@@ -6,7 +6,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 // Production leaderboard/consent/feed helpers on actual SQLite; no Discord calls or fabricated live records.
 const source = `import {DurableObject} from 'cloudflare:workers';
  import {CommunitySharingStore,defaultSharingPolicy} from './src/community-sharing.ts';
- import {CommunityLeaderboards,utcPeriodStart,handleCommunityFeed,handleLeaderboardsRequest} from './src/leaderboards.ts';
+ import {CommunityLeaderboards,utcPeriodStart,handleCommunityFeed,handleLeaderboardsRequest,discordLeaderboardMessage} from './src/leaderboards.ts';
  import {AccountStore} from './src/accounts.ts';
  import {validatedPublicRngEvent} from './src/digest.ts';
  export {AccountStore};
@@ -17,8 +17,9 @@ const source = `import {DurableObject} from 'cloudflare:workers';
    this.boards=new CommunityLeaderboards(this.sql,{check:(...x)=>this.sharing.check(...x),record:(...x)=>this.sharing.recordContribution(...x)});
   }
   seed(uuid,name,owner='owner:'+uuid){this.sql.exec('INSERT OR IGNORE INTO sky_accounts VALUES(?,?)',owner,'91'+String(parseInt(uuid.slice(0,4),16)).padStart(15,'0'));this.sql.exec('INSERT OR REPLACE INTO minecraft_accounts VALUES(?,?,?)',uuid,owner,name)}
-  contribution(uuid,id,metric,value,at,complete=true,extra={}){const a=this.sql.exec('SELECT account_id FROM minecraft_accounts WHERE uuid=?',uuid).one();const category=metric==='dungeon_runs'||metric==='dungeon_profit'?'dungeons':metric==='rng_drops'?'rng':'economy';this.sql.exec('INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',id,extra.owner??a.account_id,uuid,extra.category??category,metric,value,extra.unit??(metric==='dungeon_runs'?'runs':metric==='rng_drops'?'drops':'coins'),at,at,extra.source??'client-observation',extra.verification??'estimated',complete?1:0,0)}
+  contribution(uuid,id,metric,value,at,complete=true,extra={}){const a=this.sql.exec('SELECT account_id FROM minecraft_accounts WHERE uuid=?',uuid).one();const category=metric.startsWith('dungeon_')?'dungeons':metric==='rng_drops'?'rng':'economy';this.sql.exec('INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',id,extra.owner??a.account_id,uuid,extra.category??category,metric,value,extra.unit??(metric==='dungeon_runs'?'runs':metric==='dungeon_run_time'?'milliseconds':metric==='rng_drops'?'drops':'coins'),at,at,extra.source??'client-observation',extra.verification??'estimated',complete?1:0,0)}
   query(raw,now){return this.boards.query(raw,now)}
+  message(result){return discordLeaderboardMessage(result)}
   comparison(uuid,raw,now){return this.boards.journalComparison(uuid,raw,now)}
   policyOwner(owner,policy,cutoffs={}){this.sql.exec('INSERT OR REPLACE INTO community_sharing VALUES(?,?,?,?,?)',owner,JSON.stringify({...defaultSharingPolicy(),...policy}),1,Date.now(),JSON.stringify(cutoffs))}
   blockDiscord(owner){this.sql.exec("INSERT INTO community_blacklist SELECT 'discord',discord_id,NULL FROM sky_accounts WHERE account_id=?",owner)}
@@ -72,12 +73,29 @@ try {
  const page=await store.query({category:'dungeons',metric:'dungeon_runs',limit:1,page:2});assert.equal(page.entries.length,1);assert.equal(page.entries[0].rank,1);assert.equal(page.hasNext,true);
  assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs',search:'ExampleThree'})).total,0,'Private names cannot be searched');
  assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs',search:'ExampleOne'})).entries[0].rank,1,'Search preserves global rank');
+ const averageQuery={category:'dungeons',metric:'dungeon_run_time',period:'weekly'};
+ await store.contribution(a,'d0'.repeat(16),'dungeon_run_time',1000,week-1);
+ await store.contribution(a,'d1'.repeat(16),'dungeon_run_time',300001,now-2000);
+ await store.contribution(a,'d2'.repeat(16),'dungeon_run_time',300002,now-1000);
+ await store.contribution(b,'d3'.repeat(16),'dungeon_run_time',300001,now-1000);
+ await store.contribution(a,'d1'.repeat(16),'dungeon_run_time',999999,now-2000);
+ for(const [index,value,complete,extra]of[[0,0,true,{}],[1,-1,true,{}],[2,86400001,true,{}],[3,1.5,true,{}],[4,300000,false,{}],[5,300000,true,{unit:'coins'}],[6,300000,true,{category:'economy'}]])
+  await store.contribution(c,(20+index).toString(16).padStart(32,'0'),'dungeon_run_time',value,now-1000,complete,extra);
+ const averages=await store.query(averageQuery,now);
+ assert.equal(averages.unit,'milliseconds');assert.equal(averages.aggregation,'event-average');assert.match(averages.description,/across all floors/);
+ assert.deepEqual(averages.entries.map(e=>[e.rank,e.player,e.value,e.sampleSize]),[[1,'ExampleTwo',300001,1],[2,'ExampleOne',300001.5,2]],'Only valid timed completions count; fastest averages rank first, duplicates and malformed/untimed runs do not dilute the mean');
+ assert.match((await store.message(averages)).embeds[0].description,/\*\*5:00\.002\*\*/);
+ assert.match((await store.message({...averages,entries:[{...averages.entries[0],value:3599999.5}]})).embeds[0].description,/\*\*1:00:00\.000\*\*/);
+ assert.match((await store.message({...averages,entries:[{...averages.entries[0],value:86400000}]})).embeds[0].description,/\*\*24:00:00\.000\*\*/);
+ const timePage=await store.query({...averageQuery,limit:1,page:2},now);assert.equal(timePage.entries[0].rank,2);assert.equal(timePage.entries[0].value,300001.5);
+ const allTimes=await store.query({...averageQuery,period:'all-time'},now);assert.equal(allTimes.entries[0].sampleSize,3);assert.equal(allTimes.entries[0].value,(1000+300001+300002)/3);
+ assert.deepEqual((await store.query({category:'dungeons',metric:'dungeon_runs'},now)).entries.map(e=>e.value),[5,5,1],'Timing samples do not change completed-run totals');
  await store.contribution(a,'6'.repeat(32),'networth',100,month-1);await store.contribution(a,'7'.repeat(32),'networth',90,now-2000);await store.contribution(a,'8'.repeat(32),'networth',80,now-1000);
  const snapshot=await store.query({category:'economy',metric:'networth',period:'monthly'});assert.equal(snapshot.entries[0].value,80);assert.equal(snapshot.entries[0].sampleSize,1);assert.match(snapshot.description,/not net-worth gain/);
  assert.equal((await store.query({category:'other',metric:'completed_tasks'})).available,false);
  assert.equal((await store.query({category:'rng',metric:'networth'})).error,'invalid_leaderboard');assert.equal((await store.query({page:NaN})).ok,false);
- await store.policy(a,{dungeons:false,publicName:true});assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs'})).total,2);
- await store.block(b);assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs'})).total,1);
+ await store.policy(a,{dungeons:false,publicName:true});assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs'})).total,2);assert.equal((await store.query(averageQuery)).total,1);
+ await store.block(b);assert.equal((await store.query({category:'dungeons',metric:'dungeon_runs'})).total,1);assert.equal((await store.query(averageQuery)).total,0);
  await store.remount();assert.equal((await store.query({category:'economy',metric:'networth'})).entries[0].value,80,'Persistent snapshots survive store reconstruction');
 
  const event={id:'d'.repeat(32),item:'NECRON_HANDLE',activity:'dungeon',occurredAt:Date.now(),player:'ExampleThree',unverified:true,rarity:'LEGENDARY',displayName:"Necron's Handle",floor:'F7'};

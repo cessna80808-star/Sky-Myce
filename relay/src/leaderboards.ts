@@ -6,13 +6,14 @@ import { randomToken } from "./drm";
 
 export type LeaderboardQuery = { category?: unknown; metric?: unknown; period?: unknown; page?: unknown; limit?: unknown; search?: unknown };
 type Category = "economy" | "dungeons" | "rng" | "other";
-type Metric = { category: Category; privacy: SharingCategory; label: string; description: string; unit: string; aggregation: "latest-snapshot" | "event-sum"; available?: false; reason?: string };
+type Metric = { category: Category; privacy: SharingCategory; label: string; description: string; unit: string; aggregation: "latest-snapshot" | "event-sum" | "event-average"; available?: false; reason?: string };
 export const leaderboardMetrics: Record<string, Metric> = {
   networth: { category: "economy", privacy: "economy", label: "Estimated net worth", description: "Latest complete shared valuation observed in this period; not net-worth gain.", unit: "coins", aggregation: "latest-snapshot" },
   purse: { category: "economy", privacy: "economy", label: "Purse balance", description: "Latest complete shared purse snapshot observed in this period; not income.", unit: "coins", aggregation: "latest-snapshot" },
   bank: { category: "economy", privacy: "economy", label: "Bank balance", description: "Latest complete shared bank snapshot observed in this period; not income.", unit: "coins", aggregation: "latest-snapshot" },
   dungeon_runs: { category: "dungeons", privacy: "dungeons", label: "Recorded dungeon completions", description: "New timestamped completed-run records; legacy aggregate totals are excluded.", unit: "runs", aggregation: "event-sum" },
   dungeon_profit: { category: "dungeons", privacy: "dungeons", label: "Estimated recorded dungeon profit", description: "Sum of newly recorded chest profit estimates, including losses; legacy aggregate totals are excluded.", unit: "coins", aggregation: "event-sum" },
+  dungeon_run_time: { category: "dungeons", privacy: "dungeons", label: "Average Run Time", description: "Average newly completed timed runs across all floors. Unknown start times and historical totals are excluded. Faster times rank first.", unit: "milliseconds", aggregation: "event-average" },
   rng_drops: { category: "rng", privacy: "rng", label: "Supported reported RNG drops", description: "Count of newly accepted supported community drop reports; not official drop probability or every Hypixel drop.", unit: "drops", aggregation: "event-sum" },
   completed_tasks: { category: "other", privacy: "activity", label: "Completed tasks", description: "Would require timestamped completed-task records.", unit: "tasks", aggregation: "event-sum", available: false, reason: "No reliable completed-task publisher exists. This metric is unavailable until genuine completion records are collected." },
 };
@@ -70,7 +71,7 @@ export class CommunityLeaderboards {
     const parameters = [metricId, startAt ?? 0, now, search.toLowerCase()];
     const totals = this.sql.exec<{ total: number; updatedAt: number | null }>(`${ranked}SELECT COUNT(*) total,MAX(updatedAt) updatedAt FROM ranked WHERE INSTR(LOWER(player),?)>0`, ...parameters).one();
     const entries = this.sql.exec<{ uuid: string; rank: number; player: string; value: number; sampleSize: number; updatedAt: number; source: string; verification: string }>(
-      `${ranked}SELECT * FROM ranked WHERE INSTR(LOWER(player),?)>0 ORDER BY value DESC,uuid ASC LIMIT ? OFFSET ?`, ...parameters, limit, (page - 1) * limit).toArray();
+      `${ranked}SELECT * FROM ranked WHERE INSTR(LOWER(player),?)>0 ORDER BY value ${metric.aggregation === "event-average" ? "ASC" : "DESC"},uuid ASC LIMIT ? OFFSET ?`, ...parameters, limit, (page - 1) * limit).toArray();
     const visible = entries.filter(entry => this.hooks.check(entry.uuid, metric.privacy, entry.updatedAt).allowed && this.hooks.check(entry.uuid, "leaderboards", entry.updatedAt).allowed)
       .map(({ uuid: playerId, ...entry }) => ({ ...entry, player: this.hooks.check(playerId, metric.privacy).publicName ? entry.player : "Anonymous player" }));
     return { ...base, total: totals.total, updatedAt: totals.updatedAt ?? 0, entries: visible, hasNext: page * limit < totals.total };
@@ -96,11 +97,13 @@ export class CommunityLeaderboards {
     // Policy is checked inside this same SQLite turn, before grouping/ranking. Anonymous names are never searchable by private username.
     const rngValidation = metric === leaderboardMetrics.rng_drops ? `AND c.category='rng' AND c.unit='drops' AND c.value>=0 AND c.value<=9007199254740991
       AND c.value=CAST(c.value AS INTEGER) AND c.source IN ('client-observation','public-api-client') AND c.verification IN ('unverified','estimated')` : "";
+    const timeValidation = metric === leaderboardMetrics.dungeon_run_time ? `AND c.category='dungeons' AND c.unit='milliseconds' AND c.value>0 AND c.value<=86400000
+      AND c.value=CAST(c.value AS INTEGER) AND c.source IN ('client-observation','public-api-client') AND c.verification IN ('unverified','estimated')` : "";
     const allowed = `WITH allowed AS (SELECT c.*,COALESCE(m.name,'Minecraft player') name,
       CASE WHEN COALESCE(json_extract(s.policy,'$.publicName'),0)=1 AND COALESCE(json_extract(p.policy,'$.publicName'),0)=1 THEN 1 ELSE 0 END public_name
       FROM community_contributions c LEFT JOIN community_sharing s ON s.owner=c.owner LEFT JOIN minecraft_accounts m ON m.uuid=c.uuid
       LEFT JOIN community_sharing p ON p.owner=COALESCE(m.account_id,'uuid:'||c.uuid)
-      WHERE c.metric=? AND c.observed_at>=? AND c.observed_at<=? AND c.complete=1 ${rngValidation}
+      WHERE c.metric=? AND c.observed_at>=? AND c.observed_at<=? AND c.complete=1 ${rngValidation} ${timeValidation}
       AND COALESCE(json_extract(s.policy,'$.enabled'),1)=1 AND COALESCE(json_extract(s.policy,'$.leaderboards'),1)=1
       AND COALESCE(json_extract(s.policy,'$.${metric.privacy}'),1)=1
       AND c.observed_at>COALESCE(json_extract(s.cutoffs,'$.${metric.privacy}'),0) AND c.observed_at>COALESCE(json_extract(s.cutoffs,'$.leaderboards'),0)
@@ -111,10 +114,10 @@ export class CommunityLeaderboards {
         (SELECT discord_id FROM sky_accounts WHERE account_id=c.owner OR account_id=m.account_id))))`;
     const grouped = metric.aggregation === "latest-snapshot" ? `, latest AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY uuid ORDER BY observed_at DESC,received_at DESC,id DESC) row FROM allowed),
       scored AS (SELECT uuid,CASE WHEN public_name=1 THEN name ELSE 'Anonymous player' END player,value,1 sampleSize,observed_at updatedAt,source,verification FROM latest WHERE row=1)` :
-      `, scored AS (SELECT uuid,CASE WHEN MAX(public_name)=1 THEN MAX(name) ELSE 'Anonymous player' END player,SUM(value) value,COUNT(*) sampleSize,MAX(observed_at) updatedAt,
+      `, scored AS (SELECT uuid,CASE WHEN MAX(public_name)=1 THEN MAX(name) ELSE 'Anonymous player' END player,${metric.aggregation === "event-average" ? "AVG" : "SUM"}(value) value,COUNT(*) sampleSize,MAX(observed_at) updatedAt,
        CASE WHEN MIN(source)=MAX(source) THEN MIN(source) ELSE 'mixed-client-reports' END source,
        CASE WHEN MIN(verification)=MAX(verification) THEN MIN(verification) ELSE 'unverified / estimated' END verification FROM allowed GROUP BY uuid)`;
-    return `${allowed}${grouped}, ranked AS (SELECT *,RANK() OVER(ORDER BY value DESC) rank FROM scored) `;
+    return `${allowed}${grouped}, ranked AS (SELECT *,RANK() OVER(ORDER BY value ${metric.aggregation === "event-average" ? "ASC" : "DESC"}) rank FROM scored) `;
   }
   /** Called only after the existing RNG validator accepts a new report from a verified relay session. */
   acceptRng(author: string, event: PublicRngEvent, sourceId: string, channel: string | undefined): { ok: boolean; error?: string; warning?: string } {
@@ -247,7 +250,13 @@ export async function handleCommunityFeed(request: Request, env: Config): Promis
 export function discordLeaderboardMessage(result: LeaderboardResult): { content: string; embeds?: Record<string, unknown>[]; components?: Record<string, unknown>[] } {
   const escape = (value: string) => value.replace(/[\\`*_~|<>]/g, "\\$&");
   if (!result.ok) return { content: result.error === "invalid_leaderboard" ? "Choose a metric from the selected leaderboard category, a valid period and a page from 1 to 100." : "Leaderboard unavailable. Retry later; your local mod remains available." };
-  const entries = result.entries ?? [], lines = entries.map(entry => `**${entry.rank}.** ${escape(entry.player)} · **${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(entry.value)} ${result.unit}** · ${entry.sampleSize} record${entry.sampleSize === 1 ? "" : "s"}`);
+  const format = (value: number): string => {
+    if (result.unit !== "milliseconds") return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${result.unit}`;
+    const millis = Math.round(value), minutes = Math.floor(millis / 60000);
+    const prefix = millis < 3600000 ? String(minutes) : `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+    return `${prefix}:${String(Math.floor(millis / 1000) % 60).padStart(2, "0")}.${String(millis % 1000).padStart(3, "0")}`;
+  };
+  const entries = result.entries ?? [], lines = entries.map(entry => `**${entry.rank}.** ${escape(entry.player)} · **${format(entry.value)}** · ${entry.sampleSize} record${entry.sampleSize === 1 ? "" : "s"}`);
   return { content: result.available === false ? result.reason ?? "This metric is unavailable." : "", embeds: [{ title: `Sky-Myce · ${result.metricLabel} · ${result.period === "weekly" ? "UTC week" : result.period === "monthly" ? "UTC month" : "All time"}`,
     color: 0x7c61e8, description: `${result.description}\n\n${lines.join("\n") || "No complete shared records for this selection."}`.slice(0, 4000),
     fields: [{ name: "Source and coverage", value: `${result.source}\n${result.coverage}` }, { name: "Updated / page", value: `${result.updatedAt ? `<t:${Math.floor(result.updatedAt / 1000)}:R>` : "No observations yet"} · page ${result.page} · ${result.total} Minecraft identities` }],

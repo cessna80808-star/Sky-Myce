@@ -3,6 +3,8 @@ package me.mycellium.skymyce.ui
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.community.CommunityScreen
+import me.mycellium.skymyce.community.LeaderboardScreen
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.social.CosmeticsScreen
 import me.mycellium.skymyce.hud.HudTheme
@@ -37,6 +39,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("themes-light", ThemePreset.LIGHT) { ThemeEditorScreen(null) },
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
+            Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("home-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("home-keyboard-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { ThemeEditorScreen(null) },
@@ -54,6 +57,29 @@ class GuiVisualCheckClient : ClientModInitializer {
         var ticks = 0
         var started = false
         var pending = false
+        var leaderboardOrigin: LeaderboardScreen? = null
+        var communityOrigin: CommunityScreen? = null
+        var leaderboardView = emptyList<Any?>()
+        fun adapter(screen: Screen): OwoUIAdapter<*> {
+            val field = BaseOwoScreen::class.java.getDeclaredField("uiAdapter").apply { isAccessible = true }
+            return field.get(screen) as OwoUIAdapter<*>
+        }
+        fun press(title: String) {
+            val screen = checkNotNull(net.minecraft.client.Minecraft.getInstance().screen)
+            val ui = adapter(screen)
+            val components = ArrayList<UIComponent>()
+            ui.rootComponent.collectDescendants(components)
+            val control = components.first { component -> when (component) {
+                is MenuButton -> !component.navigation && component.message.string == title
+                is MenuLabel -> component.text().string == title && component.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE)
+                else -> false
+            } }
+            checkNotNull(ui.rootComponent.focusHandler()).focus(control, UIComponent.FocusSource.KEYBOARD_CYCLE)
+            screen.keyPressed(KeyEvent(GLFW.GLFW_KEY_ENTER, 0, 0))
+        }
+        fun leaderboardState(screen: LeaderboardScreen) = listOf("category", "metric", "period", "page", "query").map { name ->
+            LeaderboardScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen)
+        }
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             if (!started) {
                 if (client.screen == null || client.overlay != null) return@register
@@ -96,6 +122,35 @@ class GuiVisualCheckClient : ClientModInitializer {
                         check(focused.y() >= scroll.y() - 1 && focused.y() + focused.height() <= scroll.y() + scroll.height() + 1) {
                             "Keyboard-focused Home shortcut remained outside the visible scroll area"
                         }
+                    }
+                }
+            }
+            if (current.name == "leaderboards-community-return") when (ticks) {
+                5 -> press("Dungeons")
+                6 -> { press("Dungeon runs"); press("Average Run Time") }
+                7 -> { press("All time"); press("This week • UTC") }
+                8 -> {
+                    val screen = client.screen as LeaderboardScreen
+                    val components = ArrayList<UIComponent>()
+                    adapter(screen).rootComponent.collectDescendants(components)
+                    components.filterIsInstance<MenuTextBox>().single().text("fixture")
+                    // Offline data has no next page; retain a non-default page in this navigation fixture.
+                    LeaderboardScreen::class.java.getDeclaredField("page").apply { isAccessible = true }.setInt(screen, 3)
+                    leaderboardOrigin = screen; leaderboardView = leaderboardState(screen)
+                    press("Connect Discord")
+                    communityOrigin = client.screen as CommunityScreen
+                }
+                10 -> press("Sharing settings")
+                12 -> {
+                    check(client.screen is SettingsScreen)
+                    client.screen!!.onClose()
+                    check(client.screen === communityOrigin) { "Sharing settings discarded its Community origin" }
+                }
+                14 -> press("Done")
+                16 -> {
+                    check(client.screen === leaderboardOrigin) { "Community Done replaced the originating leaderboard" }
+                    check(leaderboardState(client.screen as LeaderboardScreen) == leaderboardView) {
+                        "The Discord connection detour reset leaderboard category, metric, period, page or search"
                     }
                 }
             }

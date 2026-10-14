@@ -2,7 +2,8 @@ export type NewsSource = "game" | "alpha";
 export type NewsItem = { id: string; title: string; content: string; publishedAt: number; url?: string; truncated?: true };
 export type NewsResult = { source: NewsSource; items: NewsItem[]; fetchedAt: number; retryAt: number;
   status: "ready" | "stale" | "unavailable"; error?: string };
-export type DigestConfig = { DISCORD_NEWS_TOKEN?: string; DIGEST_GAME_CHANNEL?: string; DIGEST_ALPHA_CHANNEL?: string };
+export type DigestConfig = { DISCORD_NEWS_TOKEN?: string; DISCORD_BACKEND_BOT_TOKEN?: string;
+  DIGEST_GAME_CHANNEL?: string; DIGEST_ALPHA_CHANNEL?: string };
 type NewsRow = { items: string; fetched_at: number; retry_at: number; last_id: string; failures: number; error: string };
 const snowflake = /^\d{17,20}$/;
 const identifier = /^[a-f0-9]{32}$/;
@@ -104,7 +105,8 @@ export class DigestNews {
       ...(row?.error ? { error: row.error } : {}) };
     if (row && row.retry_at > now) return result;
     const channel = source === "game" ? this.config.DIGEST_GAME_CHANNEL : this.config.DIGEST_ALPHA_CHANNEL;
-    if (!this.config.DISCORD_NEWS_TOKEN || !channel || !snowflake.test(channel)) {
+    const token = this.config.DISCORD_NEWS_TOKEN ?? this.config.DISCORD_BACKEND_BOT_TOKEN;
+    if (!token || !channel || !snowflake.test(channel)) {
       return { ...result, retryAt: now + NEWS_TTL, error: "not_configured" };
     }
     let lastId = row?.last_id ?? "";
@@ -115,7 +117,7 @@ export class DigestNews {
     try {
       const after = lastId ? `&after=${lastId}` : "";
       const response = await fetch(`https://discord.com/api/v10/channels/${channel}/messages?limit=8${after}`, {
-        headers: { Authorization: `Bot ${this.config.DISCORD_NEWS_TOKEN}` }, signal: AbortSignal.timeout(8000), redirect: "manual",
+        headers: { Authorization: `Bot ${token}` }, signal: AbortSignal.timeout(8000), redirect: "manual",
       });
       if (!response.ok) {
         if (response.status === 429) {

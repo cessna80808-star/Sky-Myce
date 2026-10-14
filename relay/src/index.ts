@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { verifyAccount } from "./auth";
 import { classes, SharedStats, STATS_TTL, validateStats, type StatsGrant } from "./stats";
 import { SharedWealth, WEALTH_TTL, validateWealth } from "./wealth";
-import { DigestNews, DigestRng, rngPayload, type DigestConfig } from "./digest";
+import { DigestNews, DigestRng, rngPayload, type DigestConfig, type NewsResult, type NewsSource } from "./digest";
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand, type CosmeticProfile } from "./cosmetics";
 import { handleCosmeticAssets } from "./cosmetic-assets";
 import { handleLeaderboardsRequest, handleCommunityFeed } from "./leaderboards";
@@ -92,7 +92,17 @@ export default {
       return await handlePromptRunner(request, env);
     }
     if (url.pathname.startsWith("/community/")) {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success)
+        return url.pathname === "/community/news" ? limited() : new Response("Rate limited", { status: 429 });
+      if (url.pathname === "/community/news") {
+        if (request.method !== "GET") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET" } });
+        const source = url.searchParams.get("source");
+        if (source !== "game" && source !== "alpha") return Response.json({ ok: false, error: "invalid_source" }, { status: 400 });
+        try {
+          const result = await env.RELAY_ROOMS.getByName("public-news").publicNews(source);
+          return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+        } catch { return Response.json({ ok: false, error: "news_unavailable" }, { status: 503 }); }
+      }
       try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
@@ -198,6 +208,12 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         ws.serializeAttachment(session);
       }
     }
+  }
+
+  /** Public announcements only; callers cannot select arbitrary Discord channels or access room/user state. */
+  publicNews(source: NewsSource): Promise<NewsResult> {
+    if (source !== "game" && source !== "alpha" || this.env.COMMUNITY_SERVICES_ENABLED === "false") throw Error("news_unavailable");
+    return this.news.get(source);
   }
 
   /** Binding-only RPC. The public Worker verifies Discord's exact signed HTTP body first. */

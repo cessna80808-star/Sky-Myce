@@ -8,7 +8,7 @@ export async function checkDigest(script, proof) {
   let mode = "success", calls = 0;
   const fetched = [];
   const options = convertV4MiniflareOptions({ name: "digest-check", modules: true, script, compatibilityDate: "2026-09-21",
-    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", DISCORD_NEWS_TOKEN: "test-only-bot-token",
+    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", BACKEND_BOT_TOKEN: "test-only-bot-token",
       DIGEST_GAME_CHANNEL: channels.game, DIGEST_ALPHA_CHANNEL: channels.alpha },
     durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: async request => {
@@ -78,6 +78,29 @@ export async function checkDigest(script, proof) {
   const drop = (id, item = "NECRON_HANDLE", activity = "dungeon", showName = false) => ({ type: "rng_publish", showName,
     event: { id: id.toString(16).padStart(32, "0"), item, activity, occurredAt: Date.now() } });
   try {
+    // Public announcement reads require neither a Discord link nor a Minecraft proof.
+    const publicNews = async source => {
+      const response = await mf.dispatchFetch(`https://news.test/community/news?source=${source}`);
+      assert.equal(response.status, 200); assert.equal(response.headers.get("Cache-Control"), "no-store");
+      return response.json();
+    };
+    const publicGame = await publicNews("game");
+    assert.equal(publicGame.status, "ready"); assert.equal(publicGame.items.length, 2); assert.equal(calls, 1);
+    assert.ok(!JSON.stringify(publicGame).includes("test-only-bot-token"));
+    assert.deepEqual(await publicNews("game&channel=private&refresh=true"), publicGame); assert.equal(calls, 1);
+    assert.equal((await publicNews("alpha")).source, "alpha"); assert.equal(calls, 2);
+    for (const source of ["", "global", "111111111111111111", "../../private"]) {
+      assert.equal((await mf.dispatchFetch(`https://news.test/community/news?source=${source}`)).status, 400);
+    }
+    const post = await mf.dispatchFetch("https://news.test/community/news?source=game", { method: "POST" });
+    assert.equal(post.status, 405); assert.equal(post.headers.get("Allow"), "GET");
+    await mf.unsafeEvictDurableObject("digest-check", "RelayRoom", { name: "public-news", webSockets: "hibernate" });
+    assert.deepEqual(await publicNews("game"), publicGame); assert.equal(calls, 2);
+    let publicLimited;
+    for (let attempt = 0; attempt < 21; attempt++) publicLimited = await mf.dispatchFetch("https://news.test/community/news?source=game");
+    assert.equal(publicLimited.status, 429); assert.equal((await publicLimited.json()).error, "rate_limited");
+    assert.equal(publicLimited.headers.get("Retry-After"), "60"); assert.equal(calls, 2);
+    calls = 0; fetched.length = 0;
     let alice = await connect();
     const first = await news(alice);
     assert.equal(first.status, "ready", JSON.stringify({ ...first, calls, fetched: fetched.map(url => url.pathname) })); assert.equal(calls, 1); assert.equal(first.items.length, 2);
@@ -186,7 +209,7 @@ export async function checkDigest(script, proof) {
       JSON.stringify([{ id: firstDrop.event.id, time: Date.now() - 330000 }]), Date.now() - 330000, "a".repeat(32));
     assert.equal((await request(alice, { ...firstDrop, event: { ...firstDrop.event, occurredAt: Date.now() - 270000 } })).stored, false);
     // Six-minute dedup retention includes a report's allowed one-minute clock skew, even after history eviction.
-    console.log("Digest relay checks passed: news parsing/cache/backoff/bounds, signed opt-in RNG, privacy, validation, reconnect limits, hibernation.");
+    console.log("Digest relay checks passed: public announcement route without sessions, existing bot credential, source allowlist, persisted cache, parsing/backoff/bounds, signed opt-in RNG, privacy, validation, reconnect limits, hibernation.");
   } finally {
     for (const ws of sockets) { try { ws.close(); } catch {} }
     await mf.dispose();

@@ -61,7 +61,7 @@ object CommunityClient {
         ClientTickEvents.END_CLIENT_TICK.register { tick() }
         ScreenEvents.AFTER_INIT.register { minecraft, screen, width, _ ->
             if (screen is TitleScreen) Screens.getWidgets(screen).add(Button.builder(Component.literal("Sky-Myce Community")) {
-                minecraft.setScreen(CommunityScreen())
+                minecraft.setScreen(CommunityScreen(screen))
             }.bounds((width - 162).coerceAtLeast(4), 6, 156, 20).build())
         }
         CommunityUpdates.initialize()

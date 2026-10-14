@@ -6,10 +6,12 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.MC
+import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
 /** State-specific identity actions, independent sharing settings, and explicit update consent. */
-class CommunityScreen : MenuScreen(Component.literal("Sky-Myce Community")) {
+class CommunityScreen(private val parent: Screen? = null) : MenuScreen(Component.literal("Sky-Myce Community")) {
+    override val menuParent get() = parent ?: super.menuParent
     private lateinit var status: MenuLabel
     private lateinit var heading: MenuLabel
     private lateinit var account: MenuLabel
