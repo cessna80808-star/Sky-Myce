@@ -32,6 +32,8 @@ class DigestStateStore(private val file: Path) {
             require(Files.size(file) <= 8 * 1024 * 1024)
             val json = Files.newBufferedReader(file).use { JsonParser.parseReader(it).asJsonObject }
             require(json.get("version")?.asInt == 1)
+            // Retired news must not invalidate otherwise valid local profiles/history or become normal news.
+            json.getAsJsonObject("news")?.remove("alpha")
             gson.fromJson(json, DigestSavedState::class.java).also(::validate)
         }
     } catch (_: Exception) {
@@ -70,7 +72,7 @@ class DigestStateStore(private val file: Path) {
             }
             profile.history.forEach { require(validDigestRng(it, Long.MAX_VALUE / 2)) }
         }
-        require(requireNotNull(state.news).size <= 2)
+        require(requireNotNull(state.news).size <= 1)
         state.news.forEach { (source, news) ->
             require(source in NewsSource.entries.map { it.wire } && news.fetchedAt >= 0 && news.retryAt >= 0)
             require(requireNotNull(news.items).size <= 8)

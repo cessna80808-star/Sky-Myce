@@ -55,6 +55,16 @@ fun checkDigestLifecycleAndNews() {
     check(mainProfile != DigestDailyGate.profileKey(account, "Apple", true))
 
     var now = 1_000_000L
+    check(NewsSource.entries == listOf(NewsSource.GAME))
+    val legacyNewsConfig = JsonParser.parseString("""{"General":{"Daily Digest":{"news":true,"gameUpdates":false,"alphaUpdates":true,"retainedRngEvents":100}},"unrelated":{"value":7}}""").asJsonObject
+    check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, true))
+    val migratedNewsConfig = legacyNewsConfig.getAsJsonObject("General").getAsJsonObject("Daily Digest")
+    check(!migratedNewsConfig.has("gameUpdates") && !migratedNewsConfig.has("alphaUpdates"))
+    check(migratedNewsConfig.get("retainedRngEvents").asInt == 100 && legacyNewsConfig.getAsJsonObject("unrelated").get("value").asInt == 7)
+    check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, false)) // Master News=false stays off.
+    val laterNewsChoice = me.mycellium.skymyce.config.mergeConfigFields(legacyNewsConfig,
+        JsonParser.parseString("""{"General":{"Daily Digest":{"news":true}}}""").asJsonObject)
+    check(me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(laterNewsChoice, true)) // A later user toggle cannot be undone by retired keys.
     val requests = mutableListOf<Pair<NewsSource, CompletableFuture<JsonObject?>>>()
     var updates = 0
     val news = DigestNewsRepository({ source -> CompletableFuture<JsonObject?>().also { requests += source to it } },
@@ -66,30 +76,26 @@ fun checkDigestLifecycleAndNews() {
     }""").asJsonObject
     check(news.state(NewsSource.GAME).items.isEmpty())
     news.refresh(NewsSource.entries)
-    check(requests.size == 2 && news.state(NewsSource.GAME).loading)
+    check(requests.size == 1 && news.state(NewsSource.GAME).loading)
     news.refresh(NewsSource.entries, true)
-    check(requests.size == 2)
+    check(requests.size == 1)
     requests[0].second.complete(response())
     check(news.state(NewsSource.GAME).items.size == 1 && !news.state(NewsSource.GAME).loading)
-    check(news.state(NewsSource.ALPHA).items.isEmpty() && news.state(NewsSource.ALPHA).loading)
-    requests[1].second.completeExceptionally(TimeoutException())
-    check(news.state(NewsSource.ALPHA).failure == DigestFailure.TIMEOUT)
-    check(news.state(NewsSource.GAME).failure == null) // One failing provider doesn't affect another.
+    check(news.state(NewsSource.GAME).failure == null)
     news.restore(NewsSource.GAME, DigestNewsState(fetchedAt = 1))
     check(news.state(NewsSource.GAME).items.size == 1) // A late disk read cannot overwrite a fresh response.
     now += 61_000
     news.refresh(listOf(NewsSource.GAME))
-    check(requests.size == 2) // A warm successful cache avoids another download.
+    check(requests.size == 1) // A warm successful cache avoids another download.
     now += 300_000
     news.refresh(listOf(NewsSource.GAME))
-    check(requests.size == 3 && news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).loading)
+    check(requests.size == 2 && news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).loading)
     requests.last().second.complete(null)
     check(news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).failure == DigestFailure.TIMEOUT)
     now += 61_000
-    news.refresh(listOf(NewsSource.ALPHA))
-    requests.last().second.complete(response("alpha", "456"))
-    check(news.state(NewsSource.ALPHA).items.single().source == NewsSource.ALPHA)
-    check(news.state(NewsSource.GAME).items.single().source == NewsSource.GAME)
+    news.refresh(listOf(NewsSource.GAME), true)
+    requests.last().second.completeExceptionally(TimeoutException())
+    check(news.state(NewsSource.GAME).items.single().source == NewsSource.GAME && news.state(NewsSource.GAME).failure == DigestFailure.TIMEOUT)
     now += 61_000
     news.refresh(listOf(NewsSource.GAME), true)
     val cancelled = requests.last().second
@@ -237,6 +243,14 @@ fun checkDigestLifecycleAndNews() {
             news = mapOf("game" to news.state(NewsSource.GAME)))
         store.save(state)
         check(store.load() == state)
+        val legacyNews = com.google.gson.Gson().toJsonTree(state).asJsonObject
+        val retiredNews = legacyNews.getAsJsonObject("news").get("game").deepCopy().asJsonObject
+        retiredNews.getAsJsonArray("items").forEach { it.asJsonObject.addProperty("source", "ALPHA") }
+        legacyNews.getAsJsonObject("news").add("alpha", retiredNews)
+        Files.writeString(file, legacyNews.toString())
+        check(store.load() == state && !store.recovered) { "Removing retired news invalidated normal news or local profile/RNG history" }
+        store.save(store.load())
+        check(!JsonParser.parseString(Files.readString(file)).asJsonObject.getAsJsonObject("news").has("alpha"))
         Files.writeString(file, "{ damaged")
         check(store.load() == DigestSavedState() && store.recovered)
         store.save(state)
