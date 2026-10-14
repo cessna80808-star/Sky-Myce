@@ -25,6 +25,14 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
 import me.mycellium.skymyce.features.instances.dungeons.tracker.ChestReceipt
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
 import me.mycellium.skymyce.features.instances.dungeons.tracker.RunLoot
+import me.mycellium.skymyce.features.instances.dungeons.tracker.legacyTrackerView
+import me.mycellium.skymyce.features.instances.dungeons.tracker.marketValuedLoot
+import me.mycellium.skymyce.features.instances.dungeons.tracker.marketValuedTrackerSummary
+import me.mycellium.skymyce.features.instances.dungeons.tracker.cachedLootUnitPrice
+import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
+import tech.thatgravyboat.skyblockapi.api.remote.api.SimpleItemAPI
+import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
+import tech.thatgravyboat.skyblockapi.api.repo.apis.SkyBlockItemsRepo
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.digest.DailyDigest
@@ -83,9 +91,14 @@ class GuiVisualCheckClient : ClientModInitializer {
         }
         val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
+            Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-tracker-overview", ThemePreset.SIGNATURE) {
                 trackerScreen(TrackerPage.OVERVIEW)
+            },
+            Scene("dungeon-tracker-overview-all-floors", ThemePreset.SIGNATURE) {
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.OVERVIEW, scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
             },
             Scene("dungeon-tracker-overview-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.OVERVIEW) },
             Scene("dungeon-tracker-loot", ThemePreset.SIGNATURE) {
@@ -368,6 +381,13 @@ class GuiVisualCheckClient : ClientModInitializer {
                     }
                     check(view.summary.knownNet == view.summary.gross - view.summary.chestCost - view.summary.knownRerollCost &&
                         view.summary.preservedProfit == 0.0) { "Overview reused preserved profit instead of its current loot valuation" }
+                    val widgetView = me.mycellium.skymyce.features.instances.dungeons.tracker.trackerView(
+                        AcquisitionRepository.state, legacyTrackerView(), TrackerFilter(floor = trackerFilter().floor, scope = TrackerScope.ALL_LOCAL_PROFILES),
+                        AcquisitionRepository.currentContext())
+                    val widgetSummary = marketValuedTrackerSummary(widgetView.summary, marketValuedLoot(widgetView.loot) {
+                        cachedLootUnitPrice(it, DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType)
+                    })
+                    check(widgetSummary == view.summary) { "Widget and Overview used different market profit calculations" }
                 }
                 if (trackerFilter().page in listOf(TrackerPage.OVERVIEW, TrackerPage.MUSEUM, TrackerPage.TIMELINE)) {
                     check(components.filterIsInstance<MenuButton>().none { it.message.string in listOf("‹", "›") }) {
@@ -382,6 +402,27 @@ class GuiVisualCheckClient : ClientModInitializer {
                             "Museum cards in one row had mismatched heights or vertical alignment"
                         }
                     }
+                    cards.singleOrNull { it.id() == "museum-card-IMPLOSION_SCROLL" }?.let { card ->
+                        val contents = arrayListOf<UIComponent>(); card.collectDescendants(contents)
+                        val icon = contents.filterIsInstance<MenuItem>().single()
+                        val model = SkyBlockItemsRepo.get("IMPLOSION_SCROLL")?.getAsJsonObject("components")?.get("minecraft:item_model")?.asString
+                        check(icon.stack().get(DataComponents.ITEM_MODEL) == model?.let(Identifier::parse)) { "Museum scroll icon lost its item model" }
+                        val pixels = MenuItem::class.java.getDeclaredField("modelArt").apply { isAccessible = true }.get(icon) as List<*>
+                        check(pixels.isNotEmpty()) { "Museum scroll icon did not load its selected model texture pixels" }
+                    }
+                }
+            }
+            if (current.name == "item-models-skyblock" && ticks == 30) {
+                val components = arrayListOf<UIComponent>()
+                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                for (id in listOf("IMPLOSION_SCROLL", "WITHER_SHIELD_SCROLL", "SHADOW_WARP_SCROLL", "TARANTULA_CATALYST")) {
+                    val icon = components.filterIsInstance<MenuItem>().single { it.id() == "model-$id" }
+                    val images = MenuItem::class.java.getDeclaredField("modelArt").apply { isAccessible = true }.get(icon) as List<*>
+                    val loaded = MenuItem::class.java.getDeclaredField("loaded").apply { isAccessible = true }.get(icon)
+                    val textures = MenuItem::class.java.getDeclaredField("loadedTextures").apply { isAccessible = true }.get(icon)
+                    check(images.filterIsInstance<java.awt.image.BufferedImage>().any { image ->
+                        image.getRGB(0, 0, image.width, image.height, null, 0, image.width).any { it ushr 24 != 0 }
+                    }) { "The actual $id menu icon did not paint texture pixels: loaded=$loaded images=${images.size} textures=$textures bounds=${icon.x()},${icon.y()} ${icon.width()}×${icon.height()}" }
                 }
             }
             if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == 18) {
@@ -402,6 +443,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             val captureTick = when (current.name) {
                 "dungeon-tracker-filter-return" -> 30
                 "dungeon-tracker-personal-rate-tooltip" -> 40
+                "item-models-skyblock" -> 31
                 else -> 25
             }
             if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == captureTick) {
@@ -470,6 +512,16 @@ private fun checkMenuItemModels(client: Minecraft) {
     check(sprites(missing) == paper && missing.get(DataComponents.ITEM_MODEL) == Identifier.parse("skymyce:gui_fixture_missing_model")) {
         "A missing icon model changed the original item stack instead of its display copy"
     }
+    for (item in listOf("IMPLOSION_SCROLL", "WITHER_SHIELD_SCROLL", "SHADOW_WARP_SCROLL")) {
+        val raw = SkyBlockItemsRepo.get(item)?.getAsJsonObject("components")?.get("minecraft:item_model")?.asString
+        val decoded = SimpleItemAPI.getLazyItemStackForItem(SkyBlockId.item(item))?.get(DataComponents.ITEM_MODEL)
+        val actual = runCatching { me.mycellium.skymyce.utils.ItemUtils.displayItem(SkyBlockId.item(item)) }
+        println("Visual actual item model: $item raw=$raw decoded=$decoded stack=${actual.getOrNull()?.get(DataComponents.ITEM_MODEL)} error=${actual.exceptionOrNull()?.message}")
+        check(raw != null && decoded == Identifier.parse(raw)) { "A scroll lost its canonical SkyBlock item model during decoding" }
+        check(actual.getOrThrow().get(DataComponents.ITEM_MODEL) == decoded && sprites(actual.getOrThrow()) == sprites(model(raw))) {
+            "A real scroll rendered as a fallback item"
+        }
+    }
     if (client.resourceManager.getResource(Identifier.parse("hypixel_skyblock:items/item/combat_1/tarantula_catalyst.json")).isPresent) {
         check(sprites(model("hypixel_skyblock:item/combat_1/tarantula_catalyst")) == setOf(Identifier.parse("hypixel_skyblock:item/combat_1/tarantula_catalyst")))
         check(sprites(model("hypixel_skyblock:item/uncategorized/titanium_drill_dr_x655")) == setOf(
@@ -534,6 +586,28 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         output.fill(0, 0, width, height, 0xFF101725.toInt())
         check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
+}
+
+/** Actual repository definitions exercise the offline icon path, including the official pack. */
+private class GuiVisualItemModelsScreen : MenuScreen(Component.literal("SkyBlock item models")) {
+    override fun buildContent(root: FlowLayout) {
+        root.padding(Insets.of(16)); root.gap(10)
+        root.child(MenuLabel(Component.literal("Official SkyBlock item models")))
+        listOf("IMPLOSION_SCROLL", "WITHER_SHIELD_SCROLL", "SHADOW_WARP_SCROLL", "NECRON_HANDLE",
+            "TARANTULA_CATALYST", "RECOMBOBULATOR_3000").chunked(2).forEach { items ->
+            root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+                gap(12)
+                items.forEach { id ->
+                    val stack = me.mycellium.skymyce.utils.ItemUtils.displayItem(SkyBlockId.item(id))
+                    child(UIContainers.horizontalFlow(Sizing.fill(48), Sizing.content()).apply {
+                        gap(8)
+                        child(MenuItem(stack).apply { id("model-$id"); sizing(Sizing.fixed(40), Sizing.fixed(40)) })
+                        child(MenuLabel(stack.hoverName).apply { horizontalSizing(Sizing.expand()) })
+                    })
+                }
+            })
+        }
     }
 }
 

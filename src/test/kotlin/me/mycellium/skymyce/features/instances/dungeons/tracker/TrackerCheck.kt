@@ -186,7 +186,7 @@ private fun checkMarketValuedTrackerSummary() {
     val filter = TrackerFilter(page = TrackerPage.OVERVIEW, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
     fun valued(selected: TrackerFilter, prices: Map<String, Double?> = quotes): TrackerSummary {
         val source = trackerView(archive, listOf(historical), selected, context)
-        val rows = source.loot.map { it.copy(value = estimatedLootMarketValue(it.count, prices[it.item])) }
+        val rows = marketValuedLoot(source.loot) { prices[it] }
         val shown = marketValuedTrackerSummary(source.summary, rows)
         check(shown.gross == rows.sumOf { it.value ?: 0.0 })
         check(shown.copy(gross = source.summary.gross, incompleteValues = source.summary.incompleteValues,
@@ -197,8 +197,16 @@ private fun checkMarketValuedTrackerSummary() {
     check(shown.gross == 600.0 && shown.chestCost == 150.0 && shown.knownRerollCost == 62.0 && shown.net == 388.0)
     check(shown.preservedProfit == 0.0 && !shown.profitIncomplete)
     check(valued(filter.copy(page = TrackerPage.LOOT)) == shown) // Both pages use the identical selected item counts and quotes.
+    val widgetSource = trackerView(archive, listOf(historical),
+        TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES), context)
+    val widgetSummary = marketValuedTrackerSummary(widgetSource.summary, marketValuedLoot(widgetSource.loot) { quotes[it] })
+    check(widgetSummary == shown && dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, widgetSummary)
+        .single { "Profit:" in it }.contains("388"))
     val missing = valued(filter, quotes - "NECRON_HANDLE")
     check(missing.gross == 100.0 && missing.knownNet == -112.0 && missing.net == null && missing.incompleteValues)
+    val missingWidget = marketValuedTrackerSummary(widgetSource.summary, marketValuedLoot(widgetSource.loot) { (quotes - "NECRON_HANDLE")[it] })
+    check(missingWidget == missing && dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, missingWidget)
+        .single { "Profit:" in it }.contains("+ ?"))
     check(valued(filter.copy(scope = TrackerScope.CURRENT_PROFILE)).net == -15.0)
     check(valued(filter.copy(from = "2026-09-24", until = "2026-09-24")).net == -15.0)
     check(valued(filter.copy(session = "second-session")).net == 13.0)

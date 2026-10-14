@@ -1,5 +1,21 @@
 package me.mycellium.skymyce.features.instances.dungeons.tracker
 
+import com.google.gson.JsonPrimitive
+import com.mojang.serialization.JsonOps
+import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
+import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
+import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
+import java.util.Locale
+
+internal fun marketValuedLoot(rows: List<TrackerLootRow>, unitPrice: (String) -> Double?): List<TrackerLootRow> =
+    rows.map { it.copy(value = estimatedLootMarketValue(it.count, unitPrice(it.item))) }
+
+internal fun cachedLootUnitPrice(item: String, bazaar: DungeonsConfig.BazaarType, auction: DungeonsConfig.AuctionType): Double? = runCatching {
+    val id = if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(Locale.ROOT))).result().orElse(null)
+        else SkyBlockId.item(item)
+    id?.getPriceOrNull(bazaar, auction)
+}.getOrNull()
+
 /** Display estimate only; this never changes the recorded acquisition value or profit. */
 internal fun estimatedLootMarketValue(count: Long, unitPrice: Double?): Double? {
     if (count < 0) return null

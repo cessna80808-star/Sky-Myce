@@ -2,6 +2,7 @@ package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
+import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
 import me.mycellium.skymyce.hud.hudPanel
 import me.mycellium.skymyce.hud.updateTextLines
 import me.mycellium.skymyce.hud.widget.Widget
@@ -60,6 +61,9 @@ object DungeonTrackerWidget : SkyMyceModule() {
     private var seenHistoricalRevision = -1L
     private var seenFloor: DungeonFloor? = null
     private var seenContext: AcquisitionContext? = null
+    private var seenBazaar: DungeonsConfig.BazaarType? = null
+    private var seenAuction: DungeonsConfig.AuctionType? = null
+    private var nextMarketRefresh = 0L
     private var cachedLines = emptyList<String>()
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
@@ -71,10 +75,17 @@ object DungeonTrackerWidget : SkyMyceModule() {
 
         val context = AcquisitionRepository.currentContext()
         val activeFloor = DungeonTracker.currentFloor ?: DungeonAPI.dungeonFloor
-        if (seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != activeFloor || seenContext != context) {
+        val bazaar = DungeonTrackerConfig.bazaarPriceType; val auction = DungeonTrackerConfig.auctionPriceType
+        val now = System.currentTimeMillis()
+        if (seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != activeFloor || seenContext != context ||
+            seenBazaar != bazaar || seenAuction != auction || now >= nextMarketRefresh) {
             seenRevision = AcquisitionRepository.revision; seenHistoricalRevision = DungeonTracker.revision; seenFloor = activeFloor; seenContext = context
+            seenBazaar = bazaar; seenAuction = auction; nextMarketRefresh = now + 10_000
             val floor = dungeonTrackerDisplayFloor(activeFloor, null, AcquisitionRepository.state.runs, context)
-            cachedLines = dungeonTrackerWidgetLines(floor, dungeonTrackerLifetimeSummary(AcquisitionRepository.state, legacyTrackerView(), floor?.name))
+            val selected = trackerView(AcquisitionRepository.state, legacyTrackerView(),
+                TrackerFilter(floor = floor?.name, scope = TrackerScope.ALL_LOCAL_PROFILES), context)
+            val pricedLoot = marketValuedLoot(selected.loot) { cachedLootUnitPrice(it, bazaar, auction) }
+            cachedLines = dungeonTrackerWidgetLines(floor, marketValuedTrackerSummary(selected.summary, pricedLoot))
         }
         content.updateTextLines(cachedLines)
     }
