@@ -70,6 +70,8 @@ export async function checkCommunitySharing() {
     assert.equal((await store.counts(alice)).contributions, 2, "All-time observations are retained beyond a month");
     assert.equal((await store.contribute(alice, contribution)).ok, true);
     assert.equal((await store.counts(alice)).contributions, 2, "Duplicate event IDs remain idempotent");
+    await store.merge(alice, "alice-account", "alice-account");
+    assert.equal((await store.counts(alice)).contributions, 2, "Refreshing/reconnecting the same owner preserves recorded contributions");
     for (const changes of [{ value: null }, { value: 0.5 }, { complete: false }, { metric: "__proto__" }, { verification: "verified" }, { source: "server" }]) {
       assert.equal((await store.contribute(alice, { ...contribution, ...changes })).error, "invalid_contribution");
     }
@@ -91,8 +93,16 @@ export async function checkCommunitySharing() {
     assert.equal((await store.get(session(alice, "carol-account"))).policy.enabled, false, "Reassignment inherits explicit old opt-outs");
     assert.equal((await store.get(session(alt))).policy.enabled, false, "Source preferences remain for its other Minecraft accounts");
     const anon = await store.updateVerified(anonymous, 0, { ...defaults, economy: false });
-    assert.equal(anon.ok, true); await store.merge(anonymous, null, "new-account");
+    assert.equal(anon.ok, true);
+    assert.equal((await store.contribute(anonymous, { ...contribution, id: "8".repeat(32), observedAt: Date.now() })).ok, true);
+    await store.merge(anonymous, null, "new-account");
+    assert.equal((await store.counts(anonymous)).contributions, 0, "First linking still clears contributions from the old UUID owner");
     assert.equal((await store.get(session(anonymous, "new-account"))).policy.economy, false, "A UUID opt-out survives first Discord linking");
+    const transferred = "8".repeat(32);
+    await store.seed(transferred, "transfer-source");
+    assert.equal((await store.contribute(transferred, { ...contribution, id: "7".repeat(32), observedAt: Date.now() })).ok, true);
+    await store.merge(transferred, "transfer-source", "transfer-destination");
+    assert.equal((await store.counts(transferred)).contributions, 0, "Actual reassignment still removes old-owner contributions even when both owners consent");
     await store.blacklist(carol); assert.equal((await store.decision(carol, "rng")).allowed, false);
     assert.equal((await store.get(session(carol, "carol-account"))).error, "not_authorized");
     // The CAS is checked against persistent SQLite, including after a reconnect/reconstructed policy helper.
