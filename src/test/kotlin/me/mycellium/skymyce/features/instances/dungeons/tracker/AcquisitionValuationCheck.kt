@@ -4,6 +4,14 @@ import com.google.gson.Gson
 import me.mycellium.skymyce.utils.marketPriceOrNull
 
 fun checkAcquisitionValuations() {
+    check(estimatedLootMarketValue(5, 173_000_000.0) == 865_000_000.0)
+    check(estimatedLootMarketValue(4, 147_590_000.0) == 590_360_000.0)
+    check(estimatedLootMarketValue(0, null) == 0.0)
+    check(estimatedLootMarketValue(-1, 1.0) == null)
+    for (unavailable in listOf(null, 0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY, 1e13))
+        check(estimatedLootMarketValue(5, unavailable) == null)
+    check(estimatedLootMarketValue(Long.MAX_VALUE, 1e12) == null)
+    check(estimatedLootMarketValue(20_000, 1e12) == null)
     var auctionLookups = 0
     fun auction() = 25.0.also { auctionLookups++ }
     check(marketPriceOrNull(40.0, ::auction) == 40.0 && auctionLookups == 0)
@@ -85,9 +93,9 @@ fun checkAcquisitionValuations() {
     check(parseTrackerPreferences(null).scope == TrackerScope.ALL_LOCAL_PROFILES)
     val preferences = Gson().toJsonTree(TrackerFilter()).asJsonObject.apply { remove("overviewVersion") }
     check(parseTrackerPreferences(preferences).let { it.scope == TrackerScope.ALL_LOCAL_PROFILES && !it.legacyTotals })
-    preferences.addProperty("scope", "CURRENT_PROFILE"); preferences.addProperty("overviewVersion", 1)
+    preferences.addProperty("scope", "CURRENT_PROFILE"); preferences.addProperty("overviewVersion", 2)
     check(parseTrackerPreferences(preferences).scope == TrackerScope.CURRENT_PROFILE)
-    preferences.addProperty("overviewVersion", 2)
+    preferences.addProperty("overviewVersion", 3)
     check(runCatching { parseTrackerPreferences(preferences) }.isFailure)
     preferences.remove("overviewVersion"); preferences.addProperty("page", "LOOT")
     check(parseTrackerPreferences(preferences).scope == TrackerScope.CURRENT_PROFILE)

@@ -8,11 +8,13 @@ import io.wispforest.owo.ui.container.*
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.api.DungeonChest
 import me.mycellium.skymyce.features.digest.DigestRngParser
+import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
+import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.Items
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
@@ -27,6 +29,7 @@ import kotlin.time.Duration.Companion.milliseconds
 /** View filters never write DungeonTracker.currentFloor; the detector alone owns recording context. */
 class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), MenuPage.DUNGEONS) {
     private var filter = AcquisitionRepository.preferences
+    private var itemHistoryReturn: TrackerFilter? = null
     private var view = TrackerView()
     private var page = 0
     private var more = false
@@ -40,11 +43,13 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private var seenContext: AcquisitionContext? = null
     private var seenTheme = HudTheme.revision
     private var preferencesEdited = false
+    private var nextMarketRefresh = 0L
     private lateinit var resultSwap: MenuSwap
     private lateinit var results: MenuScroll<FlowLayout>
     private lateinit var status: LabelComponent
     private lateinit var pageLabel: LabelComponent
     private lateinit var tabs: FlowLayout
+    private lateinit var closeButton: ButtonComponent
     private var tabRows = emptyList<FlowLayout>()
     private lateinit var floorButton: ButtonComponent
     private lateinit var modeButton: ButtonComponent
@@ -63,19 +68,25 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     override fun isPauseScreen() = false
     override fun init() { closed = false; super.init() }
     override fun removed() { closed = true; generation++; super.removed() }
+    override fun onClose() {
+        val previous = itemHistoryReturn
+        if (previous == null) { super.onClose(); return }
+        itemHistoryReturn = null; change(previous); rebuild(resetScroll = true)
+    }
     override fun buildContent(root: FlowLayout) {
         root.surface(Surface.BLANK).alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER)
         root.child(column().apply {
             sizing(Sizing.fixed(panelWidth), Sizing.fixed(menuHeight)); padding(Insets.of(8)); surface(MenuTheme.panel())
             child(row().apply {
                 child(label("SKY-HAWK / DUNGEONS", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
-                child(button("Close", 42) { onClose() })
+                closeButton = button("Close", 42) { onClose() }; child(closeButton)
             })
             val perRow = if (panelWidth < 420) 2 else 4
             tabRows = TrackerPage.entries.chunked(perRow).map { pages -> row().apply { pages.forEach { tab ->
                 child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) {
                     if (filter.page == tab) return@button
-                    change(filter.copy(page = tab)); rebuild(resetScroll = true)
+                    val previous = itemHistoryReturn ?: filter
+                    itemHistoryReturn = null; change(previous.copy(page = tab)); rebuild(resetScroll = true)
                 }
                     .apply { navigation = true; selected = { filter.page == tab } }
                     .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Tracked runs, time, costs, values and XP"; TrackerPage.LOOT -> "Observed loot in your tracked sample, with real filters and sorting"; TrackerPage.TIMELINE -> "Your dated acquisitions; legacy source labels preserve uncertainty"; TrackerPage.MUSEUM -> "Your collection of catalogued rare drops. This is not Hypixel's donation Museum." })))
@@ -99,8 +110,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             }; child(historyHost)
             filterActions = row().apply {
                 moreButton = button(if (more) "Filters −" else "Filters +", 68) { more = !more; rebuild() }; child(moreButton)
-                child(button("Clear all", 65) { change(TrackerFilter(page = filter.page,
-                    scope = if (filter.page == TrackerPage.OVERVIEW) TrackerScope.ALL_LOCAL_PROFILES else TrackerScope.CURRENT_PROFILE)); rebuild() })
+                child(button("Clear filters", 80) { change(filter.clearConstraints()); rebuild() }
+                    .wrappedTooltip(Component.literal("Clear search and viewing filters. Your saved loot, source and sorting stay unchanged.")))
             }; child(filterActions)
             oldestButton = button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 75) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuild() }
             search = MenuTextBox(Sizing.fill()).apply {
@@ -128,17 +139,19 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
 
     private fun refreshControls() {
+        closeButton.message = Component.literal(if (itemHistoryReturn == null) "Close" else "Back to Museum")
+        closeButton.horizontalSizing(Sizing.fixed(if (itemHistoryReturn == null) 42 else 95))
         floorButton.message = Component.literal(filter.floor ?: "All tracked floors")
         modeButton.message = Component.literal(when (filter.mode) { "F" -> "Normal"; "M" -> "Master"; else -> "Both modes" })
         historyButton.message = Component.literal(if (history) { if (filter.legacyTotals) "Hide historical reports" else "Show all saved reports" }
             else if (filter.legacyTotals && !filter.needsRecords) "Show new tracking" else "Show historical totals")
         historyHost.clearChildren()
-        if (filter.page != TrackerPage.OVERVIEW) historyHost.child(historyButton)
+        if (history && filter.scope == TrackerScope.CURRENT_PROFILE) historyHost.child(historyButton)
         moreButton.message = Component.literal(if (more) "Filters −" else "Filters +")
         oldestButton.message = Component.literal(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓")
         if (more && height < 340) tabs.clearChildren()
         else if (tabs.children().isEmpty()) tabRows.forEach { tabs.child(it) }
-        val sortHost = if (bodyWidth >= 220) filterActions else narrowActions
+        val sortHost = if (bodyWidth >= 235) filterActions else narrowActions
         if (filter.page == TrackerPage.TIMELINE) {
             if (oldestButton.parent() !== sortHost) sortHost.child(oldestButton)
         } else oldestButton.parent()?.removeChild(oldestButton)
@@ -153,7 +166,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     private fun filters() = column().apply {
         child(button("Scope: ${filter.scope.name.replace('_', ' ')}", (bodyWidth - 8).coerceAtMost(280)) { b -> menu(b) { d ->
             TrackerScope.entries.forEach { scope -> d.button(Component.literal(scope.name.replace('_', ' '))) { change(filter.copy(scope = scope, legacyTotals = filter.legacyTotals || scope == TrackerScope.UNSCOPED_LEGACY)); rebuild() } }
-        } }.wrappedTooltip(Component.literal("Current profile uses account UUID and the available profile ID. All local profiles and unscoped legacy records are explicit separate views. Offline: choose All local profiles.")))
+        } }.wrappedTooltip(Component.literal("Current profile uses your account and profile. All local profiles shows your saved loot, including older totals without dates or sessions. Offline: choose All local profiles.")))
         child(button(filter.chest ?: "All chest types", 145) { b -> menu(b) { d ->
             (listOf<String?>(null) + DungeonChest.entries.map { it.name }).forEach { chest -> d.button(Component.literal(chest ?: "All chest types")) { change(filter.copy(chest = chest)); rebuild() } }
         } })
@@ -168,7 +181,10 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         } }.wrappedTooltip(Component.literal("Recent local sessions. A new session starts on account/profile change or disconnect. Legacy aggregates have no sessions.")))
         if (filter.page != TrackerPage.OVERVIEW) child(row().apply {
             child(button(if (filter.rareOnly) "RNG only ✓" else "RNG only", 86) { change(filter.copy(rareOnly = !filter.rareOnly)); rebuild() }.wrappedTooltip(Component.literal("Only maintained rare-item catalog IDs; market price alone does not define RNG.")))
-            child(button(if (filter.valuableOnly) "1m+ ✓" else "1m+ value", 86) { change(filter.copy(valuableOnly = !filter.valuableOnly)); rebuild() }.wrappedTooltip(Component.literal("Only recorded values of at least one million coins. Unknown historical values do not qualify.")))
+            child(button(if (filter.valuableOnly) "1m+ ✓" else "1m+ value", 86) { change(filter.copy(valuableOnly = !filter.valuableOnly)); rebuild() }
+                .wrappedTooltip(Component.literal(if (filter.page == TrackerPage.LOOT)
+                    "Only cached market estimates of at least one million coins. Items without a usable price do not qualify."
+                    else "Only recorded values of at least one million coins. Unknown historical values do not qualify.")))
         })
         if (filter.page == TrackerPage.LOOT) child(row().apply {
             child(button("Sort: ${filter.sort.name.replace('_', ' ')}", minOf(140, bodyWidth - 64)) { change(filter.copy(sort = LootOrder.entries[(filter.sort.ordinal + 1) % LootOrder.entries.size])); rebuild() })
@@ -193,7 +209,9 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun change(next: TrackerFilter) {
         if (next == filter) return
-        preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis(); AcquisitionRepository.remember(filter)
+        preferencesEdited = true; filter = next; page = 0; generation++; changedAt = System.currentTimeMillis()
+        // An item-history detour must not replace the collection's saved view, including on category exit.
+        AcquisitionRepository.remember(itemHistoryReturn ?: filter)
     }
     override fun tick() {
         super.tick()
@@ -207,11 +225,20 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             seenArchive = AcquisitionRepository.revision; seenLegacy = DungeonTracker.revision; seenContext = context; generation++
         }
         if (seenTheme != HudTheme.revision) { seenTheme = HudTheme.revision; rebuildMenu() }
+        if (filter.page == TrackerPage.LOOT && System.currentTimeMillis() >= nextMarketRefresh) {
+            nextMarketRefresh = System.currentTimeMillis() + 10_000; generation++
+        }
         if (!busy && requested != generation && System.currentTimeMillis() - changedAt >= 120) {
             val token = generation; requested = token; busy = true
             val archive = AcquisitionRepository.state; val legacy = legacyTrackerView(); val query = filter
+            val bazaar = DungeonTrackerConfig.bazaarPriceType; val auction = DungeonTrackerConfig.auctionPriceType
             Scheduling.schedule(0.milliseconds) {
-                val computed = runCatching { trackerView(archive, legacy, query, context) }
+                val computed = runCatching {
+                    val selected = trackerView(archive, legacy, if (query.page == TrackerPage.LOOT) query.copy(valuableOnly = false) else query, context)
+                    if (query.page != TrackerPage.LOOT) selected else selected.copy(loot = sortedLoot(selected.loot.map { item ->
+                        item.copy(value = estimatedLootMarketValue(item.count, itemId(item.item)?.getPriceOrNull(bazaar, auction)))
+                    }, query))
+                }
                 MC.instance.execute {
                     busy = false
                     if (!closed && !menuClosing && token == generation) computed.fold({ view = it; renderView(animate = false) }, { status.text(Component.literal("Some saved records could not be displayed").withColor(MenuTheme.RED)) })
@@ -229,7 +256,15 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             TrackerScope.ALL_LOCAL_PROFILES -> "All saved runs"
             TrackerScope.CURRENT_PROFILE -> "Current profile"
             TrackerScope.UNSCOPED_LEGACY -> "Saved totals"
-        } else if (!history && view.usingLegacy) "Historical totals • unscoped" else "${if (history && filter.legacyTotals) "Saved reports" else "Confirmed"} • ${filter.scope.name.replace('_', ' ')}${if (history && filter.legacyTotals) " + unscoped history" else ""}"
+        } else if (filter.page == TrackerPage.LOOT) when (filter.scope) {
+            TrackerScope.ALL_LOCAL_PROFILES -> if (filter.needsRecords) "Saved loot for these dates or session" else "All saved loot"
+            TrackerScope.CURRENT_PROFILE -> "Current profile loot"
+            TrackerScope.UNSCOPED_LEGACY -> "Saved totals"
+        } else when (filter.scope) {
+            TrackerScope.ALL_LOCAL_PROFILES -> "All saved reports"
+            TrackerScope.CURRENT_PROFILE -> "Current profile reports"
+            TrackerScope.UNSCOPED_LEGACY -> "Saved unscoped reports"
+        }
         status.text(Component.literal("$source${if (filters.isEmpty()) " • no filters" else " • ${filters.joinToString(" / ")}"}").withColor(MenuTheme.MUTED))
         if (more && height < 340) {
             status.text(Component.literal("Filters • changes apply immediately").withColor(MenuTheme.MUTED))
@@ -273,16 +308,21 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun loot(content: FlowLayout) {
         val visible = slice(view.loot)
-        content.child(label("Item  /  Count  /  Recorded value  /  Observed rate", MenuTheme.SECONDARY))
-        if (visible.isEmpty()) content.child(label(if (view.usingLegacy) "No historical loot matches these filters." else "No new loot matches these filters. Use Show historical totals above to see your previous loot.", MenuTheme.MUTED))
+        content.child(label("Item  /  Count  /  Market value (estimated)  /  Observed rate", MenuTheme.SECONDARY))
+        if (visible.isEmpty()) content.child(label(if (filter.scope == TrackerScope.CURRENT_PROFILE && seenContext == null)
+            "No current profile is available. Choose All local profiles in Filters to view your saved loot offline."
+            else "No saved loot matches these filters.", MenuTheme.MUTED))
+        if (filter.needsRecords && filter.scope == TrackerScope.ALL_LOCAL_PROFILES)
+            content.child(label("Date and session filters use recorded chests; older totals have no dates or sessions.", MenuTheme.MUTED))
         visible.forEach { item -> content.child(column().apply {
             surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
             child(row().apply { child(icon(item.item)); child(label(itemName(item.item)).apply { horizontalSizing(Sizing.expand()) }) })
             child(row().apply {
                 child(label("× ${item.count}").horizontalSizing(Sizing.fill(25)))
-                child(label(money(item.value), MenuTheme.GREEN).horizontalSizing(Sizing.fill(35)))
-                child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "Unknown", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
-                    .wrappedTooltip(Component.literal(if (item.observedRate == null) "Legacy aggregates do not record which chests contained this item. No theoretical chance is inferred." else
+                child(label(money(item.value), MenuTheme.GREEN).horizontalSizing(Sizing.fill(35))
+                    .wrappedTooltip(Component.literal("Cached market price: ${money(item.value?.div(item.count.toDouble()))} × ${item.count}.\nThis estimate does not change recorded dungeon profit. Prices unavailable in the cache stay unknown.")))
+                child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "—", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
+                    .wrappedTooltip(Component.literal(if (item.observedRate == null) "Saved totals do not contain complete item-by-chest observations, so a personal drop rate cannot be calculated." else
                         "Observed in ${item.acquiredChests} of ${item.sampledChests} confirmed chests in this tracked sample. This is not an official drop chance.")))
             })
         }) }
@@ -322,7 +362,10 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 child(label(if (events.isEmpty()) "Not recorded" else "Obtained: ${events.sumOf { it.quantity }} • ${events.mapNotNull { it.floor }.distinct().joinToString().ifEmpty { events.first().activity }}", MenuTheme.MUTED))
                 if (events.isNotEmpty()) child(label("First: ${date(events.minOf { it.occurredAt })} • Latest: ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED))
                 child(row().apply {
-                    child(button("History", 68) { change(filter.copy(page = TrackerPage.TIMELINE, query = item, valuableOnly = false)); rebuild() }.apply { active(events.isNotEmpty()) })
+                    child(button("History", 68) {
+                        itemHistoryReturn = filter
+                        change(filter.copy(page = TrackerPage.TIMELINE, query = item, valuableOnly = false)); rebuild(resetScroll = true)
+                    }.apply { active(events.isNotEmpty()) })
                     child(button(if (AcquisitionRepository.pinned(item, seenContext)) "Unpin" else "Pin", 55) { AcquisitionRepository.pin(item, seenContext); renderView() }
                         .wrappedTooltip(Component.literal("Pins and personal collection entries are permanent local records, independent of community-feed retention.")))
                 })
@@ -335,8 +378,12 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         return values.drop(page * 20).take(20)
     }
     private fun itemName(item: String) = DigestRngParser.catalog[item]?.name ?: item.substringAfter(':').replace('_', ' ').take(100)
+    private fun itemId(item: String) = runCatching {
+        if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(java.util.Locale.ROOT))).result().orElse(null)
+        else SkyBlockId.item(item)
+    }.getOrNull()
     private fun icon(item: String): UIComponent {
-        val stack = runCatching { if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase())).result().orElse(null)?.toItem() else SkyBlockId.item(item).toItem() }.getOrNull()
+        val stack = runCatching { itemId(item)?.toItem() }.getOrNull()
         val display = stack?.takeUnless { it.isEmpty } ?: runCatching { Items.PAPER.defaultInstance }.getOrDefault(net.minecraft.world.item.ItemStack.EMPTY)
         return MenuItem(me.mycellium.skymyce.utils.ItemUtils.displayStack(display)).apply {
             if (stack != null && !stack.isEmpty) setTooltipFromStack(true) else wrappedTooltip(Component.literal("$item • item definition unavailable"))

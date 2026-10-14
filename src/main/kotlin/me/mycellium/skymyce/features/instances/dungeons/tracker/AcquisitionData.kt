@@ -150,7 +150,9 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     val from: String = "", val until: String = "", val session: String? = null, val activity: String? = null,
     val scope: TrackerScope = TrackerScope.CURRENT_PROFILE, val legacyTotals: Boolean = false,
     val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false,
-    val overviewVersion: Int = 1) {
+    val overviewVersion: Int = 2) {
+    fun clearConstraints() = copy(floor = null, mode = null, chest = null, query = "", rareOnly = false,
+        valuableOnly = false, from = "", until = "", session = null, activity = null)
     fun floorMatches(value: String?) = (floor == null || floor == value) && (mode == null || value?.startsWith(mode) == true)
     fun scopeMatches(value: AcquisitionContext?, current: AcquisitionContext?) = when (scope) {
         TrackerScope.CURRENT_PROFILE -> current?.matches(value) == true
@@ -169,9 +171,10 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     }
     fun events(values: List<AcquisitionEvent>, current: AcquisitionContext?, runs: List<DungeonRunRecord>): List<AcquisitionEvent> {
         val sessionRuns = if (session == null) emptySet() else runs.filter { it.session == session }.mapTo(hashSetOf()) { it.id }
+        val savedHistory = legacyTotals || scope != TrackerScope.CURRENT_PROFILE
         return values.filter {
-        (it.origin == "confirmed" || legacyTotals) && floorMatches(it.floor) &&
-            (scopeMatches(it.context, current) || legacyTotals && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
+        (it.origin == "confirmed" || savedHistory) && floorMatches(it.floor) &&
+            (scopeMatches(it.context, current) || savedHistory && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
             (activity == null || activity == it.activity) && (session == null || it.run in sessionRuns) &&
             (query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(query, true)) &&
             (!rareOnly || it.item in DigestRngParser.catalog) && (!valuableOnly || it.value?.let { value -> value >= 1_000_000 } == true)
