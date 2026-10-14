@@ -148,12 +148,22 @@ object IrcChatRendering {
     private var mediaRevision = -1L
     private var initialized = false
     private val taggedMessage = ThreadLocal.withInitial { false }
+    private val refreshingMessages = ThreadLocal.withInitial { false }
 
     @JvmStatic fun addingMessage(): Boolean = taggedMessage.get()
     internal fun <T> withTaggedMessage(action: () -> T): T {
         val previous = taggedMessage.get()
         taggedMessage.set(true)
         return try { action() } finally { taggedMessage.set(previous) }
+    }
+
+    @JvmStatic fun snapshotForRefresh(messages: List<GuiMessage>): List<GuiMessage> =
+        if (refreshingMessages.get()) ArrayList(messages) else messages
+
+    internal fun <T> withRefreshMessages(action: () -> T): T {
+        val previous = refreshingMessages.get()
+        refreshingMessages.set(true)
+        return try { action() } finally { refreshingMessages.set(previous) }
     }
 
     fun init() {
@@ -213,7 +223,7 @@ object IrcChatRendering {
     }
     private fun refresh(chat: IrcChatAccessor) {
         val scroll = chat.`skymyce$getScroll`()
-        chat.`skymyce$refreshMessages`()
+        withRefreshMessages { chat.`skymyce$refreshMessages`() }
         chat.`skymyce$setScroll`(scroll.coerceAtLeast(0))
         MC.instance.gui.chat.scrollChat(0) // Native clamp after an edit or preference removes wrapped lines.
     }

@@ -63,6 +63,7 @@ fun main() {
     for (code in listOf(1000, 1006, 1008, 1013, 4003)) check(!relayNeedsReconnect(code))
     val safeError = relayErrorDetail(java.util.concurrent.CompletionException(java.io.IOException("secret-token private-message 192.0.2.1")))
     check("java.io.IOException" in safeError && "secret" !in safeError && "192.0.2.1" !in safeError)
+    checkRelayWrites()
     for (peerCloses in listOf(true, false)) {
         val closed = java.util.concurrent.CountDownLatch(1)
         val aborted = java.util.concurrent.CountDownLatch(1)
@@ -827,6 +828,53 @@ fun main() {
         Files.deleteIfExists(savedDirectory)
     }
     println("Dungeon Friends checks passed")
+}
+
+private fun checkRelayWrites() {
+    val sent = mutableListOf<String>()
+    val pending = CompletableFuture<java.net.http.WebSocket>()
+    val ws = java.lang.reflect.Proxy.newProxyInstance(java.net.http.WebSocket::class.java.classLoader,
+        arrayOf(java.net.http.WebSocket::class.java)) { _, method, args ->
+        check(method.name == "sendText")
+        sent += args[0] as String
+        pending
+    } as java.net.http.WebSocket
+    val blocked = sendRelayPacket(CompletableFuture.completedFuture(null), ws, "first", { true }, 100)
+    val queued = sendRelayPacket(blocked, ws, "second", { true }, 100)
+    check(sent == listOf("first"))
+    for (write in listOf(blocked, queued)) {
+        val failure = runCatching { write.get(2, java.util.concurrent.TimeUnit.SECONDS) }.exceptionOrNull()
+        check(failure is java.util.concurrent.ExecutionException && failure.cause is java.util.concurrent.TimeoutException)
+    }
+    check(sent == listOf("first")) // A stalled write fails queued messages; none are replayed after recovery.
+    check(!pending.complete(ws)) // A late transport completion cannot revive the old sending chain.
+    val stalePrevious = CompletableFuture<Void>()
+    val stale = sendRelayPacket(stalePrevious, ws, "old login", { false }, 100)
+    stalePrevious.complete(null)
+    check(stale.join() === ws && sent == listOf("first")) // Old generations cannot start another write.
+    val recovered = java.lang.reflect.Proxy.newProxyInstance(java.net.http.WebSocket::class.java.classLoader,
+        arrayOf(java.net.http.WebSocket::class.java)) { proxy, method, args ->
+        check(method.name == "sendText")
+        sent += args[0] as String
+        CompletableFuture.completedFuture(proxy as java.net.http.WebSocket)
+    } as java.net.http.WebSocket
+    val rejection = java.io.IOException("Synthetic send failure")
+    val rejecting = java.lang.reflect.Proxy.newProxyInstance(java.net.http.WebSocket::class.java.classLoader,
+        arrayOf(java.net.http.WebSocket::class.java)) { _, method, args ->
+        check(method.name == "sendText")
+        sent += args[0] as String
+        CompletableFuture.failedFuture<java.net.http.WebSocket>(rejection)
+    } as java.net.http.WebSocket
+    val rejected = sendRelayPacket(CompletableFuture.completedFuture(null), rejecting, "immediate failure", { true }, 100)
+    val rejectedQueue = sendRelayPacket(rejected, recovered, "queued after rejection", { true }, 100)
+    for (write in listOf(rejected, rejectedQueue)) {
+        check(write.isCompletedExceptionally)
+        val failure = runCatching { write.get(2, java.util.concurrent.TimeUnit.SECONDS) }.exceptionOrNull()
+        check(failure is java.util.concurrent.ExecutionException && failure.cause === rejection)
+    }
+    check(sent == listOf("first", "immediate failure"))
+    check(sendRelayPacket(CompletableFuture.completedFuture(null), recovered, "new input", { true }, 100).join() === recovered)
+    check(sent == listOf("first", "immediate failure", "new input"))
 }
 
 private fun checkFriendActivityTheme() {

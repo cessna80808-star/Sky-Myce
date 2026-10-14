@@ -76,6 +76,7 @@ object RelayMessages {
     private val reactionRequests = IrcReactionRequests()
     private var globalAccount: java.util.UUID? = null
     private var globalNextSend = 0L
+    private var nextIrcDiagnostic = Long.MIN_VALUE
     private val conversations = RelayConversation()
     private val quiet = ThreadLocal.withInitial { false }
     private var nextSend = 0L
@@ -287,7 +288,7 @@ object RelayMessages {
                         nextPartySubscribe = System.nanoTime() + ircPartyRefreshMillis(grantMillis) * 1_000_000L
                     } else { partySubscribedId = ""; partySubscribedUntil = 0 }
                 }
-                if (subscription.complete(revision, reason, System.nanoTime())) ircError(scope, reason)
+                if (subscription.complete(revision, reason, System.nanoTime())) ircError(scope, reason, "subscription receipt")
             }, receipt = { response -> grantMillis = ircPartyGrantMillis(response, roster?.id, System.currentTimeMillis()) ?: 0L })) {
                 subscription.queued(revision, enabled)
                 if (scope == "party") nextPartySubscribe = System.nanoTime() + 30_000_000_000L
@@ -354,7 +355,7 @@ object RelayMessages {
         if (scope == "party" && livePartyRoster() == null) {
             DungeonFriends.requestIrcPartyInfo(); notice(partyRosterError(), true); return
         }
-        if (!subscription.enabled) { ircError(scope, "not_subscribed"); return }
+        if (!subscription.enabled) { ircError(scope, "not_subscribed", "subscription pending"); return }
         if (scope == "party" && !currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) {
             notice("Party IRC needs a complete current Hypixel roster and a confirmed subscription. Wait for party info, then retry.", true); return
         }
@@ -368,14 +369,24 @@ object RelayMessages {
             if (scope == "party" && partyId != sendPartyId) return@currentGlobalResult
             if (reason != null) {
                 if (reason == "not_subscribed") subscription.reset()
-                ircError(scope, reason)
+                ircError(scope, reason, "send receipt")
             }
         })) { globalNextSend = now + 500_000_000; replyDraft = null }
-        else ircError(scope, null)
+        else ircError(scope, null, "send queue")
         // Only the authoritative broadcast renders a send. Uncertain deliveries are never resent.
     }
 
-    private fun ircError(scope: String, reason: String?) = notice(globalDeliveryError(reason).replace("Global chat", if (scope == "party") "Party IRC" else "Global chat"), true)
+    private fun ircError(scope: String, reason: String?, operation: String = "relay") {
+        val now = System.nanoTime()
+        if (now >= nextIrcDiagnostic) {
+            nextIrcDiagnostic = now + 60_000_000_000L
+            // Fixed failure descriptions keep chat bodies and arbitrary server error text out of logs.
+            me.mycellium.skymyce.SkyMyce.logger.warn("[IRC] {} {} failed: {} connected={} currentSession={} writePending={}",
+                scope, operation, globalDeliveryError(reason), DungeonFriendRelay.connected,
+                DungeonFriendRelay.currentGlobalSession(), DungeonFriendRelay.diagnostics()["relay.writePending"])
+        }
+        notice(globalDeliveryError(reason).replace("Global chat", if (scope == "party") "Party IRC" else "Global chat"), true)
+    }
     fun globalError(reason: String?) = ircError("global", reason)
     internal fun currentIrcChannel(key: IrcKey): Boolean = DungeonFriendRelay.currentGlobalSession() &&
         MC.instance.player != null && MC.connection != null && if (key.scope == "global") {
