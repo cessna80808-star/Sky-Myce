@@ -15,6 +15,7 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerFilter
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerPage
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerScope
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerView
+import me.mycellium.skymyce.features.instances.dungeons.tracker.PersonalRateSample
 import me.mycellium.skymyce.features.instances.dungeons.tracker.LootOrder
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionArchive
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
@@ -232,9 +233,13 @@ class GuiVisualCheckClient : ClientModInitializer {
                     check(trackerView().loot.single { it.item == "GUI_FIXTURE_UNPRICED" }.value == null) {
                         "Loot market values fell back to an old recorded amount for an unpriced item"
                     }
+                    check(trackerView().loot.single { it.item == "SHADOW_WARP_SCROLL" }.let {
+                        it.rateSample?.completedRuns == 20L && it.observedRate == 0.1
+                    }) { "The personal percentage ignored its separate dated run sample" }
                     val labels = arrayListOf<UIComponent>()
                     adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(labels)
                     check(labels.filterIsInstance<MenuLabel>().any { it.text().string.contains("Market value (estimated)") })
+                    check(labels.filterIsInstance<MenuLabel>().any { it.text().string.contains("Personal rate") })
                     check(labels.filterIsInstance<MenuLabel>().any { it.text().string.startsWith("All saved loot") })
                     press("RNG Museum", navigation = true)
                     val components = arrayListOf<UIComponent>()
@@ -284,7 +289,9 @@ private class GuiVisualTrackerHistoryFixture {
         AcquisitionEvent("2".repeat(32), "SHADOW_WARP_SCROLL", time + 1000, "dungeon", context, "M7", "BEDROCK", run = "fixture-run")),
         runs = listOf(DungeonRunRecord("fixture-run", "fixture-session", context, "M7", time, time + 1000, 1000,
             chests = listOf(ChestReceipt("fixture-chest", time + 1000, "BEDROCK", 0.0, listOf(
-                RunLoot("SHADOW_WARP_SCROLL", 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))))
+                RunLoot("SHADOW_WARP_SCROLL", 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))),
+        personalRateSamples = listOf(PersonalRateSample("M7", time - 86400000, time, 20,
+            mapOf("SHADOW_WARP_SCROLL" to 2L))))
     init { stateField.set(AcquisitionRepository, state) }
     fun checkIntact() {
         check(AcquisitionRepository.state === state && state.events.size == 2 && state.runs.size == 1) {

@@ -124,12 +124,12 @@ internal fun paintMenuNavigationTile(canvas: MenuCanvas, rect: MenuRect, index: 
                                      hover: Double = 0.0, chosen: Double = 0.0, focused: Boolean = false) =
     paintNavigationRow(canvas, rect, MenuCategory.entries[index].title, MenuCategory.entries[index].iconId, hover, chosen, focused)
 
-internal fun menuHomeColumns(available: Int) = when { available >= 660 -> 3; available >= 368 -> 2; else -> 1 }
+internal fun menuHomeColumns(available: Int) = when { available >= 420 -> 3; available >= 264 -> 2; else -> 1 }
 internal fun menuHomeToolColumns(available: Int) = when { available >= 540 -> 3; available >= 390 -> 2; else -> 1 }
 
 /** A complete tile uses the shared surfaces; geometry does not change with hover or theme selection. */
 internal fun paintMenuHomeTile(canvas: MenuCanvas, rect: MenuRect, title: List<String>, description: List<String>,
-                               icon: Int, hover: Double = 0.0, focused: Boolean = false, tool: Boolean = false) {
+                               icon: Int, hover: Double = 0.0, focused: Boolean = false, compact: Boolean = false) {
     val style = ThemeConfig.preset.palette.style
     val radius = MenuTheme.RADIUS.toDouble()
     canvas.roundedRect(rect.x, rect.y, rect.width, rect.height, radius,
@@ -137,19 +137,19 @@ internal fun paintMenuHomeTile(canvas: MenuCanvas, rect: MenuRect, title: List<S
     if (MenuTheme.BORDERS || focused) canvas.roundedBorder(rect.x, rect.y, rect.width, rect.height, radius,
         if (focused) style.focusWidth.toDouble() else style.borderWidth,
         MenuTheme.alpha(if (focused) MenuTheme.ACCENT else MenuTheme.BORDER))
-    if (!tool) canvas.fill(rect.x + 10, rect.y + 10, 2.0, (rect.height - 20).coerceAtLeast(1.0), MenuTheme.alpha(MenuTheme.ACCENT, 60))
-    val size = if (tool) 14.0 else 18.0
-    paintMenuIcon(canvas, icon, rect.x + if (tool) 12 else 22, rect.y + if (tool) (rect.height - size) / 2 else 14.0,
+    if (!compact) canvas.fill(rect.x + 10, rect.y + 10, 2.0, (rect.height - 20).coerceAtLeast(1.0), MenuTheme.alpha(MenuTheme.ACCENT, 60))
+    val size = if (compact) 14.0 else 18.0
+    paintMenuIcon(canvas, icon, rect.x + if (compact) 12 else 22, rect.y + if (compact) (rect.height - size) / 2 else 14.0,
         size, MenuTheme.alpha(if (hover > .1 || focused) MenuTheme.ACCENT else MenuTheme.MUTED))
-    val left = rect.x + if (tool) 36 else 50
-    val titleSize = if (tool) 10.0 else 12.0
-    val top = rect.y + if (tool) (rect.height - title.size * MenuCanvas.lineHeight(titleSize)) / 2 else 12.0
+    val left = rect.x + if (compact) 36 else 50
+    val titleSize = if (compact) 10.0 else 12.0
+    val top = rect.y + if (compact) (rect.height - title.size * MenuCanvas.lineHeight(titleSize)) / 2 else 12.0
     val oldClip = canvas.clip
     val clip = menuNavigationTextClip(rect, canvas.transform)
     canvas.clip = oldClip?.let { intersectMenuClip(it, clip) } ?: clip
     title.forEachIndexed { index, line -> canvas.text(listOf(MenuCanvas.Run(line, MenuTheme.alpha(MenuTheme.TEXT), bold = true)),
         left, top + index * MenuCanvas.lineHeight(titleSize), titleSize) }
-    if (!tool) description.forEachIndexed { index, line -> canvas.text(listOf(MenuCanvas.Run(line, MenuTheme.alpha(MenuTheme.MUTED))),
+    if (!compact) description.forEachIndexed { index, line -> canvas.text(listOf(MenuCanvas.Run(line, MenuTheme.alpha(MenuTheme.MUTED))),
         left, top + title.size * MenuCanvas.lineHeight(titleSize) + 5 + index * MenuCanvas.lineHeight(9.0), 9.0) }
     canvas.clip = oldClip
 }
@@ -271,11 +271,14 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
     override fun buildContent(root: FlowLayout) {
         val padding = MenuTheme.PADDING + 8
         root.padding(Insets.of(padding)); root.gap(10)
-        root.child(MenuLabel(Component.literal("Your SkyBlock workspace")).apply {
-            fontSize = 19f; color(Color.ofRgb(MenuTheme.TEXT)); horizontalSizing(Sizing.fill())
-        })
-        root.child(MenuLabel(Component.literal("Choose a category or jump back into your tools.")).apply {
-            color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill())
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); verticalAlignment(VerticalAlignment.CENTER)
+            child(MenuLabel(Component.literal("Your tools")).apply {
+                fontSize = 19f; color(Color.ofRgb(MenuTheme.TEXT)); horizontalSizing(Sizing.expand())
+            })
+            child(MenuButton(Component.literal("Edit")) { navigateMenu(MenuHomeShortcutsScreen()) }.apply {
+                sizing(Sizing.fixed(42), Sizing.fixed(22)); tooltip(Component.literal("Customize the six Home tools"))
+            })
         })
         val available = (menuWidth - padding * 2).coerceAtLeast(1)
         val list = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
@@ -283,46 +286,50 @@ internal class MenuHomeScreen : MenuScreen(Component.literal("Sky-Myce")) {
         }
         val columns = menuHomeColumns(available - 4)
         val tileWidth = ((available - 4 - (columns - 1) * 8) / columns).coerceAtLeast(1)
+        val toolColumns = menuHomeToolColumns(available - 4)
+        val toolWidth = ((available - 4 - (toolColumns - 1) * 8) / toolColumns).coerceAtLeast(1)
+        val tools = MenuShortcuts.homeTools.indices.map { index ->
+            val feature = menuHomeFeature(index, MenuShortcuts.homeTools)
+            Triple(feature, menuNavigationTitle(index, toolWidth - 60, 12.0, 2, feature),
+                menuNavigationDescription(index, toolWidth - 60, feature))
+        }
+        val toolRows = (tools.size + toolColumns - 1) / toolColumns
+        val categoryRows = (MenuCategory.entries.size + columns - 1) / columns
+        val minimumHeight = tools.maxOf { (_, title, description) ->
+            29 + title.size * MenuCanvas.lineHeight(12.0) + description.size * MenuCanvas.lineHeight(9.0)
+        }.coerceAtLeast(86)
+        val fixedHeight = padding * 2 + maxOf(22, MenuCanvas.lineHeight(19.0)) + 26 + 20 + 4 +
+            MenuCanvas.lineHeight(11.0) + categoryRows * 36 + (toolRows + categoryRows) * 10
+        val toolHeight = maxOf(minimumHeight, (menuHeight - fixedHeight) / toolRows.coerceAtLeast(1))
+        tools.chunked(toolColumns).forEach { row -> list.child(
+            UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+                gap(8)
+                row.forEach { (feature, title, description) ->
+                    child(object : MenuButton(Component.literal(feature.title), { openMenuFeature(feature.id) }) {
+                        override fun interactionPose(hover: Double, press: Double) = MotionPose()
+                        override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) =
+                            paintMenuHomeTile(graphics.canvas, MenuRect(x.toDouble(), y.toDouble(), width.toDouble(), this.height.toDouble()),
+                                title, description, feature.iconId, hover, isFocused)
+                    }.apply {
+                        sizing(Sizing.fixed(toolWidth), Sizing.fixed(toolHeight)); tooltip(Component.literal(feature.description))
+                    })
+                }
+            }) }
+        list.child(MenuLabel(Component.literal("Categories")).apply {
+            fontSize = 11f; color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.fill())
+        })
         MenuCategory.entries.chunked(columns).forEach { categories -> list.child(
             UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
                 gap(8)
                 categories.forEach { category ->
-                    val title = navigationTextLines(category.title, (tileWidth - 60).coerceAtLeast(1), 12.0, true, 2)
-                    val description = navigationTextLines(category.description, (tileWidth - 60).coerceAtLeast(1), 9.0, false, 2)
-                    val height = 29 + title.size * MenuCanvas.lineHeight(12.0) + description.size * MenuCanvas.lineHeight(9.0)
+                    val title = navigationTextLines(category.title, (tileWidth - 48).coerceAtLeast(1), 10.0, true, 2)
                     child(object : MenuButton(Component.literal(category.title), { openMenuCategory(category) }) {
                         override fun interactionPose(hover: Double, press: Double) = MotionPose()
                         override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) =
-                            paintMenuHomeTile(graphics.canvas, MenuRect(x.toDouble(), y.toDouble(), width.toDouble(), this.height.toDouble()),
-                                title, description, category.iconId, hover, isFocused)
-                    }.apply {
-                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(height)); tooltip(Component.literal(category.description))
-                    })
-                }
-            }) }
-        list.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-            gap(6); verticalAlignment(VerticalAlignment.CENTER)
-            child(MenuLabel(Component.literal("Your tools")).apply { color(Color.ofRgb(MenuTheme.MUTED)); horizontalSizing(Sizing.expand()) })
-            child(MenuButton(Component.literal("Edit")) { navigateMenu(MenuHomeShortcutsScreen()) }.apply {
-                sizing(Sizing.fixed(42.coerceAtMost(available)), Sizing.fixed(22)); tooltip(Component.literal("Customize the six Home tools"))
-            })
-        })
-        val toolColumns = menuHomeToolColumns(available - 4)
-        val toolWidth = ((available - 4 - (toolColumns - 1) * 8) / toolColumns).coerceAtLeast(1)
-        MenuShortcuts.homeTools.indices.chunked(toolColumns).forEach { indices -> list.child(
-            UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
-                gap(8)
-                indices.forEach { index ->
-                    val feature = menuHomeFeature(index, MenuShortcuts.homeTools)
-                    val title = menuNavigationTitle(index, toolWidth - 48, 10.0, 2, feature)
-                    child(object : MenuButton(Component.literal(feature.title), { openMenuFeature(feature.id) }) {
-                        override fun interactionPose(hover: Double, press: Double) = MotionPose()
-                        override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) =
                             paintMenuHomeTile(graphics.canvas, MenuRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble()),
-                                title, emptyList(), feature.iconId, hover, isFocused, tool = true)
+                                title, emptyList(), category.iconId, hover, isFocused, compact = true)
                     }.apply {
-                        sizing(Sizing.fixed(toolWidth), Sizing.fixed(maxOf(32, title.size * MenuCanvas.lineHeight(10.0) + 12)))
-                        tooltip(Component.literal(feature.description))
+                        sizing(Sizing.fixed(tileWidth), Sizing.fixed(36)); tooltip(Component.literal(category.description))
                     })
                 }
             }) }
