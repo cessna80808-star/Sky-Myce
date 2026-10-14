@@ -8,6 +8,12 @@ import me.mycellium.skymyce.community.LeaderboardScreen
 import me.mycellium.skymyce.community.CommunityClient
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import me.mycellium.skymyce.features.instances.dungeons.friends.RelayRetry
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTrackerWidget
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerFilter
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerPage
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerScope
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.social.CosmeticsScreen
@@ -25,6 +31,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.minecraft.client.Screenshot
 import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
@@ -37,7 +44,7 @@ import java.lang.reflect.Proxy
 import java.util.concurrent.CompletableFuture
 import java.io.IOException
 
-/** Only loaded by runGuiVisualCheck; no world, community session or user profile is used. */
+/** Only loaded by runGuiVisualCheck; no world or community session is opened. */
 class GuiVisualCheckClient : ClientModInitializer {
     override fun onInitializeClient() {
         ClientLifecycleEvents.CLIENT_STARTED.register { client ->
@@ -48,6 +55,15 @@ class GuiVisualCheckClient : ClientModInitializer {
                          val scale: Int = 2, val screen: () -> Screen)
         val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
+            Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
+            Scene("dungeon-tracker-overview", ThemePreset.SIGNATURE) {
+                AcquisitionRepository.remember(TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
+            },
+            Scene("dungeon-tracker-loot", ThemePreset.SIGNATURE) {
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = true))
+                DungeonScreen()
+            },
             Scene("settings-signature", ThemePreset.SIGNATURE) { SettingsScreen(null, SettingsTab.PARTY) },
             Scene("settings-light", ThemePreset.LIGHT) { SettingsScreen(null, SettingsTab.THEME) },
             Scene("themes-signature", ThemePreset.SIGNATURE) { ThemeEditorScreen(null) },
@@ -217,6 +233,26 @@ private fun checkImmediateSendFailure(client: Minecraft) {
         fields.forEach { (name, field) -> field.set(relay, saved[name]) }; retry.reset()
     }
     println("Visual fixture relay check passed: immediate send failure resets inline, fresh socket writes once, no replay or network")
+}
+
+/** Render the production widget's editor preview without a world or fabricated tracking state. */
+private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstance(), Minecraft.getInstance().font, Component.literal("Dungeon Tracker preview")) {
+    private val widget = DungeonTrackerWidget.widget
+    override fun init() {
+        super.init()
+        check(widget.prepareEditor()) { "Dungeon Tracker editor preview did not mount" }
+        val components = arrayListOf<UIComponent>()
+        checkNotNull(widget.adapter).rootComponent.collectDescendants(components)
+        val rows = components.filterIsInstance<me.mycellium.skymyce.hud.HudTextLabel>().map { it.text().string.trim() }
+        check(rows.any { it == "M7 Dungeon Tracker" } && rows.count { it.isEmpty() } == 2)
+        for (field in listOf("Time:", "Runs:", "Chests:", "Profit:", "Cata Exp:")) check(rows.any { it.startsWith(field) })
+        check(rows.none { it.contains("Historical") || it.contains("Inherited") || it.contains("Current profile") || it.contains("Editor preview") })
+        check(widget.width in 1..width && widget.height in 1..height)
+    }
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        output.fill(0, 0, width, height, 0xFF101725.toInt())
+        check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
 }
 
 /** Shared production controls mounted together, with an open scrollable dropdown for visual review. */

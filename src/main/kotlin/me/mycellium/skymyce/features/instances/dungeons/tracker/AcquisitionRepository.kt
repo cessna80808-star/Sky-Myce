@@ -1,6 +1,8 @@
 package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import com.google.gson.Gson
+import com.google.gson.JsonPrimitive
+import com.mojang.serialization.JsonOps
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.features.digest.DetectedRng
@@ -9,6 +11,8 @@ import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
+import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
@@ -16,6 +20,7 @@ import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
+import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
@@ -24,7 +29,7 @@ import kotlin.time.Duration.Companion.milliseconds
 object AcquisitionRepository : SkyMyceModule() {
     var state = AcquisitionArchive()
         private set
-    var preferences = TrackerFilter()
+    var preferences = TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES)
         private set
     var journalPreferences = JournalFilter()
         private set
@@ -38,6 +43,8 @@ object AcquisitionRepository : SkyMyceModule() {
     private var preferencesEdited = false
     private var journalEdited = false
     private var verifiedContext: AcquisitionContext? = null
+    private var nextValuationAttempt = Long.MIN_VALUE
+    private var valuationCursor = 0
     private lateinit var writer: StateWriter<AcquisitionArchive>
     private lateinit var preferenceWriter: StateWriter<TrackerFilter>
     private lateinit var journalWriter: StateWriter<JournalFilter>
@@ -79,14 +86,20 @@ object AcquisitionRepository : SkyMyceModule() {
                     if (saved != original) { file.preserveOriginal(if (cutover) "before-v2-cutover" else "before-migration"); file.write(Gson().toJsonTree(saved)) }
                 }.onFailure { saved = original; migrationError = true }
             }
-            val restoredView = runCatching { parseTrackerPreferences(viewFile.read()) }.getOrElse { viewFile.preserveOriginal(); TrackerFilter() }
+            var migratedPreferences = false
+            val restoredView = runCatching {
+                val json = viewFile.read()
+                parseTrackerPreferences(json).also {
+                    migratedPreferences = json?.isJsonObject == true && !json.asJsonObject.has("overviewVersion")
+                }
+            }.getOrElse { viewFile.preserveOriginal(); TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES) }
                 .let { if (cutover && !migrationError) it.copy(legacyTotals = false) else it }
             val restoredJournal = runCatching { parseJournalFilter(journalFile.read()) }.getOrElse { journalFile.preserveOriginal(); JournalFilter() }
             MC.instance.execute {
                 state = saved; writable = !storageError && !migrationError; loaded = true
                 if (!preferencesEdited) preferences = restoredView else preferenceWriter.submit(preferences)
                 if (!journalEdited) journalPreferences = restoredJournal else journalWriter.submit(journalPreferences)
-                if (cutover && !migrationError) preferenceWriter.submit(preferences)
+                if (cutover && !migrationError || migratedPreferences) preferenceWriter.submit(preferences)
                 status = when { storageError -> "Archive unreadable • original preserved; recording paused"; migrationError -> "Legacy cutover needs attention • recording paused; originals preserved"; else -> "Confirmed tracking • historical profit preserved separately" }
                 val queued = pending.toList(); pending.clear(); queued.forEach { update(it) }; revision++
             }
@@ -104,6 +117,29 @@ object AcquisitionRepository : SkyMyceModule() {
     }
     @Subscription(TickEvent::class) fun refreshContext() { if (ProfileAPI.isLoaded) currentContext() }
     @Subscription(ProfileChangeEvent::class, ServerDisconnectEvent::class) fun clearContext() { verifiedContext = null }
+    @Subscription(TickEvent::class) fun retryValuations() {
+        if (!loaded || !writable || !LocationAPI.isOnSkyBlock || MC.instance.player == null) return
+        val now = System.nanoTime()
+        if (now < nextValuationAttempt) return
+        nextValuationAttempt = now + 10_000_000_000L
+        val account = MC.instance.user.profileId.toString()
+        val server = if (LocationAPI.onAlpha) "alpha" else "main"
+        val missing = missingAcquisitionPrices(state, account, server)
+        if (missing.isEmpty()) { valuationCursor = 0; return }
+        // Bound cache lookups, and rotate so an unavailable book cannot starve later rewards.
+        val prices = buildMap<String, Double?> {
+            repeat(minOf(64, missing.size)) { offset ->
+                val item = missing[(valuationCursor + offset) % missing.size]
+                val id = runCatching {
+                    if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(java.util.Locale.ROOT)))
+                        .result().orElse(null) else SkyBlockId.item(item)
+                }.getOrNull()
+                put(item, id?.getPriceOrNull(DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType))
+            }
+        }
+        valuationCursor = (valuationCursor + prices.size) % missing.size
+        update { archive -> repairAcquisitionValuations(archive, account, server, prices, System.currentTimeMillis()) }
+    }
     private fun update(change: (AcquisitionArchive) -> AcquisitionArchive) {
         if (!loaded) { if (pending.size < 1000) pending += change; return }
         if (!writable) return
@@ -125,7 +161,10 @@ object AcquisitionRepository : SkyMyceModule() {
         val id = drop.confirmation?.let(::acquisitionId) ?: drop.id
         update { archive -> enrichAcquisitionMetadata(archive, id, drop.item, context, metadata) }
     }
-    fun run(record: DungeonRunRecord) = update { archive -> archive.copy(runs = archive.runs.filterNot { it.id == record.id } + record) }
+    fun run(record: DungeonRunRecord) = update { archive ->
+        val preserved = preserveRunValuations(archive.runs.firstOrNull { it.id == record.id }, record)
+        archive.copy(runs = archive.runs.filterNot { it.id == record.id } + preserved)
+    }
     fun pin(item: String, context: AcquisitionContext?) = update { archive ->
         val key = "${context?.key ?: "legacy"}|$item"
         archive.copy(pins = if (key in archive.pins) archive.pins - key else if (archive.pins.size < 2048) archive.pins + key else archive.pins)
@@ -138,12 +177,16 @@ object AcquisitionRepository : SkyMyceModule() {
 }
 
 internal fun parseTrackerPreferences(json: com.google.gson.JsonElement?): TrackerFilter {
-    if (json == null) return TrackerFilter()
+    if (json == null) return TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES)
+    require(json.isJsonObject)
+    val overviewVersion = json.asJsonObject.get("overviewVersion")
+    require(overviewVersion == null || overviewVersion.isJsonPrimitive && overviewVersion.asJsonPrimitive.isNumber && overviewVersion.asString == "1")
     val filter = Gson().fromJson(json, TrackerFilter::class.java)
     require(filter.page in TrackerPage.entries && filter.sort in LootOrder.entries && filter.scope in TrackerScope.entries)
     require(filter.query.length <= 100 && filter.floor?.matches(Regex("[FM][1-7]|E|ENTRANCE")) != false && filter.mode in listOf(null, "F", "M"))
     if (filter.from.isNotEmpty()) java.time.LocalDate.parse(filter.from)
     if (filter.until.isNotEmpty()) java.time.LocalDate.parse(filter.until)
     require(filter.chest?.length?.let { it <= 16 } != false && filter.session?.length?.let { it <= 40 } != false && filter.activity?.length?.let { it <= 30 } != false)
-    return filter
+    return if (overviewVersion == null && filter.page == TrackerPage.OVERVIEW && !filter.needsRecords && filter.scope == TrackerScope.CURRENT_PROFILE)
+        filter.copy(scope = TrackerScope.ALL_LOCAL_PROFILES, legacyTotals = false) else filter
 }

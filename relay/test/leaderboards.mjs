@@ -41,7 +41,7 @@ const source = `import {DurableObject} from 'cloudflare:workers';
   claimCommunityRng(channel,receipts){return this.boards.claim(channel,receipts)}
   acknowledgeCommunityRng(raw,channel){return this.boards.acknowledge(raw,channel)}
  }
- export default{async fetch(request,env){return await handleCommunityFeed(request,env)??await handleLeaderboardsRequest(request,new URL(request.url).pathname==='/community/journal-comparison'?{...env,ACCOUNT_STORE:env.ACCOUNT_AUTH}:env)??new Response('Not found',{status:404})}};`;
+ export default{async fetch(request,env){const url=new URL(request.url);return await handleCommunityFeed(request,env)??await handleLeaderboardsRequest(request,url.pathname==='/community/journal-comparison'||url.hostname==='auth.fixture.example'?{...env,ACCOUNT_STORE:env.ACCOUNT_AUTH}:env)??new Response('Not found',{status:404})}};`;
 const bundle = await build({ stdin: { contents: source, resolveDir: process.cwd(), sourcefile: 'leaderboard-fixture.ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', external: ['cloudflare:workers'], write: false });
 const channel = '22222222222222222', secret = 's'.repeat(32), name = 'leaderboard-check';
 const options = convertV4MiniflareOptions({ name, modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-09-27',
@@ -209,6 +209,108 @@ try {
  await authSql.exec('INSERT INTO community_blacklist VALUES(?,?,?,?,?,NULL,1)','minecraft',firstPlayer,'synthetic reason','synthetic actor',authNow);let blocked=await getComparison();assert.equal(blocked.status,401);assert.equal(blocked.body.error,'identity_blacklisted');
  await authSql.exec('UPDATE community_blacklist SET removed_at=? WHERE identity=?',authNow,firstPlayer);await authSql.exec('INSERT INTO community_blacklist VALUES(?,?,?,?,?,NULL,1)','discord',discord,'synthetic reason','synthetic actor',authNow);assert.equal((await getComparison()).body.error,'identity_blacklisted');
  await authSql.exec('UPDATE community_blacklist SET removed_at=? WHERE identity=?',authNow,discord);await authSql.exec('UPDATE community_sessions SET revoked_at=? WHERE access_hash=?',authNow,hash(firstToken));assert.equal((await getComparison()).body.error,'session_expired','Fresh authority is checked on every comparison read');
+
+ // The old same-owner refresh deleted only count rows. Repair uses retained accepted server proof, never new ingestion or publication.
+ const rngAuth=await mf.getDurableObjectNamespace('ACCOUNT_AUTH');
+ const recovery=async(label,global=false)=>{
+  const objectName=global?'global':'rng-recovery-'+label,account=rngAuth.getByName(objectName);await account.communityGetSharing('invalid');
+  const sql=await mf.unsafeGetDurableObjectStorage(name,'AccountStore',{name:objectName}),owner='synthetic-recovery-'+label,uuid=hash('uuid:'+label).slice(0,32),access=randomBytes(32).toString('base64url'),sessionId=hash(access).slice(0,32);
+  const now=Date.now(),acceptedAt=now-7200000,createdAt=acceptedAt-3600000,sourceId=hash('source:'+label).slice(0,32),id=hash('event:'+label).slice(0,32);
+  const original={id,item:'IMPLOSION_SCROLL',activity:'dungeon',occurredAt:now-1000,player:'Anonymous',unverified:true,rarity:'EPIC',displayName:'Implosion',floor:'F7'};
+  await sql.exec('INSERT INTO sky_accounts(account_id,discord_id,created_at,last_seen)VALUES(?,?,?,?)',owner,'93'+String(parseInt(uuid.slice(0,10),16)).padStart(15,'0'),createdAt,now);
+  await sql.exec('INSERT INTO minecraft_accounts VALUES(?,?,?,?,?)',uuid,owner,'RecoveryPlayer',createdAt,now);
+  await sql.exec('INSERT INTO community_sessions(session_id,account_id,uuid,generation,refresh_hash,refresh_expires_at,access_hash,access_expires_at,created_at,last_seen,revoked_at,mod_version)VALUES(?,?,?,0,?,?,?,?,?,?,NULL,?)',sessionId,owner,uuid,hash('refresh:'+access),now+86400000,hash(access),now+600000,createdAt,now,'synthetic-test');
+  await sql.exec('INSERT INTO community_connect_flows(flow_id,launch_hash,poll_hash,code_hash,uuid,name,mod_version,expires_at,account_id,session_id)VALUES(?,?,?,?,?,?,?,?,?,?)','flow:'+label,hash('launch:'+label),hash('poll:'+label),hash('code:'+label),uuid,'RecoveryPlayer','synthetic-test',createdAt+300000,owner,sessionId);
+  assert.equal((await account.recordAcceptedCommunityRng(uuid,original,sourceId,owner)).ok,true);
+  const delivery=(await account.claimCommunityRng(channel)).deliveries.find(row=>row.id===id);assert.ok(delivery);
+  assert.equal((await account.acknowledgeCommunityRng({id,claim:delivery.claim,operation:'publish',messageId:'96000000000000001'},channel)).ok,true);
+  const event={...original,occurredAt:acceptedAt-1000};
+  await sql.exec('UPDATE community_rng_sources SET received_at=? WHERE author=?',acceptedAt,uuid);
+  await sql.exec('UPDATE community_rng_delivery SET received_at=?,event=? WHERE author=?',acceptedAt,JSON.stringify(event),uuid);
+  await sql.exec('UPDATE community_contributions SET observed_at=?,received_at=? WHERE uuid=?',event.occurredAt,acceptedAt,uuid);
+  const before=await sql.exec('SELECT * FROM community_contributions WHERE uuid=?',uuid);
+  await sql.exec('DELETE FROM community_contributions WHERE uuid=?',uuid); // Exact old refresh mutation.
+  return{account,sql,owner,uuid,access,sessionId,createdAt,acceptedAt,sourceId,id,event,before,
+   query:()=>account.communityLeaderboard(access,{category:'rng',metric:'rng_drops'}),count:async()=>(await sql.exec('SELECT COUNT(*) n FROM community_contributions WHERE uuid=?',uuid))[0].n,
+   retained:async()=>({source:await sql.exec('SELECT * FROM community_rng_sources WHERE author=? ORDER BY source_id',uuid),delivery:await sql.exec('SELECT * FROM community_rng_delivery WHERE author=? ORDER BY id',uuid)})};
+ };
+ const repaired=await recovery('http',true),retained=await repaired.retained();
+ const restoredHttp=await mf.dispatchFetch('https://auth.fixture.example/community/leaderboard?category=rng&metric=rng_drops',{headers:{Authorization:'Bearer '+repaired.access}});
+ assert.equal(restoredHttp.status,200);const restoredResult=await restoredHttp.json();assert.equal(restoredResult.total,1);assert.equal(restoredResult.entries[0].value,1);assert.equal(restoredResult.entries[0].player,'Anonymous player');
+ assert.deepEqual(await repaired.sql.exec('SELECT * FROM community_contributions WHERE uuid=?',repaired.uuid),repaired.before,'Restore the exact original source ID, observed time, accepted time and unverified one-drop units');
+ for(let repeat=0;repeat<2;repeat++)assert.equal((await repaired.query()).entries[0].value,1);
+ const comparisonHttp=await mf.dispatchFetch('https://auth.fixture.example/community/journal-comparison',{headers:{Authorization:'Bearer '+repaired.access}});assert.equal((await comparisonHttp.json()).ownSharedCount,1);
+ assert.deepEqual(await repaired.retained(),retained,'Reads never enqueue, claim, repost or rewrite accepted Discord delivery');
+ assert.equal((await repaired.account.recordAcceptedCommunityRng(repaired.uuid,repaired.event,hash('old-ingestion').slice(0,32),repaired.owner)).error,'invalid_event','The normal five-minute ingestion boundary is unchanged');
+
+ const auditProof=await recovery('audit-proof');await auditProof.sql.exec('DELETE FROM community_connect_flows');
+ await auditProof.sql.exec('INSERT INTO account_audit(at,actor,account_id,action,override,metadata,severity)VALUES(?,?,?,?,0,?,?)',auditProof.createdAt-1000,'synthetic',auditProof.owner,'community_connected',JSON.stringify({uuid:auditProof.uuid}),'information');
+ assert.equal((await auditProof.query()).entries[0].value,1,'A durable original owner/UUID connect audit survives connect-flow expiry cleanup');
+
+ const rejected=[
+  ['no-proof',async r=>r.sql.exec('DELETE FROM community_connect_flows')],
+  ['cancelled-flow',async r=>r.sql.exec('UPDATE community_connect_flows SET cancelled_at=?',Date.now())],
+  ['late-session',async r=>r.sql.exec('UPDATE community_sessions SET created_at=?',r.acceptedAt+1)],
+  ['revoked',async r=>r.sql.exec('UPDATE community_sessions SET revoked_at=?',Date.now())],
+  ['expired',async r=>r.sql.exec('UPDATE community_sessions SET access_expires_at=0')],
+  ['expired-refresh',async r=>r.sql.exec('UPDATE community_sessions SET refresh_expires_at=0')],
+  ['generation',async r=>r.sql.exec('UPDATE sky_accounts SET generation=1')],
+  ['other-owner',async r=>{await r.sql.exec('INSERT INTO sky_accounts(account_id,discord_id,created_at,last_seen)VALUES(?,?,?,?)','different-owner','94000000000000001',Date.now(),Date.now());await r.sql.exec('UPDATE minecraft_accounts SET account_id=?','different-owner')}],
+  ['original-other-profile',async r=>r.sql.exec('UPDATE community_connect_flows SET uuid=?','f'.repeat(32))],
+  ['suppressed',async r=>r.sql.exec('UPDATE community_rng_delivery SET suppressed=1')],
+  ['missing-delivery',async r=>r.sql.exec('DELETE FROM community_rng_delivery')],
+  ['missing-source',async r=>r.sql.exec('DELETE FROM community_rng_sources')],
+  ['invalid-source-id',async r=>r.sql.exec("UPDATE community_rng_sources SET source_id='invalid'")],
+  ['other-delivery-author',async r=>r.sql.exec('UPDATE community_rng_delivery SET author=?','f'.repeat(32))],
+  ['unsupported-drop',async r=>r.sql.exec('UPDATE community_rng_delivery SET event=?',JSON.stringify({...r.event,item:'DIRT'}))],
+  ['event-id-mismatch',async r=>r.sql.exec('UPDATE community_rng_delivery SET event=?',JSON.stringify({...r.event,id:'f'.repeat(32)}))],
+  ['private-payload',async r=>r.sql.exec('UPDATE community_rng_delivery SET event=?',JSON.stringify({...r.event,privateUuid:r.uuid}))],
+  ['bad-json',async r=>r.sql.exec("UPDATE community_rng_delivery SET event='{' ")],
+  ['acceptance-age',async r=>r.sql.exec('UPDATE community_rng_delivery SET event=?',JSON.stringify({...r.event,occurredAt:r.acceptedAt-300000}))],
+  ['future-acceptance',async r=>r.sql.exec('UPDATE community_rng_sources SET received_at=?',Date.now()+60000)],
+ ];
+ for(const [label,mutate]of rejected){const r=await recovery(label);await mutate(r);await r.query();assert.equal(await r.count(),0,label+' cannot reconstruct an unverifiable original count')}
+ for(const action of['community_uuid_reconnected','community_uuid_unlinked','minecraft_uuid_removed','account_unlink']){
+  const r=await recovery(action);await r.sql.exec('INSERT INTO account_audit(at,actor,account_id,action,override,metadata,severity)VALUES(?,?,?,?,0,?,?)',r.acceptedAt+1000,'synthetic',r.owner,action,JSON.stringify({uuid:r.uuid}),'information');
+  await r.query();assert.equal(await r.count(),0,'Switching a session away and back cannot erase the '+action+' ownership boundary');
+ }
+ const interruptedAudit=await recovery('interrupted-audit');await interruptedAudit.sql.exec('DELETE FROM community_connect_flows');
+ for(const [action,at]of[['community_connected',interruptedAudit.createdAt-2000],['community_uuid_reconnected',interruptedAudit.createdAt-1000]])await interruptedAudit.sql.exec('INSERT INTO account_audit(at,actor,account_id,action,override,metadata,severity)VALUES(?,?,?,?,0,?,?)',at,'synthetic',interruptedAudit.owner,action,JSON.stringify({uuid:interruptedAudit.uuid}),'information');
+ await interruptedAudit.query();assert.equal(await interruptedAudit.count(),0,'Audit fallback requires continuous ownership since that proof, including changes before session creation');
+ for(const privacy of['enabled','rng','leaderboards','publicName']){
+  const r=await recovery('privacy-'+privacy),policy={version:1,enabled:true,dungeons:true,economy:true,rng:true,activity:true,leaderboards:true,publicName:false};
+  let revision=0;
+  if(privacy==='publicName'){assert.equal((await r.account.updateSharingVerified(r.uuid,revision++,{...policy,publicName:true})).ok,true);assert.equal((await r.account.updateSharingVerified(r.uuid,revision++,policy)).ok,true)}
+  else assert.equal((await r.account.updateSharingVerified(r.uuid,revision++,{...policy,[privacy]:false})).ok,true);
+  assert.equal((await r.account.updateSharingVerified(r.uuid,revision,{...policy,publicName:privacy==='publicName'})).ok,true);
+  await r.query();assert.equal(await r.count(),0,privacy+' withdrawal and re-enable never resurrect historical counts');
+ }
+ for(const category of['rng','leaderboards'])for(const boundary of['observed','accepted']){
+  const r=await recovery('cutoff-'+category+'-'+boundary),occurredAt=r.acceptedAt+(boundary==='accepted'?1000:-1000),cutoff=r.acceptedAt+(boundary==='accepted'?500:-500);
+  await r.sql.exec('UPDATE community_rng_delivery SET event=?',JSON.stringify({...r.event,occurredAt}));
+  await r.sql.exec('INSERT INTO community_sharing VALUES(?,?,?,?,?)',r.owner,JSON.stringify({version:1,enabled:true,dungeons:true,economy:true,rng:true,activity:true,leaderboards:true,publicName:false}),1,Date.now(),JSON.stringify({[category]:cutoff}));
+  await r.query();assert.equal(await r.count(),0,category+' cutoff checks both observed and accepted time');
+ }
+ for(const kind of['minecraft','discord']){const r=await recovery('blocked-'+kind),identity=kind==='minecraft'?r.uuid:(await r.sql.exec('SELECT discord_id FROM sky_accounts WHERE account_id=?',r.owner))[0].discord_id;
+  await r.sql.exec('INSERT INTO community_blacklist VALUES(?,?,?,?,?,NULL,1)',kind,identity,'synthetic','synthetic',Date.now());await r.query();assert.equal(await r.count(),0,kind+' blacklist prevents repair')}
+
+ const scoped=await recovery('requester-scope');
+ await scoped.account.communityLeaderboard(scoped.access,{category:'dungeons',metric:'dungeon_runs'});assert.equal(await scoped.count(),0,'Other feature reads do not repair RNG');
+ const sibling=randomBytes(16).toString('hex'),siblingAccess=randomBytes(32).toString('base64url');await scoped.sql.exec('INSERT INTO minecraft_accounts VALUES(?,?,?,?,?)',sibling,scoped.owner,'SiblingPlayer',scoped.createdAt,Date.now());
+ await scoped.sql.exec('INSERT INTO community_sessions(session_id,account_id,uuid,generation,refresh_hash,refresh_expires_at,access_hash,access_expires_at,created_at,last_seen,revoked_at,mod_version)VALUES(?,?,?,0,?,?,?,?,?,?,NULL,?)',hash(siblingAccess).slice(0,32),scoped.owner,sibling,hash('refresh:'+siblingAccess),Date.now()+86400000,hash(siblingAccess),Date.now()+600000,scoped.createdAt,Date.now(),'synthetic-test');
+ await scoped.account.communityLeaderboard(siblingAccess,{category:'rng',metric:'rng_drops'});assert.equal(await scoped.count(),0,'A sibling UUID on the same account cannot repair another UUID');
+ assert.equal((await scoped.account.communityJournalComparison(scoped.access,{})).ownSharedCount,1,'Own journal comparison also repairs the same original count');
+
+ for(const existing of[true,false]){
+  const r=await recovery('budget-'+existing),accepted=r.acceptedAt+10000;
+  await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_rng_sources SELECT ?,printf('%032x',1000+x),printf('%032x',2000+x),? FROM n",r.uuid,accepted);
+  await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_rng_delivery SELECT printf('%032x',2000+x),?,json_set(?,'$.id',printf('%032x',2000+x),'$.occurredAt',?),?,0,0,NULL,0,?,'96000000000000002',0 FROM n",r.uuid,JSON.stringify(r.event),accepted-1000,accepted,channel);
+  if(existing)await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_contributions SELECT printf('%032x',1000+x),?,?,'rng','rng_drops',1,'drops',?,?, 'client-observation','unverified',1,0 FROM n",r.owner,r.uuid,accepted-1000,accepted);
+  const unchanged=await r.retained();await r.query();
+  assert.equal(await r.count(),existing?101:100,existing?'Already-counted newer reports do not starve the older missing row':'Each read repairs at most 100 missing rows');
+  assert.equal((await r.sql.exec('SELECT id FROM community_contributions WHERE uuid=? AND id=?',r.uuid,r.sourceId)).length,existing?1:0,'The bounded repair visits newest missing rows first');
+  await r.query();assert.equal(await r.count(),101,'Following reads finish without duplicates');assert.deepEqual(await r.retained(),unchanged);
+ }
  // Hundreds of allowed receipts must not permanently hide an older now-private post.
  const namespace=await mf.getDurableObjectNamespace('ACCOUNT_STORE');
  for(const change of['blacklist','relink','name','global']){
@@ -228,5 +330,5 @@ try {
  await priority.deliveredBatch(priorityAuthor,priorityAuthor);await priority.claimCommunityRng(channel);await priority.flagDelivery(1);
  assert.equal((await priority.accept(priorityAuthor,{id:'e'.repeat(32),item:'NECRON_HANDLE',activity:'dungeon',occurredAt:Date.now(),player:'Anonymous',unverified:true},'f'.repeat(32))).ok,true);
  assert.deepEqual((await priority.claimCommunityRng(channel)).deliveries.map(delivery=>delivery.operation),['delete','publish'],'Explicit suppression stays ahead of pending publication independently of the scan cursor');
- console.log('Leaderboard/feed/journal comparison SQLite checks passed: shared UTC ranking parity, empty and own availability semantics, malformed/unsafe record exclusion, current and historical privacy, real session/blacklist authority, strict HTTP contracts, persisted global dedup and fair delivered-receipt consent retraction.');
+ console.log('Leaderboard/feed/journal comparison SQLite checks passed: shared UTC ranking parity, empty and own availability semantics, malformed/unsafe record exclusion, current and historical privacy, real session/blacklist authority, strict HTTP contracts, bounded idempotent accepted-RNG count recovery without feed changes, persisted global dedup and fair delivered-receipt consent retraction.');
 } finally {await mf.dispose();}

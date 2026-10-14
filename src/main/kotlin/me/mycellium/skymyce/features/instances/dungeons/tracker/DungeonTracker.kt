@@ -134,7 +134,8 @@ object DungeonTracker : SkyMyceModule() {
             }
         }
         if (LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
-        val active = run?.takeIf { it.context?.matches(AcquisitionRepository.currentContext()) == true } ?: return
+        val active = run?.takeIf { it.context?.matches(AcquisitionRepository.currentContext()) == true }?.let(::latestRun) ?: return
+        run = active
         val now = System.currentTimeMillis()
         if (dungeonCompletionFloor(event.text)?.name == active.floor && active.completedAt == null) {
             val duration = dungeonRunDuration(runStarted)
@@ -256,8 +257,8 @@ object DungeonTracker : SkyMyceModule() {
         }
         displayDevMessage { "Dungeon chest receipt confirmed: tier=${event.chest.name}, rewardKinds=${loot.size}, costKnown=${cost != null}" }
     }
-    private fun latestRun(record: DungeonRunRecord): DungeonRunRecord = run?.takeIf { it.id == record.id }
-        ?: AcquisitionRepository.state.runs.firstOrNull { it.id == record.id } ?: record
+    private fun latestRun(record: DungeonRunRecord): DungeonRunRecord = AcquisitionRepository.state.runs.firstOrNull { it.id == record.id }
+        ?: run?.takeIf { it.id == record.id } ?: record
     internal fun observedRun(context: AcquisitionContext): DungeonRunRecord? = run?.takeIf { it.context?.matches(context) == true }
     private fun receiptRun(floor: DungeonFloor, context: AcquisitionContext): DungeonRunRecord = run?.takeIf {
         LocationAPI.island == SkyBlockIsland.THE_CATACOMBS && it.floor == floor.name && it.context?.matches(context) == true
