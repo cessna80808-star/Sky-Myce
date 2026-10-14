@@ -15,6 +15,9 @@ fun checkTracker() {
     checkCombinedDungeonLoot()
     checkMuseumLootCounts()
     checkPersonalRateSamples()
+    checkMarketValuedTrackerSummary()
+    checkLegacyCostCoverage()
+    checkDatedLegacyRuns()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val other = context.copy(profileId = "c".repeat(32), profileName = "Pear")
@@ -104,6 +107,110 @@ fun checkTracker() {
     println("Tracker checks passed: dungeon profile continuity, visible historical totals, scoped filters, safe partial rates, legacy preservation, repeat drops, shared receipts, permanent museum and offline access")
 }
 
+private fun checkDatedLegacyRuns() {
+    val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val known = DungeonRunRecord("known-history", "known-session", context, "M7", time - 60000, time, 60000,
+        chests = listOf(ChestReceipt("known-chest", time, "BEDROCK", 4.0, listOf(RunLoot("OLD_LOOT", 1, 100.0)))), trackingVersion = 1)
+    val unscoped = known.copy(id = "imported-history", session = "imported-session", context = null,
+        completedAt = time + 120000, chests = emptyList())
+    val other = known.copy(id = "other-history", context = context.copy(profileId = "c".repeat(32), profileName = "Pear"),
+        completedAt = time + 180000, chests = listOf(known.chests.single().copy(id = "other-chest")))
+    val current = known.copy(id = "current", session = "current-session", completedAt = time + 240000,
+        chests = listOf(ChestReceipt("current-chest", time + 240000, "BEDROCK", 2.0, listOf(RunLoot("NEW_LOOT", 1, 200.0)))), trackingVersion = 2)
+    val archive = AcquisitionArchive(runs = listOf(known, unscoped, other, current))
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 3, time = 180000, timedRuns = 3, incompleteCosts = true),
+        mapOf("BEDROCK" to listOf(TrackerLootRow("OLD_LOOT", 2, 200.0, null, 2))),
+        mapOf("BEDROCK" to 8.0), emptyMap(), mapOf("BEDROCK" to 2))
+    val filter = TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun view(selected: TrackerFilter) = trackerView(archive, listOf(historical), selected, context)
+    check(filter.runs(archive.runs, null) == listOf(current))
+    check(view(filter).let { it.summary.runs == 4L && it.loot.first { row -> row.item == "OLD_LOOT" }.count == 2L }) // Frozen totals already include all three dated v1 records.
+    val dated = filter.copy(from = "2026-09-24", until = "2026-09-24")
+    check(dated.runs(archive.runs, null).size == 4)
+    check(view(dated).let { it.summary.runs == 4L && it.summary.incompleteCosts && it.summary.time == 240000L })
+    check(view(dated.copy(scope = TrackerScope.CURRENT_PROFILE)).summary.runs == 2L)
+    check(view(dated.copy(scope = TrackerScope.UNSCOPED_LEGACY)).let { it.summary.runs == 1L && it.summary.incompleteCosts })
+    check(view(filter.copy(scope = TrackerScope.CURRENT_PROFILE)).let { it.summary.runs == 1L && !it.summary.incompleteCosts })
+    check(view(filter.copy(session = "current-session")).let { it.summary.runs == 1L && !it.summary.incompleteCosts })
+    check(view(filter.copy(session = "imported-session")).let { it.summary.runs == 1L && it.summary.incompleteCosts })
+    check(view(filter.copy(scope = TrackerScope.CURRENT_PROFILE, session = "imported-session")).summary.runs == 0L)
+    check(view(dated.copy(from = "2026-09-25", until = "")).summary.runs == 0L)
+    val oldSchema = parseAcquisitionArchive(Gson().toJsonTree(archive.copy(version = 1)))
+    check(oldSchema.runs.all { it.trackingVersion == 1 } && dated.runs(oldSchema.runs, null).size == 4)
+    check(dated.copy(scope = TrackerScope.CURRENT_PROFILE).runs(oldSchema.runs, context).size == 2)
+    check(filter.runs(oldSchema.runs, null).isEmpty())
+}
+
+private fun checkLegacyCostCoverage() {
+    val floor = tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7
+    val totals = FloorTracker(totalRuns = 2, totalTimeMillis = 120000, timedRuns = 2,
+        chests = mutableMapOf(me.mycellium.skymyce.api.DungeonChest.BEDROCK to ChestTracker(
+            chestCount = 2, chestCost = 100.0, rerollCount = 1, rerollCost = 20.0)))
+    val oldJson = FloorTracker.CODEC.encodeStart(com.mojang.serialization.JsonOps.INSTANCE, totals).result().orElseThrow().asJsonObject.apply {
+        remove("incompleteCosts")
+    }
+    val old = FloorTracker.CODEC.parse(com.mojang.serialization.JsonOps.INSTANCE, oldJson).result().orElseThrow()
+    check(!old.incompleteCosts && old.totalChestsCost == 100.0 && old.totalRerolledCost == 20.0)
+    val flagged = FloorTracker.CODEC.parse(com.mojang.serialization.JsonOps.INSTANCE,
+        oldJson.deepCopy().apply { addProperty("incompleteCosts", true) }).result().orElseThrow()
+    val filter = TrackerFilter(scope = TrackerScope.ALL_LOCAL_PROFILES, floor = "M7")
+    val archive = AcquisitionArchive(legacyProfit = mapOf("M7" to 500.0))
+    val complete = trackerView(archive, legacyTrackerView(mapOf(floor to old)), filter, null).summary
+    val partial = trackerView(archive, legacyTrackerView(mapOf(floor to flagged)), filter, null).summary
+    check(!complete.incompleteCosts && complete.knownNet == 500.0 && partial.knownNet == complete.knownNet)
+    check(partial.incompleteCosts && partial.profitIncomplete && partial.net == null)
+    val shown = marketValuedTrackerSummary(partial, listOf(TrackerLootRow("LOOT", 1, 1000.0, null, 2)))
+    check(shown.knownNet == 880.0 && shown.net == null && shown.incompleteCosts)
+    check(!totals.incompleteCosts && flagged.totalChestsCost == old.totalChestsCost && flagged.totalRerolledCost == old.totalRerolledCost)
+}
+
+private fun checkMarketValuedTrackerSummary() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 4), mapOf("BEDROCK" to listOf(
+        TrackerLootRow("IMPLOSION_SCROLL", 4, 400.0, null, 4), TrackerLootRow("NECRON_HANDLE", 5, 500.0, null, 4),
+        TrackerLootRow("ZERO", 0, 0.0, null, 4))),
+        mapOf("BEDROCK" to 100.0), mapOf("BEDROCK" to 50.0), mapOf("BEDROCK" to 4))
+    val first = DungeonRunRecord("first", "first-session", context, "M7", time - 60000, time, 60000,
+        chests = listOf(ChestReceipt("first-chest", time, "BEDROCK", 20.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 100.0)))),
+        rerolls = 1, rerollCost = 5.0)
+    val second = first.copy(id = "second", session = "second-session", context = context.copy(profileName = "Pear"), completedAt = time + 86400000,
+        chests = listOf(ChestReceipt("second-chest", time + 86400000, "DIAMOND", 30.0,
+            listOf(RunLoot("IMPLOSION_SCROLL", 1, 100.0), RunLoot("OTHER", 2)))), rerollCost = 7.0)
+    val old = first.copy(id = "old-copy", session = "old-session", startedAt = time - 86460000, completedAt = time - 86400000,
+        chests = first.chests.map { it.copy(id = "old-chest", time = it.time - 86400000) }, trackingVersion = 1)
+    val archive = AcquisitionArchive(runs = listOf(old, first, second), legacyProfit = mapOf("M7" to 5000.0))
+    val original = Gson().toJson(archive)
+    val quotes = mapOf("IMPLOSION_SCROLL" to 10.0, "NECRON_HANDLE" to 100.0, "OTHER" to 20.0)
+    val filter = TrackerFilter(page = TrackerPage.OVERVIEW, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun valued(selected: TrackerFilter, prices: Map<String, Double?> = quotes): TrackerSummary {
+        val source = trackerView(archive, listOf(historical), selected, context)
+        val rows = source.loot.map { it.copy(value = estimatedLootMarketValue(it.count, prices[it.item])) }
+        val shown = marketValuedTrackerSummary(source.summary, rows)
+        check(shown.gross == rows.sumOf { it.value ?: 0.0 })
+        check(shown.copy(gross = source.summary.gross, incompleteValues = source.summary.incompleteValues,
+            preservedProfit = source.summary.preservedProfit) == source.summary) // Counts, timing, XP and known fees are unchanged.
+        return shown
+    }
+    val shown = valued(filter)
+    check(shown.gross == 600.0 && shown.chestCost == 150.0 && shown.knownRerollCost == 62.0 && shown.net == 388.0)
+    check(shown.preservedProfit == 0.0 && !shown.profitIncomplete)
+    check(valued(filter.copy(page = TrackerPage.LOOT)) == shown) // Both pages use the identical selected item counts and quotes.
+    val missing = valued(filter, quotes - "NECRON_HANDLE")
+    check(missing.gross == 100.0 && missing.knownNet == -112.0 && missing.net == null && missing.incompleteValues)
+    check(valued(filter.copy(scope = TrackerScope.CURRENT_PROFILE)).net == -15.0)
+    check(valued(filter.copy(from = "2026-09-24", until = "2026-09-24")).net == -15.0)
+    check(valued(filter.copy(session = "second-session")).net == 13.0)
+    check(valued(filter.copy(chest = "BEDROCK")).let { it.knownNet == 380.0 && it.profitIncomplete }) // A chest filter cannot assign run-wide reroll costs to that chest.
+    val unpriced = trackerView(archive, listOf(historical), filter, context).summary
+    val knownZero = listOf(TrackerLootRow("ZERO", 0, estimatedLootMarketValue(0, null), null, 0))
+    check(marketValuedTrackerSummary(unpriced, knownZero).let { it.gross == 0.0 && !it.incompleteValues && it.net == -212.0 })
+    check(marketValuedTrackerSummary(unpriced.copy(incompleteCosts = true), knownZero).let { it.net == null && it.incompleteCosts && it.knownNet == -212.0 })
+    check(marketValuedTrackerSummary(unpriced.copy(rerollCost = null), knownZero).let { it.net == null && it.knownRerollCost == 62.0 })
+    check(Gson().toJson(archive) == original && archive.legacyProfit.getValue("M7") == 5000.0 && first.chests.single().loot.single().value == 100.0)
+}
+
 private fun checkMuseumLootCounts() {
     val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
     val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -112,7 +219,9 @@ private fun checkMuseumLootCounts() {
         emptyMap(), emptyMap(), mapOf("BEDROCK" to 5))
     val run = DungeonRunRecord("new", "new-session", context, "M7", time - 60000, time, 60000,
         chests = listOf(ChestReceipt("new-chest", time, "BEDROCK", 0.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 1000.0)))))
-    val archive = AcquisitionArchive(runs = listOf(run.copy(id = "old-copy", trackingVersion = 1), run), events = listOf(
+    val old = run.copy(id = "old-copy", session = "old-session", startedAt = time - 86460000, completedAt = time - 86400000,
+        chests = run.chests.map { it.copy(id = "old-chest", time = it.time - 86400000) }, trackingVersion = 1)
+    val archive = AcquisitionArchive(runs = listOf(old, run), events = listOf(
         AcquisitionEvent("e".repeat(32), "IMPLOSION_SCROLL", time - 86400000, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
         AcquisitionEvent("f".repeat(32), "NECRON_HANDLE", time - 86400000, "dungeon", floor = "M7", origin = "legacy-tracker"),
         AcquisitionEvent("g".repeat(32), "IMPLOSION_SCROLL", time, "dungeon", context, "M7", "BEDROCK", run = run.id)))
@@ -220,7 +329,9 @@ private fun checkCombinedDungeonLoot() {
             listOf(RunLoot("IMPLOSION_SCROLL", 1, 1000.0), RunLoot("DYE_NECRON", 1), RunLoot("NECRON_HANDLE", 1, 5000.0)))))
     val second = first.copy(id = "other", session = "second-session", context = other, completedAt = time + 86400000,
         chests = listOf(ChestReceipt("other-chest", time + 86400000, "DIAMOND", 0.0, listOf(RunLoot("RECOMBOBULATOR_3000", 1, 100.0)))))
-    val archive = AcquisitionArchive(runs = listOf(first.copy(id = "duplicated-old", trackingVersion = 1), first, second),
+    val old = first.copy(id = "duplicated-old", session = "old-session", startedAt = time - 86460000, completedAt = time - 86400000,
+        chests = first.chests.map { it.copy(id = "old-chest", time = it.time - 86400000) }, trackingVersion = 1)
+    val archive = AcquisitionArchive(runs = listOf(old, first, second),
         legacyProfit = mapOf("M7" to 9000.0))
     val legacy = listOf(historical, normal)
     val filter = TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
@@ -275,7 +386,7 @@ private fun checkLifetimeDungeonSummary() {
         cataXp = 2000.0, chests = listOf(ChestReceipt("second-chest", 181000, "BEDROCK", 100.0,
             listOf(RunLoot("KNOWN", 1, 500.0), RunLoot("UNPRICED", 1)))), rerollCost = null)
     val archive = AcquisitionArchive(cutoverAt = 1000, legacyProfit = mapOf("F7" to 850.0),
-        runs = listOf(first.copy(id = "pre-cutover", trackingVersion = 1), first, partial,
+        runs = listOf(first.copy(id = "pre-cutover", session = "historical-session", trackingVersion = 1), first, partial,
             first.copy(id = "other-floor", floor = "M7")))
     val combined = dungeonTrackerLifetimeSummary(archive, listOf(historical), "F7")
     check(combined.runs == 22L && combined.timedRuns == 22L && combined.time == 1380000L)

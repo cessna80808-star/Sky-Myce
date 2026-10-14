@@ -187,6 +187,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     var intent = MenuButtonIntent.SECONDARY
     var selected: () -> Boolean = { false }
     var navigation = false
+    var centeredNavigation = false
     var background = true
     var trailingChevron = false
     var toggled: (() -> Boolean)? = null
@@ -302,7 +303,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
                     MenuTheme.blend(MenuTheme.CARD, accent, (hover * MenuTheme.style.hoverWeight + chosen * MenuTheme.style.selectionWeight + press * 9 + if (active && intent == MenuButtonIntent.PRIMARY) 12 else 0).toInt()),
                     MenuTheme.blend(MenuTheme.BORDER, accent, (maxOf(chosen, hover * .65).coerceAtLeast(if (active && intent != MenuButtonIntent.SECONDARY) .65 else 0.0) * 100).toInt()))
                 MenuTheme.sheen(graphics, x, y, width, height, .45 + hover * .55)
-                if (navigation && chosen > 0.0) {
+                if (navigation && !centeredNavigation && chosen > 0.0) {
                     val indicatorHeight = ((height - 10) * chosen).toInt()
                     MenuTheme.rounded(graphics, x + 1, y + (height - indicatorHeight) / 2, MenuTheme.style.focusWidth, indicatorHeight, MenuTheme.ACCENT, 1)
                 }
@@ -336,8 +337,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         val lineHeight = MenuCanvas.lineHeight()
         graphics.enableScissor(x + 3, y + 1, x + contentWidth - 3, y + height - 1)
         lines.forEachIndexed { index, _ ->
-            val left = if (navigation) x + 8 else x + (contentWidth - lineWidths[index]) / 2
-            val shift = if (navigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
+            val left = if (navigation && !centeredNavigation) x + 8 else x + (contentWidth - lineWidths[index]) / 2
+            val shift = if (navigation && !centeredNavigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
             graphics.styledText(lineRuns[index], left + shift,
                 (y + (height - lines.size * lineHeight) / 2 + index * lineHeight).toDouble())
         }

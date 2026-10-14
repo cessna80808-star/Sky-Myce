@@ -230,7 +230,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             seenArchive = AcquisitionRepository.revision; seenLegacy = DungeonTracker.revision; seenContext = context; generation++
         }
         if (seenTheme != HudTheme.revision) { seenTheme = HudTheme.revision; rebuildMenu() }
-        if (filter.page == TrackerPage.LOOT && System.currentTimeMillis() >= nextMarketRefresh) {
+        if (filter.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT) && System.currentTimeMillis() >= nextMarketRefresh) {
             nextMarketRefresh = System.currentTimeMillis() + 10_000; generation++
         }
         if (!busy && requested != generation && System.currentTimeMillis() - changedAt >= 120) {
@@ -239,10 +239,20 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             val bazaar = DungeonTrackerConfig.bazaarPriceType; val auction = DungeonTrackerConfig.auctionPriceType
             Scheduling.schedule(0.milliseconds) {
                 val computed = runCatching {
-                    val selected = trackerView(archive, legacy, if (query.page == TrackerPage.LOOT) query.copy(valuableOnly = false) else query, context)
-                    if (query.page != TrackerPage.LOOT) selected else selected.copy(loot = sortedLoot(selected.loot.map { item ->
+                    val marketView = query.page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT)
+                    val selectedFilter = when (query.page) {
+                        TrackerPage.OVERVIEW -> query.copy(query = "", rareOnly = false, valuableOnly = false)
+                        TrackerPage.LOOT -> query.copy(valuableOnly = false)
+                        else -> query
+                    }
+                    val selected = trackerView(archive, legacy, selectedFilter, context)
+                    if (!marketView) selected else {
+                        val pricedLoot = selected.loot.map { item ->
                         item.copy(value = estimatedLootMarketValue(item.count, itemId(item.item)?.getPriceOrNull(bazaar, auction)))
-                    }, query))
+                        }
+                        selected.copy(summary = if (query.page == TrackerPage.OVERVIEW) marketValuedTrackerSummary(selected.summary, pricedLoot) else selected.summary,
+                            loot = sortedLoot(pricedLoot, selectedFilter.copy(valuableOnly = query.page == TrackerPage.LOOT && query.valuableOnly)))
+                    }
                 }
                 MC.instance.execute {
                     busy = false
@@ -255,8 +265,9 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         if (animate) resultSwap.change()
         val filters = listOfNotNull(filter.floor, filter.mode?.let { if (it == "M") "Master" else "Normal" }, filter.chest,
             filter.from.takeIf(String::isNotEmpty)?.let { "From $it" }, filter.until.takeIf(String::isNotEmpty)?.let { "To $it" },
-            filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf(String::isNotBlank)?.let { "Search: ${it.take(25)}" },
-            if (filter.rareOnly) "RNG" else null, if (filter.valuableOnly) "1m+" else null)
+            filter.session?.let { "Session ${it.take(8)}" }, filter.query.takeIf { it.isNotBlank() && filter.page != TrackerPage.OVERVIEW }?.let { "Search: ${it.take(25)}" },
+            if (filter.rareOnly && filter.page != TrackerPage.OVERVIEW) "RNG" else null,
+            if (filter.valuableOnly && filter.page != TrackerPage.OVERVIEW) "1m+" else null)
         val source = if (filter.page == TrackerPage.OVERVIEW) when (filter.scope) {
             TrackerScope.ALL_LOCAL_PROFILES -> "All saved runs"
             TrackerScope.CURRENT_PROFILE -> "Current profile"
@@ -300,9 +311,10 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         }
         val cards = listOf(
             stat("Runs", s.runs.toString(), "Completed runs", primary = true),
-            stat("Profit (estimated)", money(s.knownNet), if (s.profitIncomplete) "Partial • missing prices or costs" else "After chest and reroll costs",
+            stat("Profit (estimated)", money(s.knownNet), if (s.profitIncomplete) "Loot value − recorded costs • partial" else "Loot value − chest and reroll costs",
                 primary = true, color = if (s.knownNet < 0) MenuTheme.RED else MenuTheme.GREEN,
-                hint = "Chest costs: ${money(s.chestCost)}${if (s.incompleteCosts) " (partial)" else ""}\n" +
+                hint = "Loot value: ${money(s.gross)}${if (s.incompleteValues) " (partial)" else ""}\n" +
+                    "Chest costs: ${money(s.chestCost)}${if (s.incompleteCosts) " (partial)" else ""}\n" +
                     "Rerolls: ${money(s.knownRerollCost)}${if (s.rerollCost == null) " (partial)" else ""}"),
             stat("Average run", s.average?.toLong()?.let(::duration) ?: "—", "${s.timedRuns} timed runs"),
             stat("Tracked time", if (s.timedRuns == 0L && s.runs > 0) "—" else duration(s.time), "${s.timedRuns} of ${s.runs} runs timed"),
@@ -321,8 +333,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         content.child(label("Item  /  Count  /  Market value (estimated)  /  Personal rate", MenuTheme.SECONDARY))
         val samples = visible.mapNotNull { it.rateSample }.distinct()
         samples.singleOrNull()?.let { sample -> content.child(label(
-            "Rates: ${sample.completedRuns} ${sample.floor} runs • ${date(sample.from)} – ${date(sample.until - 1)}", MenuTheme.MUTED)
-            .wrappedTooltip(Component.literal("Dated drops only; loot counts include all saved totals."))) }
+            "Rate sample: ${sample.completedRuns} ${sample.floor} runs • ${date(sample.from)} – ${date(sample.until - 1)}", MenuTheme.MUTED)
+            .wrappedTooltip(Component.literal("Older dated sample; Overview counts your full run history."))) }
         if (samples.size > 1) content.child(label("Rates use separate dated samples", MenuTheme.MUTED))
         if (visible.isEmpty()) content.child(label(if (filter.scope == TrackerScope.CURRENT_PROFILE && seenContext == null)
             "Choose All local profiles to see saved loot offline."
@@ -338,7 +350,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     .wrappedTooltip(Component.literal("${money(item.value?.div(item.count.toDouble()))} each × ${item.count}\nCached market estimate")))
                 child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "—", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
                     .wrappedTooltip(Component.literal(item.rateSample?.let { sample ->
-                        "${sample.itemCounts[item.item]} drops / ${sample.completedRuns} ${sample.floor} runs\nDated sample, per run"
+                        "Drops: ${sample.itemCounts[item.item]} / ${sample.completedRuns} ${sample.floor} runs\nDated sample, per run"
                     } ?: if (item.observedRate == null) "Not enough recorded runs or chests" else
                         "${item.acquiredChests} drops / ${item.sampledChests} recorded chests")))
             })
