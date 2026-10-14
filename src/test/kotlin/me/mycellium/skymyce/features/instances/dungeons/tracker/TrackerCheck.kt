@@ -13,6 +13,7 @@ fun checkTracker() {
     checkAcquisitionValuations()
     checkLifetimeDungeonSummary()
     checkCombinedDungeonLoot()
+    checkPersonalRateSamples()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val other = context.copy(profileId = "c".repeat(32), profileName = "Pear")
@@ -100,6 +101,55 @@ fun checkTracker() {
     check(parseAcquisitionArchive(Gson().toJsonTree(entrance)).legacyProfit.keys == setOf("E"))
     check(raw.toString().contains("$time,$time")) // Import did not mutate the original save.
     println("Tracker checks passed: dungeon profile continuity, visible historical totals, scoped filters, safe partial rates, legacy preservation, repeat drops, shared receipts, permanent museum and offline access")
+}
+
+private fun checkPersonalRateSamples() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 4), mapOf("BEDROCK" to listOf(
+        TrackerLootRow("IMPLOSION_SCROLL", 4, 4000.0, null, 4), TrackerLootRow("ZERO", 3, 0.0, null, 4))),
+        emptyMap(), emptyMap(), mapOf("BEDROCK" to 4))
+    val run = DungeonRunRecord("new", "new-session", context, "M7", 1000, 61000, 60000,
+        chests = listOf(ChestReceipt("new-chest", 61000, "BEDROCK", 0.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 1000.0)))))
+    val sample = PersonalRateSample("M7", 1000, 2000, 792, mapOf("IMPLOSION_SCROLL" to 2L, "ZERO" to 0L))
+    val archive = AcquisitionArchive(runs = listOf(run), personalRateSamples = listOf(sample))
+    val filter = TrackerFilter(page = TrackerPage.LOOT, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun rows(selected: TrackerFilter = filter, state: AcquisitionArchive = archive) =
+        trackerView(state, listOf(historical), selected, context).loot.associateBy { it.item }
+    val saved = rows()
+    check(saved.getValue("IMPLOSION_SCROLL").let { it.count == 5L && it.value == 5000.0 && it.observedRate == 2.0 / 792 && it.acquiredChests == null })
+    check(saved.getValue("ZERO").let { it.count == 3L && it.observedRate == 0.0 }) // All-time counts can include newer acquisitions outside the dated sample.
+    check(rows(filter.copy(scope = TrackerScope.UNSCOPED_LEGACY)).getValue("IMPLOSION_SCROLL").let { it.count == 4L && it.rateSample == sample })
+    check(rows(filter.copy(scope = TrackerScope.CURRENT_PROFILE)).getValue("IMPLOSION_SCROLL").let { it.count == 1L && it.rateSample == null && it.observedRate == 1.0 })
+    for (selected in listOf(filter.copy(from = "1970-01-01"), filter.copy(until = "1970-01-01"),
+        filter.copy(session = "new-session"), filter.copy(chest = "BEDROCK")))
+        check(rows(selected).values.all { it.rateSample == null })
+    check(rows(filter.copy(floor = "F7")).isEmpty() && rows(filter.copy(floor = null, mode = "F")).isEmpty())
+    check(rows(state = archive.copy(personalRateSamples = emptyList())).getValue("IMPLOSION_SCROLL").observedRate == null)
+    val ambiguous = archive.copy(personalRateSamples = listOf(sample, sample.copy(floor = "F7")))
+    check(rows(filter.copy(floor = null), ambiguous).getValue("IMPLOSION_SCROLL").let { it.rateSample == null && it.observedRate == null })
+    check(rows(filter.copy(floor = null, mode = "M"), ambiguous).getValue("IMPLOSION_SCROLL").rateSample == sample)
+    check(parseAcquisitionArchive(Gson().toJsonTree(archive)) == archive)
+    val invalid = listOf(sample.copy(floor = "M8"), sample.copy(from = 0), sample.copy(until = sample.from),
+        sample.copy(completedRuns = 0), sample.copy(completedRuns = 1_000_001),
+        sample.copy(itemCounts = mapOf("bad item" to 1L)), sample.copy(itemCounts = mapOf("ITEM" to -1L)),
+        sample.copy(itemCounts = mapOf("ITEM" to 1_000_001L)),
+        sample.copy(itemCounts = (0..1000).associate { "ITEM_$it" to 1L }))
+    for (bad in invalid) check(runCatching { parseAcquisitionArchive(Gson().toJsonTree(archive.copy(personalRateSamples = listOf(bad)))) }.isFailure)
+    check(runCatching { parseAcquisitionArchive(Gson().toJsonTree(archive.copy(personalRateSamples = listOf(sample, sample)))) }.isFailure)
+    check(runCatching { parseAcquisitionArchive(Gson().toJsonTree(archive).asJsonObject.apply { add("personalRateSamples", com.google.gson.JsonNull.INSTANCE) }) }.isFailure)
+    for (field in listOf("from", "until", "completedRuns")) for (invalid in listOf("1.5", "\"123\"", "null", "9223372036854775808")) {
+        val json = Gson().toJsonTree(archive).asJsonObject
+        json.getAsJsonArray("personalRateSamples")[0].asJsonObject.add(field, JsonParser.parseString(invalid))
+        check(runCatching { parseAcquisitionArchive(json) }.isFailure)
+    }
+    for (invalid in listOf("1.5", "\"2\"", "null", "9223372036854775808")) {
+        val json = Gson().toJsonTree(archive).asJsonObject
+        json.getAsJsonArray("personalRateSamples")[0].asJsonObject.getAsJsonObject("itemCounts")
+            .add("IMPLOSION_SCROLL", JsonParser.parseString(invalid))
+        check(runCatching { parseAcquisitionArchive(json) }.isFailure)
+    }
+    val withoutSamples = Gson().toJsonTree(archive).asJsonObject.apply { remove("personalRateSamples") }
+    check(parseAcquisitionArchive(withoutSamples).personalRateSamples.isEmpty())
 }
 
 private fun checkTrackerPreferenceUpgrade() {

@@ -308,7 +308,11 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun loot(content: FlowLayout) {
         val visible = slice(view.loot)
-        content.child(label("Item  /  Count  /  Market value (estimated)  /  Observed rate", MenuTheme.SECONDARY))
+        content.child(label("Item  /  Count  /  Market value (estimated)  /  Personal rate", MenuTheme.SECONDARY))
+        val samples = visible.mapNotNull { it.rateSample }.distinct()
+        samples.singleOrNull()?.let { sample -> content.child(label(
+            "Personal rates: ${sample.completedRuns} completed ${sample.floor} runs • ${date(sample.from)} through ${date(sample.until - 1)}", MenuTheme.MUTED)) }
+        if (samples.size > 1) content.child(label("Personal rates use dated samples; each rate's tooltip shows its dates and runs.", MenuTheme.MUTED))
         if (visible.isEmpty()) content.child(label(if (filter.scope == TrackerScope.CURRENT_PROFILE && seenContext == null)
             "No current profile is available. Choose All local profiles in Filters to view your saved loot offline."
             else "No saved loot matches these filters.", MenuTheme.MUTED))
@@ -322,7 +326,11 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 child(label(money(item.value), MenuTheme.GREEN).horizontalSizing(Sizing.fill(35))
                     .wrappedTooltip(Component.literal("Cached market price: ${money(item.value?.div(item.count.toDouble()))} × ${item.count}.\nThis estimate does not change recorded dungeon profit. Prices unavailable in the cache stay unknown.")))
                 child(label(item.observedRate?.let { "%.2f%%".format(it * 100) } ?: "—", MenuTheme.SECONDARY).horizontalSizing(Sizing.expand())
-                    .wrappedTooltip(Component.literal(if (item.observedRate == null) "Saved totals do not contain complete item-by-chest observations, so a personal drop rate cannot be calculated." else
+                    .wrappedTooltip(Component.literal(item.rateSample?.let { sample ->
+                        "${sample.itemCounts[item.item]} dated drops / ${sample.completedRuns} completed ${sample.floor} runs.\n" +
+                            "Sample: ${date(sample.from)} through ${date(sample.until - 1)}. Newer and undated drops are excluded.\n" +
+                            "Your recorded acquisitions per completed run; not an official or per-chest drop probability."
+                    } ?: if (item.observedRate == null) "Saved totals do not contain a dated run sample or complete item-by-chest observations, so a personal rate cannot be calculated." else
                         "Observed in ${item.acquiredChests} of ${item.sampledChests} confirmed chests in this tracked sample. This is not an official drop chance.")))
             })
         }) }

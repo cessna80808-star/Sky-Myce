@@ -118,23 +118,27 @@ private fun checkNativeHomeGlyphEdges() {
     try {
         SkijaMenuFonts.active = true
         val rect = MenuRect(110.25, 72.5, 400.0, 86.0)
+        val tool = menuHomeFeature(1)
+        val toolTitle = menuNavigationTitle(1, 120, 12.0, 2, tool)
+        val toolDescription = menuNavigationDescription(1, 120, tool)
         for (mode in listOf(GuiMotion.LIGHT, GuiMotion.MEDIUM, GuiMotion.HEAVY)) {
             ThemeConfig.animationMode = mode
-            for (hover in listOf(0.0, 1.0)) for (scale in listOf(1.0, 1.5, 2.0)) for (shellScale in listOf(1.0, .975)) {
+            for (compact in listOf(false, true)) for (hover in listOf(0.0, 1.0)) for (scale in listOf(1.0, 1.5, 2.0)) for (shellScale in listOf(1.0, .975)) {
                 val pose = MotionPose(scale = shellScale, x = 7.5, y = -2.25, pivotX = 350.0, pivotY = 180.0)
                 canvas.begin()
                 canvas.transform = MenuCanvas.Transform(a = pose.scale, d = pose.scale,
                     x = pose.x + pose.pivotX * (1 - pose.scale), y = pose.y + pose.pivotY * (1 - pose.scale))
-                paintMenuHomeTile(canvas, rect, listOf("Dungeons"), listOf("Parties, routes and run history"), 4, hover)
+                if (compact) paintMenuHomeTile(canvas, rect.copy(width = 128.0, height = 36.0), listOf("Dungeons"), emptyList(), 4, hover, compact = true)
+                else paintMenuHomeTile(canvas, rect.copy(width = 180.0, height = 118.0), toolTitle, toolDescription, tool.iconId, hover)
                 val frame = canvas.finishFrame(700, 360, scale)
                 val text = frame.commands.filter { it.kind == 3 }
-                check(text.any { it.runs.any { run -> run.text == "Dungeons" } })
-                check(text.any { it.runs.any { run -> run.text == "Parties, routes and run history" } })
+                val expected = if (compact) listOf("Dungeons") else toolTitle + toolDescription
+                check(expected.all { line -> text.any { it.runs.any { run -> run.text == line } } })
                 val clipped = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, text)
                 val reference = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision,
                     text.map { it.copy(clip = null) })
                 check(pixels(clipped).contentEquals(pixels(reference))) {
-                    "Home title/description glyph ink was clipped at $mode hover=$hover scale=$scale shell=$shellScale"
+                    "Home title/description glyph ink was clipped at compact=$compact $mode hover=$hover scale=$scale shell=$shellScale"
                 }
             }
         }
@@ -216,7 +220,7 @@ fun main() {
         val columns = menuHomeColumns(available)
         val tileWidth = (available - (columns - 1) * 8) / columns
         check(columns in 1..3 && tileWidth > 0 && tileWidth * columns + (columns - 1) * 8 <= available)
-        if (columns > 1) check(tileWidth >= 180) { "Category descriptions were squeezed into narrow tiles" }
+        if (columns > 1) check(tileWidth >= 128) { "Compact category names were squeezed into narrow tiles" }
         val toolColumns = menuHomeToolColumns(available)
         val toolWidth = (available - (toolColumns - 1) * 8) / toolColumns
         check(toolWidth > 0 && toolWidth * toolColumns + (toolColumns - 1) * 8 <= available)

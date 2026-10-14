@@ -33,10 +33,15 @@ fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filt
     val floors = legacy.filter { filter.floorMatches(it.floor) }
     val historicalRuns = floors.sumOf { it.summary.runs }
     val historicalChests = floors.sumOf { it.chestCounts.values.sum() }
+    fun sampledLoot(rows: List<TrackerLootRow>): List<TrackerLootRow> {
+        if (filter.scope == TrackerScope.CURRENT_PROFILE || filter.needsRecords || filter.chest != null) return rows
+        val samples = archive.personalRateSamples.filter { filter.floorMatches(it.floor) }
+        return rows.map { row -> row.copy(rateSample = samples.singleOrNull { row.item in it.itemCounts }) }
+    }
     if (legacyMode) {
         val (summary, loot) = summarizeLegacy(floors, filter.chest)
         return TrackerView(summary,
-            sortedLoot(loot, filter), events, true, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
+            sortedLoot(sampledLoot(loot), filter), events, true, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
     }
     val runs = filter.runs(archive.runs, context)
     val (selectedSummary, loot) = summarizeRuns(runs, filter.chest, includeDetails)
@@ -50,7 +55,7 @@ fun trackerView(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, filt
                 if (rows.any { it.acquiredChests == null }) null else rows.sumOf { it.acquiredChests!! }, rows.sumOf { it.sampledChests })
         }
     } else loot
-    return TrackerView(summary, sortedLoot(savedLoot, filter), events, false, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
+    return TrackerView(summary, sortedLoot(sampledLoot(savedLoot), filter), events, false, inheritedProfit, trackedLifetimeProfit, historicalRuns, historicalChests)
 }
 
 /** Frozen aggregates and v2 receipts describe separate periods; v1 receipts already belong to the aggregates. */
