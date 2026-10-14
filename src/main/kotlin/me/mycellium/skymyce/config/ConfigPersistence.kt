@@ -28,6 +28,7 @@ fun loadSkyMyceConfig(): ResourcefulConfig {
         }
     }
     val delegate = Config.register(SkyMyce.configurator)
+    me.mycellium.skymyce.config.misc.ThemeConfig.restoreLegacyTheme(original)
     val file = AtomicJsonFile(directory.resolve("${delegate.id()}.jsonc"), 1024 * 1024)
     val writer = StateWriter<JsonObject>({ file.write(it) }, { work -> Scheduling.schedule(100.milliseconds) { work() } }, {
         SkyMyce.logger.warn("Could not save configuration; previous file retained")

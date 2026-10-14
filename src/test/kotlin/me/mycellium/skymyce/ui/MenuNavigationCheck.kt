@@ -16,7 +16,7 @@ private fun measureNavigationGeometry() {
     val geometry = MenuNavigationGeometry(layout)
     val bean = ManagementFactory.getThreadMXBean() as? com.sun.management.ThreadMXBean
     bean?.takeIf { it.isThreadAllocatedMemorySupported }?.isThreadAllocatedMemoryEnabled = true
-    fun frame() { geometry.update(0.0); menuSectionTitles.indices.forEach { navigationGeometrySink = geometry.rect(it) } }
+    fun frame() { geometry.update(); menuSectionTitles.indices.forEach { navigationGeometrySink = geometry.rect(it) } }
     repeat(2000) { frame() }
     val id = Thread.currentThread().threadId()
     val bytes = bean?.getThreadAllocatedBytes(id) ?: 0L
@@ -30,8 +30,8 @@ private fun measureNavigationGeometry() {
 
 private fun checkStableCardEdges(layout: MenuLayout) {
     val geometry = MenuNavigationGeometry(layout)
-    for (compact in listOf(0.0, .25, .55, 1.0)) for ((originX, originY) in listOf(0.0 to 0.0, 36.0 to 80.0)) {
-        geometry.update(compact, originX, originY)
+    for ((originX, originY) in listOf(0.0 to 0.0, 36.0 to 80.0)) {
+        geometry.update(originX, originY)
         val rects = menuSectionTitles.indices.map { geometry.rect(it) }
         val revision = geometry.revision
         for (index in rects.indices) {
@@ -49,13 +49,13 @@ private fun checkStableCardEdges(layout: MenuLayout) {
                 val hover = MotionValue(0.0) { now }
                 repeat(90) { frame ->
                     now += 16_000_000
-                    geometry.update(compact, originX, originY)
+                    geometry.update(originX, originY)
                     val selected = geometry.indexAt(px, py)
-                    check(selected == expected) { "Hover/click/tooltip changed at $mode/$compact/card$index edge while feedback moved" }
+                    check(selected == expected) { "Hover/click/tooltip changed at $mode/card$index edge while feedback moved" }
                     hover.animateTo(if (selected == index) 1.0 else 0.0, 110, mode.profile.hoverEasing, mode)
                     val amount = hover.sample()
                     val press = if (frame in 20..25) .6 else 0.0
-                    val painted = r.transformed(menuNavigationPose(r, compact, amount, press, mode))
+                    val painted = r.transformed(menuNavigationPose(r, amount, press, mode))
                         .let { it.copy(y = it.y + (1 - minOf(1.0, frame / 20.0)) * mode.profile.revealOffset) }
                     check(painted.width > 0 && painted.height > 0)
                     // Visual hover/press/reveal feedback cannot revise the input footprint.
@@ -71,14 +71,39 @@ private fun checkStableCardEdges(layout: MenuLayout) {
             }
         }
     }
-    geometry.update(0.0)
+    geometry.update()
     val before = geometry.rect(0); val revision = geometry.revision
-    geometry.update(1.0)
+    geometry.update(36.0, 80.0)
     check(geometry.rect(0) != before && geometry.revision == revision + 1)
     check(geometry.indexAt(Double.NaN, Double.POSITIVE_INFINITY) == null)
 }
 
-/** Compare real Home text commands with their unclipped native pixels, including the reported leading D. */
+/** Explicit geometry overrides reach the same surfaces as shared controls. */
+private fun checkNavigationCornerOverrides() {
+    val previousPreset = ThemeConfig.preset
+    val previousRounded = ThemeConfig.rounded
+    val canvas = MenuCanvas()
+    try {
+        for (preset in listOf(me.mycellium.skymyce.hud.ThemePreset.MINIMAL, me.mycellium.skymyce.hud.ThemePreset.HIGH_CONTRAST)) {
+            ThemeConfig.preset = preset
+            for (rounded in listOf(0, 1)) {
+                ThemeConfig.rounded = rounded
+                canvas.begin()
+                paintMenuNavigationTile(canvas, MenuRect(8.0, 64.0, 128.0, 34.0), 0, hover = 1.0, focused = true)
+                paintMenuHomeTile(canvas, MenuRect(8.0, 110.0, 128.0, 70.0), listOf("Dungeons"), emptyList(), 4, focused = true)
+                val surfaces = canvas.finishFrame(160, 220, 1.0).commands.filter { it.kind == 7 || it.kind == 8 }
+                val radius = if (rounded == 1) 2.0 else 0.0
+                check(surfaces.size >= 4 && surfaces.all { it.extra == radius }) {
+                    "Home cards or category navigation ignored the explicit corner override in $preset"
+                }
+            }
+        }
+    } finally {
+        canvas.close(); ThemeConfig.preset = previousPreset; ThemeConfig.rounded = previousRounded
+    }
+}
+
+/** Compare real Home text commands with unclipped native pixels through fractional shell transforms. */
 private fun checkNativeHomeGlyphEdges() {
     val previousActive = SkijaMenuFonts.active
     val previousMode = ThemeConfig.animationMode
@@ -92,35 +117,27 @@ private fun checkNativeHomeGlyphEdges() {
     }
     try {
         SkijaMenuFonts.active = true
-        val rect = MenuRect(110.25, 72.5, 400.0, 220.0)
-        var reproduced = false
+        val rect = MenuRect(110.25, 72.5, 400.0, 86.0)
         for (mode in listOf(GuiMotion.LIGHT, GuiMotion.MEDIUM, GuiMotion.HEAVY)) {
             ThemeConfig.animationMode = mode
-            for (hover in listOf(0.0, 1.0)) for (scale in listOf(1.0, 1.5, 2.0)) {
-                val pose = menuNavigationPose(rect, 0.0, hover, 0.0, mode)
+            for (hover in listOf(0.0, 1.0)) for (scale in listOf(1.0, 1.5, 2.0)) for (shellScale in listOf(1.0, .975)) {
+                val pose = MotionPose(scale = shellScale, x = 7.5, y = -2.25, pivotX = 350.0, pivotY = 180.0)
                 canvas.begin()
                 canvas.transform = MenuCanvas.Transform(a = pose.scale, d = pose.scale,
                     x = pose.x + pose.pivotX * (1 - pose.scale), y = pose.y + pose.pivotY * (1 - pose.scale))
-                paintMenuNavigationTile(canvas, rect, 0, 0.0, hover, homeRect = rect)
+                paintMenuHomeTile(canvas, rect, listOf("Dungeons"), listOf("Parties, routes and run history"), 4, hover)
                 val frame = canvas.finishFrame(700, 360, scale)
                 val text = frame.commands.filter { it.kind == 3 }
-                check(text.any { it.runs.any { run -> run.text.startsWith("Dungeons · Open tool") } })
+                check(text.any { it.runs.any { run -> run.text == "Dungeons" } })
+                check(text.any { it.runs.any { run -> run.text == "Parties, routes and run history" } })
                 val clipped = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, text)
                 val reference = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision,
                     text.map { it.copy(clip = null) })
                 check(pixels(clipped).contentEquals(pixels(reference))) {
-                    "Home title/description/footer glyph ink was clipped at $mode hover=$hover scale=$scale"
-                }
-                if (mode == GuiMotion.HEAVY && hover == 1.0 && scale == 2.0) {
-                    val footer = text.single { it.runs.any { run -> run.text.startsWith("Dungeons · Open tool") } }
-                    val oldClip = MenuCanvas.Clip((rect.x + 15).toInt(), rect.y.toInt(), (rect.width - 25).toInt(), rect.height.toInt())
-                    val old = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, listOf(footer.copy(clip = oldClip)))
-                    val whole = MenuCanvas.Frame(frame.width, frame.height, frame.scale, frame.revision, listOf(footer.copy(clip = null)))
-                    reproduced = !pixels(old).contentEquals(pixels(whole))
+                    "Home title/description glyph ink was clipped at $mode hover=$hover scale=$scale shell=$shellScale"
                 }
             }
         }
-        check(reproduced) { "Native Home fixture did not reproduce the screenshot's old leading-glyph clip" }
     } finally {
         canvas.close(); SkijaMenuPainter.close()
         SkijaMenuFonts.active = previousActive; ThemeConfig.animationMode = previousMode
@@ -138,7 +155,7 @@ fun main() {
         check(menuBackTarget(null, home = true, openedFromHome = true) == MenuBackTarget.Game)
     }
     measureNavigationGeometry()
-    check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "General Settings"))
+    check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     val homeTools = defaultMenuHomeTools.indices.map { menuHomeFeature(it) }
     check(homeTools.map { it.id } == listOf("party-finder", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "daily-digest"))
     check(homeTools.all(::canUseMenuHomeTool)) { "A Home card opens a category or settings-only feature instead of a tool" }
@@ -182,32 +199,28 @@ fun main() {
     val layouts = listOf(320 to 260, 480 to 320, 960 to 540, 1440 to 900).map { (w, h) -> MenuLayout.fit(w, h) }
     for (layout in layouts) {
         checkStableCardEdges(layout)
-        check(layout.sidebar <= 52 && layout.contentWidth >= layout.width * .66)
-        val home = menuSectionTitles.indices.map { menuNavigationRect(layout, it, 0.0) }
-        val mini = menuSectionTitles.indices.map { menuNavigationRect(layout, it, 1.0) }
-        val footerTop = maxOf(260, layout.height) - menuHomeFooterRows(layout).size * 32 - 8
-        for (index in home.indices) {
-            for (r in listOf(home[index], mini[index])) {
-                check(r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0)
-                check(r.x + r.width <= layout.width && r.y + r.height <= layout.height)
+        check(layout.sidebar <= 144 && layout.contentWidth >= layout.width * .65)
+        val railLayout = layout.copy(height = maxOf(260, layout.height))
+        val rail = menuSectionTitles.indices.map { menuNavigationRect(railLayout, it) }
+        for (index in rail.indices) {
+            val r = rail[index]
+            check(r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0)
+            check(r.x + r.width <= railLayout.sidebar && r.y + r.height < railLayout.height - 34)
+            check(r.x + r.width < railLayout.sidebar + 1) { "Categories covered their content panel" }
+            for (other in rail.indices.filter { it != index }) {
+                check(!rail[other].contains(r.x + r.width / 2, r.y + r.height / 2))
             }
-            check(home[index].y + home[index].height <= layout.height - minOf(56.0, layout.height * .2))
-            check(home[index].y + home[index].height <= footerTop - 8) { "Home cards overlap wrapped footer buttons" }
-            check(mini[index].y + mini[index].height < layout.height - 64)
-            for (other in home.indices.filter { it != index }) {
-                check(!home[other].contains(home[index].x + home[index].width / 2, home[index].y + home[index].height / 2))
-                check(!mini[other].contains(mini[index].x + mini[index].width / 2, mini[index].y + mini[index].height / 2))
-            }
-            for (step in 0..20) {
-                val p = step / 20.0
-                check(home[index].mix(mini[index], p) == menuNavigationRect(layout, index, p))
-            }
-            val lifted = MotionPose(scale = 1.009, y = -6.0, pivotX = home[index].x + home[index].width / 2,
-                pivotY = home[index].y + home[index].height / 2)
-            val painted = home[index].transformed(lifted)
-            check(painted.contains(painted.x + 1, painted.y + 1))
-            check(home[index].contains(lifted.inverseX(painted.x + 1), lifted.inverseY(painted.y + 1)))
+            repeat(2000) { check(menuNavigationRect(railLayout, index) == r) { "Rapid navigation moved the category rail" } }
         }
+        val available = (layout.contentWidth - 36).coerceAtLeast(1)
+        val columns = menuHomeColumns(available)
+        val tileWidth = (available - (columns - 1) * 8) / columns
+        check(columns in 1..3 && tileWidth > 0 && tileWidth * columns + (columns - 1) * 8 <= available)
+        if (columns > 1) check(tileWidth >= 180) { "Category descriptions were squeezed into narrow tiles" }
+        val toolColumns = menuHomeToolColumns(available)
+        val toolWidth = (available - (toolColumns - 1) * 8) / toolColumns
+        check(toolWidth > 0 && toolWidth * toolColumns + (toolColumns - 1) * 8 <= available)
+        if (toolColumns > 1) check(toolWidth >= 174) { "Home shortcuts were squeezed into unreadable columns" }
     }
     val paths = listOf("animation", "graphics")
     val pinned = mutableMapOf<String, Any?>("animation" to "Medium", "graphics" to "Light")
@@ -237,23 +250,22 @@ fun main() {
         ThemeConfig.graphicsQuality = GuiQuality.MEDIUM
         for (mode in listOf(GuiMotion.LIGHT, GuiMotion.MEDIUM, GuiMotion.HEAVY)) {
             ThemeConfig.animationMode = mode
-            for ((name, compact) in listOf("home" to 0.0, "transform" to .55, "submenu" to 1.0)) {
+            for (name in listOf("home", "submenu")) {
                 canvas.begin()
                 canvas.fill(0.0, 0.0, 760.0, 440.0, MenuTheme.alpha(MenuTheme.PANEL))
-                canvas.opacity = (1 - compact * 3).coerceIn(0.0, 1.0)
-                canvas.text(listOf(MenuCanvas.Run("SKY-MYCE", MenuTheme.alpha(MenuTheme.TEXT), bold = true)), 22.0, 17.0, 18.0)
-                canvas.opacity = 1.0
-                if (compact == 0.0) canvas.text(listOf(MenuCanvas.Run("Search / Quick Settings", MenuTheme.alpha(MenuTheme.ACCENT))), 275.0, 407.0, 11.0)
-                if (compact > 0) {
-                    canvas.fill(52.0, 0.0, 1.0, 440.0, MenuTheme.alpha(MenuTheme.BORDER))
-                    canvas.text(listOf(MenuCanvas.Run("Dungeons", MenuTheme.alpha(MenuTheme.TEXT), bold = true)), 78.0, 30.0, 18.0)
-                }
+                canvas.fill(0.0, 0.0, 144.0, 440.0, MenuTheme.alpha(MenuTheme.SIDEBAR))
+                canvas.fill(143.0, 0.0, 1.0, 440.0, MenuTheme.alpha(MenuTheme.BORDER))
+                canvas.text(listOf(MenuCanvas.Run("SKY-MYCE", MenuTheme.alpha(MenuTheme.TEXT), bold = true)), 14.0, 10.0, 10.0)
+                canvas.text(listOf(MenuCanvas.Run(if (name == "home") "Your SkyBlock workspace" else "Dungeons", MenuTheme.alpha(MenuTheme.TEXT), bold = true)),
+                    160.0, 16.0, 19.0)
                 menuSectionTitles.indices.forEach { index ->
-                    val hovered = if (index == 3) 1.0 else 0.0
-                    val r = menuNavigationRect(layout, index, compact)
-                    val physical = r.transformed(menuNavigationPose(r, compact, hovered, 0.0, mode))
-                    paintMenuNavigationTile(canvas, physical, index, compact, hovered, if (index == 3) compact else 0.0,
-                        homeRect = menuNavigationRect(layout, index, 0.0))
+                    val r = menuNavigationRect(layout.copy(sidebar = 144), index)
+                    paintMenuNavigationTile(canvas, r, index, if (index == 3) 1.0 else 0.0, if (name == "submenu" && index == 0) 1.0 else 0.0)
+                    if (name == "home") {
+                        val category = MenuCategory.entries[index]
+                        paintMenuHomeTile(canvas, MenuRect(160.0 + index % 2 * 300, 70.0 + index / 2 * 85, 284.0, 73.0),
+                            listOf(category.title), listOf(category.description.take(38)), category.iconId)
+                    }
                 }
                 val image = canvas.finish(760, 440, 1.5)
                 check(image.width == 1140 && image.height == 660)
@@ -267,6 +279,7 @@ fun main() {
     } finally {
         ThemeConfig.animationMode = modeBefore; ThemeConfig.graphicsQuality = qualityBefore; canvas.close()
     }
+    checkNavigationCornerOverrides()
     checkNativeHomeGlyphEdges()
-    println("Menu navigation checks passed: stable logical card edges across hover/press/reveal profiles, native Home glyph edges, responsive cards/rail, rapid final intent, bounded shortcuts, real tile previews and idle geometry/raster reuse")
+    println("Menu navigation checks passed: stable logical card edges across hover/press/reveal profiles, native Home glyph edges, stationary categories and responsive home tiles, rapid final intent, bounded shortcuts, real tile previews and idle geometry/raster reuse")
 }

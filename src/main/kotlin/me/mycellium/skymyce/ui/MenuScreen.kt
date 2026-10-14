@@ -53,7 +53,6 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private var closingDropdown: MenuDropdown? = null
     private var content: FlowLayout? = null
     private var sidebar: FlowLayout? = null
-    private var navigationProgress = MotionValue(if (home) 0.0 else 1.0)
     private var navigationSelection = MotionValue(0.0)
     private var introductionClaimed = false
     private var introductionChecked = false
@@ -127,13 +126,11 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             // Keep the shell's current pose and deadline, even when navigation interrupts its entrance.
             val shell = destination.opening; destination.opening = opening; opening = shell
             val side = destination.sidebarOpening; destination.sidebarOpening = sidebarOpening; sidebarOpening = side
-            val navigation = destination.navigationProgress
-            destination.navigationProgress = navigationProgress; navigationProgress = navigation
             val indicator = destination.navigationSelection
             destination.navigationSelection = navigationSelection; navigationSelection = indicator
             destination.introductionChecked = true
             destination.introductionClaimed = introductionClaimed; introductionClaimed = false
-            // Home tool labels and sidebar category labels differ; slots retain their feedback through the morph.
+            // Stable category identities retain feedback while only the page content transitions.
             destination.navigationMotion = navigationButtons().withIndex().associate { it.index to it.value }
         } else {
             destination.opening.snap(if (destination.modal) 0.0 else 1.0)
@@ -161,12 +158,11 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         closeMenuDropdown()
         // Anchor geometry is retained, so settle its content before opening an interactive popup.
         opening.snap(1.0); sidebarOpening.snap(1.0); pageOpening.snap(1.0); outgoing = null
-        navigationProgress.snap(if (home) 0.0 else 1.0)
         paintedShell = shellPose(); paintedContent = contentPose()
         val popup = MenuDropdown(anchor.width, ::closeMenuDropdown)
         options(popup)
         dropdown = popup; dropdownAnchor = anchor
-        mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x, anchor.y + anchor.height)
+        mountMenuDropdown(uiAdapter.rootComponent, popup, anchor.x, anchor.y + anchor.height, anchor.height)
         popup.focusFirst()
         return popup
     }
@@ -204,8 +200,6 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             delayMillis = if (closing) 0 else 25)
         pageOpening.animateTo(if (closing) 0.0 else 1.0, if (closing) 110 else 230, MotionEasing.QUICK, ThemeConfig.animationMode,
             delayMillis = if (!closing && opening.sample() < 1.0) 45 else 0)
-        navigationProgress.animateTo(if (home) 0.0 else 1.0, ThemeConfig.animationMode.profile.layoutMillis,
-            ThemeConfig.animationMode.profile.hoverEasing, ThemeConfig.animationMode)
         super.init()
         if (!invalid && (builtLayout != menuLayout || builtTheme != me.mycellium.skymyce.hud.HudTheme.revision)) {
             uiAdapter.rootComponent.clearChildren(); build(uiAdapter.rootComponent); uiAdapter.inflateAndMount()
@@ -229,7 +223,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             surface(Surface { g, c -> MenuTheme.panel().draw(g, c); drawAmbient(g as MenuGraphics, c) })
         }
         if (!modal) {
-            // Reserve the final content width once; moving cards never relayout or rewrap page text.
+            // Category navigation stays on the left at every depth, including Home.
             frame.child(UIContainers.verticalFlow(Sizing.fixed(menuLayout.sidebar), Sizing.fill()))
         }
         val body = MenuLayer(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight), FlowLayout.Algorithm.VERTICAL, "content", { paintedContent }, around = ::drawContent)
@@ -240,23 +234,23 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         if (!modal) {
             val side = buildNavigation()
             sidebar = side
-            // Paint navigation last: the original card surfaces pass over the incoming content.
+            // The stationary rail is separate from content transitions.
             frame.child(MenuLayer(Sizing.fixed(menuLayout.sidebar), Sizing.fixed(menuLayout.height), FlowLayout.Algorithm.VERTICAL,
                 "sidebar", { MotionPose(alpha = sidebarProgress) }).apply {
-                positioning(Positioning.absolute(0, 0)); allowOverflow(true); child(side)
+                positioning(Positioning.absolute(0, 0)); allowOverflow(true)
+                child(if (menuLayout.height < 260) menuScroll(Sizing.fill(), Sizing.fill(), side) else side)
             })
         }
         root.child(frame)
         try { buildContent(body) } finally { constructing = false }
     }
-    protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout, { navigationProgress.sample().coerceIn(0.0, 1.0) },
+    protected open fun buildNavigation(): FlowLayout = MenuNavigation(menuLayout.copy(height = maxOf(260, menuLayout.height)),
         { if (home) -1 else menuCategory?.ordinal ?: -1 }, navigationSelection,
-        { index -> if (index == null) openMenu() else if (home) openMenuFeature(menuHomeFeature(index, MenuShortcuts.homeTools).id)
-            else openMenuCategory(MenuCategory.entries[index]) },
+        { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
         { navigateMenu(MenuDirectoryScreen()) },
         { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
         { if (introductionClaimed) ThemeConfig.animationMode else GuiMotion.OFF },
-        { !introductionClaimed || opening.sample() >= .85 }, home, MenuShortcuts.homeTools)
+        { !introductionClaimed || opening.sample() >= .85 }, home)
 
     protected abstract fun buildContent(root: FlowLayout)
     /** Native player previews cannot be rasterized into MenuCanvas. Paint only on the settled, visible page. */
@@ -270,7 +264,6 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         opening.animateTo(if (closing) 0.0 else 1.0, if (closing) 145 else 245, MotionEasing.SETTLE, mode)
         sidebarOpening.animateTo(if (closing) 0.0 else 1.0, 200, mode = mode)
         pageOpening.animateTo(if (closing) 0.0 else 1.0, 230, mode = mode)
-        navigationProgress.animateTo(if (home) 0.0 else 1.0, mode.profile.layoutMillis, mode.profile.hoverEasing, mode)
         if (closing && opening.sample() == 0.0 && !opening.running) {
             if (MC.screen === this) {
                 val destination = closeDestination
@@ -286,8 +279,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         paintedShell = shellPose(opening.sample(now))
         sidebarProgress = sidebarOpening.sample(now).coerceIn(0.0, 1.0)
         pageProgress = pageOpening.sample(now).coerceIn(0.0, 1.0)
-        navigationProgress.sample(now)
-        if (introductionClaimed && !opening.running && !sidebarOpening.running && !pageOpening.running && !navigationProgress.running &&
+        if (introductionClaimed && !opening.running && !sidebarOpening.running && !pageOpening.running &&
             (sidebar as? MenuNavigation)?.revealsSettled != false) {
             menuIntroduction.complete(); introductionClaimed = false
         }
@@ -333,15 +325,14 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     private fun contentPose(progress: Double = pageOpening.sample().coerceIn(0.0, 1.0)): MotionPose {
         val profile = ThemeConfig.animationMode.profile
         val offset = (1 - progress) * profile.pageOffset * pageDirection
-        val focus = if (modal || home) 1.0 else navigationProgress.sample().coerceIn(0.0, 1.0)
-        return MotionPose(alpha = (if (outgoing == null) progress else 1.0) * focus, x = offset,
+        return MotionPose(alpha = if (outgoing == null) progress else 1.0, x = offset,
             scale = 1 - (1 - progress) * profile.pageScale,
             pivotX = width / 2.0, pivotY = height / 2.0)
     }
     private fun drawAmbient(g: MenuGraphics, component: UIComponent) {
         val quality = ThemeConfig.graphicsQuality
-        if (!quality.ambient || !ThemeConfig.animationMode.profile.ambient || closing) return
-        val changing = opening.running || pageOpening.running || navigationProgress.running
+        if (!quality.ambient || !ThemeConfig.animationMode.profile.ambient || MenuTheme.style.sheen <= 0.0 || closing) return
+        val changing = opening.running || pageOpening.running
         val step = menuAmbientStep(ambientStep, System.nanoTime(), quality.ambientIntervalNanos, changing)
         if (ambientStep != step) {
             ambientStep = step
@@ -431,7 +422,6 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         sidebarOpening.snap(if (closing) 0.0 else 1.0)
         pageOpening.snap(if (closing) 0.0 else 1.0)
         contentExit.snap(if (closing) 0.0 else 1.0)
-        navigationProgress.snap(if (home) 0.0 else 1.0)
         navigationSelection.cancel()
         uiAdapter.inflateAndMount()
         if (focused != null && menuComponentAttached(root, focused))
@@ -442,7 +432,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         uiAdapter?.rootComponent?.let(::releaseContentMotion)
         outgoing = null; modalUnderlay = null; navigationMotion = emptyMap()
         closingContent = null; contentExit.cancel()
-        opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); navigationProgress.cancel(); navigationSelection.cancel(); tooltip.clear(); toasts.clear()
+        opening.cancel(); sidebarOpening.cancel(); pageOpening.cancel(); navigationSelection.cancel(); tooltip.clear(); toasts.clear()
         closeDestination = null; closing = false
         canvas.close(); texture.close(); super.removed()
     }
@@ -475,7 +465,13 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
                 return true
             }
         }
-        return super.keyPressed(event)
+        val previous = uiAdapter?.rootComponent?.focusHandler()?.focused()
+        val handled = super.keyPressed(event)
+        val handler = uiAdapter?.rootComponent?.focusHandler()
+        val focused = handler?.focused()
+        if (focused != null && focused !== previous && handler?.lastFocusSource() == UIComponent.FocusSource.KEYBOARD_CYCLE)
+            revealMenuKeyboardFocus(focused)
+        return handled
     }
     final override fun charTyped(event: CharacterEvent): Boolean {
         if (closing) return true

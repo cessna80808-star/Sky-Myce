@@ -53,3 +53,29 @@ class MenuScroll<C : UIComponent>(horizontal: Sizing, vertical: Sizing, child: C
 }
 
 fun <C : UIComponent> menuScroll(horizontal: Sizing, vertical: Sizing, child: C): MenuScroll<C> = MenuScroll(horizontal, vertical, child)
+
+/** Keyboard focus stays visible, including through the nested viewport used by short windows. */
+internal fun revealMenuKeyboardFocus(component: UIComponent) {
+    val scrolls = generateSequence(component.parent()) { it.parent() }.filterIsInstance<MenuScroll<*>>().toList()
+    var inheritedFraction = scrolls.sumOf { it.scrollPosition % 1.0 }
+    var top = component.y() - inheritedFraction
+    var bottom = top + component.height()
+    for (scroll in scrolls) {
+        inheritedFraction -= scroll.scrollPosition % 1.0
+        val padding = scroll.padding().get()
+        val visibleTop = scroll.y() + padding.top() - inheritedFraction
+        val visibleBottom = scroll.y() + scroll.height() - padding.bottom() - inheritedFraction
+        val offset = when {
+            top < visibleTop || component.height() > visibleBottom - visibleTop -> top - visibleTop
+            bottom > visibleBottom -> bottom - visibleBottom
+            else -> 0.0
+        }
+        val before = scroll.scrollPosition
+        if (offset != 0.0 || scroll.scrollTarget != before) {
+            // Cancel an unfinished wheel target before applying the visible control's exact offset.
+            scroll.scrollBy(before + offset - scroll.scrollTarget, true, true)
+            val moved = scroll.scrollPosition - before
+            top -= moved; bottom -= moved
+        }
+    }
+}

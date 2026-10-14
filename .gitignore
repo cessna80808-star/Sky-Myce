@@ -54,3 +54,7 @@ node_modules/
 /docs/
 /discord-bots/
 /discord-user-bot/
+
+# Generated local GUI review captures and reference video frames
+/artifacts/gui-overhaul/
+/artifacts-gui-visual-check.log

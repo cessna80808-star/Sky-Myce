@@ -39,6 +39,7 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
     private var populating = false
     private var dirtyPreferences = false
     private lateinit var preview: FlowLayout
+    private lateinit var workspace: UIComponent
     private lateinit var controls: FlowLayout
     private lateinit var status: MenuLabel
     private lateinit var draftStatus: MenuLabel
@@ -64,9 +65,8 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         LocalCosmetics.observeOwner()
         initializeDraftOwner()
         draftStatus = label("Equip locally works without Discord", MenuTheme.SECONDARY); root.child(draftStatus)
-        val row = UIContainers.horizontalFlow(Sizing.fill(), Sizing.expand()).apply { gap(10) }
-        val left = UIContainers.verticalFlow(Sizing.fixed((menuWidth * .34).toInt().coerceAtLeast(135)), Sizing.fill()).apply { gap(8) }
-        preview = UIContainers.verticalFlow(Sizing.fill(), Sizing.expand()).apply { surface(MenuTheme.panel()); padding(Insets.of(8)) }
+        val left = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(8) }
+        preview = UIContainers.verticalFlow(Sizing.fill(), if (menuWidth < 500) Sizing.fixed(180) else Sizing.expand()).apply { surface(MenuTheme.panel()); padding(Insets.of(8)) }
         preview.child(label("LIVE PREVIEW", MenuTheme.SECONDARY))
         preview.child(label("${MC.instance.user.name} • actual skin", MenuTheme.MUTED))
         capeStatus = label(capeLabel(), MenuTheme.MUTED)
@@ -82,8 +82,8 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         })
         left.child(label("Visual only. Identity, movement and hitboxes stay the same.", MenuTheme.MUTED))
         controls = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(8)) }
-        row.child(left); row.child(menuScroll(Sizing.expand(), Sizing.fill(), controls).apply { scrollStep(20); scrollbarThiccness(2) })
-        root.child(row); populate(); studio.refresh()
+        workspace = cosmeticsWorkspace(menuWidth, left, controls)
+        root.child(workspace); populate(); studio.refresh()
     }
     private fun populate() {
         populating = true
@@ -279,6 +279,9 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         val player = MC.instance.player ?: return; if (!::preview.isInitialized) return
         val left = ((preview.x() + 8) * sx).roundToInt(); val top = ((preview.y() + 45) * sy).roundToInt()
         val right = ((preview.x() + preview.width() - 8) * sx).roundToInt(); val bottom = ((preview.y() + preview.height() - 8) * sy).roundToInt()
+        val clipTop = maxOf(top - 15, (workspace.y() * sy).roundToInt())
+        val clipBottom = minOf(bottom, ((workspace.y() + workspace.height()) * sy).roundToInt())
+        if (clipBottom <= clipTop) return
         if (bottom - top < 50) return
         val state = MC.instance.entityRenderDispatcher.getPlayerRenderer(player).createRenderState(player, partialTicks)
         (state as CosmeticAvatarState).`skymyce$setCosmetics`(draft)
@@ -287,16 +290,35 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         prepareCosmeticPreview(state)
         state.bodyRot = 0f; state.yRot = 0f; state.xRot = 0f; state.walkAnimationSpeed = 0f
         val scale = minOf((bottom - top) / 3.8f, (right - left) / 2.5f, (bottom - top - 15) / (player.bbHeight * draft.scaleY), (right - left) / (1.1f * draft.scaleX))
-        g.entity(state, scale, Vector3f(0f, .9f * draft.scaleY, 0f), Quaternionf().rotateZ(Math.PI.toFloat()).rotateY(Math.toRadians(rotation.toDouble()).toFloat()), null, left, top, right, bottom)
+        g.enableScissor(left, clipTop, right, clipBottom)
+        try { g.entity(state, scale, Vector3f(0f, .9f * draft.scaleY, 0f), Quaternionf().rotateZ(Math.PI.toFloat()).rotateY(Math.toRadians(rotation.toDouble()).toFloat()), null, left, top, right, bottom) }
+        finally { g.disableScissor() }
         val tag = CosmeticNames.decorated(draft.nameStyle ?: Component.literal(MC.instance.user.name)); val tagScale = sy * draft.nametagScale
-        g.enableScissor(left, top - 15, right, bottom); g.pose().pushMatrix()
-        try { g.pose().translate((left + right) / 2f, top.toFloat()); g.pose().scale(tagScale); g.text(MC.font, tag, -MC.font.width(tag) / 2, 0, 0xffffffff.toInt(), true) }
+        g.enableScissor(left, clipTop, right, clipBottom); g.pose().pushMatrix()
+        try {
+            g.pose().translate((left + right) / 2f, top.toFloat()); g.pose().scale(tagScale)
+            // Explicit cosmetic colors stay intact; the theme supplies the unstyled name color.
+            val tagWidth = MC.font.width(tag)
+            g.fill(-tagWidth / 2 - 3, -2, (tagWidth + 1) / 2 + 3, MC.font.lineHeight + 2, MenuTheme.alpha(MenuTheme.PANEL, 95))
+            g.text(MC.font, tag, -tagWidth / 2, 0, MenuTheme.alpha(MenuTheme.TEXT), MenuTheme.SHADOW)
+        }
         finally { g.pose().popMatrix(); g.disableScissor() }
     }
     override fun removed() { studio.close(); CapeTextures.clearPreviews(); if (dirtyPreferences) java.util.concurrent.CompletableFuture.runAsync { runCatching { SkyMyce.config.save() } }; super.removed() }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
     private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
 }
+
+internal fun cosmeticsWorkspace(availableWidth: Int, preview: UIComponent, controls: FlowLayout): UIComponent =
+    if (availableWidth < 500) menuScroll(Sizing.fill(), Sizing.expand(),
+        UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(10); child(preview.sizing(Sizing.fill(), Sizing.content())); child(controls)
+        }).apply { scrollStep(20); scrollbarThiccness(2) }
+    else UIContainers.horizontalFlow(Sizing.fill(), Sizing.expand()).apply {
+        gap(10)
+        child(preview.sizing(Sizing.fixed((availableWidth * .34).toInt()), Sizing.fill()))
+        child(menuScroll(Sizing.expand(), Sizing.fill(), controls).apply { scrollStep(20); scrollbarThiccness(2) })
+    }
 
 /** Responsive rebuilds retain drafts; only a first load or actual Minecraft owner change seeds them. */
 internal fun initialCosmeticDraft(initializedOwner: UUID?, currentOwner: UUID, equipped: CosmeticProfile?): CosmeticProfile? =

@@ -19,7 +19,7 @@ import java.io.File
 import javax.imageio.ImageIO
 
 fun checkSettings() {
-    // Settings participates in the same card-to-rail navigation as tools. Inspect dispatch
+    // Settings participates in the same category navigation as tools. Inspect dispatch
     // without starting Minecraft; a separate settings sidebar breaks this integration.
     fun navigationOwner(name: String): Class<*> {
         var type: Class<*>? = SettingsScreen::class.java
@@ -141,6 +141,7 @@ fun checkSettings() {
     check(settingsFocusPath(null, "MisterKrister") == "friend/MisterKrister")
     check(settingsFocusPath("devMode", "MisterKrister") == "devMode") { "A direct setting link lost priority over friend preferences" }
     checkSettingsCardLayout()
+    checkSettingsSectionLayout()
     val devMode = rows.single { it.path == "devMode" }
     check(devMode.title == "Dev Mode" && settingsTab(devMode.path) == SettingsTab.GENERAL)
     val previousDevMode = Config.devMode
@@ -233,6 +234,25 @@ private fun checkSettingsCardLayout() {
         check(focus.focused() == null) { "Mounting a settings page auto-focused its first control" }
         focus.focus(settingsFocusTarget(firstCard), io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
         check(focus.focused() === control) { "A direct setting link cannot focus its actual control" }
+    }
+}
+
+private fun checkSettingsSectionLayout() {
+    bootstrapHeadlessOwo()
+    for (width in listOf(150, 191, 240, 320, 680)) {
+        val title = UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(30))
+        val reset = UIContainers.verticalFlow(Sizing.fixed(88), Sizing.fixed(20))
+        val header = settingsSectionHeader(title, reset, width).apply { horizontalSizing(Sizing.fixed(width)) }
+        header.inflate(Size.of(width, 240)); header.mount(null, 20, 20)
+        check(title.width() > 0 && reset.x() >= header.x() && reset.x() + reset.width() <= header.x() + header.width()) {
+            "Settings section action escaped the header at width $width"
+        }
+        check(title.x() + title.width() <= reset.x() || title.y() + title.height() <= reset.y()) {
+            "Settings section title overlaps its action at width $width"
+        }
+        check(reset.y() + reset.height() <= header.y() + header.height()) {
+            "Settings section action was clipped at width $width"
+        }
     }
 }
 
@@ -449,6 +469,14 @@ private fun checkMenuSliderKeys() {
 }
 
 internal fun checkMenuDropdownInput() {
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 250, 24, 100) == 250 to 100)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 250, 24, 400) == 250 to 286)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 500, 24, 100) == 376 to 100)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 500, 24, 600) == 4 to 472)
+    for (height in listOf(1, 8, 140, 540)) for (anchor in listOf(0, height / 2, height, height + 20)) {
+        val (top, size) = me.mycellium.skymyce.ui.menuDropdownPlacement(height, anchor, 24, 800)
+        check(top >= 0 && size >= 1 && top + size <= height) { "Dropdown escaped its viewport" }
+    }
     val text = net.minecraft.network.chat.Component.literal("Clear (show all)").withStyle(net.minecraft.ChatFormatting.BOLD)
     val popupWidth = me.mycellium.skymyce.ui.menuDropdownWidth(text, false)
     val rowHeight = me.mycellium.skymyce.ui.menuDropdownRowHeight()

@@ -134,11 +134,11 @@ class FriendsSocialScreen(private val tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
             list.child(card().apply {
                 surface(surface().and(Surface { graphics, component ->
                     graphics.fill(component.x(), component.y(), component.x() + 2, component.y() + component.height(),
-                        0xFF000000.toInt() or friend.activity.color)
+                        MenuTheme.alpha(friend.activity.menuColor))
                 }))
                 child(row().apply {
                     child(label("${if (friend.bestFriend) "§l" else ""}${friend.name}").horizontalSizing(Sizing.expand()))
-                    child(label(friend.activity.label, friend.activity.color))
+                    child(label(friend.activity.label, friend.activity.menuColor))
                 })
                 child(label(friend.location, MUTED).horizontalSizing(Sizing.fill()))
                 val data = FriendWealthCache.get(friend.name)
@@ -167,7 +167,7 @@ class FriendsSocialScreen(private val tab: Tab = Tab.FRIENDS) : MenuScreen(Compo
                     if (outstanding && item.loan != LoanState.LENT) return@forEachIndexed
                     child(row().apply {
                         val text = "${item.count}× ${item.name}${when (item.loan) { LoanState.LENT -> " • Lent"; LoanState.RETURNED -> " • Returned"; else -> "" }}"
-                        child(label(text, if (item.loan == LoanState.LENT) 0xE8BF71 else WHITE).horizontalSizing(Sizing.expand())
+                        child(label(text, if (item.loan == LoanState.LENT) MenuTheme.YELLOW else WHITE).horizontalSizing(Sizing.expand())
                             .tooltip(Component.literal("Sent to ${trade.friend}\n${item.id}${item.uuid?.let { "\n$it" }.orEmpty()}")))
                         child(button(when (item.loan) { LoanState.NONE -> "Mark as lent"; LoanState.LENT -> "Returned"; LoanState.RETURNED -> "Reopen loan" }, 90) {
                             ledger.mark(trade.id, index, if (item.loan == LoanState.LENT) LoanState.RETURNED else LoanState.LENT)

@@ -134,6 +134,15 @@ fun notifySettingsChanged() {
 internal fun settingsRow(): FlowLayout = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
     gap(5); verticalAlignment(VerticalAlignment.CENTER)
 }
+
+internal fun settingsSectionHeader(title: UIComponent, action: UIComponent?, availableWidth: Int): FlowLayout {
+    val compact = availableWidth < 240
+    return (if (compact) UIContainers.verticalFlow(Sizing.fill(), Sizing.content()) else settingsRow()).apply {
+        gap(8); padding(Insets.of(10)); surface(MenuTheme.panel(true))
+        child(title.horizontalSizing(if (compact || action == null) Sizing.fill() else Sizing.expand()))
+        action?.let { child(it) }
+    }
+}
 /** Only the theme editor's public overrides are exposed from hidden config entries. */
 internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = settingRows(config) +
     config.categories()["Theme & Appearance"]?.elements().orEmpty()
@@ -148,15 +157,6 @@ internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>,
     }
     val matches = catalog.search(query).mapNotNull { it.settingPath }.toSet()
     return rows.filter { it.path in matches }
-}
-
-/** Keep click feedback in the shared canvas so transformed paint and pointer mapping agree. */
-private class SettingsButton(message: Component, action: (ButtonComponent) -> Unit) : MenuButton(message, action) {
-    override fun interactionPose(hover: Double, press: Double): MotionPose {
-        val profile = ThemeConfig.animationMode.profile
-        return MotionPose(scale = 1.0 + hover * profile.hoverScale + press * profile.pressScale * 3,
-            pivotX = x + width / 2.0, pivotY = y + height / 2.0)
-    }
 }
 
 class SettingsScreen @JvmOverloads constructor(
@@ -182,6 +182,7 @@ class SettingsScreen @JvmOverloads constructor(
     private var query = ""
     private lateinit var body: FlowLayout
     private lateinit var heading: LabelComponent
+    private lateinit var summary: LabelComponent
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
     private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
@@ -230,8 +231,9 @@ class SettingsScreen @JvmOverloads constructor(
             onChanged().subscribe { query = it; keyCapture = null; closeMenuDropdown(); populate(animate = false) }
         }
         heading = label(category.title, MenuTheme.TEXT, 17f)
+        summary = label("", MenuTheme.MUTED, 9f)
         contentScroll = settingsScroll(body)
-        root.child(settingsPage(search, heading, contentScroll, settingsRow().apply {
+        root.child(settingsPage(search, column().apply { gap(4); child(heading); child(summary) }, contentScroll, settingsRow().apply {
             child(label("Changes save on close • Friend preferences use Save", MenuTheme.MUTED, 8f).horizontalSizing(Sizing.expand()))
             child(button("Done", 42, "Save settings and return") { onClose() })
         }))
@@ -249,6 +251,10 @@ class SettingsScreen @JvmOverloads constructor(
             if (featureScoped) it.featureId == featureId else it.category == category
         } else catalog.search(query)
         val extraPaths = results.mapNotNull { it.settingPath }.toSet()
+        val count = (matches.map { it.path } + extraPaths).distinct().size
+        summary.text(Component.literal(if (query.isBlank()) {
+            "${count} settings • ${if (featureScoped) "Pin frequent controls to Quick Settings" else category.description}"
+        } else "${count} matching controls across all categories"))
         catalog.features.forEach { owner ->
             val settings = matches.filter { MenuCatalog.settingLocation(it.path).let { location ->
                 location.featureId == owner.id || location.featureId == null && owner.category == MenuCategory.SETTINGS && location.subcategory == owner.subcategory
@@ -257,12 +263,19 @@ class SettingsScreen @JvmOverloads constructor(
             val preferences = owner.id == "party-finder" && extraPaths.any { it in setOf("Dungeons/Dungeon Friends/messageTemplate", "Dungeons/Dungeon Friends/titleNotifications") }
             val hud = owner.id == "settings-hud" && (query.isBlank() && category == MenuCategory.SETTINGS && (!featureScoped || featureId == owner.id) || query.isNotBlank() && results.any { it.featureId == owner.id })
             if (settings.isEmpty() && !availability && !preferences && !hud) return@forEach
-            body.child(label(owner.breadcrumb, MenuTheme.ACCENT, 11f))
-            if (settings.isNotEmpty()) body.child(button("Reset section", 88, "Restore defaults for these displayed settings") {
+            val reset = if (settings.isEmpty()) null else button("Reset section", 88, "Restore defaults for these displayed settings") {
                 settings.forEach { it.entry.reset() }
                 if (settings.any { it.path == "openConfigKey" }) SkyMyceCommands.updateSettingsKey()
                 keyCapture = null; edited(); populate()
-            })
+            }
+            body.child(settingsSectionHeader(column().apply {
+                gap(4)
+                child(label(owner.title, MenuTheme.TEXT, 12f))
+                child(label(if (query.isBlank()) owner.description else owner.breadcrumb, MenuTheme.MUTED, 9f))
+            }, reset, detailWidth))
+            if (owner.id == "settings-appearance") body.child(button("Browse themes & customize", minOf(210, controlWidth), "Choose a theme, preview its controls, or customize and transfer its palette") {
+                navigateMenu(ThemeEditorScreen(this))
+            }.apply { intent = MenuButtonIntent.PRIMARY })
             if (owner.id == "starred-routes") {
                 settingGroups(settings, owner.id).forEach { (group, entries) ->
                     if (group == "Advanced") {
@@ -283,9 +296,13 @@ class SettingsScreen @JvmOverloads constructor(
                 editingDungeonFriend?.let { name -> controls["friend/$name"] = it }
             })
             if (hud) body.child(button("Open HUD editor", minOf(190, controlWidth), "Arrange widget positions, scale and appearance") { navigateMenu(WidgetEditorScreen(this)) })
-            if (owner.id == "settings-appearance") body.child(button("Theme preview / import / export", minOf(210, controlWidth), "Open the shared theme preview and clipboard tools") { navigateMenu(ThemeEditorScreen(this)) })
         }
-        if (body.children().isEmpty()) body.child(label("No matching settings", MenuTheme.MUTED))
+        if (body.children().isEmpty()) body.child(column().apply {
+            gap(7); padding(Insets.of(14)); surface(MenuTheme.panel(true))
+            child(label("No matching settings", MenuTheme.TEXT, 12f))
+            child(label("Try a feature name, setting name or a shorter search. Search includes every category.", MenuTheme.MUTED, 9f))
+            child(button("Clear search", minOf(100, controlWidth), "Show this category's settings") { search.text("") })
+        })
         contentScroll.scrollTo(0.0)
     }
 
@@ -309,7 +326,7 @@ class SettingsScreen @JvmOverloads constructor(
         if (availabilityOnly || friend != null) {
             if (friend != null) child(label("Secondary classes: $friend", MenuTheme.ACCENT))
             DungeonClass.entries.chunked(2).forEach { options -> child(settingsRow().apply {
-                options.forEach { clazz -> child(SettingsButton(Component.literal(clazz.displayName)) {
+                options.forEach { clazz -> child(MenuButton(Component.literal(clazz.displayName)) {
                     draft.classes = if (clazz in draft.classes) draft.classes - clazz else draft.classes + clazz
                 }.apply {
                     selected = { clazz in draft.classes }; sizing(Sizing.fixed(((detailWidth - 5) / 2).coerceAtLeast(1)), Sizing.fixed(24))
@@ -329,7 +346,7 @@ class SettingsScreen @JvmOverloads constructor(
         } else if (friend == null) {
             child(settingsRow().apply {
                 child(label("Title notifications").horizontalSizing(Sizing.expand()))
-                child(SettingsButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
+                child(MenuButton(Component.literal("Titles")) { draft.titles = !draft.titles }.apply {
                     toggled = { draft.titles }; sizing(Sizing.fixed(64), Sizing.fixed(22))
                     tip("Show invitations and joining players as titles")
                 }.also { controls["Dungeons/Dungeon Friends/titleNotifications"] = it })
@@ -377,7 +394,7 @@ class SettingsScreen @JvmOverloads constructor(
         populate(animate)
     }
 
-    private fun toggle(setting: SettingRow) = SettingsButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
+    private fun toggle(setting: SettingRow) = MenuButton(Component.literal(if (setting.entry.boolean) "On" else "Off")) { b ->
         if (setting.entry.setBoolean(!setting.entry.boolean)) edited()
         b.message = Component.literal(if (setting.entry.boolean) "On" else "Off")
     }.apply {
@@ -583,8 +600,8 @@ class SettingsScreen @JvmOverloads constructor(
     private fun label(text: String, color: Int = MenuTheme.TEXT, size: Float = 10f) = MenuLabel(Component.literal(text)).apply {
         fontSize = size; color(Color.ofRgb(color)); shadow(MenuTheme.SHADOW); horizontalSizing(Sizing.fill())
     }
-    private fun button(text: String, width: Int, tooltip: String, action: (ButtonComponent) -> Unit) = SettingsButton(Component.literal(text), action).themed().apply {
-        sizing(Sizing.fixed(width), Sizing.fixed(20)); tip(tooltip)
+    private fun button(text: String, width: Int, tooltip: String, action: (ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply {
+        themed(); sizing(Sizing.fixed(width), Sizing.fixed(20)); tip(tooltip)
     }
     private fun <T : UIComponent> T.tip(text: String): T = wrappedTooltip(Component.literal(text))
     private fun menu(anchor: ButtonComponent, options: (DropdownComponent) -> Unit) = openMenuDropdown(anchor, options)

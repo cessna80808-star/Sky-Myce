@@ -34,6 +34,7 @@ fun main() {
     checkFullFriendRoster()
     checkMenuRefresh()
     checkFriendActionLayout()
+    checkFriendActivityTheme()
     checkWealthRefresh()
     checkUserMessages()
     me.mycellium.skymyce.features.social.checkCosmetics()
@@ -826,6 +827,20 @@ fun main() {
         Files.deleteIfExists(savedDirectory)
     }
     println("Dungeon Friends checks passed")
+}
+
+private fun checkFriendActivityTheme() {
+    val previous = me.mycellium.skymyce.config.misc.ThemeConfig.preset
+    try {
+        for (preset in me.mycellium.skymyce.hud.ThemePreset.entries) {
+            me.mycellium.skymyce.config.misc.ThemeConfig.preset = preset
+            val theme = me.mycellium.skymyce.ui.MenuTheme
+            check(FriendActivity.IDLE.menuColor == theme.GREEN && FriendActivity.SKYBLOCK.menuColor == theme.YELLOW)
+            check(FriendActivity.IN_RUN.menuColor == theme.RED && FriendActivity.LIMBO.menuColor == theme.RED)
+            check(FriendActivity.OFFLINE.menuColor == theme.MUTED && FriendActivity.UNKNOWN.menuColor == theme.MUTED)
+            check(FriendActivity.OTHER_GAME.menuColor == theme.ACCENT) { "Friend status colors did not follow the active theme" }
+        }
+    } finally { me.mycellium.skymyce.config.misc.ThemeConfig.preset = previous }
 }
 
 private fun checkJoinLookups() {
