@@ -55,6 +55,48 @@ export class CommunityLeaderboards {
       CREATE TABLE IF NOT EXISTS community_rng_scan(channel TEXT PRIMARY KEY,cursor TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS community_rng_scan_order ON community_rng_delivery(channel,id) WHERE message_id IS NOT NULL AND suppressed=0`);
   }
+  /** Repair count rows erased by the old same-owner refresh bug; never enqueue or repost accepted reports. */
+  restoreAcceptedRng(author: string, sessionId: string, now = Date.now()): number {
+    if (!/^[a-f0-9]{32}$/.test(author)) return 0;
+    // Refresh may change a session's UUID: prove its original link with the retained flow or durable connect audit.
+    // Missing proof stays unavailable. The accepted source tuple supplies the private acquisition ID absent from public events.
+    const rows = this.sql.exec<{ source_id: string; event_id: string; received_at: number; event: string; account_id: string }>(`
+      WITH identity AS (SELECT c.account_id,c.uuid,c.created_at,COALESCE(
+        (SELECT c.created_at FROM community_connect_flows f WHERE f.session_id=c.session_id AND f.account_id=c.account_id
+          AND f.uuid=c.uuid AND f.cancelled_at IS NULL LIMIT 1),
+        (SELECT MAX(p.at) FROM account_audit p WHERE p.account_id=c.account_id AND p.action='community_connected'
+          AND json_extract(p.metadata,'$.uuid')=c.uuid AND p.at<=c.created_at)) proof_at
+        FROM community_sessions c JOIN minecraft_accounts m ON m.uuid=c.uuid AND m.account_id=c.account_id
+        JOIN sky_accounts a ON a.account_id=c.account_id AND a.generation=c.generation
+        WHERE c.session_id=? AND c.uuid=? AND c.revoked_at IS NULL AND c.access_expires_at>? AND c.refresh_expires_at>?)
+      SELECT s.source_id,s.event_id,s.received_at,d.event,c.account_id FROM identity c JOIN community_rng_sources s ON s.author=c.uuid
+      JOIN community_rng_delivery d ON d.id=s.event_id AND d.author=s.author AND d.suppressed=0
+      WHERE c.proof_at IS NOT NULL AND c.created_at<=s.received_at AND s.received_at<=?
+      AND NOT EXISTS(SELECT 1 FROM account_audit x WHERE x.account_id=c.account_id AND x.at>=c.proof_at
+        AND x.action IN ('community_uuid_reconnected','community_uuid_unlinked','minecraft_uuid_removed','account_unlink')
+        AND (json_extract(x.metadata,'$.uuid')=s.author OR x.action='account_unlink' AND json_extract(x.metadata,'$.uuid') IS NULL))
+      AND NOT EXISTS(SELECT 1 FROM community_contributions p WHERE p.uuid=s.author AND p.id=s.source_id)
+      ORDER BY s.received_at DESC,s.source_id DESC LIMIT 100`, sessionId, author, now, now, now).toArray();
+    if (!rows.length) return 0;
+    let remaining = 100000 - this.sql.exec<{ n: number }>("SELECT COUNT(*) n FROM community_contributions").one().n;
+    let restored = 0;
+    for (const row of rows) {
+      if (remaining <= 0) break;
+      let event: PublicRngEvent | null;
+      try { event = validatedPublicRngEvent(JSON.parse(row.event)); } catch { continue; }
+      if (!event || event.id !== row.event_id || !/^[a-f0-9]{32}$/.test(row.source_id) ||
+        !Number.isSafeInteger(row.received_at) || row.received_at <= 0 ||
+        event.occurredAt <= row.received_at - 300000 || event.occurredAt > row.received_at + 60000) continue;
+      const rng = this.hooks.check(author, "rng", event.occurredAt);
+      if (!rng.allowed || !this.hooks.check(author, "rng", row.received_at).allowed ||
+        !this.hooks.check(author, "leaderboards", event.occurredAt).allowed ||
+        !this.hooks.check(author, "leaderboards", row.received_at).allowed) continue;
+      this.sql.exec("INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", row.source_id, row.account_id,
+        author, "rng", "rng_drops", 1, "drops", event.occurredAt, row.received_at, "client-observation", "unverified", 1, rng.revision);
+      remaining--; restored++;
+    }
+    return restored;
+  }
   query(raw: LeaderboardQuery, now = Date.now()): LeaderboardResult {
     const category = typeof raw.category === "string" ? raw.category : "economy";
     const metricId = typeof raw.metric === "string" ? raw.metric : ({ economy: "networth", dungeons: "dungeon_runs", rng: "rng_drops", other: "completed_tasks" } as Record<string, string>)[category];

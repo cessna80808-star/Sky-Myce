@@ -149,7 +149,8 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     val chest: String? = null, val query: String = "", val rareOnly: Boolean = false, val valuableOnly: Boolean = false,
     val from: String = "", val until: String = "", val session: String? = null, val activity: String? = null,
     val scope: TrackerScope = TrackerScope.CURRENT_PROFILE, val legacyTotals: Boolean = false,
-    val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false) {
+    val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false,
+    val overviewVersion: Int = 1) {
     fun floorMatches(value: String?) = (floor == null || floor == value) && (mode == null || value?.startsWith(mode) == true)
     fun scopeMatches(value: AcquisitionContext?, current: AcquisitionContext?) = when (scope) {
         TrackerScope.CURRENT_PROFILE -> current?.matches(value) == true

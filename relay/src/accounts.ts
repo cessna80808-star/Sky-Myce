@@ -282,8 +282,13 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   async communityLeaderboard(token: string, query: LeaderboardQuery) {
     const session = await this.community.tokenSession(token);
     if (!session.ok) return { ok: false, error: session.error };
-    this.limit(`leaderboards:${session.accountId}`, 60);
-    return this.leaderboards.query(query);
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
+      if (!current.ok) return { ok: false, error: current.error };
+      this.limit(`leaderboards:${session.accountId}`, 60);
+      if (query.category === "rng" && (query.metric === undefined || query.metric === "rng_drops")) this.leaderboards.restoreAcceptedRng(session.uuid!, session.sessionId!);
+      return this.leaderboards.query(query);
+    });
   }
   async communityJournalComparison(token: string, query: JournalComparisonQuery): Promise<JournalComparisonResult> {
     const session = await this.community.tokenSession(token);
@@ -293,6 +298,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       if (!current.ok) return { ok: false, error: current.error };
       try { this.limit(`journal-comparison:${session.accountId}`, 60); }
       catch (error) { return { ok: false, error: error instanceof AuthorizationError ? error.code : "comparison_unavailable" }; }
+      this.leaderboards.restoreAcceptedRng(session.uuid!, session.sessionId!);
       return this.leaderboards.journalComparison(session.uuid!, query);
     });
   }
