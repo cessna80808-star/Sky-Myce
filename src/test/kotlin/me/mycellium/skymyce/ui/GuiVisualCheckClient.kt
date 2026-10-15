@@ -110,6 +110,10 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeon-tracker-museum-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.MUSEUM) },
             Scene("dungeon-tracker-timeline-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { trackerScreen(TrackerPage.TIMELINE) },
             Scene("dungeon-tracker-timeline-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { trackerScreen(TrackerPage.TIMELINE) },
+            Scene("dungeon-tracker-handle-history", ThemePreset.SIGNATURE) {
+                AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", query = "NECRON_HANDLE", scope = TrackerScope.ALL_LOCAL_PROFILES))
+                DungeonScreen()
+            },
             Scene("dungeon-tracker-timeline-load-older", ThemePreset.SIGNATURE) {
                 trackerHistoryFixture = GuiVisualTrackerHistoryFixture(timelineCount = 120)
                 AcquisitionRepository.remember(TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
@@ -373,6 +377,16 @@ class GuiVisualCheckClient : ClientModInitializer {
                 val components = arrayListOf<UIComponent>()
                 adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
                 check(AcquisitionRepository.state === trackerArchiveSnapshot) { "A tracker view changed the acquisition archive" }
+                if (trackerFilter().page == TrackerPage.TIMELINE) {
+                    val shown = trackerView()
+                    val rows = components.filter { it.id()?.startsWith("timeline-undated-") == true }
+                    check(rows.size == shown.undatedLoot.size) { "Timeline omitted saved drops without dates" }
+                    for ((item, count) in shown.undatedLoot) {
+                        val row = rows.single { it.id() == "timeline-undated-$item" } as FlowLayout
+                        val children = arrayListOf<UIComponent>(); row.collectDescendants(children)
+                        check(children.filterIsInstance<MenuLabel>().any { it.text().string.endsWith("×$count") })
+                    }
+                }
                 if (trackerFilter().page == TrackerPage.OVERVIEW) {
                     val view = trackerView()
                     val expectedGross = view.loot.sumOf { it.value ?: 0.0 }
@@ -484,7 +498,9 @@ private class GuiVisualTrackerHistoryFixture(item: String = "SHADOW_WARP_SCROLL"
         AcquisitionEvent("1".repeat(32), item, time, "dungeon", floor = "M7", quantity = 2, origin = "legacy-tracker"),
         AcquisitionEvent("2".repeat(32), item, time + 1000, "dungeon", context, "M7", "BEDROCK", run = "fixture-run"))
         else List(timelineCount) { index -> AcquisitionEvent((index + 1).toString(16).padStart(32, '0'), item,
-            time + index * 1000L, "dungeon", floor = "M7", origin = "legacy-tracker") },
+            time + index * 1000L, "dungeon", context = if (index == 0) context else null, floor = "M7",
+            chest = if (index == 0) "BEDROCK" else null, run = if (index == 0) "fixture-run" else null,
+            origin = if (index == 0) "confirmed" else "legacy-tracker") },
         runs = listOf(DungeonRunRecord("fixture-run", "fixture-session", context, "M7", time, time + 1000, 1000,
             chests = listOf(ChestReceipt("fixture-chest", time + 1000, "BEDROCK", 0.0, listOf(
                 RunLoot(item, 1, 1_000_000.0), RunLoot("GUI_FIXTURE_UNPRICED", 2, 123_456_789.0)))))),

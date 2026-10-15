@@ -354,7 +354,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
     }
     private fun timeline(content: FlowLayout) {
         val visible = view.events.take(timelineLimit)
-        if (visible.isEmpty()) content.child(label("No drops match these filters.", MenuTheme.MUTED))
+        if (visible.isEmpty() && view.undatedLoot.isEmpty()) content.child(label("No drops match these filters.", MenuTheme.MUTED))
         var date = ""
         visible.forEach { event ->
             val local = Instant.ofEpochMilli(event.occurredAt).atZone(ZoneId.systemDefault())
@@ -379,6 +379,16 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 ).joinToString("\n")))
             })
         }
+        if (view.undatedLoot.isNotEmpty()) {
+            content.child(label("Date not saved", MenuTheme.SECONDARY).apply { margins(Insets.top(8)); fontSize = 11f })
+            view.undatedLoot.entries.sortedBy { itemName(it.key) }.forEach { (item, count) ->
+                content.child(row().apply {
+                    id("timeline-undated-$item"); padding(Insets.vertical(3))
+                    child(label("", MenuTheme.MUTED).horizontalSizing(Sizing.fixed(34)))
+                    child(icon(item)); child(label("${itemName(item)} ×$count", MenuTheme.TEXT).horizontalSizing(Sizing.expand()))
+                })
+            }
+        }
         if (view.events.size > visible.size) content.child(button("Load ${if (filter.oldestFirst) "newer" else "older"} (${view.events.size - visible.size})", minOf(150, bodyWidth)) {
             timelineLimit += 100; renderView(animate = false)
         })
@@ -399,6 +409,8 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             gap(8); verticalAlignment(VerticalAlignment.TOP)
             group.forEach { item ->
             val events = grouped[item].orEmpty()
+            val undated = view.undatedLoot[item] ?: 0L
+            val dated = obtained(item) - undated
             child(column().apply {
                 id("museum-card-$item"); sizing(Sizing.fixed(cardWidth), Sizing.fixed(102)); gap(6)
                 surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
@@ -407,7 +419,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 })
                 child(label(if (obtained(item) == 0L) "Not collected" else "× ${obtained(item)} collected", if (obtained(item) == 0L) MenuTheme.MUTED else MenuTheme.ACCENT)
                     .apply { fontSize = 13f })
-                child(label(if (events.isEmpty()) "No dated history" else "Last recorded ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED)
+                child(label(if (undated > 0) "$dated dated • $undated without dates" else if (events.isEmpty()) "No dated history" else "Last recorded ${date(events.maxOf { it.occurredAt })}", MenuTheme.MUTED)
                     .apply { fontSize = 9f }
                     .wrappedTooltip(Component.literal(if (events.isEmpty()) "Older totals have no dates" else
                         "${events.sumOf { it.quantity }} dated drops • ${date(events.minOf { it.occurredAt })} – ${date(events.maxOf { it.occurredAt })}")))
@@ -415,7 +427,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     child(button("History", 68) {
                         itemHistoryReturn = filter
                         change(filter.copy(page = TrackerPage.TIMELINE, query = item, valuableOnly = false)); rebuild(resetScroll = true)
-                    }.apply { active(events.isNotEmpty()) })
+                    }.apply { active(undated > 0 || events.isNotEmpty()) })
                     child(button(if (AcquisitionRepository.pinned(item, seenContext)) "Unpin" else "Pin", 55) { AcquisitionRepository.pin(item, seenContext); renderView() }
                         .wrappedTooltip(Component.literal("Keep this item at the top")))
                 })
