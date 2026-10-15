@@ -14,6 +14,8 @@ fun checkTracker() {
     checkLifetimeDungeonSummary()
     checkCombinedDungeonLoot()
     checkMuseumLootCounts()
+    checkUndatedTrackerLoot()
+    checkReceiptHistoryProjection()
     checkPersonalRateSamples()
     checkMarketValuedTrackerSummary()
     checkLegacyCostCoverage()
@@ -244,6 +246,120 @@ private fun checkMuseumLootCounts() {
         check(scoped.loot.single().let { it.item == "IMPLOSION_SCROLL" && it.count == 1L })
         check(scoped.events.single().origin == "confirmed")
     }
+}
+
+private fun checkUndatedTrackerLoot() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 5), mapOf(
+        "BEDROCK" to listOf(TrackerLootRow("NECRON_HANDLE", 5, 5_000_000.0, null, 5),
+            TrackerLootRow("IMPLOSION_SCROLL", 4, 4_000_000.0, null, 5),
+            TrackerLootRow("ORDINARY_LOOT", 8, 4_000_000.0, null, 5), TrackerLootRow("WARDEN_HEART", 7, 7_000_000.0, null, 5)),
+        "OBSIDIAN" to listOf(TrackerLootRow("SHADOW_WARP_SCROLL", 2, 0.0, null, 2))),
+        emptyMap(), emptyMap(), mapOf("BEDROCK" to 5, "OBSIDIAN" to 2))
+    val otherFloor = historical.copy(floor = "F7", loot = mapOf("BEDROCK" to listOf(
+        TrackerLootRow("NECRON_HANDLE", 9, 9_000_000.0, null, 9))))
+    val run = DungeonRunRecord("new", "new-session", context, "M7", time - 60000, time, 60000,
+        chests = listOf(ChestReceipt("new-chest", time, "BEDROCK", 0.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 1_000_000.0)))))
+    val oldRun = run.copy(id = "old-copy", trackingVersion = 1)
+    val handle = AcquisitionEvent("e".repeat(32), "NECRON_HANDLE", time - 86400000, "dungeon",
+        floor = "M7", chest = "BEDROCK", origin = "legacy-tracker")
+    val archive = AcquisitionArchive(runs = listOf(oldRun, run), events = listOf(handle,
+        handle.copy(id = "f".repeat(32), item = "IMPLOSION_SCROLL", quantity = 2),
+        handle.copy(id = "a".repeat(32), item = "IMPLOSION_SCROLL", occurredAt = time, context = context,
+            quantity = 1, origin = "confirmed", value = 1_000_000.0, run = run.id)))
+    val before = Gson().toJson(archive)
+    val legacy = listOf(historical, otherFloor)
+    val filter = TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun view(selected: TrackerFilter = filter, state: AcquisitionArchive = archive, details: Boolean = true) =
+        trackerView(state, legacy, selected, context, details)
+    val timeline = view()
+    check(timeline.loot == view(filter.copy(page = TrackerPage.MUSEUM)).loot)
+    check(timeline.loot == view(filter.copy(page = TrackerPage.LOOT)).loot)
+    check(timeline.loot.first { it.item == "IMPLOSION_SCROLL" }.count == 5L) // The v1 receipt is already in the aggregate.
+    check(timeline.undatedLoot == mapOf("NECRON_HANDLE" to 4L, "IMPLOSION_SCROLL" to 2L, "SHADOW_WARP_SCROLL" to 2L))
+    check(view(filter.copy(page = TrackerPage.MUSEUM)).undatedLoot == timeline.undatedLoot)
+    check(timeline.events == filter.events(archive.events, context, archive.runs)) // No dates or events are invented.
+    check(trackerView(archive, legacy, filter, null).undatedLoot == timeline.undatedLoot) // Works offline.
+    check(view(filter.copy(scope = TrackerScope.UNSCOPED_LEGACY)).undatedLoot == timeline.undatedLoot)
+    check(view(filter.copy(query = "Necron's Handle")).undatedLoot == mapOf("NECRON_HANDLE" to 4L))
+    check(view(filter.copy(rareOnly = true)).undatedLoot == timeline.undatedLoot)
+    check(view(filter.copy(valuableOnly = true)).let {
+        it.events.size == 1 && it.undatedLoot == mapOf("NECRON_HANDLE" to 4L, "IMPLOSION_SCROLL" to 2L)
+    }) // Unknown-valued dated drops still reduce the undated balance.
+    check(view(filter.copy(chest = "BEDROCK")).undatedLoot == mapOf("NECRON_HANDLE" to 4L, "IMPLOSION_SCROLL" to 2L))
+    check(view(filter.copy(chest = "OBSIDIAN")).undatedLoot == mapOf("SHADOW_WARP_SCROLL" to 2L))
+    check(view(filter.copy(chest = "DIAMOND")).undatedLoot.isEmpty())
+    check(view(filter.copy(floor = null, mode = "M")).undatedLoot == timeline.undatedLoot)
+    check(view(filter.copy(floor = null, mode = "F")).undatedLoot == mapOf("NECRON_HANDLE" to 9L))
+    check(view(filter.copy(floor = "F7")).undatedLoot == mapOf("NECRON_HANDLE" to 9L))
+    check(view(filter.copy(activity = "dungeon")).undatedLoot == timeline.undatedLoot)
+    for (selected in listOf(filter.copy(scope = TrackerScope.CURRENT_PROFILE, legacyTotals = true),
+        filter.copy(from = "2026-09-24"), filter.copy(until = "2026-09-24"), filter.copy(session = run.session),
+        filter.copy(activity = "slayer"), filter.copy(page = TrackerPage.OVERVIEW)))
+        check(view(selected).undatedLoot.isEmpty())
+    check(view(details = false).undatedLoot.isEmpty())
+    val overlapping = archive.copy(events = archive.events + handle.copy(id = "b".repeat(32), quantity = 10))
+    check(view(state = overlapping).let { "NECRON_HANDLE" !in it.undatedLoot && it.loot.first { row -> row.item == "NECRON_HANDLE" }.count == 5L })
+    val many = archive.copy(runs = emptyList(), events = (0 until 105).map { handle.copy(id = it.toString(16).padStart(32, '0')) })
+    val fullHistory = trackerView(many, listOf(historical.copy(loot = mapOf("BEDROCK" to listOf(
+        TrackerLootRow("NECRON_HANDLE", 105, 105_000_000.0, null, 105))))), filter, null)
+    check(fullHistory.events.size == 105 && fullHistory.undatedLoot.isEmpty()) // Coverage uses more than the first timeline page.
+    check(Gson().toJson(archive) == before)
+}
+
+private fun checkReceiptHistoryProjection() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val time = LocalDate.of(2026, 9, 24).atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val loot = RunLoot("NECRON_HANDLE", 2, 4_000_000.0, "LEGENDARY", "Necron's Handle")
+    val chest = ChestReceipt("paid-chest", time, "BEDROCK", 100.0, listOf(loot, RunLoot("ORDINARY_LOOT", 8)))
+    val run = DungeonRunRecord("paid-run", "session", context, "M7", time - 60000, time, 60000, chests = listOf(chest))
+    val archive = AcquisitionArchive(runs = listOf(run))
+    val before = Gson().toJson(archive)
+    val legacy = LegacyFloorView("M7", TrackerSummary(), mapOf("BEDROCK" to listOf(
+        TrackerLootRow("NECRON_HANDLE", 3, 6_000_000.0, null, 3))), emptyMap(), emptyMap(), mapOf("BEDROCK" to 3))
+    val filter = TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    fun view(state: AcquisitionArchive = archive, selected: TrackerFilter = filter) = trackerView(state, listOf(legacy), selected, context)
+    val projected = view()
+    val event = projected.events.single()
+    check(event.item == loot.item && event.quantity == 2 && event.occurredAt == chest.time && event.value == loot.value)
+    check(event.context == context && event.floor == run.floor && event.chest == chest.chest && event.run == run.id)
+    check(event.rarity == loot.rarity && event.displayName == loot.displayName && event.chestCost == chest.cost)
+    check(projected.loot.first { it.item == loot.item }.count == 5L && projected.undatedLoot == mapOf(loot.item to 3L))
+    check(view().events.single().id == event.id && view(selected = filter.copy(query = "handle")).events.single().id == event.id)
+    check(view(selected = filter.copy(scope = TrackerScope.CURRENT_PROFILE)).events == listOf(event))
+    check(view(selected = filter.copy(scope = TrackerScope.UNSCOPED_LEGACY)).events.isEmpty())
+    check(view(selected = filter.copy(from = "2026-09-25")).events.isEmpty())
+    check(view(selected = filter.copy(session = run.session)).events == listOf(event))
+    for (hidden in listOf(event.copy(floor = null), event.copy(occurredAt = time - 86400000))) {
+        val dated = view(archive.copy(events = listOf(hidden)), filter.copy(from = "2026-09-24", until = "2026-09-24"))
+        check(dated.events.single().let { it.quantity == 2 && it.occurredAt == chest.time && it.floor == run.floor })
+    }
+    val linked = event.copy(id = "c".repeat(32), quantity = 1, value = 2_000_000.0)
+    val partial = archive.copy(events = listOf(linked))
+    val remaining = view(partial).events.single { it.id != linked.id }
+    check(remaining.quantity == 1 && remaining.value == 2_000_000.0 && remaining.occurredAt == chest.time)
+    check(view(partial).events.first { it.id == linked.id } == linked && view(partial).undatedLoot == projected.undatedLoot)
+    check(view(archive.copy(events = listOf(event.copy(id = linked.id)))).events == listOf(event.copy(id = linked.id)))
+    val wrongContext = linked.copy(context = context.copy(profileName = "Pear"))
+    check(view(archive.copy(events = listOf(wrongContext)), filter.copy(scope = TrackerScope.CURRENT_PROFILE)).events.single().quantity == 2)
+    val unlinked = linked.copy(run = null, origin = "legacy-tracker")
+    check(view(archive.copy(events = listOf(unlinked))).events.sumOf { it.quantity } == 3) // Similar dates do not prove a legacy link.
+    check(view(archive.copy(runs = listOf(run.copy(trackingVersion = 1)))).events.isEmpty())
+    val second = chest.copy(id = "second-chest", time = time + 1000, chest = "OBSIDIAN")
+    val both = archive.copy(runs = listOf(run.copy(chests = listOf(second, chest))),
+        events = listOf(linked, linked.copy(id = "d".repeat(32), chest = null)))
+    check(view(both).events.sumOf { it.quantity } == 4) // Each linked quantity covers only one paid quantity.
+    check(view(both).events.single { it.id !in both.events.map { saved -> saved.id } }.let {
+        it.chest == "OBSIDIAN" && it.quantity == 2 && it.occurredAt == second.time
+    }) // Receipt order is stable, even when the stored list is reversed.
+    check(view(both, filter.copy(chest = "BEDROCK")).let {
+        it.events.sumOf { event -> event.quantity } == 2 && it.undatedLoot == mapOf(loot.item to 3L)
+    }) // A hidden chest-unspecified announcement cannot hide a receipt's known date.
+    check(view(both, filter.copy(chest = "OBSIDIAN")).let {
+        it.events.single().quantity == 2 && it.undatedLoot.isEmpty()
+    })
+    check(Gson().toJson(archive) == before && archive.events.isEmpty())
 }
 
 private fun checkPersonalRateSamples() {
