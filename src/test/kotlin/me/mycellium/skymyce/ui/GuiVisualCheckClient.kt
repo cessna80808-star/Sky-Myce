@@ -379,6 +379,10 @@ class GuiVisualCheckClient : ClientModInitializer {
                 check(AcquisitionRepository.state === trackerArchiveSnapshot) { "A tracker view changed the acquisition archive" }
                 if (trackerFilter().page == TrackerPage.TIMELINE) {
                     val shown = trackerView()
+                    check(shown.events.none { it.item == "RECOMBOBULATOR_3000" } &&
+                        shown.loot.none { it.item == "RECOMBOBULATOR_3000" } && "RECOMBOBULATOR_3000" !in shown.undatedLoot) {
+                        "RNG Timeline still showed standard Recombobulators"
+                    }
                     val rows = components.filter { it.id()?.startsWith("timeline-undated-") == true }
                     check(rows.size == shown.undatedLoot.size) { "Timeline omitted saved drops without dates" }
                     for ((item, count) in shown.undatedLoot) {

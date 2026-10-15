@@ -16,6 +16,7 @@ fun checkTracker() {
     checkMuseumLootCounts()
     checkUndatedTrackerLoot()
     checkReceiptHistoryProjection()
+    checkTimelineRecombobulators()
     checkPersonalRateSamples()
     checkMarketValuedTrackerSummary()
     checkLegacyCostCoverage()
@@ -360,6 +361,40 @@ private fun checkReceiptHistoryProjection() {
         it.events.single().quantity == 2 && it.undatedLoot.isEmpty()
     })
     check(Gson().toJson(archive) == before && archive.events.isEmpty())
+}
+
+private fun checkTimelineRecombobulators() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val time = 1_000_000L
+    val standard = "RECOMBOBULATOR_3000"
+    val auto = "AUTO_RECOMBOBULATOR"
+    val run = DungeonRunRecord("run", "session", context, "M7", chests = listOf(
+        ChestReceipt("paid", time, "BEDROCK", 0.0, listOf(RunLoot(standard, 2), RunLoot(auto, 1)))))
+    val standardEvent = AcquisitionEvent("e".repeat(32), standard, time, "dungeon", context, "M7", "BEDROCK", quantity = 2, run = run.id)
+    val autoEvent = standardEvent.copy(id = "f".repeat(32), item = auto, quantity = 1)
+    val archive = AcquisitionArchive(events = listOf(standardEvent, autoEvent), runs = listOf(run))
+    val legacy = LegacyFloorView("M7", TrackerSummary(), mapOf("BEDROCK" to listOf(
+        TrackerLootRow(standard, 5, 0.0, null, 5), TrackerLootRow(auto, 2, 0.0, null, 2))), emptyMap(), emptyMap(), emptyMap())
+    val before = Gson().toJson(archive) to Gson().toJson(legacy)
+    val filter = TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    for (query in listOf("", "recomb", "AUTO_RECOMBOBULATOR")) {
+        val selected = filter.copy(query = query)
+        val timeline = trackerView(archive, listOf(legacy), selected, null)
+        check(timeline.events == listOf(autoEvent) && timeline.loot.single().let { it.item == auto && it.count == 3L })
+        check(standard !in timeline.undatedLoot && selected.events(archive.events, null, archive.runs) == listOf(autoEvent))
+    }
+    val searched = trackerView(archive, listOf(legacy), filter.copy(query = standard), null)
+    check(searched.events.isEmpty() && searched.loot.isEmpty() && searched.undatedLoot.isEmpty())
+    for (page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT, TrackerPage.MUSEUM)) {
+        val other = trackerView(archive, listOf(legacy), filter.copy(page = page), null)
+        check(other.events.toSet() == archive.events.toSet())
+        check(other.loot.associate { it.item to it.count } == mapOf(standard to 7L, auto to 3L))
+    }
+    val standardOnly = archive.copy(events = listOf(standardEvent), runs = listOf(run.copy(chests = run.chests.map {
+        it.copy(loot = it.loot.filter { item -> item.item == standard })
+    })))
+    check(trackerView(standardOnly, emptyList(), filter, null).let { it.events.isEmpty() && it.loot.isEmpty() && it.undatedLoot.isEmpty() })
+    check((Gson().toJson(archive) to Gson().toJson(legacy)) == before)
 }
 
 private fun checkPersonalRateSamples() {
