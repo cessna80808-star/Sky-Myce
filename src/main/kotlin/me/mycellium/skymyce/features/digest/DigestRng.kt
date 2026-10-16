@@ -31,10 +31,12 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.acquisitionId
 data class DetectedRng(val id: String, val item: String, val activity: String, val occurredAt: Long, val confirmation: String? = null,
     val rarity: String? = null, val displayName: String? = null)
 internal fun confirmedRng(drop: DetectedRng) = drop.confirmation?.let { drop.copy(id = acquisitionId(it)) } ?: drop
-data class DigestRareItem(val name: String, val activity: String)
+/** [public] items may be shared to the community feed; the relay accepts only those. Others stay in local history. */
+data class DigestRareItem(val name: String, val activity: String, val public: Boolean = true)
 
 object DigestRngCatalog {
     fun valid(item: String, activity: String): Boolean = DigestRngParser.catalog[item]?.activity == activity
+    fun public(item: String, activity: String): Boolean = DigestRngParser.catalog[item]?.let { it.activity == activity && it.public } == true
     fun name(item: String): String = DigestRngParser.catalog[item]?.name ?: "Unknown drop"
 }
 
@@ -67,6 +69,14 @@ object DigestRngParser {
         "IMPLOSION_SCROLL" to DigestRareItem("Implosion", "dungeon"),
         "WITHER_SHIELD_SCROLL" to DigestRareItem("Wither Shield", "dungeon"),
         "SHADOW_WARP_SCROLL" to DigestRareItem("Shadow Warp", "dungeon"),
+        // Local journal only until the relay's public allowlist includes them.
+        "FIRST_MASTER_STAR" to DigestRareItem("First Master Star", "dungeon", public = false),
+        "SECOND_MASTER_STAR" to DigestRareItem("Second Master Star", "dungeon", public = false),
+        "THIRD_MASTER_STAR" to DigestRareItem("Third Master Star", "dungeon", public = false),
+        "FOURTH_MASTER_STAR" to DigestRareItem("Fourth Master Star", "dungeon", public = false),
+        "FIFTH_MASTER_STAR" to DigestRareItem("Fifth Master Star", "dungeon", public = false),
+        "MASTER_SKULL_TIER_5" to DigestRareItem("Master Skull - Tier 5", "dungeon", public = false),
+        "AUTO_RECOMBOBULATOR" to DigestRareItem("Auto Recombobulator", "dungeon", public = false),
         "WARDEN_HEART" to DigestRareItem("Warden Heart", "slayer"),
         "JUDGEMENT_CORE" to DigestRareItem("Judgement Core", "slayer"),
         "OVERFLUX_CAPACITOR" to DigestRareItem("Overflux Capacitor", "slayer"),

@@ -144,6 +144,7 @@ fun checkDigestLifecycleAndNews() {
     check(privateReport.keys == setOf("event", "showName") && privateReport["showName"] == false)
     check((privateReport["event"] as Map<*, *>).keys == setOf("id", "item", "activity", "occurredAt"))
     check(digestRngSubmission(drop.copy(item = "DIRT"), true, true, now) == null)
+    check(digestRngSubmission(drop.copy(item = "FIFTH_MASTER_STAR"), true, true, now) == null) { "Local-only journal drops are never submitted to the public feed" }
     check(digestRngSubmission(drop.copy(occurredAt = now - 300001), true, true, now) == null)
     val observedContext = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val receipt = AcquisitionEvent(drop.id, drop.item, now - 5000, "dungeon", observedContext,

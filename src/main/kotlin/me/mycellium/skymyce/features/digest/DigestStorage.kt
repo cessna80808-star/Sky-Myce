@@ -176,7 +176,7 @@ class DigestStateWriter(private val store: DigestStateStore, private val schedul
 
 internal fun digestRngSubmission(drop: DetectedRng, sharing: Boolean, showName: Boolean, now: Long,
     acquisition: AcquisitionEvent? = null, context: AcquisitionContext? = null): Map<String, Any>? {
-    if (!sharing || !drop.id.matches(Regex("[a-f0-9]{32}")) || !DigestRngCatalog.valid(drop.item, drop.activity) ||
+    if (!sharing || !drop.id.matches(Regex("[a-f0-9]{32}")) || !DigestRngCatalog.public(drop.item, drop.activity) ||
         drop.occurredAt <= 0 || drop.occurredAt <= now - 300000 || drop.occurredAt > now + 60000) return null
     // Only this live receipt can supply context. Old history and another profile's matching item are not metadata sources.
     val confirmed = acquisition?.takeIf { it.id == drop.id && it.item == drop.item && it.activity == drop.activity &&

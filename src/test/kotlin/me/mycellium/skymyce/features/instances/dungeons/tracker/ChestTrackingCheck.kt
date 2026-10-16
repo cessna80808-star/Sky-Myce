@@ -69,17 +69,32 @@ fun checkChestTracking() {
     check(closed.active(4000, context, "run") && !closed.active(4001, context, "run"))
     check(initial.copy(contents = mapOf("ESSENCE_WITHER" to 102), rewardHeader = true).confirmed)
     check(!initial.copy(contents = emptyMap(), rewardHeader = true).confirmed)
-    // Cached physical Power Dragon shards resolve to attribute:l30 in both preview and inventory.
+    // Power Dragon shards (attribute:l30) go to the Hunting Box, like essences go to storage: never required in the inventory.
     val shard = canonicalItemId("attribute:l30")
+    check(dungeonStoredReward("attribute:l30", null) && dungeonStoredReward("SHARD_WIKI_TIKI", null) &&
+        dungeonStoredReward("item:unknown", "§5Power Dragon Shard") && dungeonStoredReward("ESSENCE_WITHER", "Wither Essence x102"))
+    check(!dungeonStoredReward("FIFTH_MASTER_STAR", "Fifth Master Star") && !dungeonStoredReward("WITHER_CATALYST", null))
     val shardChest = initial.copy(contents = mapOf(shard to 1, "WITHER_CATALYST" to 2, "ESSENCE_WITHER" to 102),
-        baseline = mapOf(shard to 4, "WITHER_CATALYST" to 3), rewardHeader = true)
-    check(shardChest.physical == mapOf(shard to 1, "WITHER_CATALYST" to 2))
+        baseline = mapOf("WITHER_CATALYST" to 3), rewardHeader = true, stored = setOf(shard))
+    check(shardChest.physical == mapOf("WITHER_CATALYST" to 2))
     check(!shardChest.confirmed)
-    check(!shardChest.inventory(mapOf(shard to 5, "WITHER_CATALYST" to 3), "shard-only").confirmed)
-    // Header-first delivery confirms only after the deferred read sees all physical rewards.
-    val directInventory = shardChest.inventory(mapOf(shard to 5, "WITHER_CATALYST" to 5), "direct-packet")
+    check(!shardChest.inventory(mapOf(shard to 1, "WITHER_CATALYST" to 3), "shard-only").confirmed)
+    // Header-first delivery confirms once the deferred read sees every inventory reward; the filed shard is not awaited.
+    val directInventory = shardChest.inventory(mapOf("WITHER_CATALYST" to 5), "direct-packet")
     check(directInventory.confirmed && directInventory.inventory(mapOf(shard to 5, "WITHER_CATALYST" to 5), "repeat") == directInventory)
     check(!directInventory.copy(rewardHeader = false).confirmed)
+    // The reported chest: two books, a Fifth Master Star, a Hunting Box shard and two essences.
+    val reported = PendingChestObservation("reported", context, "run", mapOf("ENCHANTMENT_INFINITE_QUIVER_7" to 1,
+        "FIFTH_MASTER_STAR" to 1, "ENCHANTMENT_REJUVENATE_3" to 1, shard to 1, "ESSENCE_WITHER" to 100, "ESSENCE_UNDEAD" to 130),
+        emptyMap(), 1000, rewardHeader = true, stored = setOf(shard))
+    check(reported.inventory(mapOf("ENCHANTMENT_INFINITE_QUIVER_7" to 1, "FIFTH_MASTER_STAR" to 1, "ENCHANTMENT_REJUVENATE_3" to 1), "claim").confirmed) {
+        "A bedrock chest with a Hunting Box shard must confirm once its inventory rewards arrive"
+    }
+    // Master stars are local journal drops; only the relay's public catalog may be published.
+    check(me.mycellium.skymyce.features.digest.DigestRngCatalog.valid("FIFTH_MASTER_STAR", "dungeon") &&
+        !me.mycellium.skymyce.features.digest.DigestRngCatalog.public("FIFTH_MASTER_STAR", "dungeon"))
+    check(me.mycellium.skymyce.features.digest.DigestRngCatalog.public("NECRON_HANDLE", "dungeon"))
+    check(DigestRngParser.detect("RNG DROP! [MVP+] TestPlayer just found a Fifth Master Star!", "TestPlayer", "THE_CATACOMBS", 1000)?.item == "FIFTH_MASTER_STAR")
     check(rerollInventoryConfirmed(2, 1) && rerollInventoryConfirmed(1, 0))
     check(!rerollInventoryConfirmed(2, 2) && !rerollInventoryConfirmed(2, 0) && !rerollInventoryConfirmed(0, -1))
 

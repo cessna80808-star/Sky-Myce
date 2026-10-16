@@ -11,8 +11,10 @@ internal data class PendingChestObservation(
     val closed: Long? = null,
     val rewardHeader: Boolean = false,
     val received: Map<String, String> = emptyMap(),
+    /** Rewards that go to essence storage or the Hunting Box, never the inventory. */
+    val stored: Set<String> = emptySet(),
 ) {
-    val physical get() = contents.filterKeys { !it.startsWith("ESSENCE_") }
+    val physical get() = contents.filterKeys { !it.startsWith("ESSENCE_") && it !in stored }
     fun active(now: Long, current: AcquisitionContext?, currentRun: String): Boolean =
         context.matches(current) && run == currentRun && now - started in 0..10000 &&
             (closed == null || now - closed in 0..2000)

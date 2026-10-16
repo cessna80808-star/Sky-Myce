@@ -4,6 +4,7 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.DungeonChest
 import me.mycellium.skymyce.api.dungeonRewardHeader
+import me.mycellium.skymyce.api.dungeonStoredReward
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
@@ -182,8 +183,9 @@ object DungeonTracker : SkyMyceModule() {
         val record = receiptRun(event.floor, context)
         val contents = event.contents.mapKeys { canonicalItemId(it.key.id) }
         if (contents.keys.any { !it.matches(Regex("[A-Z0-9_:;-]{1,100}")) }) return
+        val stored = event.contents.keys.filter { dungeonStoredReward(it.id, event.metadata[it]?.displayName) }.mapTo(hashSetOf()) { canonicalItemId(it.id) }
         pendingChest = PendingChest(event, record, world, PendingChestObservation(event.observation, context,
-            record.id, contents, DigestRng.inventoryCounts(), elapsedMillis()))
+            record.id, contents, DigestRng.inventoryCounts(), elapsedMillis(), stored = stored))
         displayDevMessage { "Dungeon receipt awaiting server header/inventory: tier=${event.chest.name}, rewardKinds=${contents.size}, costKnown=${event.costKnown}" }
     }
     fun awaitsInventory(): Boolean {
