@@ -36,7 +36,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * A live, client-local second world view. Extraction uses independent mutable renderer state;
- * the world pass runs after the main world and before GUI drawing. The player's Camera is never set,
+ * the world pass runs before the main world, after its lightmap is ready. The player's Camera is never set,
  * repositioned, rotated or replaced. Scoped output routing is only active during this world pass.
  */
 public final class SecondaryWorldCamera {
@@ -135,7 +135,7 @@ public final class SecondaryWorldCamera {
         }
     }
 
-    /** Hook after the main world render, while its lightmap and immutable asset resources are ready. */
+    /** Render first so the main pass rebinds its state and clears any singleton overlay draws from other mods. */
     public static void render(DeltaTracker ticks) {
         if (pipeline == null) return;
         if (!requested || Minecraft.getInstance().level != pipeline.level) { stop(); return; }

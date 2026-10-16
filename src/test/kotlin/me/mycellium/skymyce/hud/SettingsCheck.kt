@@ -144,6 +144,19 @@ fun checkSettings() {
     check(settingsFocusPath("Dungeons/Starred Clear Routing/routeThroughMobs", null) == "Dungeons/Starred Clear Routing/routeThroughMobs")
     check(settingsFocusPath(null, "MisterKrister") == "friend/MisterKrister")
     check(settingsFocusPath("devMode", "MisterKrister") == "devMode") { "A direct setting link lost priority over friend preferences" }
+    val routing = catalog.findFeature("starred-routes")!!
+    check(settingsBreadcrumbLinks(routing.category, routing) == listOf(
+        SettingsBreadcrumbLink("Dungeons"), SettingsBreadcrumbLink("Routes", section = "Routes"),
+        SettingsBreadcrumbLink("Dungeon Routing", featureId = "starred-routes"),
+    )) { "Settings breadcrumbs must target their category, filtered section and canonical feature" }
+    check(settingsBreadcrumbLinks(routing.category, null) == listOf(SettingsBreadcrumbLink("Dungeons")))
+    catalog.features.forEach { feature ->
+        val links = settingsBreadcrumbLinks(feature.category, feature)
+        check(links.map { it.title }.joinToString(" → ") == feature.breadcrumb)
+        check(links.first().section == null && links.first().featureId == null)
+        check(links.all { it.section == null || it.section == feature.subcategory })
+        check(links.all { it.featureId == null || it.featureId == feature.id })
+    }
     checkSettingsCardLayout()
     checkSettingsSectionLayout()
     val devMode = rows.single { it.path == "devMode" }

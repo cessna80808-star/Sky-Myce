@@ -24,7 +24,7 @@ public abstract class SecondaryCameraGameRendererMixin {
         SecondaryWorldCamera.beginFrame();
     }
 
-    @Inject(method = "renderLevel", at = @At("TAIL"))
+    @Inject(method = "renderLevel", at = @At("HEAD"))
     private void skyMyce$drawSecondaryWorld(DeltaTracker ticks, CallbackInfo info) {
         SecondaryWorldCamera.render(ticks);
     }
