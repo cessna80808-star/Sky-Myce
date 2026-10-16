@@ -13,6 +13,14 @@ enum class BazaarEvidence { OBSERVED, CORROBORATED, ESTIMATED, MANUAL }
 enum class BazaarEventKind {
     BUY_ORDER, BUY_FILL, BUY_COLLECT, SELL_ORDER, SELL_FILL, COINS_COLLECT,
     CANCEL, EXPIRE, RELIST, INVENTORY_MOVE, GAP, OBSERVATION, CORRECTION,
+    /** A complete Manage Orders read no longer lists the order: its items or coins were claimed and any unfilled rest ended. */
+    SYNC_CLOSE,
+}
+
+/** Hypixel's order menu: "Manage Orders", "Bazaar Orders", "Your Bazaar Orders" or, on co-op profiles, "Co-op Bazaar Orders". */
+fun bazaarOrdersMenu(title: String): Boolean {
+    val clean = title.replace(Regex("§."), "").trim()
+    return clean == "Manage Orders" || clean == "Bazaar ➜ Orders" || clean.endsWith("Bazaar Orders")
 }
 
 /**

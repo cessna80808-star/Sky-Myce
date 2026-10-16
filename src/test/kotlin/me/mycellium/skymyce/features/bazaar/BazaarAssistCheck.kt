@@ -91,7 +91,10 @@ private fun checkAssistSellAndClaimSteps() {
     val orders = container("Bazaar Orders", slot(10, "BUY Enchanted Carrot"), slot(11, "SELL Enchanted Carrot"), slot(12, "SELL Enchanted Potato"))
     check(assistStep(carrot, AssistPhase.CLAIM_ITEMS, orders).slot == 10)
     check(assistStep(carrot, AssistPhase.CLAIM_COINS, orders).slot == 11)
-    check(assistStep(carrot, AssistPhase.CLAIM_COINS, AssistScreen()).command == "bz")
+    check(assistStep(carrot, AssistPhase.CLAIM_COINS, AssistScreen()).command == "managebazaarorders") { "Claims go straight to the order menu" }
+    val coop = container("Co-op Bazaar Orders", slot(10, "SELL Enchanted Carrot"))
+    check(assistView(coop) == AssistView.ORDERS && assistStep(carrot, AssistPhase.CLAIM_COINS, coop).slot == 10) { "Co-op profiles' order menu" }
+    check(assistStep(carrot, AssistPhase.CLAIM_COINS, container("Large Chest")).command == "managebazaarorders")
     check(assistStep(carrot, AssistPhase.CLAIM_COINS, container("Bazaar ➜ Farming", slot(50, "Manage Orders"))).slot == 50)
     check(assistStep(carrot, AssistPhase.WAIT_SELL, orders).kind == AssistKind.WAIT)
     check(assistStep(carrot, AssistPhase.DONE, AssistScreen()).kind == AssistKind.DONE)

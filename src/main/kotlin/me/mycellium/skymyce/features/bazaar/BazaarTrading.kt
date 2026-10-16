@@ -18,6 +18,7 @@ import me.mycellium.skymyce.ui.navigateMenu
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils
 import me.mycellium.skymyce.utils.StateWriter
+import me.mycellium.skymyce.utils.Utils
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
@@ -75,9 +76,14 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
     private var epoch = 0L
 
     private data class Observation(val context: BazaarContext, val at: Long, val session: String?, val text: String? = null,
-                                   val title: String = "", val rows: List<BazaarObservedSlot> = emptyList())
+                                   val title: String = "", val rows: List<BazaarObservedSlot> = emptyList(), val self: String? = null)
     private val observations = ArrayDeque<Observation>()
     private var dirtyScreen: AbstractContainerScreen<*>? = null
+    /** The latest order-menu read and when each tracked order was last listed; cleared with the context. */
+    private var lastSync: BazaarSyncResult? = null
+    private val orderSeenAt = linkedMapOf<String, Long>()
+    /** Set by Sync orders, so the result of that read is confirmed once in chat. */
+    private var syncRequested = false
 
     private var ledger = BazaarLedger()
     private var opportunities = emptyList<BazaarOpportunity>()
@@ -290,6 +296,7 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
         // Orders keep filling offline and Manage Orders shows that progress later, so a disconnect is not a gap.
         stop("Left SkyBlock or disconnected")
         context = null; observer.reset(); observations.clear(); dirtyScreen = null; epoch++
+        lastSync = null; orderSeenAt.clear(); syncRequested = false
         analyse()
     }
 
@@ -322,7 +329,8 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
 
     private fun observeContainer(title: String, rows: List<BazaarObservedSlot>) {
         val scope = liveContext() ?: return
-        if (journal.writable) queue(Observation(scope, System.currentTimeMillis(), lifecycle.active?.id, title = title, rows = rows))
+        if (journal.writable) queue(Observation(scope, System.currentTimeMillis(), lifecycle.active?.id, title = title, rows = rows,
+            self = MC.instance.player?.name?.string))
     }
 
     private fun queue(observation: Observation) {
@@ -346,10 +354,24 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
             val entry = observations.removeFirst()
             if (entry.context != liveContext()) continue
             val products = market.snapshot?.products.orEmpty()
+            val before = observer.lastSync
             val events = if (entry.text != null) observer.chat(entry.text, entry.context, ledger, products, entry.at, entry.session)
-                else observer.container(entry.title, entry.rows, entry.context, ledger, products, entry.at, entry.session)
+                else observer.container(entry.title, entry.rows, entry.context, ledger, products, entry.at, entry.session, entry.self)
             record(events)
+            observer.lastSync?.takeIf { it !== before }?.let(::synced)
         }
+    }
+
+    /** Keeps the sync status for the terminal; the first read after Sync orders is also confirmed in chat. */
+    private fun synced(result: BazaarSyncResult) {
+        lastSync = result
+        orderSeenAt.putAll(result.seen)
+        while (orderSeenAt.size > 512) orderSeenAt.remove(orderSeenAt.keys.first())
+        if (syncRequested) {
+            syncRequested = false
+            Utils.displayModMessage("§7Bazaar orders synced: ${bazaarSyncNote(result)}. §8/sm bazaar")
+        }
+        refreshView()
     }
 
     private fun record(events: List<BazaarEvent>) {
@@ -517,6 +539,9 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
             theme = mapOf("bg" to MenuTheme.PANEL, "panel" to MenuTheme.PANEL, "card" to MenuTheme.CARD, "line" to MenuTheme.BORDER,
                 "text" to MenuTheme.TEXT, "muted" to MenuTheme.MUTED, "accent" to MenuTheme.ACCENT, "warning" to MenuTheme.YELLOW, "negative" to MenuTheme.RED),
             reduceMotion = ThemeConfig.animationMode in setOf(GuiMotion.REDUCED, GuiMotion.OFF),
+            ordersSyncedAt = lastSync?.at,
+            ordersSyncNote = lastSync?.let(::bazaarSyncNote),
+            orderSeenAt = orderSeenAt.toMap(),
         )
     }
 
@@ -603,7 +628,9 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
             BazaarAction.TOGGLE -> { toggle(); complete(view.status) }
             BazaarAction.REFRESH -> complete(if (lifecycle.active == null) "Start flipping to load market data" else market.requestRefresh(System.currentTimeMillis()))
             BazaarAction.GUIDE -> complete(guide(fields))
-            BazaarAction.OPEN_ORDERS -> complete(if (liveContext() == null) "Join SkyBlock to open your Bazaar orders" else { openBazaarOrders(); "Opening Manage Orders to sync fills" })
+            BazaarAction.OPEN_BAZAAR -> complete(if (liveContext() == null) "Join SkyBlock to open the Bazaar" else { openHypixelBazaar(); "Opening the Bazaar" })
+            BazaarAction.OPEN_ORDERS -> complete(if (liveContext() == null) "Join SkyBlock to open your Bazaar orders"
+                else { syncRequested = true; openBazaarOrders(); "Opening Manage Orders to sync fills" })
             BazaarAction.SETUP -> { BazaarConfig.wizardDone = true; persistPreferences(); complete("Setup saved") }
             BazaarAction.PREFERENCE -> {
                 val key = requireNotNull(fields["key"])
@@ -679,6 +706,13 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
         if (MC.instance.screen is BazaarScreen) navigateMenu(null)
         PlayerUtils.sendCommand(command, false)
         MC.instance.gui.setOverlayMessage(Component.literal("$quantity copied"), false)
+    }
+
+    /** The terminal's Bazaar button: one click, one /bz, the same as typing it. */
+    private fun openHypixelBazaar() {
+        check(MC.instance.connection != null)
+        if (MC.instance.screen is BazaarScreen) navigateMenu(null)
+        PlayerUtils.sendCommand("bz", false)
     }
 
     private fun openBazaarOrders() {

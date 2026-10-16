@@ -318,6 +318,7 @@ private fun checkBazaarManualOnlyBytecode() {
     var methods = 0
     val dispatches = mutableMapOf<String, Int>()
     var openOrdersLiteral = false
+    var openBazaarLiteral = false
     var guideValidated = false
     for (resource in listOf("BazaarTrading", "BazaarGuideKt", "BazaarCorrectionKt")) resourceReader("/me/mycellium/skymyce/features/bazaar/$resource.class").accept(object : ClassVisitor(Opcodes.ASM9) {
         override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<out String>?): MethodVisitor {
@@ -326,6 +327,7 @@ private fun checkBazaarManualOnlyBytecode() {
             return object : MethodVisitor(Opcodes.ASM9) {
                 override fun visitLdcInsn(value: Any?) {
                     if (resource == "BazaarTrading" && method == "openBazaarOrders" && value == "managebazaarorders") openOrdersLiteral = true
+                    if (resource == "BazaarTrading" && method == "openHypixelBazaar" && value == "bz") openBazaarLiteral = true
                 }
                 override fun visitMethodInsn(opcode: Int, owner: String, name: String, descriptor: String, isInterface: Boolean) {
                     if (resource == "BazaarTrading" && method == "openGuidedBazaar" && owner == "me/mycellium/skymyce/features/bazaar/BazaarGuideKt" && name == "bazaarGuideCommand") guideValidated = true
@@ -336,8 +338,9 @@ private fun checkBazaarManualOnlyBytecode() {
                     check(!(owner == "net/minecraft/client/KeyMapping" && name in setOf("click", "setDown", "set"))) { "Bazaar simulates player input" }
                     check(!owner.startsWith("java/awt/Robot"))
                     if (owner == "me/mycellium/skymyce/utils/PlayerUtils" && name in setOf("sendCommand", "sendCommand\$default", "sendMessage", "sendMessage\$default", "sendModMessage", "sendModMessage\$default")) {
-                        check(resource == "BazaarTrading" && method in setOf("openGuidedBazaar", "openBazaarOrders") && name in setOf("sendCommand", "sendCommand\$default")) {
-                            "Only an explicit Guide or Open orders selection may open a Bazaar menu; every trade remains manual"
+                        check(resource == "BazaarTrading" && method in setOf("openGuidedBazaar", "openBazaarOrders", "openHypixelBazaar") &&
+                            name in setOf("sendCommand", "sendCommand\$default")) {
+                            "Only an explicit Guide, Open orders or Open Bazaar selection may open a Bazaar menu; every trade remains manual"
                         }
                         dispatches[method] = (dispatches[method] ?: 0) + 1
                     }
@@ -345,8 +348,12 @@ private fun checkBazaarManualOnlyBytecode() {
             }
         }
     }, ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
-    check(methods > 20 && dispatches == mapOf("openGuidedBazaar" to 1, "openBazaarOrders" to 1)) { "Guide and Open orders must each have one isolated dispatch" }
-    check(openOrdersLiteral && guideValidated) { "Manual menu opening must use literal managebazaarorders or the validated Guide search" }
+    check(methods > 20 && dispatches == mapOf("openGuidedBazaar" to 1, "openBazaarOrders" to 1, "openHypixelBazaar" to 1)) {
+        "Guide, Open orders and Open Bazaar must each have one isolated dispatch"
+    }
+    check(openOrdersLiteral && openBazaarLiteral && guideValidated) {
+        "Manual menu opening must use literal managebazaarorders or bz, or the validated Guide search"
+    }
     var redirectsNever = false
     resourceReader("/me/mycellium/skymyce/features/bazaar/BazaarWebhook.class").accept(object : ClassVisitor(Opcodes.ASM9) {
         override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<out String>?) = object : MethodVisitor(Opcodes.ASM9) {

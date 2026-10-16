@@ -30,6 +30,10 @@ object BazaarAssistConfig : CategoryKt("Bazaar Assistant") {
         name = TranslatableValue.literal("Sign helper")
         description = TranslatableValue.literal("Show the expected search, amount or price above Bazaar signs and check what you typed")
     }
+    var menuButton by boolean(true) {
+        name = TranslatableValue.literal("Sky-Myce button in Bazaar menus")
+        description = TranslatableValue.literal("Adds a button to Hypixel's Bazaar menus that opens the Sky-Myce Bazaar terminal")
+    }
     var panelInMenus by boolean(true) {
         name = TranslatableValue.literal("Show the panel over Bazaar menus")
     }
@@ -71,7 +75,7 @@ object BazaarAssistConfig : CategoryKt("Bazaar Assistant") {
 
     fun resetAppearance() {
         enabled = true; priceMode = AssistPriceMode.MATCH_ORDER_BOOK; ghostText = true; tabFill = true; signHelper = true
-        panelInMenus = true; panelPlacement = AssistPanelPlacement.BESIDE_MENU; profitNotices = true; animations = true; highlightColor = ""; highlightShape = AssistHighlightShape.OUTLINE_FILL
+        menuButton = true; panelInMenus = true; panelPlacement = AssistPanelPlacement.BESIDE_MENU; profitNotices = true; animations = true; highlightColor = ""; highlightShape = AssistHighlightShape.OUTLINE_FILL
         highlightThickness = 2; highlightOpacity = 80; highlightPulse = AssistPulse.ON_CHANGE; autoCommand = false; autoSign = false
     }
 }

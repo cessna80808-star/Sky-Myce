@@ -85,6 +85,7 @@ object SkyMyce : ClientModInitializer {
             me.mycellium.skymyce.features.instances.dungeons.leap.LeapPovSharing,
             me.mycellium.skymyce.features.bazaar.BazaarTrading,
             me.mycellium.skymyce.features.bazaar.BazaarHud,
+            me.mycellium.skymyce.features.bazaar.BazaarMenuButton,
             me.mycellium.skymyce.features.bazaar.assist.BazaarAssist,
             me.mycellium.skymyce.features.bazaar.assist.BazaarAssistHud
         )

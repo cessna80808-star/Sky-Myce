@@ -182,6 +182,8 @@ class BazaarAssistGameTest : FabricClientGameTest {
         expectHighlight("another product's page", "Farming ➜ Enchanted Potato", null, 10 to "Create Buy Order")
         pass("another product's page asks to go back", on { BazaarAssist.step?.kind == AssistKind.CLOSE })
         expectHighlight("unrelated chest", "Large Chest", null, 13 to "Buy Order")
+        context.waitTicks(5)
+        pass("no Sky-Myce button in unrelated chests", on { me.mycellium.skymyce.features.bazaar.BazaarMenuButton.button?.visible != true })
 
         // A slot renamed under the highlight hides it at once, before the next read.
         openMenu("How much do you want to pay?", *price)
@@ -296,10 +298,13 @@ class BazaarAssistGameTest : FabricClientGameTest {
 
         source.ledger = BazaarLedger(listOf(position(BazaarStage.COLLECT, pending = 640)), listOf(order(true, 640, 0, BazaarOrderStatus.FILLED)))
         context.waitTicks(2)
-        pass("filled: claim items starts with /bz", on { BazaarAssist.phase == AssistPhase.CLAIM_ITEMS && BazaarAssist.shownCommand == "bz" })
-        openMenu("Bazaar Orders", 10 to "BUY Enchanted Carrot", 11 to "SELL Enchanted Potato")
-        context.waitTicks(2)
-        pass("orders menu highlights the buy order", on { highlight() == 10 })
+        pass("filled: claim items goes straight to /managebazaarorders", on {
+            BazaarAssist.phase == AssistPhase.CLAIM_ITEMS && BazaarAssist.shownCommand == "managebazaarorders"
+        })
+        openMenu("Co-op Bazaar Orders", 10 to "BUY Enchanted Carrot", 11 to "SELL Enchanted Potato")
+        context.waitTicks(6)
+        pass("co-op orders menu highlights the buy order", on { highlight() == 10 })
+        pass("Sky-Myce button shows in Hypixel's order menu", on { me.mycellium.skymyce.features.bazaar.BazaarMenuButton.button?.visible == true })
         screenshot("claim-items")
         // The order is claimed while the menu stays open: the step changes underneath it.
         source.ledger = BazaarLedger(listOf(position(BazaarStage.READY, remaining = 640)), listOf(order(true, 640, 640, BazaarOrderStatus.FILLED)))
