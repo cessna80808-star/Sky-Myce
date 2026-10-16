@@ -23,6 +23,7 @@ object Config : ConfigKt("SkyMyce Config") {
         category(me.mycellium.skymyce.config.misc.CosmeticsConfig)
         category(me.mycellium.skymyce.config.misc.CommunitySharingConfig)
         category(me.mycellium.skymyce.config.economy.BazaarConfig)
+        category(me.mycellium.skymyce.config.economy.BazaarAssistConfig)
     }
 
     var openConfigKey by key(GLFW.GLFW_KEY_RIGHT_SHIFT) {

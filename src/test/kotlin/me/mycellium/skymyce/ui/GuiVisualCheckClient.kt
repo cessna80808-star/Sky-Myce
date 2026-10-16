@@ -111,6 +111,8 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("bazaar-terminal", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-positions", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-history", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("history").also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-more", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-narrow-more", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-narrow-positions", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },

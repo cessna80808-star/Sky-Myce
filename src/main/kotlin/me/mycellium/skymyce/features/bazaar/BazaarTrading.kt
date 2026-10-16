@@ -130,6 +130,15 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
     internal fun needsRelay() = isEnabled() && lifecycle.active != null && BazaarConfig.discordAlerts
     val active get() = lifecycle.active != null
 
+    // ---- Read-only views for the Bazaar Assistant (client thread) ----
+
+    internal val assistLedger get() = ledger
+    internal val assistOpportunities get() = opportunities
+    internal fun assistQuote(product: String) = market.snapshot?.products?.firstOrNull { it.id == product }
+    internal fun assistFreshness() = market.freshness()
+    /** Starts a flipping session so recommendations load; the assistant never trades by itself. */
+    internal fun assistStartSession() { if (lifecycle.active == null) toggle() }
+
     // ---- Account, context and lifecycle ----
 
     private fun selectedOwner() = MC.instance.user.profileId.toString()
@@ -655,6 +664,7 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
         if (opportunity == null || session == null || session.context != liveContext() || session.island != island() ||
             !market.freshness().scannable || snapshot?.observedAt != opportunity.observedAt || !affordable) return "Market moved; refresh before opening this flip"
         val name = bazaarGuideName(opportunity.product) ?: return "Item names are still loading; try again"
+        me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.begin(opportunity, name)
         openGuidedBazaar(name, opportunity.quantity)
         guidedProduct = opportunity.product; guidedPosition = null; guidedAt = System.currentTimeMillis()
         guidedPlan = "$name · place a buy order for ${opportunity.quantity} at ${bazaarCoins(opportunity.buyPrice)} each (amount copied)"

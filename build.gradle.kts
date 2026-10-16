@@ -649,7 +649,7 @@ val rngTesterCheck by tasks.registering(JavaExec::class) {
 tasks.check { dependsOn(rngTesterCheck) }
 tasks.test { failOnNoDiscoveredTests = false }
 
-for (bazaarCheckName in listOf("Bazaar", "BazaarDashboard", "BazaarIntegration", "BazaarPreferenceSync")) {
+for (bazaarCheckName in listOf("Bazaar", "BazaarAssist", "BazaarDashboard", "BazaarIntegration", "BazaarPreferenceSync")) {
     val bazaarCheck = tasks.register<JavaExec>(bazaarCheckName.replaceFirstChar { it.lowercase() } + "Check") {
         group = "verification"
         dependsOn(tasks.testClasses)

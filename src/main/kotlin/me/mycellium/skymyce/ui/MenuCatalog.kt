@@ -151,7 +151,7 @@ class MenuCatalog(rows: List<SettingRow>) {
         fun settingLocation(path: String): MenuSettingLocation {
             val key = path.substringAfterLast('/')
             val feature = when {
-                path.startsWith("Bazaar Flipping/") -> "bazaar-flipping"
+                path.startsWith("Bazaar Flipping/") || path.startsWith("Bazaar Assistant/") -> "bazaar-flipping"
                 path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"

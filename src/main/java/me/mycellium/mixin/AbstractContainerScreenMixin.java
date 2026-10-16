@@ -8,6 +8,8 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.Slot;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import tech.thatgravyboat.skyblockapi.api.SkyBlockAPI;
 
 @Mixin(AbstractContainerScreen.class)
@@ -17,5 +19,11 @@ public class AbstractContainerScreenMixin {
         new RenderSlotEvent.Before(graphics, slot).post(SkyBlockAPI.getEventBus());
         original.call(instance, graphics, slot, mouseX, mouseY);
         new RenderSlotEvent.After(graphics, slot).post(SkyBlockAPI.getEventBus());
+    }
+
+    /** Drawn once after every slot, in the same container-relative space, so a highlight can glide over items. */
+    @Inject(method = "extractSlots", at = @At("TAIL"))
+    public void skymyce$afterSlots(GuiGraphicsExtractor graphics, int mouseX, int mouseY, CallbackInfo ci) {
+        me.mycellium.skymyce.features.bazaar.assist.BazaarAssistHighlight.drawSlots((AbstractContainerScreen<?>) (Object) this, graphics);
     }
 }

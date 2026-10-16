@@ -180,6 +180,10 @@ object SkyMyceCommands : SkyMyceModule() {
         })
         .then(literal("close-dashboard").executes { BazaarDashboard.stop(); 1 })
         .then(literal("cycle").executes { BazaarHud.cycle(); 1 })
+        .then(literal("assist")
+            .executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.start() }; 1 }
+            .then(literal("start").executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.start() }; 1 })
+            .then(literal("stop").executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.stop() }; 1 }))
 
     fun dungeon(): LiteralArgumentBuilder<FabricClientCommandSource> {
         return literal("dungeon")
