@@ -110,6 +110,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
             Scene("bazaar-terminal", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-positions", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-positions-scrolled", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualBazaarFixture("positions", scroll = 470.0).also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-history", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("history").also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-more", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },
             Scene("bazaar-terminal-narrow-more", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },

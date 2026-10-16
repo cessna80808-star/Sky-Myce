@@ -21,7 +21,50 @@ const compactFormatter = new Intl.NumberFormat("en-US", { notation: "compact", m
 const recordDrafts = new Map(),
   openRepairs = new Set(),
   openPendingDetails = new Set(),
-  openRepairAdvanced = new Set();
+  openRepairAdvanced = new Set(),
+  openPositions = new Set();
+let reviewOpen = false,
+  staleOpen = false;
+// Positions are grouped by what the player must do, mirroring Manage Orders; stale ones sit apart at the bottom.
+const groupMeta = {
+  NEEDS_YOU: { title: "Needs you", hint: "Claim, list or decide", cls: "warning" },
+  FILLING: { title: "Filling", hint: "Open orders waiting on the market", cls: "accent" },
+  HELD: { title: "Held", hint: "Items you own with no offer", cls: "muted" },
+  STALE: { title: "Possibly stale", hint: "Not in your last sync", cls: "muted" },
+};
+const groupOrder = ["NEEDS_YOU", "FILLING", "HELD", "STALE"];
+const isLive = (order) => order.status === "OPEN" || order.status === "FILLED";
+const age = (at) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  return seconds < 90 ? seconds + "s ago" : seconds < 5400 ? Math.floor(seconds / 60) + "m ago" : Math.floor(seconds / 3600) + "h ago";
+};
+// Manage Orders was read after this live order was last seen there, so it may no longer exist.
+const orderUnseen = (order) =>
+  Boolean(state.ordersSyncedAt) && isLive(order) && (state.orderSeenAt?.[order.id] || 0) < state.ordersSyncedAt;
+function primaryOrder(position) {
+  const own = (state.orders || []).filter((o) => o.positionId === position.id),
+    buying = position.stage === "BUYING" ? true : position.stage === "SELLING" ? false : null,
+    latest = (list) => list.reduce((best, o) => (!best || o.lastAt > best.lastAt ? o : best), null);
+  return (
+    latest(own.filter((o) => isLive(o) && (buying === null || o.buy === buying))) ||
+    latest(own.filter((o) => isLive(o) || o.filled > o.collected))
+  );
+}
+function positionGroup(position) {
+  const live = (state.orders || []).filter((o) => o.positionId === position.id && isLive(o));
+  if (live.length && live.every(orderUnseen)) return "STALE";
+  if (state.nextSteps?.[position.id]?.actionable) return "NEEDS_YOU";
+  if (live.length || position.stage === "BUYING" || position.stage === "SELLING") return "FILLING";
+  return "HELD";
+}
+const syncLine = () =>
+  state.ordersSyncedAt
+    ? "Synced " + age(state.ordersSyncedAt) + (state.ordersSyncNote ? " · " + state.ordersSyncNote : "")
+    : "Never synced · press Sync orders to read your Manage Orders";
+const guidedPosition = () =>
+  state.guidance
+    ? state.positions.find((p) => state.guidance === itemName(p.product) + " · " + state.nextSteps?.[p.id]?.text)
+    : null;
 const stageLabels = {
   BUYING: "Buy order open",
   COLLECT: "Collect bought items",
@@ -290,9 +333,13 @@ function render() {
   content.replaceChildren();
   document.querySelectorAll("[data-page]").forEach((n) => n.classList.toggle("selected", n.dataset.page === page));
   if (state.guidance) {
-    const next = card("Next step");
+    const guided = guidedPosition(),
+      group = guided ? positionGroup(guided) : null,
+      next = card("Next step" + (group ? " · " + groupMeta[group].title : ""));
     next.classList.add("guidance");
     para(next, state.guidance, "accent");
+    const order = guided && primaryOrder(guided);
+    if (order) next.append(fillBar(order, group), el("p", fillText(order, guided), "muted"));
     content.append(next);
   }
   if (!state.wizardDone) {
@@ -358,12 +405,158 @@ function render() {
   else preferences();
   if (["Orders", "History"].includes(page)) pendingRecords();
 }
+function fillBar(order, group) {
+  const bar = el("div", undefined, "fill-bar " + (group === "STALE" ? "stale" : order.buy ? "buy" : "sell")),
+    fraction = order.quantity > 0 ? Math.min(1, Math.max(0, order.filled / order.quantity)) : 0,
+    fill = el("span");
+  bar.setAttribute("role", "progressbar");
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", String(order.quantity));
+  bar.setAttribute("aria-valuenow", String(order.filled));
+  fill.style.width = (fraction * 100).toFixed(1) + "%";
+  bar.append(fill);
+  return bar;
+}
+const fillText = (order, position) =>
+  order.filled +
+  "/" +
+  order.quantity +
+  (order.buy ? " bought" : " sold") +
+  (position.pendingItems > 0 ? " · " + position.pendingItems + " to claim" : "");
+function syncTools() {
+  const tools = el("div", undefined, "actions sync-row"),
+    open = button("Sync orders", () => action("open-orders"));
+  open.dataset.action = "open-orders";
+  tools.append(open, el("p", syncLine(), "muted sync-status"));
+  return tools;
+}
+function groupHead(group, count) {
+  const node = el("div", undefined, "group-head");
+  node.append(el("span", groupMeta[group].title + " · " + count, groupMeta[group].cls), el("span", groupMeta[group].hint));
+  return node;
+}
+/** One row per position: badge, name, fill bar, key numbers and one primary action; the rest sits under Details. */
+function positionRow(position, group) {
+  const step = state.nextSteps?.[position.id],
+    order = primaryOrder(position),
+    stale = group === "STALE",
+    kind = !order ? "HELD" : order.buy ? "BUY" : "SELL",
+    node = el("article", undefined, "card position-row" + (stale ? " stale" : "")),
+    head = el("div", undefined, "position-head"),
+    title = el("div", undefined, "position-title"),
+    figure = el("div", undefined, "position-figure");
+  node.dataset.position = position.id;
+  title.append(el("span", kind, "pill pill-" + kind.toLowerCase()), el("strong", itemName(position.product)));
+  if (stale) title.append(el("span", "Not in last sync", "pill pill-outline warning"));
+  else if (position.uncertain || order?.uncertain) title.append(el("span", "Reconstructed", "pill pill-outline"));
+  const [big, small] =
+    position.pendingItems > 0
+      ? [position.pendingItems, "to claim"]
+      : order
+        ? [order.filled + "/" + order.quantity, order.buy ? "bought" : "sold"]
+        : [position.remaining, "held"];
+  figure.append(el("strong", String(big)), el("span", small));
+  head.append(title, figure);
+  node.append(head);
+  para(
+    node,
+    [
+      stageLabels[position.stage] || position.stage,
+      order && order.price !== null && order.price !== undefined ? coins(order.price) + " each" : null,
+      "cost " + coins(position.costBasis),
+      position.relistCount ? "relisted " + position.relistCount + "×" : null,
+      position.realizedProfit ? coins(position.realizedProfit) + " realized" : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
+  if (order) node.append(fillBar(order, group));
+  if (step) para(node, "→ " + step.text, stale ? "muted" : step.actionable ? "warning" : "step");
+  const advice = state.relistAdvice?.[position.id];
+  if (advice?.warn) para(node, "Relist check: " + advice.recommendation, "warning");
+  const claim = position.pendingItems > 0 || (step?.actionable && step.text.startsWith("Claim")),
+    follow = button("Follow this flip", () => action("guide", { position: position.id })),
+    sync = button(claim ? "Open Manage Orders" : "Sync orders", () => action("open-orders")),
+    primary = stale || claim ? sync : follow,
+    tools = el("div", undefined, "actions");
+  primary.classList.add("primary");
+  sync.dataset.action = "open-orders";
+  tools.append(primary);
+  node.append(tools);
+  const details = el("details");
+  details.open = openPositions.has(position.id);
+  details.append(el("summary", "Details"));
+  details.addEventListener("toggle", () => {
+    if (!details.isConnected) return;
+    if (details.open) openPositions.add(position.id);
+    else openPositions.delete(position.id);
+  });
+  para(
+    details,
+    [
+      position.acquired + " bought",
+      position.sold + " sold",
+      position.remaining + " held",
+      position.listed ? position.listed + " listed" : null,
+      position.pendingItems ? position.pendingItems + " to claim" : null,
+      "opened " + date(position.openedAt),
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    "step",
+  );
+  for (const own of (state.orders || []).filter((o) => o.positionId === position.id && (isLive(o) || o.filled > o.collected))) {
+    const seen = state.orderSeenAt?.[own.id];
+    para(
+      details,
+      (own.buy ? "Buy " : "Sell ") +
+        own.quantity +
+        " at " +
+        coins(own.price) +
+        " · " +
+        own.filled +
+        "/" +
+        own.quantity +
+        " filled · " +
+        own.collected +
+        " claimed · " +
+        (orderUnseen(own)
+          ? "not in your last sync"
+          : seen
+            ? "seen in Manage Orders " + age(seen)
+            : own.uncertain
+              ? "unconfirmed"
+              : "confirmed"),
+    );
+  }
+  if (advice?.warn) {
+    para(
+      details,
+      "Waiting would return ~" +
+        coins(advice.waitProceeds) +
+        "; selling instantly ~" +
+        coins(advice.instantProceeds) +
+        " (" +
+        coins(advice.instantProfit) +
+        " vs cost). You decide.",
+    );
+    for (const warning of advice.warnings || []) para(details, warning, "warning");
+  }
+  if (position.uncertain)
+    para(details, "Some of this position was reconstructed from receipts rather than observed, so it stays out of public rankings.");
+  details.append(primary === follow ? sync : follow);
+  node.append(details);
+  return node;
+}
 function positions() {
   const steps = state.nextSteps || {};
   const entries = state.positions
     .filter((p) => p.remaining > 0 || p.pendingItems > 0 || p.stage === "BUYING" || steps[p.id]?.actionable)
     .filter((p) => matches(p.product + " " + itemName(p.product)))
-    .sort((a, b) => Number(!!steps[b.id]?.actionable) - Number(!!steps[a.id]?.actionable) || b.lastAt - a.lastAt);
+    .sort((a, b) => Number(!!steps[b.id]?.actionable) - Number(!!steps[a.id]?.actionable) || b.lastAt - a.lastAt)
+    .map((p) => [positionGroup(p), p])
+    .sort((a, b) => groupOrder.indexOf(a[0]) - groupOrder.indexOf(b[0]));
+  content.append(syncTools());
   if (state.awaiting)
     para(
       content,
@@ -373,53 +566,31 @@ function positions() {
     empty("No open positions. Place a buy order and Sky-Myce will follow it from fill to sale.");
     return;
   }
-  for (const position of entries.slice(0, 100)) {
-    const node = card(itemName(position.product));
-    para(node, stageLabels[position.stage] || position.stage, "accent");
-    const step = steps[position.id];
-    if (step) para(node, "Next: " + step.text, step.actionable ? "warning" : "muted");
-    para(
-      node,
-      position.remaining +
-        " remaining · " +
-        position.pendingItems +
-        " to collect · " +
-        position.listed +
-        " listed · cost " +
-        coins(position.costBasis),
-    );
-    para(
-      node,
-      "Realized " +
-        coins(position.realizedProfit) +
-        " · " +
-        position.relistCount +
-        " confirmed relists" +
-        (position.uncertain ? " · personal / uncertain" : ""),
-    );
-    if (position.relistCount > Number(state.settings.relistThreshold || 6))
-      para(
-        node,
-        "Relist fatigue: compare waiting with instant-sale proceeds using current depth and your remaining cost. No action is performed for you.",
-        "warning",
-      );
-    const advice = state.relistAdvice?.[position.id];
-    if (advice?.warn) {
-      para(node, advice.recommendation, "warning");
-      para(
-        node,
-        "Wait proceeds " +
-          coins(advice.waitProceeds) +
-          " · Instant proceeds " +
-          coins(advice.instantProceeds) +
-          " · Supported instant profit/loss " +
-          coins(advice.instantProfit),
-      );
-      for (const warning of advice.warnings) para(node, warning, "warning");
+  let shown = null;
+  const confirmed = entries.filter(([group]) => group !== "STALE");
+  for (const [group, position] of confirmed.slice(0, 100)) {
+    if (group !== shown) {
+      shown = group;
+      content.append(groupHead(group, confirmed.filter(([g]) => g === group).length));
     }
-    node.append(button("Follow this flip", () => action("guide", { position: position.id })));
-    content.append(node);
+    content.append(positionRow(position, group));
   }
+  const stale = entries.filter(([group]) => group === "STALE");
+  if (!stale.length) return;
+  const fold = el("details", undefined, "stale-group");
+  fold.open = staleOpen;
+  fold.append(el("summary", "Possibly stale · " + stale.length + (stale.length === 1 ? " position" : " positions") + " not in your last sync"));
+  fold.addEventListener("toggle", () => {
+    if (fold.isConnected) staleOpen = fold.open;
+  });
+  para(
+    fold,
+    "Manage Orders did not show these orders when it was last read (" +
+      age(state.ordersSyncedAt) +
+      "). They may have been cancelled, claimed or finished elsewhere; sync again to confirm before acting on them.",
+  );
+  for (const [group, position] of stale.slice(0, 100)) fold.append(positionRow(position, group));
+  content.append(fold);
 }
 function finder() {
   const tools = el("div", undefined, "actions");
@@ -531,11 +702,7 @@ function finder() {
   content.append(grid);
 }
 function orders() {
-  const tools = el("div", undefined, "actions"),
-    open = button("Sync orders", () => action("open-orders"));
-  open.dataset.action = "open-orders";
-  tools.append(open);
-  content.append(tools);
+  content.append(syncTools());
   para(content, "Sync orders opens Manage Orders in game so Sky-Myce can read your current fills.");
   const entries = state.orders.filter((o) => matches(o.product + " " + itemName(o.product) + " " + o.id));
   if (!entries.length) {
@@ -545,17 +712,21 @@ function orders() {
   const wrap = el("div", undefined, "table-wrap"),
     table = el("table"),
     head = el("tr");
-  for (const name of ["Order", "Status", "Filled / quantity", "Collected", "Unit price", "Last observation"])
+  for (const name of ["Order", "Status", "Filled / quantity", "Collected", "Unit price", "Last sync", "Last observation"])
     head.append(el("th", name));
   table.append(head);
   for (const order of entries.slice(0, 200)) {
-    const row = el("tr");
+    const row = el("tr"),
+      unseen = orderUnseen(order),
+      seen = state.orderSeenAt?.[order.id];
+    if (unseen) row.classList.add("stale");
     for (const text of [
       (order.buy ? "Buy · " : "Sell · ") + itemName(order.product),
-      order.status + (order.uncertain ? " / uncertain" : ""),
+      order.status + (order.uncertain ? " / unconfirmed" : ""),
       order.filled + " / " + order.quantity,
       order.collected,
       coins(order.price),
+      unseen ? "Not in your last sync" : seen ? "Seen " + age(seen) : isLive(order) ? "Not synced yet" : "—",
       date(order.lastAt),
     ])
       row.append(el("td", text));
@@ -592,8 +763,22 @@ function historyPage() {
     content.append(node);
   }
 }
+/** One summary row; the receipts and their repair forms unfold beneath it so real records stay on top. */
 function pendingRecords() {
-  for (const record of state.pending || []) {
+  const records = state.pending || [];
+  if (!records.length) return;
+  const fold = el("details", undefined, "review-group");
+  fold.open = reviewOpen || records.some((record) => openRepairs.has(record.id));
+  fold.append(el("summary", records.length === 1 ? "1 receipt needs review" : records.length + " receipts need review"));
+  fold.addEventListener("toggle", () => {
+    if (fold.isConnected) reviewOpen = fold.open;
+  });
+  para(
+    fold,
+    "These Bazaar receipts couldn't be matched to an order with certainty. Syncing orders usually fixes them; fixed records stay personal and never count toward leaderboards.",
+  );
+  content.append(fold);
+  for (const record of records) {
     const node = card("Needs your review"),
       tools = el("div", undefined, "actions");
     node.classList.add("pending-card");
@@ -620,7 +805,7 @@ function pendingRecords() {
     node.append(tools);
     if (openPendingDetails.has(record.id)) para(node, record.message, "muted pending-reason");
     if (openRepairs.has(record.id)) manualInputs(node, record, "confirm");
-    content.append(node);
+    fold.append(node);
   }
 }
 function manualInputs(parent, record, name) {

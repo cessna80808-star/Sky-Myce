@@ -9,6 +9,7 @@
   --accent: #a0dec0;
   --warning: #efd494;
   --negative: #f0a79d;
+  --positive: #9fd8a8;
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-size: 14px;
 }
@@ -531,4 +532,146 @@ a {
 }
 .record-repair > button {
   margin: 5px 8px 0 0;
+}
+/* Positions: one row per order or stack, grouped by what the player must do. */
+.sync-row {
+  margin-bottom: 10px;
+}
+.sync-row p {
+  margin: 0;
+  font-size: 12px;
+}
+.group-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 2px 6px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.group-head span:last-child {
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.position-row {
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+.position-row.stale {
+  opacity: 0.8;
+}
+.position-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.position-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.position-title strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+.position-figure {
+  text-align: right;
+  white-space: nowrap;
+}
+.position-figure strong {
+  display: block;
+  font-size: 19px;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+.position-figure span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.pill {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+.pill-buy {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.pill-sell {
+  color: var(--positive);
+  border-color: var(--positive);
+  background: color-mix(in srgb, var(--positive) 16%, transparent);
+}
+.pill-outline.warning {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.fill-bar {
+  height: 6px;
+  margin: 8px 0;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.fill-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.fill-bar.sell span {
+  background: var(--positive);
+}
+.fill-bar.stale span {
+  background: var(--muted);
+}
+.position-row p.step {
+  color: var(--text);
+}
+.position-row .actions {
+  margin-top: 8px;
+}
+.position-row details {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.position-row details > button {
+  margin-top: 6px;
+}
+button.primary {
+  border-color: var(--accent);
+}
+details.stale-group,
+details.review-group {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 10px 14px;
+  margin: 14px 0 0;
+}
+details.review-group {
+  border-color: var(--warning);
+}
+details.review-group > summary {
+  color: var(--warning);
+}
+details.stale-group > summary {
+  color: var(--muted);
+}
+details.stale-group .position-row,
+details.review-group .pending-card {
+  margin-top: 10px;
+}
+tr.stale td {
+  color: var(--muted);
 }
