@@ -59,6 +59,12 @@ data class BazaarUiState(
     val dashboardRunning: Boolean = false,
     val theme: Map<String, Int> = emptyMap(),
     val reduceMotion: Boolean = false,
+    /** Last time the native Manage Orders menu was read on this profile; null until it has been read. */
+    val ordersSyncedAt: Long? = null,
+    /** A short, player-facing result of the last sync, such as "Read 3 orders"; null until the first sync. */
+    val ordersSyncNote: String? = null,
+    /** Order id → when Manage Orders last showed it. Orders missing from the latest read may be stale. */
+    val orderSeenAt: Map<String, Long> = emptyMap(),
 ) {
     fun name(product: String) = names[product] ?: bazaarFallbackName(product)
     /** Positions still in progress, including closed ones whose sale coins wait to be claimed. */
