@@ -66,7 +66,7 @@ fun main() {
     check(plainPreview.none { it.contains("Editor preview") || it.contains("Historical") || it.contains("Inherited") || it.contains("profile") })
     val partial = TrackerSummary(runs = 2, timedRuns = 1, time = 300_000, gross = 50_000.0, chestCost = 10_000.0, incompleteValues = true)
     val partialRows = dungeonTrackerWidgetLines(DungeonFloor.M7, partial).map { it.replace(Regex("§."), "") }
-    check(partialRows.size == 9 && partialRows[3] == "Time: ≥5m (5m/run known)")
+    check(partialRows.size == 9 && partialRows[3] == "Time: 5m recorded (5m/run)" && partialRows[6] == "Rates need matched run times")
     check(partialRows[4].contains("—/h") && partialRows[7].contains("40K + ?") && partialRows[7].contains("—/h"))
     check(dungeonTrackerWidgetLines(DungeonFloor.M7, TrackerSummary())[3].contains("0s") && plainPreview[7].contains("~"))
     for (value in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {

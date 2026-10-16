@@ -7,6 +7,7 @@ import me.mycellium.skymyce.api.events.ChatChannel
 import me.mycellium.skymyce.api.events.PlayerMessageEvent
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsConfig
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
+import me.mycellium.skymyce.config.instances.dungeons.LeapMenuConfig
 import me.mycellium.skymyce.config.instances.dungeons.PartyListing
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
 import me.mycellium.skymyce.utils.MC
@@ -167,11 +168,13 @@ object DungeonFriends : SkyMyceModule() {
     }
 
     override fun tick() {
-        val global = GlobalChatConfig.enabled || GlobalChatConfig.partyEnabled
+        val sharing = LeapMenuConfig.enabled && LeapMenuConfig.partyPovSharing
+        val global = GlobalChatConfig.enabled || GlobalChatConfig.partyEnabled || sharing ||
+            me.mycellium.skymyce.features.bazaar.BazaarTrading.needsRelay()
         DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
             global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
         RelayMessages.globalTick()
-        if ((isEnabled() || GlobalChatConfig.partyEnabled) && LocationAPI.onHypixel && MC.instance.player != null &&
+        if ((isEnabled() || GlobalChatConfig.partyEnabled || sharing) && LocationAPI.onHypixel && MC.instance.player != null &&
             partyInfoRequestDue(now(), nextPartyRequest, partyRequestAllowedAt)) {
             val requestAt = now()
             val sent = HypixelModAPI.getInstance().sendPacket(ServerboundPartyInfoPacket())

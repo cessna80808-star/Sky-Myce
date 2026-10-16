@@ -15,6 +15,9 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.player.PlayerModelType;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 
 import java.util.Map;
 
@@ -25,6 +28,7 @@ final class SecondaryEntityRenderDispatcher extends EntityRenderDispatcher {
     private Map<EntityType<?>, EntityRenderer<?, ?>> localRenderers = Map.of();
     private Map<PlayerModelType, AvatarRenderer<AbstractClientPlayer>> localPlayers = Map.of();
     private Map<PlayerModelType, AvatarRenderer<ClientMannequin>> localMannequins = Map.of();
+    private CameraDiagnostics diagnostics;
 
     SecondaryEntityRenderDispatcher(Minecraft client, SecondaryEntityDispatcherAccessor assets) {
         super(client, client.getTextureManager(), assets.skyMyce$blockModels(), assets.skyMyce$itemModels(),
@@ -66,5 +70,13 @@ final class SecondaryEntityRenderDispatcher extends EntityRenderDispatcher {
     static <R> R avatarRenderer(Map<PlayerModelType, R> renderers, PlayerModelType model) {
         R renderer = renderers.get(model);
         return renderer != null ? renderer : renderers.get(PlayerModelType.WIDE);
+    }
+
+    void diagnostics(CameraDiagnostics value) { diagnostics = value; }
+
+    @Override public <S extends EntityRenderState> void submit(S state, CameraRenderState camera, double x, double y, double z,
+        PoseStack pose, SubmitNodeCollector output) {
+        super.submit(state, camera, x, y, z, pose, output);
+        diagnostics.submitted(state);
     }
 }

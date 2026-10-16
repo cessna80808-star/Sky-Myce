@@ -4,6 +4,8 @@ import me.mycellium.mixin.IrcChatAccessor
 import me.mycellium.mixin.IrcChatScreenAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
+import me.mycellium.skymyce.features.browser.InGameBrowser
 import me.mycellium.skymyce.ui.MenuTexture
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
@@ -18,6 +20,7 @@ import net.minecraft.client.gui.TextAlignment
 import net.minecraft.client.gui.components.ChatComponent
 import net.minecraft.client.gui.navigation.ScreenRectangle
 import net.minecraft.client.gui.screens.ChatScreen
+import net.minecraft.client.gui.screens.ConfirmLinkScreen
 import net.minecraft.client.multiplayer.chat.GuiMessage
 import net.minecraft.client.multiplayer.chat.GuiMessageSource
 import net.minecraft.client.multiplayer.chat.GuiMessageTag
@@ -198,6 +201,7 @@ object IrcChatRendering {
             if (screen !is ChatScreen) return@register
             ScreenMouseEvents.allowMouseClick(screen).register { _, click ->
                 if (click.button() == 0 && !suggestionsVisible() && IrcInlineControls.click(screen, click.x().toInt(), click.y().toInt())) return@register false
+                if (click.button() == 0 && !click.hasShiftDown() && openSupportedLink(screen, click.x().toInt(), click.y().toInt())) return@register false
                 val action = actionAt(click.x().toInt(), click.y().toInt())
                 if (click.button() != 0 || click.hasShiftDown() || action == null) true
                 else { RelayMessages.chatAction(action.command, click.x().toInt(), click.y().toInt()); false }
@@ -384,19 +388,38 @@ object IrcChatRendering {
     }
 
     private fun actionAt(mouseX: Int, mouseY: Int): IrcChatAction? {
-        if (MC.screen !is ChatScreen || MC.instance.options.hideGui || MC.instance.player == null) return null
-        if (suggestionsVisible()) return null
-        val client = MC.instance
-        val finder = ActiveTextCollector.ClickableStyleFinder(client.font, mouseX, mouseY)
-        client.gui.chat.captureClickableText(finder, client.window.guiScaledHeight, client.gui.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
-        val action = (finder.result()?.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction) ?: return null
+        val action = (clickStyleAt(mouseX, mouseY)?.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction) ?: return null
         val key = RelayMessages.key(action.scope, action.id)
         val message = RelayMessages.chatStore.get(key) ?: return null
         if (message.deleted || !RelayMessages.currentIrcChannel(key)) return null
         return action.takeIf { it.kind != "media" || message.media.getOrNull(it.mediaIndex ?: -1) != null }
     }
+    private fun clickStyleAt(mouseX: Int, mouseY: Int): net.minecraft.network.chat.Style? {
+        if (MC.screen !is ChatScreen || MC.instance.options.hideGui || MC.instance.player == null) return null
+        if (suggestionsVisible()) return null
+        val client = MC.instance
+        val finder = ActiveTextCollector.ClickableStyleFinder(client.font, mouseX, mouseY)
+        client.gui.chat.captureClickableText(finder, client.window.guiScaledHeight, client.gui.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
+        return finder.result()
+    }
+    private fun supportedLinkAt(mouseX: Int, mouseY: Int) =
+        BrowserLinks.supported((clickStyleAt(mouseX, mouseY)?.clickEvent as? ClickEvent.OpenUrl)?.uri()?.toString())
+    private fun openSupportedLink(screen: ChatScreen, mouseX: Int, mouseY: Int): Boolean {
+        val uri = supportedLinkAt(mouseX, mouseY) ?: return false
+        val client = MC.instance
+        if (!client.options.chatLinks().get()) return true
+        val generation = IrcMediaAssets.generation
+        client.gui.chat.preserveCurrentChatScreen()
+        if (client.options.chatLinksPrompt().get()) client.setScreen(ConfirmLinkScreen({ confirmed ->
+            if (generation != IrcMediaAssets.generation) client.setScreen(null)
+            else if (confirmed && client.options.chatLinks().get()) InGameBrowser.open(screen, uri.toString())
+            else client.setScreen(screen)
+        }, uri.toString(), false))
+        else InGameBrowser.open(screen, uri.toString())
+        return true
+    }
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
-    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || !suggestionsVisible() &&
+    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || supportedLinkAt(mouseX, mouseY) != null || !suggestionsVisible() &&
         (MC.screen as? ChatScreen)?.let { IrcInlineControls.hasInteractionAt(it, mouseX, mouseY) } == true
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
     private fun thumbnailLayout() = ircThumbnailLayout(GlobalChatConfig.previewSize,

@@ -56,7 +56,9 @@ fun checkDigestLifecycleAndNews() {
     check(mainProfile != DigestDailyGate.profileKey(account, "Apple", true))
 
     var now = 1_000_000L
-    check(NewsSource.entries == listOf(NewsSource.GAME))
+    check(NewsSource.entries == listOf(NewsSource.GAME, NewsSource.DERAILIOUS))
+    checkDigestVideos()
+    checkDigestLinks()
     val legacyNewsConfig = JsonParser.parseString("""{"General":{"Daily Digest":{"news":true,"gameUpdates":false,"alphaUpdates":true,"retainedRngEvents":100}},"unrelated":{"value":7}}""").asJsonObject
     check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, true))
     val migratedNewsConfig = legacyNewsConfig.getAsJsonObject("General").getAsJsonObject("Daily Digest")
@@ -76,9 +78,9 @@ fun checkDigestLifecycleAndNews() {
         {"id":"$id","title":"Repeated update","content":"Details","publishedAt":900000}]
     }""").asJsonObject
     check(news.state(NewsSource.GAME).items.isEmpty())
-    news.refresh(NewsSource.entries)
+    news.refresh(listOf(NewsSource.GAME))
     check(requests.size == 1 && news.state(NewsSource.GAME).loading)
-    news.refresh(NewsSource.entries, true)
+    news.refresh(listOf(NewsSource.GAME), true)
     check(requests.size == 1)
     requests[0].second.complete(response())
     check(news.state(NewsSource.GAME).items.size == 1 && !news.state(NewsSource.GAME).loading)
@@ -277,6 +279,90 @@ fun checkDigestLifecycleAndNews() {
         Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
     println("Daily Digest checks passed: local day, delayed consent, profile isolation, asynchronous cache, corruption recovery and bounded history")
+}
+
+private fun checkDigestVideos() {
+    val now = 1_000_000L
+    val watch = "https://www.youtube.com/watch?v=ovmsEmAhoIQ"
+    val thumbnail = "https://i4.ytimg.com/vi/ovmsEmAhoIQ/hqdefault.jpg"
+    fun response() = JsonParser.parseString("""{"source":"derailious","status":"ready","fetchedAt":$now,"items":[
+        {"id":"derailious:ovmsEmAhoIQ","title":"A SkyBlock video","content":"Description","publishedAt":900000,
+        "url":"$watch","thumbnailUrl":"$thumbnail"}]}""").asJsonObject
+    val item = parseDigestNews(response(), NewsSource.DERAILIOUS, now).single()
+    check(item.url == watch && item.thumbnailUrl == thumbnail && item.publishedAt == 900000L)
+    check(safeDigestVideoUrl("https://www.youtube.com/shorts/ovmsEmAhoIQ") != null)
+    check(safeDigestUrl(watch) == null && safeDigestVideoUrl(thumbnail) == null && safeDigestVideoUrl(watch, true) == null)
+    for (unsafe in listOf("http://www.youtube.com/watch?v=ovmsEmAhoIQ", "https://www.youtube.com.evil.example/watch?v=ovmsEmAhoIQ",
+        "https://www.youtube.com@evil.example/watch?v=ovmsEmAhoIQ", "https://www.youtube.com/redirect?q=example",
+        "$watch&redirect=example", "https://www.youtube.com:444/watch?v=ovmsEmAhoIQ")) check(safeDigestVideoUrl(unsafe) == null)
+    for (unsafe in listOf("https://ytimg.com/vi/ovmsEmAhoIQ/hqdefault.jpg", "https://i4.ytimg.com.evil.example/vi/ovmsEmAhoIQ/hqdefault.jpg",
+        "$thumbnail?redirect=example", "https://i4.ytimg.com/other.png")) check(safeDigestVideoUrl(unsafe, true) == null)
+    val unsafeThumbnail = response().apply { getAsJsonArray("items")[0].asJsonObject.addProperty("thumbnailUrl", "https://evil.example/a.png") }
+    check(parseDigestNews(unsafeThumbnail, NewsSource.DERAILIOUS, now).single().thumbnailUrl == null)
+    val unsafeVideo = response().apply { getAsJsonArray("items")[0].asJsonObject.addProperty("url", "https://evil.example/watch") }
+    check(runCatching { parseDigestNews(unsafeVideo, NewsSource.DERAILIOUS, now) }.isFailure)
+    val requests = mutableMapOf<NewsSource, CompletableFuture<JsonObject?>>()
+    val repository = DigestNewsRepository({ source -> CompletableFuture<JsonObject?>().also { requests[source] = it } }, { it() }, {}, { now })
+    repository.restore(NewsSource.GAME, DigestNewsState(items = listOf(DigestNewsItem("old", NewsSource.GAME, "Saved update", "Details", 800000))))
+    repository.refresh(NewsSource.entries)
+    requests.getValue(NewsSource.DERAILIOUS).complete(response())
+    requests.getValue(NewsSource.GAME).completeExceptionally(IOException("offline"))
+    check(repository.state(NewsSource.DERAILIOUS).items.single() == item && repository.state(NewsSource.DERAILIOUS).failure == null)
+    check(repository.state(NewsSource.GAME).items.single().id == "old" && repository.state(NewsSource.GAME).failure == DigestFailure.OFFLINE)
+    val directory = Files.createTempDirectory("digest-video-check")
+    try {
+        val store = DigestStateStore(directory.resolve("state.json"))
+        val state = DigestSavedState(news = NewsSource.entries.associate { it.wire to repository.state(it) })
+        store.save(state)
+        check(store.load() == state && !store.recovered)
+    } finally { Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+}
+
+private fun checkDigestLinks() {
+    val now = 1_000_000L
+    val forum = "https://hypixel.net/threads/release.123/"
+    val watch = "https://www.youtube.com/watch?v=abcdefghijk"
+    val short = "https://youtu.be/abcdefghijk?t=30"
+    val content = "[Patch notes]($forum). <$short> $forum"
+    check(digestNewsLinks(content) == listOf(forum, short))
+    check(digestNewsLinks("$watch, ($forum).") == listOf(watch, forum))
+    val unsupported = listOf("https://hypixel.net.evil.example/", "https://hypixel.net@evil.example/", "http://hypixel.net/",
+        "file:///private", "https://www.youtube.com/redirect?q=unsafe", "$watch&redirect=unsafe", "https://hypixel.net:444/")
+    check(digestNewsLinks(unsupported.joinToString(" ")).isEmpty())
+    check(digestNewsLinks((1..20).joinToString(" ") { "https://hypixel.net/threads/$it/" }).size == 8)
+    val long = "https://hypixel.net/" + "a".repeat(900)
+    val bounded = digestNewsLinks("", listOf(long, "https://hypixel.net/" + "b".repeat(900), short))
+    check(bounded == listOf(long, short) && bounded.sumOf { it.length } <= 1024)
+    check(digestNewsLinks("", listOf("https://hypixel.net/" + "ä".repeat(400))).isEmpty())
+    fun response() = JsonParser.parseString("""{"source":"game","items":[{"id":"links","title":"Patch notes",
+        "content":"$content","publishedAt":900000,"url":"https://discord.com/channels/1/2/3",
+        "links":["$watch","$forum","$watch","https://evil.example/"]}]}""").asJsonObject
+    val parsed = parseDigestNews(response(), NewsSource.GAME, now).single()
+    check(parsed.url == "https://discord.com/channels/1/2/3" && parsed.links == listOf(watch, forum, short))
+    val oldResponse = response().apply { getAsJsonArray("items")[0].asJsonObject.remove("links") }
+    check(parseDigestNews(oldResponse, NewsSource.GAME, now).single().links == listOf(forum, short))
+    for (malformed in listOf("null", "{}", "[1]", "[null]", "[\"${"x".repeat(2049)}\"]",
+        "[" + List(9) { "\"$watch\"" }.joinToString(",") + "]")) {
+        val invalid = response().apply { getAsJsonArray("items")[0].asJsonObject.add("links", JsonParser.parseString(malformed)) }
+        check(runCatching { parseDigestNews(invalid, NewsSource.GAME, now) }.isFailure)
+    }
+    val directory = Files.createTempDirectory("digest-links-check")
+    try {
+        val file = directory.resolve("state.json")
+        val store = DigestStateStore(file)
+        val state = DigestSavedState(news = mapOf("game" to DigestNewsState(listOf(parsed), now)))
+        store.save(state)
+        check(store.load() == state && !store.recovered)
+        val legacy = com.google.gson.Gson().toJsonTree(state).asJsonObject
+        legacy.getAsJsonObject("news").getAsJsonObject("game").getAsJsonArray("items")[0].asJsonObject.remove("links")
+        Files.writeString(file, legacy.toString())
+        check(store.load() == state.copy(news = mapOf("game" to DigestNewsState(listOf(parsed.copy(links = emptyList())), now))) && !store.recovered)
+        store.save(state)
+        for (invalid in listOf(listOf(watch, watch), unsupported, List(9) { forum }, listOf(long, long + "b"))) {
+            check(runCatching { store.save(state.copy(news = mapOf("game" to DigestNewsState(listOf(parsed.copy(links = invalid)), now)))) }.isFailure)
+            check(store.load() == state) // Rejected links cannot overwrite the previously saved history.
+        }
+    } finally { Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
 }
 
 private fun checkLocalRngHistory() {

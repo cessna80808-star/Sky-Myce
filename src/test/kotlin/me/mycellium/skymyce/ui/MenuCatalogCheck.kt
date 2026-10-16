@@ -53,6 +53,9 @@ fun main() {
     val camera = checkNotNull(catalog.findFeature("healer-crush-camera"))
     check(camera.title == "Crush Camera")
     check(camera.enabledPath == "Dungeons/Healer Crush Camera/enabled")
+    val leap = checkNotNull(catalog.findFeature("leap-menu"))
+    check(leap.settings.map { it.path.substringAfterLast('/') }.toSet() == setOf("enabled", "povEnabled", "partyPovSharing", "framesPerSecond"))
+    check(!checkNotNull(catalog.setting("Dungeons/Leap Menu/partyPovSharing")).entry.boolean) { "Party POV sharing must require explicit opt-in" }
     val cameraGroups = settingGroups(rows, camera.id)
     check(cameraGroups.keys == setOf("Automatic activation", "Appearance"))
     for (key in listOf("enabled", "healer", "mage", "berserk", "archer", "tank"))

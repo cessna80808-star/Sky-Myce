@@ -27,4 +27,9 @@ public final class CameraMath {
         double scale = Math.min(guiScale, Math.min(1024.0 / width, 768.0 / height));
         return new int[] {Math.max(1, (int) Math.round(width * scale)), Math.max(1, (int) Math.round(height * scale))};
     }
+
+    public static int[] previewTargetSize(int width, int height, double guiScale) {
+        if (!Double.isFinite(guiScale)) throw new IllegalArgumentException("Invalid camera viewport scale");
+        return targetSize(width, height, Math.min(guiScale, Math.min(320.0 / width, 180.0 / height)));
+    }
 }

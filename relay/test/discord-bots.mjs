@@ -78,6 +78,7 @@ async function responseFor(data, result = { ok: true, identity }, kind = 'user',
     cacheDiscordIdentity: async () => ({ ok: true }),
     communityUserCommand: async (caller, action, options) => { operations.push(['user', caller.id, action, options]); return result; },
     discordLeaderboard: async (caller, options) => { operations.push(['leaderboard', caller, options]); return result; },
+    discordBazaar: async (caller, action, period) => { operations.push(['bazaar', caller, action, period]); return result; },
     communityRead: async (caller, action, selected, options) => { operations.push(['read', caller.id, action, selected, options]); return result; },
     communityManage: async () => { throw Error('Native managed mutations must not bypass confirmation'); },
     prepareCommunityManagement: async (caller, selectedKind, action, selected, options) => {
@@ -255,6 +256,26 @@ test('leaderboards use the signed user actor, the shared query and honest source
   assert.match(missing.text, /No reliable completed-task publisher exists/);
   const invalid = await responseFor(command('leaderboard'), { ok: false, error: 'invalid_leaderboard' });
   assert.match(invalid.text, /metric from the selected leaderboard category/);
+});
+
+test('Bazaar commands bind private summaries, statistics and replay links to the signed caller', async () => {
+  const result={ok:true,version:1,period:'weekly',profit:200,cost:1000,durationMs:60000,completedFlips:1,realizations:2,roi:.2,profitPerHour:12000,
+    coverage:'Only your eligible shared realized portions, not private local history.',verification:'Unverified client observations',
+    sessionSummary:{durationMs:60000,realizedProfit:200,completedFlips:1},publications:[{token:'p'.repeat(43)}],sharing:{enabled:true,economy:true,leaderboards:true,publicName:false}};
+  for(const action of ['stats','summary','replays','privacy']){
+    const response=await responseFor(command('bazaar',action,action==='stats'?[{name:'period',type:3,value:'weekly'}]:[]),result);
+    assert.deepEqual(response.operations,[['bazaar',{...actor,roles:[]},action,action==='stats'?'weekly':'all-time']]);
+    if(action==='summary')assert.match(response.text,/explicitly shared session summary/);
+    if(action==='replays')assert.match(response.text,/community\/bazaar\/replays\//);
+    for(const secret of [identity.accountId,target,device])assert(!response.text.includes(secret));
+  }
+  const env={...config,ACCOUNT_STORE:{getByName(){throw Error('Untrusted user selection reached private storage')}}};
+  for(const raw of [command('bazaar','stats',[{name:'user',type:6,value:target}]),{...command('bazaar','stats'),guild_id:'99999999999999999'}]){
+    assert.equal((await handleAccountInteraction(raw,env,{waitUntil(){}},'user').json()).type,4);
+  }
+  const linked=await responseFor(command('leaderboard',null,[{name:'category',type:3,value:'economy'},{name:'metric',type:3,value:'bazaar_profit'},{name:'identity',type:3,value:'linked'}]),
+    {...leaderboard,category:'economy',metric:'bazaar_profit',identity:'linked'});
+  assert.match(linked.text,/Local Sunday week/);assert(linked.reply.components[0].components.every(control=>control.custom_id.endsWith(':linked')));
 });
 
 test('malformed leaderboard selections and wrong guild never reach storage', async () => {

@@ -20,6 +20,8 @@ data class DigestEntry(
     val community: Boolean = false,
     val activity: String = "",
     val slots: List<DigestEntry> = emptyList(),
+    val video: Boolean = false,
+    val links: List<String> = emptyList(),
 )
 
 data class DigestCardState(

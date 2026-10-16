@@ -65,6 +65,8 @@ npm run check
 
 Run the narrowest relevant checks while iterating, then `./gradlew check` for mod-wide changes. Report any verification that could not be run and why.
 
+For GUI changes, `./gradlew runGuiVisualCheck` launches an isolated development client, captures real menu/theme/control screens at multiple sizes and GUI scales under `build/gui-visual-check/screenshots`, and exits. It uses test-only Fabric code and no multiplayer connection or existing player profile. This supplements the executable checks; gameplay HUD and native player previews still need in-world verification.
+
 The user has authorized deployment of every completed mod release build to the production Cloudflare backend. Include deployment in future build tasks without asking again: use a new release version, upload the private artifact before its signed protocol-4 Fabric manifest (`sign-community`), activate `releases/community-current.json` on `--env backend`, and verify the live signature and artifact hash. Retain previous builds and historical Loader release pointers for later cleanup.
 
 The sole production Discord Gateway lives in the separate `D:\Code\Cessna fork\relay` checkout. Update that existing service for Gateway changes; do not start a competing Node bot. Keep RNG posts in a dedicated channel, Global bridged to Discord and Party restricted to game clients. Local features and personal history remain usable without a community session.

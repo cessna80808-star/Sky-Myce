@@ -483,7 +483,7 @@ export class CommunityAccounts {
 }
 
 const htmlEscape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
-async function boundedJson(request: Request, maximum: number): Promise<Record<string, unknown>> {
+export async function boundedJson(request: Request, maximum: number): Promise<Record<string, unknown>> {
   if (!request.body || Number(request.headers.get("Content-Length") ?? 0) > maximum) deny("invalid_request");
   const reader = request.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
   try {

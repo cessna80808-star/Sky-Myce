@@ -23,26 +23,35 @@ internal fun dungeonTrackerDisplayFloor(current: DungeonFloor?, api: DungeonFloo
         .maxByOrNull { it.completedAt!! }?.floor?.let { DungeonFloor.getByName(it) }
 }
 
-internal fun dungeonTrackerWidgetLines(floor: DungeonFloor?, stats: TrackerSummary): List<String> {
+internal fun dungeonTrackerWidgetLines(floor: DungeonFloor?, stats: TrackerSummary,
+    rateSample: TrackerSummary? = stats.takeIf { it.completeTiming && it.profitTimingComplete && it.xpTimingComplete }): List<String> {
     fun number(value: Double) = if (value.isFinite()) NumberUtils.condense(value) else "Unknown"
     fun duration(millis: Long?) = millis?.takeIf { it >= 0 }?.milliseconds?.takeIf { it.isFinite() }
         ?.inWholeSeconds?.seconds?.toString() ?: "Unknown"
-    fun rate(value: Double) = stats.hourlyRate(value)?.let(::number) ?: "—"
+    val sample = rateSample?.takeIf { it.completeTiming }
+    fun rate(value: Double?) = value?.let { sample?.hourlyRate(it) }?.let(::number) ?: "—"
     val partialTime = stats.timedRuns < stats.runs
     val empty = stats.runs == 0L && stats.time == 0L
-    val time = if (stats.timedRuns > 0) (if (partialTime) "≥" else "") + duration(stats.time) else if (empty) "0s" else "Unknown"
+    val time = if (stats.timedRuns > 0) duration(stats.time) + (if (partialTime) " recorded" else "") else if (empty) "0s" else "Unknown"
     val average = duration(stats.average?.takeIf { it.isFinite() && it >= 0 }?.toLong() ?: 0L.takeIf { empty })
     val profit = stats.knownNet.takeIf(Double::isFinite)?.let { "§7~${TextUtils.parseProfit(it)}" } ?: "§eUnknown"
-    val profitRate = if (!stats.profitIncomplete && stats.profitTimingComplete) rate(stats.knownNet) else "—"
-    val xpRate = if (stats.xpTimingComplete) rate(stats.cataXp) else "—"
+    val profitRate = if (sample != null && !sample.profitIncomplete && sample.profitTimingComplete) rate(sample.knownNet) else "—"
+    val xpRate = if (sample?.xpTimingComplete == true) rate(sample.cataXp) else "—"
+    val sampleCaption = when {
+        stats.runs == 0L -> ""
+        sample == null -> "§8Rates need matched run times"
+        partialTime || sample.runs != stats.runs || sample.time != stats.time || !stats.profitTimingComplete || !stats.xpTimingComplete ->
+            "§8Rates: ${sample.runs}/${stats.runs} matched runs"
+        else -> ""
+    }
     return listOf(
         "§b§l${floor?.name ?: "All floors"} Dungeon Tracker",
         "§8/skymyce dungeon",
         "",
-        "§7Time: §e$time§7 (§e$average§7/run${if (partialTime && stats.timedRuns > 0) " known" else ""})",
-        "§7Runs: §a${stats.runs.coerceAtLeast(0)}§7 (§a${rate(stats.runs.toDouble())}§7/h)",
+        "§7Time: §e$time§7 (§e$average§7/run)",
+        "§7Runs: §a${stats.runs.coerceAtLeast(0)}§7 (§a${rate(sample?.runs?.toDouble())}§7/h)",
         "§7Chests: §a${stats.chests.coerceAtLeast(0)}§7 (§b${stats.rerolls.coerceAtLeast(0)} rerolls§7)",
-        "",
+        sampleCaption,
         "§7Profit: $profit${if (stats.profitIncomplete) " §8+ ?" else ""}§7 ($profitRate§7/h)",
         "§7Cata Exp: §b${number(stats.cataXp)} §7(§b$xpRate§7/h)",
     )
@@ -82,10 +91,15 @@ object DungeonTrackerWidget : SkyMyceModule() {
             seenRevision = AcquisitionRepository.revision; seenHistoricalRevision = DungeonTracker.revision; seenFloor = activeFloor; seenContext = context
             seenBazaar = bazaar; seenAuction = auction; nextMarketRefresh = now + 10_000
             val floor = dungeonTrackerDisplayFloor(activeFloor, null, AcquisitionRepository.state.runs, context)
-            val selected = trackerView(AcquisitionRepository.state, legacyTrackerView(),
+            val legacy = legacyTrackerView()
+            val selected = trackerView(AcquisitionRepository.state, legacy,
                 TrackerFilter(floor = floor?.name, scope = TrackerScope.ALL_LOCAL_PROFILES), context)
-            val pricedLoot = marketValuedLoot(selected.loot) { cachedLootUnitPrice(it, bazaar, auction) }
-            cachedLines = dungeonTrackerWidgetLines(floor, marketValuedTrackerSummary(selected.summary, pricedLoot))
+            val sample = dungeonTrackerRateSample(AcquisitionRepository.state, legacy, floor?.name)
+            val prices = (selected.loot + sample.loot).map { it.item }.distinct().associateWith { cachedLootUnitPrice(it, bazaar, auction) }
+            val pricedLoot = marketValuedLoot(selected.loot, prices::get)
+            val sampleLoot = marketValuedLoot(sample.loot, prices::get)
+            cachedLines = dungeonTrackerWidgetLines(floor, marketValuedTrackerSummary(selected.summary, pricedLoot),
+                marketValuedTrackerSummary(sample.summary, sampleLoot))
         }
         content.updateTextLines(cachedLines)
     }

@@ -522,6 +522,7 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "dungeon-tracker" -> DungeonScreen()
         "healer-crush-camera" -> me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()
         "auction-browser" -> AuctionHouseScreen()
+        "bazaar-flipping" -> me.mycellium.skymyce.features.bazaar.BazaarScreen()
         "cosmetics" -> CosmeticsScreen()
         "community" -> me.mycellium.skymyce.community.CommunityScreen()
         "leaderboards" -> me.mycellium.skymyce.community.LeaderboardScreen()

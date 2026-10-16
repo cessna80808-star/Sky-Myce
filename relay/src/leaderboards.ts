@@ -4,10 +4,11 @@ import type { SharingCategory, SharingDecision } from "./community-sharing";
 import { validatedPublicRngEvent, type PublicRngEvent } from "./digest";
 import { randomToken } from "./drm";
 
-export type LeaderboardQuery = { category?: unknown; metric?: unknown; period?: unknown; page?: unknown; limit?: unknown; search?: unknown };
+export type LeaderboardQuery = { category?: unknown; metric?: unknown; period?: unknown; page?: unknown; limit?: unknown; search?: unknown; identity?: unknown };
 type Category = "economy" | "dungeons" | "rng" | "other";
 type Metric = { category: Category; privacy: SharingCategory; label: string; description: string; unit: string; aggregation: "latest-snapshot" | "event-sum" | "event-average"; available?: false; reason?: string };
 export const leaderboardMetrics: Record<string, Metric> = {
+  bazaar_profit: { category: "economy", privacy: "economy", label: "Observed realized Bazaar profit", description: "Actual net sale proceeds less allocated observed acquisition cost; includes supported partial sales and losses.", unit: "coins", aggregation: "event-sum" },
   networth: { category: "economy", privacy: "economy", label: "Estimated net worth", description: "Latest complete shared valuation observed in this period; not net-worth gain.", unit: "coins", aggregation: "latest-snapshot" },
   purse: { category: "economy", privacy: "economy", label: "Purse balance", description: "Latest complete shared purse snapshot observed in this period; not income.", unit: "coins", aggregation: "latest-snapshot" },
   bank: { category: "economy", privacy: "economy", label: "Bank balance", description: "Latest complete shared bank snapshot observed in this period; not income.", unit: "coins", aggregation: "latest-snapshot" },
@@ -24,7 +25,7 @@ export function utcPeriodStart(period: string, now: number): number | null {
   const midnight = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
   return midnight - ((date.getUTCDay() + 6) % 7) * 86400000;
 }
-export type LeaderboardResult = { ok: boolean; error?: string; version?: 1; category?: string; metric?: string; period?: string; startAt?: number | null;
+export type LeaderboardResult = { ok: boolean; error?: string; version?: 1; category?: string; metric?: string; period?: string; identity?: string; startAt?: number | null;
   endAt?: number; metricLabel?: string; description?: string; unit?: string; aggregation?: string; source?: string; coverage?: string;
   available?: boolean; reason?: string; updatedAt?: number; total?: number; page?: number; limit?: number; search?: string; hasNext?: boolean;
   entries?: { rank: number; player: string; value: number; sampleSize: number; updatedAt: number; source: string; verification: string }[] };
@@ -39,6 +40,7 @@ type FeedRow = { id: string; author: string; event: string; received_at: number;
 export type FeedDelivery = { id: string; claim: string; operation: "publish" | "delete"; event?: PublicRngEvent; channelId?: string; messageId?: string };
 export type FeedReceipt = { id: string; messageId: string };
 type Hooks = { check(uuid: string, category: SharingCategory, at?: number): SharingDecision;
+  bazaar?(query: LeaderboardQuery, now: number): LeaderboardResult;
   record(uuid: string, raw: unknown, name: string): { ok: boolean; error?: string }; };
 
 /** One persistent global source serves the mod, Discord and future read-only consumers. */
@@ -54,6 +56,7 @@ export class CommunityLeaderboards {
         received_at INTEGER NOT NULL,PRIMARY KEY(author,source_id));
       CREATE TABLE IF NOT EXISTS community_rng_scan(channel TEXT PRIMARY KEY,cursor TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS community_rng_scan_order ON community_rng_delivery(channel,id) WHERE message_id IS NOT NULL AND suppressed=0`);
+    sql.exec("CREATE INDEX IF NOT EXISTS community_rng_recent ON community_rng_delivery(channel,received_at DESC,id) WHERE message_id IS NOT NULL AND suppressed=0");
   }
   /** Repair count rows erased by the old same-owner refresh bug; never enqueue or repost accepted reports. */
   restoreAcceptedRng(author: string, sessionId: string, now = Date.now()): number {
@@ -98,6 +101,8 @@ export class CommunityLeaderboards {
     return restored;
   }
   query(raw: LeaderboardQuery, now = Date.now()): LeaderboardResult {
+    if (raw.metric === "bazaar_profit") return raw.category !== undefined && raw.category !== "economy" ? { ok: false, error: "invalid_leaderboard" } : this.hooks.bazaar?.(raw, now) ?? { ok: false, error: "bazaar_unavailable" };
+    if (raw.identity !== undefined) return { ok: false, error: "invalid_leaderboard" };
     const category = typeof raw.category === "string" ? raw.category : "economy";
     const metricId = typeof raw.metric === "string" ? raw.metric : ({ economy: "networth", dungeons: "dungeon_runs", rng: "rng_drops", other: "completed_tasks" } as Record<string, string>)[category];
     const metric = metricId && Object.hasOwn(leaderboardMetrics, metricId) ? leaderboardMetrics[metricId] : undefined;
@@ -191,6 +196,19 @@ export class CommunityLeaderboards {
   suppress(uuids: string[]): void {
     for (const player of uuids.slice(0, 256)) if (/^[a-f0-9]{32}$/.test(player)) this.sql.exec("UPDATE community_rng_delivery SET suppressed=1,next_at=0 WHERE author=?", player);
   }
+  recentRng(channel: string, now = Date.now()): PublicRngEvent[] {
+    const events: PublicRngEvent[] = [];
+    const rows = this.sql.exec<FeedRow>("SELECT * FROM community_rng_delivery WHERE channel=? AND message_id IS NOT NULL AND suppressed=0 AND received_at>? ORDER BY received_at DESC,id DESC LIMIT 200", channel, now - 604800000).toArray();
+    for (const row of rows) {
+      const event = validatedPublicRngEvent(JSON.parse(row.event));
+      if (!event || event.occurredAt < now - 604800000 || event.occurredAt > now + 60000) continue;
+      const decision = this.hooks.check(row.author, "rng", event.occurredAt);
+      if (!decision.allowed || event.player !== "Anonymous" && !decision.publicName) continue;
+      events.push(event);
+      if (events.length === 30) break;
+    }
+    return events;
+  }
   private prune(): void {
     const now = Date.now();
     // A lost ACK may hide a posted message: expire publication, but retain attempted deliveries for cancellation.
@@ -256,7 +274,7 @@ export async function handleLeaderboardsRequest(request: Request, env: Config): 
     const result = await env.ACCOUNT_STORE.getByName("global").communityJournalComparison(token, Object.fromEntries(url.searchParams));
     return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_journal_comparison" ? 400 : result.error === "comparison_unavailable" ? 503 : result.error === "rate_limited" ? 429 : 401, headers: { "Cache-Control": "no-store" } });
   }
-  if ([...url.searchParams.keys()].some(key => !["category", "metric", "period", "page", "limit", "search"].includes(key))) return Response.json({ ok: false, error: "invalid_leaderboard" }, { status: 400 });
+  if ([...url.searchParams.keys()].some(key => !["category", "metric", "period", "page", "limit", "search", "identity"].includes(key))) return Response.json({ ok: false, error: "invalid_leaderboard" }, { status: 400 });
   const result = await env.ACCOUNT_STORE.getByName("global").communityLeaderboard(token, Object.fromEntries(url.searchParams));
   return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_leaderboard" ? 400 : 401, headers: { "Cache-Control": "no-store" } });
 }
@@ -299,11 +317,12 @@ export function discordLeaderboardMessage(result: LeaderboardResult): { content:
     return `${prefix}:${String(Math.floor(millis / 1000) % 60).padStart(2, "0")}.${String(millis % 1000).padStart(3, "0")}`;
   };
   const entries = result.entries ?? [], lines = entries.map(entry => `**${entry.rank}.** ${escape(entry.player)} · **${format(entry.value)}** · ${entry.sampleSize} record${entry.sampleSize === 1 ? "" : "s"}`);
-  return { content: result.available === false ? result.reason ?? "This metric is unavailable." : "", embeds: [{ title: `Sky-Myce · ${result.metricLabel} · ${result.period === "weekly" ? "UTC week" : result.period === "monthly" ? "UTC month" : "All time"}`,
+  const local = result.metric === "bazaar_profit", identitySuffix = local ? `:${result.identity ?? "uuid"}` : "";
+  return { content: result.available === false ? result.reason ?? "This metric is unavailable." : "", embeds: [{ title: `Sky-Myce · ${result.metricLabel} · ${result.period === "weekly" ? local ? "Local Sunday week" : "UTC week" : result.period === "monthly" ? local ? "Local month" : "UTC month" : "All time"}`,
     color: 0x7c61e8, description: `${result.description}\n\n${lines.join("\n") || "No complete shared records for this selection."}`.slice(0, 4000),
     fields: [{ name: "Source and coverage", value: `${result.source}\n${result.coverage}` }, { name: "Updated / page", value: `${result.updatedAt ? `<t:${Math.floor(result.updatedAt / 1000)}:R>` : "No observations yet"} · page ${result.page} · ${result.total} Minecraft identities` }],
     footer: { text: result.search ? "Filtered results: repeat /leaderboard with the same search and desired page. Community reports remain unverified." : "Community reports remain unverified · anonymous names honor sharing preferences" } }],
     components: !result.search && (result.hasNext || (result.page ?? 1) > 1) ? [{ type: 1, components: [
-      ...((result.page ?? 1) > 1 ? [{ type: 2, style: 2, label: "Previous", custom_id: `sky:leaderboard:${result.category}:${result.metric}:${result.period}:${(result.page ?? 1) - 1}` }] : []),
-      ...(result.hasNext ? [{ type: 2, style: 2, label: "Next", custom_id: `sky:leaderboard:${result.category}:${result.metric}:${result.period}:${(result.page ?? 1) + 1}` }] : [])] }] : [] };
+      ...((result.page ?? 1) > 1 ? [{ type: 2, style: 2, label: "Previous", custom_id: `sky:leaderboard:${result.category}:${result.metric}:${result.period}:${(result.page ?? 1) - 1}${identitySuffix}` }] : []),
+      ...(result.hasNext ? [{ type: 2, style: 2, label: "Next", custom_id: `sky:leaderboard:${result.category}:${result.metric}:${result.period}:${(result.page ?? 1) + 1}${identitySuffix}` }] : [])] }] : [] };
 }

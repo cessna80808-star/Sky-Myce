@@ -1,0 +1,16 @@
+Sky-Myce bundles unmodified uBlock Origin Lite 2026.1012.1545 for its Chromium browser.
+Author: Raymond Hill and contributors. License: GNU GPL v3 or later.
+The full license is included inside browser/ubol-2026.1012.1545.zip as LICENSE.txt.
+
+Official release and source:
+https://github.com/uBlockOrigin/uBOL-home/releases/tag/2026.1012.1545
+https://github.com/gorhill/uBlock/tree/master/platform/mv3
+Build instructions: https://github.com/uBlockOrigin/uBOL-home/tree/main/chromium
+
+Original release asset:
+https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.1012.1545/uBOLite_2026.1012.1545.chromium.zip
+SHA-256: 73909c8f26d608b00a99f446192630868bea4f947ba293c29bbd18ae948d903b
+
+The extension runs in Sky-Myce's browser only. Browser data is not imported from
+the system browser or Minecraft accounts. Updating this pinned package requires
+a Sky-Myce update; website advertising changes may require newer filter lists.

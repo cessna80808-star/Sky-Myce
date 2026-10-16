@@ -1,7 +1,9 @@
 package me.mycellium.skymyce.features.digest
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonParser
+import me.mycellium.skymyce.features.browser.BrowserLinks
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
 import me.mycellium.skymyce.utils.observedItemMetadata
@@ -34,6 +36,11 @@ class DigestStateStore(private val file: Path) {
             require(json.get("version")?.asInt == 1)
             // Retired news must not invalidate otherwise valid local profiles/history or become normal news.
             json.getAsJsonObject("news")?.remove("alpha")
+            json.getAsJsonObject("news")?.entrySet()?.forEach { (_, news) ->
+                news.asJsonObject.getAsJsonArray("items")?.forEach { item ->
+                    if (!item.asJsonObject.has("links")) item.asJsonObject.add("links", JsonArray())
+                }
+            }
             gson.fromJson(json, DigestSavedState::class.java).also(::validate)
         }
     } catch (_: Exception) {
@@ -72,13 +79,17 @@ class DigestStateStore(private val file: Path) {
             }
             profile.history.forEach { require(validDigestRng(it, Long.MAX_VALUE / 2)) }
         }
-        require(requireNotNull(state.news).size <= 1)
+        require(requireNotNull(state.news).size <= NewsSource.entries.size)
         state.news.forEach { (source, news) ->
             require(source in NewsSource.entries.map { it.wire } && news.fetchedAt >= 0 && news.retryAt >= 0)
             require(requireNotNull(news.items).size <= 8)
             news.items.forEach { item ->
                 require(item.source.wire == source && requireNotNull(item.id).length in 1..80 && requireNotNull(item.title).length in 1..160)
-                require(requireNotNull(item.content).length <= 2500 && item.publishedAt > 0 && (item.url == null || safeDigestUrl(item.url) != null))
+                require(requireNotNull(item.content).length <= 2500 && item.publishedAt > 0 && (item.url == null || safeDigestNewsUrl(item.url, item.source) != null))
+                require(item.thumbnailUrl == null || item.source == NewsSource.DERAILIOUS && safeDigestVideoUrl(item.thumbnailUrl, true) != null)
+                require(requireNotNull(item.links).size <= 8 && item.links.distinct().size == item.links.size)
+                require(item.links.sumOf { it.length } <= 1024)
+                require(item.links.all { BrowserLinks.supported(it) != null })
             }
         }
         state.global?.let { global ->

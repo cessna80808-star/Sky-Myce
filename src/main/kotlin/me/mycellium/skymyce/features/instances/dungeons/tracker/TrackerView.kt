@@ -30,6 +30,16 @@ data class TrackerView(val summary: TrackerSummary = TrackerSummary(), val loot:
 internal fun marketValuedTrackerSummary(recorded: TrackerSummary, marketLoot: List<TrackerLootRow>) = recorded.copy(
     gross = marketLoot.sumOf { it.value ?: 0.0 }, incompleteValues = marketLoot.any { it.value == null }, preservedProfit = 0.0)
 
+/** Incomplete historical timing cannot assign its loot or XP to the runs whose durations survived. */
+internal fun dungeonTrackerRateSample(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, floor: String?): TrackerView {
+    val filter = TrackerFilter(floor = floor, scope = TrackerScope.ALL_LOCAL_PROFILES)
+    val runs = filter.runs(archive.runs, null).filter { it.completedAt != null && it.duration != null && it.duration in 1..MAX_DUNGEON_RUN_MILLIS }
+        .distinctBy { it.id }
+    val historical = legacy.filter { filter.floorMatches(it.floor) && it.summary.completeTiming }
+    val sample = trackerView(AcquisitionArchive(runs = runs), historical, filter, null)
+    return sample.copy(summary = sample.summary.copy(xpTimingComplete = runs.all { it.cataXp != null }))
+}
+
 /** A saved paid receipt can outlive its journal write; this projection is never persisted or published. */
 private fun trackerHistoryEvents(archive: AcquisitionArchive, filter: TrackerFilter, context: AcquisitionContext?): List<AcquisitionEvent> {
     val linked = filter.copy(query = "", rareOnly = false, valuableOnly = false).events(archive.events, context, archive.runs)

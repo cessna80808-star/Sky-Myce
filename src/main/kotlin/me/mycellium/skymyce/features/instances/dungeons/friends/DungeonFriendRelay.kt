@@ -23,18 +23,39 @@ import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
 
 internal class RelayRetry {
+    private var authenticatedAt: Long? = null
     var nextAttempt = 0L
         private set
     var delay = 1000L
         private set
-    fun failed(now: Long, pause: Boolean) {
-        nextAttempt = if (pause) Long.MAX_VALUE else now + delay
-        delay = (delay * 2).coerceAtMost(60000)
+    fun authenticated(now: Long) { authenticatedAt = now }
+    fun stable(now: Long) {
+        if (authenticatedAt?.let { now - it >= 60000 } == true) reset()
     }
-    fun reset() { nextAttempt = 0; delay = 1000 }
+    fun failed(now: Long, pause: Boolean, minimumDelay: Long = 0) {
+        stable(now); authenticatedAt = null
+        val wait = maxOf(delay, minimumDelay.coerceIn(0, 60000))
+        nextAttempt = if (pause) Long.MAX_VALUE else now + wait
+        delay = (wait * 2).coerceAtMost(60000)
+    }
+    fun reset() { nextAttempt = 0; delay = 1000; authenticatedAt = null }
 }
 
 internal fun relayNeedsReconnect(code: Int) = code == 4001 || code == 4004
+internal fun relayCloseRetryDelay(code: Int, reason: String) = when {
+    code == 1013 && reason == "traffic_cooldown" -> 60000L
+    code == 1008 || code == 1013 -> 5000L
+    else -> 0L
+}
+internal fun relayBazaarCapability(json: JsonObject) = json.get("bazaarVersion")?.let {
+    it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
+} == true
+internal fun relayBazaarPacketAllowed(type: String, supported: Boolean, currentSession: Boolean) =
+    supported && currentSession && type in setOf("bazaar_session", "bazaar_alert")
+internal fun validRelayBazaarReceipt(json: JsonObject): Boolean = json.keySet() == setOf("type", "id", "active", "dmEnabled") &&
+    json.get("type")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString == "bazaar_session_result" } == true &&
+    json.get("id")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.matches(Regex("[a-f0-9]{32}")) } == true &&
+    listOf("active", "dmEnabled").all { json.get(it)?.let { value -> value.isJsonPrimitive && value.asJsonPrimitive.isBoolean } == true }
 
 internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean, identity: String, requestedIdentity: String) =
     localAllowed && active && identity.isNotEmpty() && identity == requestedIdentity
@@ -159,12 +180,18 @@ object DungeonFriendRelay {
         private set
     var partyChatAvailable = false
         private set
+    var leapPovAvailable = false
+        private set
+    var bazaarAvailable = false
+        private set
     internal val sessionGeneration get() = generation
     internal val ircRoom get() = relayUri(DungeonFriendsSettings.relayUrl)?.rawQuery?.substringAfter("room=") ?: "friends"
     private var activeLease: String? = null
     var onDigestEvent: ((JsonObject) -> Unit)? = null
     var onDigestReady: (() -> Unit)? = null
     var onDigestClosed: (() -> Unit)? = null
+    internal var onLeapPovEvent: ((JsonObject) -> Unit)? = null
+    internal var onLeapPovClosed: (() -> Unit)? = null
     private val partyPolicies = object : LinkedHashMap<String, Pair<Long, PartyPolicy?>>(128, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, PartyPolicy?>>) = size > 1024
     }
@@ -226,6 +253,7 @@ object DungeonFriendRelay {
             disconnect(clearCosmetics = false); identity = key; activeLease = CommunityClient.sessionToken
         }
         val now = DungeonFriends.now()
+        if (connected) retry.stable(now)
         if (now >= policyDeadline) policyRequest = null
         deliveries.tick(now)
         expireRelayRequests(statsRequests, now, cancelled = false)
@@ -331,7 +359,7 @@ object DungeonFriendRelay {
                                         } }
                                     }
                                     "ready" -> {
-                                        check(authenticating && json.get("protocol")?.asInt == 3)
+                                        check(authenticating && !connected && json.get("protocol")?.asInt == 3)
                                         check(json.get("uuid").asString == user.profileId.toString().replace("-", ""))
                                         check(json.get("name").asString.equals(user.name, true))
                                         connected = true
@@ -347,7 +375,11 @@ object DungeonFriendRelay {
                                         globalChatAvailable = json.get("globalChat")?.asBoolean == true
                                         richChatAvailable = richIrcCapability(json)
                                         partyChatAvailable = partyIrcCapability(json)
-                                        retry.reset()
+                                        leapPovAvailable = json.get("leapPovVersion")?.let {
+                                            it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
+                                        } == true
+                                        bazaarAvailable = relayBazaarCapability(json)
+                                        retry.authenticated(DungeonFriends.now())
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
                                         nextPing = DungeonFriends.now() + 45000
@@ -379,6 +411,11 @@ object DungeonFriendRelay {
                                             partyRequests.remove(json.get("id")?.asString)?.second?.complete(json)
                                         }
                                     }
+                                    "leap_pov_result", "leap_pov_pose", "leap_pov_remove" -> {
+                                        check(connected && leapPovAvailable)
+                                        onLeapPovEvent?.invoke(json)
+                                    }
+                                    "bazaar_session_result" -> { check(connected && bazaarAvailable && validRelayBazaarReceipt(json)) }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
                                         CommunityClient.onlineDenied(reason); disconnect()
@@ -458,7 +495,7 @@ object DungeonFriendRelay {
                                     }
                                     else -> error("Unknown relay packet")
                                 }
-                            }.onFailure { failed("Invalid relay response; reconnecting", it) }
+                            }.onFailure { failed("Invalid relay response; retrying with backoff", it, minimumRetry = 5000) }
                         }
                     }
                 }
@@ -471,12 +508,15 @@ object DungeonFriendRelay {
             }
             override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*>? {
                 MC.instance.execute { if (token == generation) {
-                    SkyMyce.logger.info("[Dungeon relay] Close code={} authenticated={} stage={}", statusCode, connected, stage)
+                    val safeReason = reason.takeIf { it in setOf("traffic_cooldown", "rate_limited", "service_busy", "Invalid relay message", "Authentication required", "Incoming message rate exceeded") } ?: "unspecified"
+                    SkyMyce.logger.info("[Dungeon relay] Close code={} authenticated={} stage={} reason={}", statusCode, connected, stage, safeReason)
                     failed(when (statusCode) {
                         4001 -> "Account connected elsewhere; use Reconnect in Settings"
                         4004 -> "Minecraft proof rejected; restart Minecraft or update the mod, then use Reconnect in Settings"
+                        1008 -> "Relay rejected a protocol message; retrying with backoff"
+                        1013 -> if (reason == "traffic_cooldown") "Community traffic cooldown; retrying after one minute" else "Community service busy or rate limited; retrying with backoff"
                         else -> "Relay closed ($statusCode); reconnecting"
-                    }, pause = relayNeedsReconnect(statusCode), graceful = true)
+                    }, pause = relayNeedsReconnect(statusCode), graceful = true, minimumRetry = relayCloseRetryDelay(statusCode, reason))
                     if (statusCode == 4005) CommunityClient.onlineDenied("session_revoked")
                 } }
                 return null
@@ -526,6 +566,19 @@ object DungeonFriendRelay {
     internal fun currentGlobalSession() = connected && CommunityClient.connected &&
         globalRelaySessionCurrent(identity, activeLease, DungeonFriendsSettings.relayUrl, MC.instance.user.profileId,
             CommunityClient.sessionToken)
+
+    internal fun bazaarPacket(type: String, fields: Map<String, Any>, current: () -> Boolean): Boolean {
+        if (!relayBazaarPacketAllowed(type, bazaarAvailable, currentGlobalSession()) || !current()) return false
+        packet(fields + ("type" to type), current)
+        return true
+    }
+
+    internal fun leapPovPacket(type: String, fields: Map<String, Any>, current: () -> Boolean, dropIfBusy: Boolean = false): Boolean {
+        if (type !in setOf("leap_pov_subscribe", "leap_pov_pose") || !leapPovAvailable || !currentGlobalSession() ||
+            !current() || dropIfBusy && !sending.isDone) return false
+        packet(fields + ("type" to type), current)
+        return true
+    }
 
     fun sendUserMessage(name: String, text: String, received: () -> Unit, failed: (String) -> Unit): Boolean {
         if (!connected || !userMessagesAvailable) return false
@@ -664,21 +717,21 @@ object DungeonFriendRelay {
             "uuid" to wealth.uuid.replace("-", ""), "wealth" to wealth, "fetchedAt" to wealth.fetchedAt, "upload" to upload))
     }
 
-    private fun packet(data: Any) = RuntimeProfiler.measure(RuntimeProfiler.Area.RELAY_SEND) {
+    private fun packet(data: Any, current: () -> Boolean = { true }) = RuntimeProfiler.measure(RuntimeProfiler.Area.RELAY_SEND) {
         val ws = socket ?: return@measure
         val token = generation
         val text = if (data is String) data else gson.toJson(data)
         if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.RELAY_SEND, text.toByteArray(Charsets.UTF_8).size.toLong())
-        sending = sendRelayPacket(sending, ws, text, { token == generation })
+        sending = sendRelayPacket(sending, ws, text, { token == generation && current() })
         sending.whenComplete { _, error ->
             if (error != null) MC.instance.execute { if (token == generation) failed("Relay send failed; reconnecting", error) }
         }
     }
 
-    private fun failed(message: String, error: Throwable? = null, pause: Boolean = false, graceful: Boolean = false, failingStage: String = stage) {
+    private fun failed(message: String, error: Throwable? = null, pause: Boolean = false, graceful: Boolean = false, failingStage: String = stage, minimumRetry: Long = 0) {
         if (message != "Relay disconnected") SkyMyce.logger.warn(
             "[Dungeon relay] {} stage={} authenticated={} retry={} exception={}",
-            message, failingStage, connected, if (pause) "paused" else "${retry.delay}ms", relayErrorDetail(error))
+            message, failingStage, connected, if (pause) "paused" else "${maxOf(retry.delay, minimumRetry)}ms", relayErrorDetail(error))
         generation++
         socket?.let { if (graceful) closeRelaySocket(it, sending) else it.abort() }
         socket = null
@@ -692,6 +745,8 @@ object DungeonFriendRelay {
         globalChatAvailable = false
         richChatAvailable = false
         partyChatAvailable = false
+        leapPovAvailable = false
+        bazaarAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false
@@ -716,11 +771,12 @@ object DungeonFriendRelay {
         partyRequests.clear()
         pendingParty.forEach { it.second.complete(globalFailure) }
         onDigestClosed?.invoke()
+        onLeapPovClosed?.invoke()
         connecting = false
         authenticating = false
         stage = "idle"
         sending = CompletableFuture.completedFuture(null)
-        retry.failed(DungeonFriends.now(), pause)
+        retry.failed(DungeonFriends.now(), pause, minimumRetry)
         status = message
         deliveries.connectionFailed()
     }

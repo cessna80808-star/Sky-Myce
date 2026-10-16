@@ -238,16 +238,33 @@ async function runCommand(command: ParsedCommand, env: DiscordAccountsConfig, ki
 /** Discord validates the original signed body; AccountStore rechecks actor and confirmation authority. */
 export function handleAccountInteraction(data: Record<string, unknown>, env: DiscordAccountsConfig, ctx: ExecutionContext, kind: "user" | "backend"): Response | null {
   const member = object(data.member), caller = object(member?.user) ?? object(data.user);
-  const leaderboardControl = /^sky:leaderboard:(economy|dungeons|rng|other):([a-z_]{1,40}):(all-time|weekly|monthly):(\d{1,3})$/.exec(String(object(data.data)?.custom_id ?? ""));
+  if (kind === "user" && data.type === 2 && object(data.data)?.name === "bazaar") {
+    if (!snowflake(caller?.id) || !snowflake(data.id) || data.guild_id !== env.DISCORD_GUILD_ID || !env.ACCOUNT_STORE) return ephemeral(safeError("forbidden"));
+    const subs = object(data.data)?.options;
+    if (!Array.isArray(subs) || subs.length !== 1) return ephemeral("Choose a Bazaar command.");
+    const sub = object(subs[0]), options = sub?.options ?? [];
+    if (sub?.type !== 1 || !["stats", "summary", "replays", "privacy"].includes(String(sub.name)) || !Array.isArray(options) || options.length > 1) return ephemeral("Choose a Bazaar command.");
+    let period = "all-time";
+    if (options.length) { const value = object(options[0]); if (sub.name !== "stats" || value?.name !== "period" || value.type !== 3 || !["all-time", "weekly", "monthly"].includes(String(value.value))) return ephemeral("Choose a valid period."); period = String(value.value); }
+    return deferInteraction(data, ctx, async () => {
+      const result = await env.ACCOUNT_STORE.getByName("global").discordBazaar({ id: caller.id as string, guildId: env.DISCORD_GUILD_ID!, roles: [], interactionId: data.id as string }, String(sub.name), period);
+      if (!result.ok) return safeError(result.error);
+      if (sub.name === "privacy") return `Bazaar uses Economy and Leaderboards sharing. Current preferences: ${JSON.stringify(result.sharing)}. Change them in the mod Community Sharing screen. Replay publication and local history are separate.`;
+      if (sub.name === "replays") return result.publications.length ? result.publications.map(publication => `${env.SKYMYCE_PUBLIC_URL ?? "https://sky-myce-backend.skyblock-relay.workers.dev"}/community/bazaar/replays/${publication.token}`).join("\n") : "No active explicitly published replays. Private recordings remain on your computer.";
+      if (sub.name === "summary") return result.sessionSummary ? `**Your last explicitly shared session summary**\n${Math.round(result.sessionSummary.durationMs / 60000)} minutes · ${result.sessionSummary.completedFlips} completed flips · ${result.sessionSummary.realizedProfit.toLocaleString()} realized coins. Client-observed, not Hypixel-certified.` : "Session summaries stay local until you explicitly share one from Bazaar. No private journal was uploaded.";
+      return `**Your linked Bazaar statistics · ${period}**\n${result.profit.toLocaleString()} realized coins · ${result.completedFlips} completed flips · ${result.realizations} supported portions.\nROI: ${result.roi === null ? "unknown" : (result.roi * 100).toFixed(2) + "%"}. Profit per supported flip-hour: ${result.profitPerHour === null ? "unknown" : Math.round(result.profitPerHour).toLocaleString()}.\n${result.coverage} ${result.verification}.`;
+    });
+  }
+  const leaderboardControl = /^sky:leaderboard:(economy|dungeons|rng|other):([a-z_]{1,40}):(all-time|weekly|monthly):(\d{1,3})(?::(uuid|linked))?$/.exec(String(object(data.data)?.custom_id ?? ""));
   if (kind === "user" && (data.type === 2 && object(data.data)?.name === "leaderboard" || data.type === 3 && leaderboardControl)) {
     if (!snowflake(caller?.id) || !snowflake(data.id) || data.guild_id !== env.DISCORD_GUILD_ID || !env.ACCOUNT_STORE) return ephemeral(safeError("forbidden"));
-    const options: Record<string, unknown> = leaderboardControl ? { category: leaderboardControl[1], metric: leaderboardControl[2], period: leaderboardControl[3], page: Number(leaderboardControl[4]) } : {};
+    const options: Record<string, unknown> = leaderboardControl ? { category: leaderboardControl[1], metric: leaderboardControl[2], period: leaderboardControl[3], page: Number(leaderboardControl[4]), ...leaderboardControl[5] ? { identity: leaderboardControl[5] } : {} } : {};
     if (!leaderboardControl) {
       const raw = object(data.data)?.options ?? [];
-      if (!Array.isArray(raw) || raw.length > 5) return ephemeral("Choose a valid leaderboard selection.");
+      if (!Array.isArray(raw) || raw.length > 6) return ephemeral("Choose a valid leaderboard selection.");
       for (const entry of raw) {
         const option = object(entry);
-        if (!option || typeof option.name !== "string" || !["category", "metric", "period", "page", "search"].includes(option.name) || Object.hasOwn(options, option.name) ||
+        if (!option || typeof option.name !== "string" || !["category", "metric", "period", "page", "search", "identity"].includes(option.name) || Object.hasOwn(options, option.name) ||
           option.type !== (option.name === "page" ? 4 : 3) || (option.name === "page" ? !Number.isSafeInteger(option.value) : typeof option.value !== "string" || option.value.length > 100)) return ephemeral("Choose a valid leaderboard selection.");
         options[option.name] = option.value;
       }

@@ -35,7 +35,7 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
     }
     val retainedRngEvents by int(100) {
         name = TranslatableValue.literal("Local RNG history size")
-        description = TranslatableValue.literal("Maximum retained personal events; community reports are capped separately at 30. Clear personal history from the RNG submenu.")
+        description = TranslatableValue.literal("Maximum retained recent personal events; saved acquisition history remains available. Community reports are capped separately at 30.")
         range = 20..500
         slider = true
     }
