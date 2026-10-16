@@ -44,6 +44,17 @@ internal fun dungeonEssenceId(name: String): String? = normalizeChestText(name)?
     chestEssence.matchEntire(it)?.groupValues?.get(1)?.uppercase()?.let { type -> "ESSENCE_$type" }
 }
 
+/**
+ * Rewards Hypixel files away instead of placing in the inventory: essences go to essence storage and shards to the
+ * Hunting Box. A chest receipt cannot wait for them to arrive.
+ */
+internal fun dungeonStoredReward(id: String, displayName: String?): Boolean {
+    val canonical = id.uppercase()
+    return canonical.startsWith("ESSENCE_") || canonical.startsWith("SHARD_") || canonical.startsWith("ATTRIBUTE:") ||
+        displayName?.let(::normalizeChestText)?.let { chestStored.matches(it) } == true
+}
+private val chestStored = Regex("[A-Za-z' -]+ (?:Essence|Shard)(?: x[0-9,]+)?")
+
 internal fun dungeonRewardHeader(text: String): DungeonChest? = normalizeChestText(text)?.let { value ->
     DungeonChest.entries.firstOrNull { value == "${it.name} CHEST REWARDS" }
 }

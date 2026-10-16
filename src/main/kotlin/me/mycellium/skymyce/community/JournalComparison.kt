@@ -30,7 +30,7 @@ internal fun journalComparableLocalCount(archive: AcquisitionArchive, owner: Str
     require(owner.matches(Regex("[a-f0-9]{32}")))
     return archive.events.asSequence().filter { event ->
         event.origin == "confirmed" && event.context?.account?.replace("-", "")?.lowercase() == owner &&
-            DigestRngCatalog.valid(event.item, event.activity) &&
+            DigestRngCatalog.public(event.item, event.activity) &&
             (comparison.startAt == null || event.occurredAt >= comparison.startAt) && event.occurredAt <= comparison.endAt
     }.count().toLong()
 }
