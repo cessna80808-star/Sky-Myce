@@ -31,18 +31,18 @@ The four tiles show **Purse** (coins you can spend now), coins **in buy orders**
 
 The assistant walks you through one flip at a time: buy order, claim, sell offer, claim. It never clicks, confirms or places anything; you do every step yourself.
 
-- Start it with **Guide this flip**, **More → Guide the best flip**, `/sm bazaar assist`, or the **Start Bazaar Assistant** key (set it in **Options → Controls → Miscellaneous**). Stop it with `/sm bazaar assist stop` or its key.
-- Its panel says what to do next. In Bazaar menus, the button to click is highlighted, but only when exactly one slot matches; otherwise nothing is highlighted and the panel explains why.
-- In chat, the expected command appears as faint ghost text. Press **Tab** to fill it in. Other commands keep normal Tab completion.
-- On Bazaar signs, the expected search, amount or price shows above the sign and turns green once what you typed matches.
+- Start it with **Guide this flip**, **More → Guide the best flip**, `/sm bazaar assist`, or `]`. Stop it with `[` or `/sm bazaar assist stop`. Both keys also work inside menus; change them in **Options → Controls → Miscellaneous**.
+- Its panel says what to do next. In menus it sits beside the menu (drag it anywhere to keep it there). The button to click is highlighted, but only when exactly one slot matches and still shows that button; otherwise nothing is highlighted and the panel explains why.
+- In chat, the expected command appears as faint ghost text, and anything typed wrong turns red. Press **Tab** to fill it in. Other commands keep normal Tab completion.
+- On Bazaar signs, the expected search, amount or price shows above the sign and turns green once what you typed matches. Then click **Done** (Enter only moves to the next line).
 - **Price entry** chooses between matching the order book (Top Order +0.1 / Best Offer -0.1) and typing the recommended price.
-- When a guided sale is claimed, its realized profit pops up and the panel shows this run's profit per hour, from the same records as **History**.
+- When a guided sale is claimed, its realized profit rises from the order you clicked, and the panel shows this run's profit per hour, from the same records as **History**. Stopping prints a short run summary.
 - Highlight color, shape, thickness, opacity, pulse and animations are under **More → All assistant settings**. Move or resize the panel and profit pop-ups with **Move the HUD**. **Reset to defaults** restores everything.
 
 Two helpers are off by default and explained before you turn them on:
 
-- **Auto Command** sends the shown command when you press the **Send Bazaar Assistant command** key: one key press, one command, only with no menu open and never twice in a row.
-- **Auto Sign** pre-types the expected value into an empty Bazaar sign. You still check it and press Enter.
+- **Auto Command** sends the shown command when you press the **Send Bazaar Assistant command** key (unbound until you set it): one key press, one command, only with no menu open and never twice within three seconds.
+- **Auto Sign** pre-types the expected value into an empty Bazaar sign. You still check it and click Done.
 
 Hypixel's rules on client modifications apply to you. Leave both helpers off if you're unsure.
 

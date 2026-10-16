@@ -569,6 +569,27 @@ loom.runs.register("guiVisualCheck") {
     programArguments.addAll("--width", "1280", "--height", "800", "--username", "GuiReview")
 }
 tasks.named("runGuiVisualCheck") { dependsOn(guiVisualCheckMod) }
+// The Bazaar Assistant inside a running client: a local flat world, real keybinds, chat, HUD and menus. Not part of `check`.
+val bazaarAssistGameTestMod by tasks.registering(Jar::class) {
+    dependsOn(tasks.testClasses)
+    archiveFileName = "bazaar-assist-game-test.jar"
+    destinationDirectory = layout.buildDirectory.dir("bazaar-assist-game-test")
+    from(sourceSets.test.get().output) { include("me/mycellium/skymyce/features/bazaar/assist/BazaarAssistGameTest*.class",
+        "me/mycellium/skymyce/features/bazaar/assist/FakeAssistSource*.class") }
+    from("src/test/resources/bazaar-assist-game-test")
+}
+loom.runs.register("bazaarAssistGameTest") {
+    client()
+    runDirectory = layout.buildDirectory.dir("bazaar-assist-game-test/client")
+    generateRunConfig = false
+    systemProperties.put("fabric.addMods", layout.buildDirectory.file("bazaar-assist-game-test/bazaar-assist-game-test.jar").get().asFile.absolutePath)
+    systemProperties.put("fabric.client.gametest", "")
+    systemProperties.put("devauth.enabled", "false")
+    systemProperties.put("skymyce.browserMuted", "true")
+    jvmArguments.add("--enable-native-access=ALL-UNNAMED")
+    programArguments.addAll("--width", "1280", "--height", "720", "--username", "AssistTest")
+}
+tasks.named("runBazaarAssistGameTest") { dependsOn(bazaarAssistGameTestMod) }
 val dungeonRoutingCheck by tasks.registering {
     group = "verification"
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"

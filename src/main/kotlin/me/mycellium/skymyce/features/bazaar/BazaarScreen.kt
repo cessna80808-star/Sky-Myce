@@ -625,11 +625,11 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         )))
         child(assistToggle("Assistant enabled", "enabled", { Assist.enabled }) { Assist.enabled = it; if (!it) assist.stop() })
         child(assistToggle("Auto Command", "auto-command", { Assist.autoCommand }, "Turn on Auto Command?",
-            "Sends the command the assistant shows (such as /bz Enchanted Carrot) when you press its key in Options → Controls. " +
+            "Sends the command the assistant shows (such as /bz Enchanted Carrot) when you press Send Bazaar Assistant command (set it in Options → Controls). " +
                 "One key press sends one command, only with no menu open, and never twice in a row. It never clicks, " +
                 "confirms or places anything. Hypixel's rules on modifications still apply to you; leave this off if you're unsure.") { Assist.autoCommand = it })
         child(assistToggle("Auto Sign", "auto-sign", { Assist.autoSign }, "Turn on Auto Sign?",
-            "Pre-types the expected search, amount or price into an empty Bazaar sign. You still check it and press Enter yourself; " +
+            "Pre-types the expected search, amount or price into an empty Bazaar sign. You still check it and click Done yourself; " +
                 "it never submits, closes or confirms. Hypixel's rules on modifications still apply to you.") { Assist.autoSign = it })
         child(row().apply {
             child(label("Highlight", MenuTheme.TEXT, 9f).apply { horizontalSizing(Sizing.expand()) })
@@ -642,7 +642,12 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
                 }
             }.apply { id("bazaar-assist-shape") })
         })
-        val keys = listOfNotNull(assist.startKeyName()?.let { "start $it" }, assist.commandKeyName()?.let { "send command $it" })
+        assist.lastRun?.let { run ->
+            child(label("Last run: ${bazaarSignedCoins(run.profit)} from ${plural(run.sales, "sale")} in ${me.mycellium.skymyce.features.bazaar.assist.assistDuration(run.millis)}" +
+                (run.perHour?.let { " · ${bazaarCompactCoins(it)}/h" } ?: ""), MenuTheme.MUTED, 8.5f))
+        }
+        val keys = listOfNotNull(assist.startKeyName()?.let { "start $it" }, assist.stopKeyName()?.let { "stop $it" },
+            assist.commandKeyName()?.let { "send command $it" })
         child(label(if (keys.isEmpty()) "Set start, stop and send-command keys in Options → Controls → Miscellaneous. Color, pulse and animations are in the settings."
             else "Keys: ${keys.joinToString(" · ")}. Change them in Options → Controls.", MenuTheme.MUTED, 8f))
         child(actions(listOf(

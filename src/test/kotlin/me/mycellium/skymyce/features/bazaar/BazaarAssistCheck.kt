@@ -22,7 +22,9 @@ fun main() {
     checkAssistSellAndClaimSteps()
     checkAssistNeverGuesses()
     checkAssistTextHelpers()
-    println("Bazaar Assistant checks passed: screen recognition, phases, step sequence, unambiguous highlights, ghost text, sign checks and colors")
+    checkAssistChatGuide()
+    checkAssistPopsAndRuns()
+    println("Bazaar Assistant checks passed: screen recognition, phases, step sequence, unambiguous highlights, ghost text, mismatch marking, sign checks, colors, pop merging, run summaries and panel placement")
 }
 
 private fun checkAssistViews() {
@@ -118,4 +120,57 @@ private fun checkAssistTextHelpers() {
     check(assistPrice(152.0) == "152" && assistPrice(152.34) == "152.3" && assistPrice(0.0) == null && assistPrice(Double.POSITIVE_INFINITY) == null)
     check(parseAssistColor("#FFC857") == 0xFFC857 && parseAssistColor("ffc857") == 0xFFC857)
     check(parseAssistColor("#FFF") == null && parseAssistColor("red") == null && parseAssistColor("") == null)
+}
+
+private fun checkAssistChatGuide() {
+    val command = "bz Enchanted Carrot"
+    check(assistChatGuide("/", command) == AssistChatGuide("bz Enchanted Carrot"))
+    check(assistChatGuide("/b", command) == AssistChatGuide("z Enchanted Carrot"))
+    check(assistChatGuide("/ba", command) == null) { "/bank, /back and other commands keep vanilla completion" }
+    check(assistChatGuide("/bzz", command) == null)
+    check(assistChatGuide("/bz Enchanted Potato", command) == AssistChatGuide("", 14)) { "A wrong item after the right command is marked from where it diverges" }
+    check(assistChatGuide("/BZ enchanted", command) == AssistChatGuide(" Carrot")) { "Case does not matter on Hypixel" }
+    check(assistChatGuide("hello", command) == null && assistChatGuide("/bz Enchanted Carrot", command) == null)
+    check(assistChatGuide("/b", "bz") == AssistChatGuide("z") && assistChatGuide("/bz ", "bz") == AssistChatGuide("", 3))
+    check(assistStep(carrot, AssistPhase.PLACE_BUY, sign("", "", "Enter amount", "to order")).instruction.endsWith("click Done")) {
+        "Enter moves to the next sign line; the instruction must say Done"
+    }
+}
+
+private fun checkAssistPopsAndRuns() {
+    val first = assistMergePop(emptyList(), AssistPopEvent(100.0, 1_000, 40, 50))
+    val merged = assistMergePop(first, AssistPopEvent(50.0, 1_900, 40, 50))
+    check(merged.size == 1 && merged.single().amount == 150.0) { "Portions claimed together pop once" }
+    check(assistMergePop(merged, AssistPopEvent(10.0, 3_500, 40, 50)).size == 2) { "Later claims pop separately" }
+    check(assistMergePop(merged, AssistPopEvent(10.0, 2_000, null, null)).size == 2) { "Different places never merge" }
+    check(assistMergePop((1..10).map { AssistPopEvent(1.0, it * 5_000L) }, AssistPopEvent(1.0, 60_000)).size == 6)
+    check(assistPopTone(-5.0) == AssistPopTone.LOSS && assistPopTone(99_999.0) == AssistPopTone.SMALL &&
+        assistPopTone(100_000.0) == AssistPopTone.GAIN && assistPopTone(1_000_000.0) == AssistPopTone.BIG)
+
+    fun realization(id: String, position: String, product: String, at: Long, profit: Double?) = BazaarRealization(id, product, position, at, 10,
+        null, null, null, null, profit, true, BazaarEvidence.OBSERVED, null, null, "fp-$id")
+    val rows = listOf(realization("a", "p1", "ENCHANTED_CARROT", 2_000, 120_000.0), realization("b", "p1", "ENCHANTED_CARROT", 3_000, 30_000.0),
+        realization("c", "p2", "ENCHANTED_SUGAR", 4_000, 200_000.0), realization("d", "p3", "WHEAT", 5_000, 999_999.0),
+        realization("e", "p1", "ENCHANTED_CARROT", 500, 7.0), realization("f", "p2", "ENCHANTED_SUGAR", 4_500, null))
+    val run = checkNotNull(assistRunSummary(rows, setOf("p1", "p2"), 1_000, 1_000 + 30 * 60_000))
+    check(run.profit == 350_000.0 && run.sales == 3) { "Only guided positions, after the run started, with known profit count: $run" }
+    check(run.bestProduct == "ENCHANTED_SUGAR" && run.bestProfit == 200_000.0)
+    check(run.perHour != null && kotlin.math.abs(run.perHour!! - 700_000.0) < 1e-6)
+    check(assistRunSummary(rows, setOf("p1"), 1_000, 1_000 + 60_000)?.perHour == null) { "Rates wait for five minutes" }
+    check(assistRunSummary(rows, setOf("p9"), 0, 10) == null)
+
+    check(assistBesideMenu(480, 152, 176, 120) == 334) { "Right of the menu when it fits" }
+    check(assistBesideMenu(400, 200, 176, 120) == 74) { "Left of the menu otherwise" }
+    check(assistBesideMenu(300, 62, 176, 120) == null) { "The saved position when neither side fits" }
+    check(assistFitBesideMenu(640, 232, 176, 200, 1f) == AssistPlacement(414, 1f)) { "Full size when it fits" }
+    val fitted = checkNotNull(assistFitBesideMenu(426, 125, 176, 250, 1f, minScale = 1f / 3)) { "A narrow screen shrinks the panel instead of covering the menu" }
+    check(fitted.x == 307 && fitted.scale < 1f && 307 + kotlin.math.ceil(250 * fitted.scale) <= 424)
+    check(assistFitBesideMenu(320, 72, 176, 250, 1f) == null) { "Below half size the saved position is used" }
+    val left = checkNotNull(assistFitBesideMenu(500, 300, 176, 200, 1f))
+    check(left.x + 200 * left.scale <= 294.01) { "The left side is used when it has more room: $left" }
+
+    check(assistWrap("§7short") == listOf("§7short"))
+    val wrapped = assistWrap("§7Needs a Booster Cookie; otherwise visit the Bazaar NPC in the Hub")
+    check(wrapped.size == 2 && wrapped.all { it.startsWith("§7") && it.length <= 42 } && wrapped[1].startsWith("§7  ")) { wrapped.toString() }
+    check(assistDuration(5_000) == "under a minute" && assistDuration(125_000) == "2 min" && assistDuration(3_900_000) == "1 h 5 min")
 }
