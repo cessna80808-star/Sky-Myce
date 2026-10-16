@@ -30,7 +30,10 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
     private var state = BazaarUiState()
     private var seenRevision = -1L
     private var renderedSignature: Any? = null
-    private var renderedGuidance: String? = null
+    private var renderedGuidance: Any? = null
+    private var reviewOpen = false
+    private var staleOpen = false
+    private var syncLabel: MenuLabel? = null
     private var bodyDirty = false
     private var submitting = false
     private var lastSecond = 0L
@@ -60,7 +63,10 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         root.padding(Insets.of(10, 10, 14, 14)); root.gap(6)
         root.child(row().apply {
             child(label("BAZAAR", MenuTheme.ACCENT, 15f).apply { horizontalSizing(Sizing.expand()) })
-            sessionButton = button(sessionTitle(), 112) { submit(BazaarAction.TOGGLE) }.apply { id("bazaar-toggle") }
+            // Pairs with the button Hypixel's Bazaar menus get for opening this terminal.
+            child(button("Open Bazaar", if (narrow) 84 else 96) { submit(BazaarAction.OPEN_BAZAAR) }.apply { id("bazaar-open-hypixel") }
+                .wrappedTooltip(Component.literal("Closes the terminal and opens Hypixel's Bazaar (/bz)")))
+            sessionButton = button(sessionTitle(), if (narrow) 96 else 112) { submit(BazaarAction.TOGGLE) }.apply { id("bazaar-toggle") }
             child(sessionButton)
             child(button("More", 52) { anchor -> moreMenu(anchor) }.apply { id("bazaar-more") })
         })
@@ -83,7 +89,9 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         super.tick()
         if (!::body.isInitialized || menuClosing) return
         val second = System.currentTimeMillis() / 1000
-        if (second != lastSecond) { lastSecond = second; marketLabel.text(Component.literal(marketLine())) }
+        if (second != lastSecond) {
+            lastSecond = second; marketLabel.text(Component.literal(marketLine())); syncLabel?.text(Component.literal(syncLine()))
+        }
         val next = BazaarUi.bridge?.snapshot() ?: return
         if (next.revision == seenRevision) {
             if (bodyDirty && !editing()) render()
@@ -112,14 +120,21 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
             bazaarSignedCoins(stats?.realizedProfit))
         kpiValues.zip(values).forEach { (label, value) -> label.text(Component.literal(value)) }
         kpiValues[3].color(Color.ofRgb(if ((stats?.realizedProfit ?: 0.0) < 0) MenuTheme.RED else MenuTheme.GREEN))
-        if (state.guidance == renderedGuidance && guidanceHost.children().isNotEmpty() == (state.guidance != null)) return
-        renderedGuidance = state.guidance
+        syncLabel?.text(Component.literal(syncLine()))
+        // The banner names the followed position's group and fill so it reads the same as its row under Positions.
+        val guided = state.guidance?.let { text -> state.openPositions.firstOrNull { text == "${state.name(it.product)} · ${state.nextSteps[it.id]?.text}" } }
+        val group = guided?.let { bazaarPositionGroup(state, it) }
+        val order = guided?.let { bazaarPrimaryOrder(state, it) }
+        val key = listOf(state.guidance, guided?.id, group, order?.filled, order?.quantity)
+        if (key == renderedGuidance && guidanceHost.children().isNotEmpty() == (state.guidance != null)) return
+        renderedGuidance = key
         guidanceHost.clearChildren()
         state.guidance?.let { text ->
             guidanceHost.child(column().apply {
                 padding(Insets.of(6, 6, 8, 8)); surface(MenuTheme.tintedPanel { MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 22), 92) })
-                child(label("NEXT STEP", MenuTheme.ACCENT, 8f))
+                child(label("NEXT STEP" + (group?.let { " · ${it.title.uppercase()}" } ?: ""), group?.color ?: MenuTheme.ACCENT, 8f))
                 child(label(text, MenuTheme.TEXT, 10f).apply { id("bazaar-guidance") })
+                if (order != null && guided != null) child(fillRow(order, group ?: BazaarPositionGroup.FILLING, guided))
             })
         }
     }
@@ -129,8 +144,13 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         return "Market ${state.freshness.label.lowercase()} · updated ${bazaarAge(observed)} · ${state.marketStatus}"
     }
 
+    private fun syncLine(): String {
+        val synced = state.ordersSyncedAt ?: return "Never synced · press Sync orders to read your Manage Orders"
+        return "Synced ${bazaarAge(synced)}" + (state.ordersSyncNote?.let { " · $it" } ?: "")
+    }
+
     private fun positionsTitle(): String {
-        val attention = state.pending.size + state.openPositions.count { state.nextSteps[it.id]?.actionable == true }
+        val attention = state.pending.size + state.openPositions.count { bazaarPositionGroup(state, it) == BazaarPositionGroup.NEEDS_YOU }
         return if (attention > 0) "Positions • $attention" else "Positions"
     }
 
@@ -195,7 +215,7 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
 
     private fun renderToolbar() {
         if (!::toolbar.isInitialized) return
-        toolbar.clearChildren()
+        toolbar.clearChildren(); syncLabel = null
         val search = { hint: String ->
             MenuTextBox(Sizing.expand()).apply {
                 id("bazaar-search"); setMaxLength(80); text(query); setHint(Component.literal(hint))
@@ -211,10 +231,14 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
                 }
                 child(search("Search items…"))
             })
-            Tab.POSITIONS -> toolbar.child(row().apply {
-                child(button("Sync orders", 84) { submit(BazaarAction.OPEN_ORDERS) }.apply { id("bazaar-open-orders") }
-                    .wrappedTooltip(Component.literal("Opens Manage Orders so Sky-Myce can read your current fills")))
-                child(search("Search positions…"))
+            Tab.POSITIONS -> toolbar.child(column().apply {
+                gap(3)
+                child(row().apply {
+                    child(button("Sync orders", 84) { submit(BazaarAction.OPEN_ORDERS) }.apply { id("bazaar-open-orders") }
+                        .wrappedTooltip(Component.literal("Opens Manage Orders so Sky-Myce can read your current fills")))
+                    child(search("Search positions…"))
+                })
+                child(label(syncLine(), MenuTheme.MUTED, 8.5f).apply { id("bazaar-sync-status"); syncLabel = this })
             })
             Tab.HISTORY -> toolbar.child(row().apply { child(search("Search sales…")) })
             else -> Unit
@@ -249,7 +273,8 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         Tab.FLIPS -> listOf(state.opportunities, state.priceHistory, state.settings["risk"], state.freshness, state.active, state.wizardDone, state.publicSharing,
             state.settings["inGameAlerts"], state.settings["discordAlerts"], state.purse == null)
         Tab.POSITIONS -> listOf(state.positions, state.orders, state.nextSteps, state.pending, state.awaiting, state.relistAdvice, state.portfolioWarnings,
-            state.purse, state.committed, state.inventoryCost, state.inventoryValue, state.pendingCollection)
+            state.purse, state.committed, state.inventoryCost, state.inventoryValue, state.pendingCollection, state.ordersSyncedAt, state.orderSeenAt,
+            reviewOpen, staleOpen)
         Tab.HISTORY -> listOf(state.history, state.stats, state.connectionStatus)
         Tab.REPLAYS -> listOf(state.sessions, state.publications, state.settings["webhookEnabled"], state.settings["webhookConfigured"])
         Tab.MORE -> listOf(state.settings, state.connectionStatus, state.dashboardRunning, state.publicSharing)
@@ -322,79 +347,174 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
         )))
     }
 
+    // ---- Positions ----
+
+    /** Grouped by what the player must do, mirroring Manage Orders: needs you, filling, held, then anything the last sync did not show. */
     private fun positions() {
         if (state.pending.isNotEmpty()) review()
-        body.child(card().apply {
-            id("bazaar-capital")
-            child(label("Where your coins are", MenuTheme.TEXT, 11f))
-            child(label("${bazaarCoins(state.purse)} in your purse is free to spend. Open buy orders hold ${bazaarCoins(state.committed)}.", MenuTheme.MUTED, 9f))
-            child(label("Items you hold cost ${bazaarCoins(state.inventoryCost)} and would sell for about ${bazaarCoins(state.inventoryValue)} now " +
-                "(an estimate, not profit).", MenuTheme.MUTED, 9f))
-            state.pendingCollection?.takeIf { it > 0 }?.let { child(label("${bazaarCoins(it)} from sales is waiting to be claimed.", MenuTheme.YELLOW, 9f)) }
-            state.portfolioWarnings.forEach { child(label("• $it", MenuTheme.YELLOW, 8.5f)) }
-        })
-        if (state.awaiting > 0) body.child(label(if (state.awaiting == 1) "1 sale is waiting for its coins to be claimed; profit is counted once you claim them."
-            else "${state.awaiting} sales are waiting for their coins to be claimed; profit is counted once you claim them.", MenuTheme.MUTED, 8.5f))
-        val entries = bazaarPositionPriority(state).filter { matches(state.name(it.product), it.product) }
-        if (entries.isEmpty()) body.child(emptyCard("No open positions",
+        body.child(capitalCard())
+        val grouped = bazaarPositionPriority(state).filter { matches(state.name(it.product), it.product) }
+            .map { bazaarPositionGroup(state, it) to it }.sortedBy { it.first.ordinal }
+        if (grouped.isEmpty()) body.child(emptyCard("No open positions",
             "Place a buy order in the Bazaar and Sky-Myce will follow it from fill to sale. Use Sync orders if something seems missing."))
-        paginate(entries) { positionCard(it) }
+        val confirmed = grouped.filter { it.first != BazaarPositionGroup.STALE }
+        var shown: BazaarPositionGroup? = null
+        paginate(confirmed) { (group, position) ->
+            column().apply {
+                if (group != shown) { shown = group; child(groupHeader(group, confirmed.count { it.first == group })) }
+                child(positionRow(position, group))
+            }
+        }
+        val stale = grouped.filter { it.first == BazaarPositionGroup.STALE }
+        if (stale.isNotEmpty()) body.child(column().apply {
+            gap(4); padding(Insets.of(2, 2, 2, 2)); surface(MenuTheme.tintedPanel { MenuTheme.alpha(MenuTheme.MUTED, 10) })
+            child(disclosure("bazaar-stale-toggle", "Possibly stale · ${plural(stale.size, "position")} not in your last sync", staleOpen) {
+                staleOpen = !staleOpen; render(force = true)
+            })
+            if (!staleOpen) return@apply
+            child(label("Manage Orders did not show these orders when it was last read (${bazaarAge(state.ordersSyncedAt)}). They may have been " +
+                "cancelled, claimed or finished elsewhere; sync again to confirm before acting on them.", MenuTheme.MUTED, 8.5f).apply { margins(Insets.horizontal(6)) })
+            stale.forEach { (group, position) -> child(positionRow(position, group)) }
+        })
     }
 
-    private fun positionCard(position: BazaarPosition) = card().apply {
-        id("bazaar-position-${position.id}")
+    /** One compact line; the exact sentences stay in its tooltip. */
+    private fun capitalCard() = card().apply {
+        id("bazaar-capital"); gap(3)
+        val summary = listOfNotNull(
+            "${bazaarCompactCoins(state.purse)} free in your purse",
+            "${bazaarCompactCoins(state.committed)} in buy orders".takeIf { state.committed > 0 },
+            state.inventoryCost?.let { "items cost ${bazaarCompactCoins(it)}" + (state.inventoryValue?.let { value -> " (worth ~${bazaarCompactCoins(value)})" } ?: "") },
+            state.pendingCollection?.takeIf { it > 0 }?.let { "${bazaarCompactCoins(it)} from sales to claim" },
+            "${plural(state.awaiting, "sale")} awaiting claim".takeIf { state.awaiting > 0 },
+        ).joinToString(" · ")
+        child(row().apply {
+            child(label("Where your coins are", MenuTheme.TEXT, 9.5f).apply { horizontalSizing(Sizing.content()) })
+            child(label(summary, MenuTheme.MUTED, 8.5f).apply { horizontalSizing(Sizing.expand()); if (!narrow) horizontalTextAlignment(HorizontalAlignment.RIGHT) })
+        })
+        state.portfolioWarnings.forEach { child(label("• $it", MenuTheme.YELLOW, 8.5f)) }
+        wrappedTooltip(Component.literal("${bazaarCoins(state.purse)} in your purse is free to spend. Open buy orders hold ${bazaarCoins(state.committed)}. " +
+            "Items you hold cost ${bazaarCoins(state.inventoryCost)} and would sell for about ${bazaarCoins(state.inventoryValue)} now (an estimate, not profit)." +
+            (state.pendingCollection?.takeIf { it > 0 }?.let { " ${bazaarCoins(it)} from sales is waiting to be claimed." } ?: "") +
+            (if (state.awaiting > 0) " Profit from ${plural(state.awaiting, "sale")} is counted once you claim the coins." else "")))
+    }
+
+    private fun groupHeader(group: BazaarPositionGroup, count: Int) = row().apply {
+        padding(Insets.of(4, 1, 2, 2))
+        child(label("${group.title.uppercase()} · $count", group.color, 8.5f).apply { horizontalSizing(Sizing.content()) })
+        if (!narrow) child(label(group.hint, MenuTheme.MUTED, 8f).apply { horizontalSizing(Sizing.expand()); horizontalTextAlignment(HorizontalAlignment.RIGHT) })
+    }
+
+    /** One row per position: badge, name, fill bar, key numbers and a single primary action; everything else sits under Details. */
+    private fun positionRow(position: BazaarPosition, group: BazaarPositionGroup) = card().apply {
+        id("bazaar-position-${position.id}"); gap(3)
         val step = state.nextSteps[position.id]
+        val order = bazaarPrimaryOrder(state, position)
+        val stale = group == BazaarPositionGroup.STALE
+        val kind = when { order == null -> "HELD"; order.buy -> "BUY"; else -> "SELL" }
+        val tone = if (stale) MenuTheme.MUTED else when (kind) { "BUY" -> MenuTheme.ACCENT; "SELL" -> MenuTheme.GREEN; else -> MenuTheme.MUTED }
+        val open = expanded == position.id
+        val claim = position.pendingItems > 0 || step?.actionable == true && step.text.startsWith("Claim")
         child(row().apply {
             icon(position.product)?.let(::child)
             child(column().apply {
                 horizontalSizing(Sizing.expand()); gap(2)
-                child(label(state.name(position.product), MenuTheme.TEXT, 11f))
-                child(label(position.stage.label, if (step?.actionable == true) MenuTheme.YELLOW else MenuTheme.ACCENT, 9f))
+                child(row().apply {
+                    gap(5)
+                    child(BazaarBadge(kind, tone))
+                    child(label(state.name(position.product), if (stale) MenuTheme.MUTED else MenuTheme.TEXT, 11f).apply { horizontalSizing(Sizing.content()) })
+                    if (stale) child(BazaarBadge("NOT IN LAST SYNC", MenuTheme.YELLOW, filled = false))
+                    else if (position.uncertain || order?.uncertain == true) child(BazaarBadge("RECONSTRUCTED", MenuTheme.MUTED, filled = false))
+                })
+                child(label(listOfNotNull(position.stage.label, order?.price?.let { "${bazaarCoins(it)} each" }, "cost ${bazaarCompactCoins(position.costBasis)}",
+                    "relisted ${position.relistCount}×".takeIf { position.relistCount > 0 },
+                    "${bazaarSignedCoins(position.realizedProfit)} realized".takeIf { position.realizedProfit != 0.0 }).joinToString(" · "), MenuTheme.MUTED, 8.5f))
             })
-            if (position.realizedProfit != 0.0) child(MenuLabel(Component.literal(bazaarSignedCoins(position.realizedProfit))).apply {
-                fontSize = 11f; color(Color.ofRgb(if (position.realizedProfit >= 0) MenuTheme.GREEN else MenuTheme.RED))
+            val (figure, unit) = when {
+                position.pendingItems > 0 -> "${position.pendingItems}" to "to claim"
+                order != null -> "${order.filled}/${order.quantity}" to if (order.buy) "bought" else "sold"
+                else -> "${position.remaining}" to "held"
+            }
+            child(column().apply {
+                horizontalSizing(Sizing.content()); gap(1); horizontalAlignment(HorizontalAlignment.RIGHT)
+                child(label(figure, if (stale) MenuTheme.MUTED else MenuTheme.TEXT, 12f).apply { horizontalSizing(Sizing.content()) })
+                child(label(unit, MenuTheme.MUTED, 8f).apply { horizontalSizing(Sizing.content()) })
             })
         })
-        child(label(listOfNotNull("${position.remaining} held", "${position.listed} listed".takeIf { position.listed > 0 },
-            "${position.pendingItems} to claim".takeIf { position.pendingItems > 0 }, "cost ${bazaarCompactCoins(position.costBasis)}",
-            "relisted ${position.relistCount}×".takeIf { position.relistCount > 0 }).joinToString(" · "), MenuTheme.MUTED, 8.5f))
-        step?.let { child(label("→ ${it.text}", if (it.actionable) MenuTheme.YELLOW else MenuTheme.TEXT, 9.5f)) }
+        order?.let { child(BazaarProgressBar(it.filled, it.quantity, tone)) }
+        step?.let { child(label("→ ${it.text}", if (stale) MenuTheme.MUTED else if (it.actionable) MenuTheme.YELLOW else MenuTheme.TEXT, 9.5f)) }
+        state.relistAdvice[position.id]?.takeIf { it.warn }?.let { child(label("Relist check: ${it.recommendation}", MenuTheme.YELLOW, 9f)) }
+        val follow = button("Follow this flip", 104) { submit(BazaarAction.GUIDE, mapOf("position" to position.id)) }
+            .wrappedTooltip(Component.literal("Show its next step at the top of the terminal"))
+        val sync = button(if (claim) "Open Manage Orders" else "Sync orders", if (claim) 122 else 84) { submit(BazaarAction.OPEN_ORDERS) }
+            .wrappedTooltip(Component.literal(if (claim) "Opens Manage Orders, where you claim it yourself" else "Opens Manage Orders so Sky-Myce can read it again"))
+        val primary = if (stale || claim) sync else follow
+        primary.intent = if (stale) MenuButtonIntent.SECONDARY else MenuButtonIntent.PRIMARY
+        child(actions(listOf(primary, button(if (open) "Hide details" else "Details", 80) { expanded = position.id.takeUnless { open }; render(force = true) })))
+        if (!open) return@apply
+        child(divider())
+        child(label(listOfNotNull("${position.acquired} bought", "${position.sold} sold", "${position.remaining} held", "${position.listed} listed".takeIf { position.listed > 0 },
+            "${position.pendingItems} to claim".takeIf { position.pendingItems > 0 }, "opened ${bazaarTime(position.openedAt)}").joinToString(" · "), MenuTheme.TEXT, 9f))
+        state.orders.filter { it.positionId == position.id && (it.status.live || it.filled > it.collected) }.forEach { own ->
+            val seen = state.orderSeenAt[own.id]
+            child(label("${if (own.buy) "Buy" else "Sell"} ${own.quantity} at ${bazaarCoins(own.price)} · ${own.filled}/${own.quantity} filled · ${own.collected} claimed · " +
+                when {
+                    bazaarOrderUnseen(state, own) -> "not in your last sync"
+                    seen != null -> "seen in Manage Orders ${bazaarAge(seen)}"
+                    own.uncertain -> "unconfirmed"
+                    else -> "confirmed"
+                }, MenuTheme.MUTED, 8.5f))
+        }
         state.relistAdvice[position.id]?.takeIf { it.warn }?.let { advice ->
-            child(label("Relist check: ${advice.recommendation}", MenuTheme.YELLOW, 9f))
             child(label("Waiting would return ~${bazaarCoins(advice.waitProceeds)}; selling instantly ~${bazaarCoins(advice.instantProceeds)} " +
                 "(${bazaarSignedCoins(advice.instantProfit)} vs cost). You decide.", MenuTheme.MUTED, 8.5f))
         }
-        state.orders.filter { it.positionId == position.id && (it.status.live || it.filled > it.collected) }.forEach { order ->
-            child(label("${if (order.buy) "Buy" else "Sell"} ${order.quantity} at ${bazaarCoins(order.price)} · ${order.filled}/${order.quantity} filled · " +
-                "${order.collected} claimed${if (order.uncertain) " · unconfirmed" else ""}", MenuTheme.MUTED, 8.5f))
-        }
-        if (position.uncertain) child(label("Some of this position was reconstructed, so it stays out of public rankings.", MenuTheme.MUTED, 8f))
-        child(actions(listOf(button("Follow this flip", 104) { submit(BazaarAction.GUIDE, mapOf("position" to position.id)) }
-            .wrappedTooltip(Component.literal("Show its next step at the top of the terminal")))))
+        if (position.uncertain) child(label("Some of this position was reconstructed from receipts rather than observed, so it stays out of public rankings.", MenuTheme.MUTED, 8f))
+        child(actions(listOf(if (primary === follow) sync else follow)))
     }
 
+    /** One summary row; the receipts and their repair forms unfold beneath it so real positions stay on top. */
     private fun review() {
-        body.child(label("Needs your review (${state.pending.size})", MenuTheme.YELLOW, 11f))
-        body.child(label("These Bazaar receipts couldn't be matched to an order with certainty. Syncing orders usually fixes them; " +
-            "fixed records stay personal and never count toward leaderboards.", MenuTheme.MUTED, 8.5f))
-        state.pending.take(12).forEach { record ->
-            body.child(card().apply {
-                id("bazaar-pending-${record.id}")
-                child(label(record.product?.let { "${state.name(it)} · unmatched receipt" } ?: "Unmatched Bazaar receipt", MenuTheme.TEXT, 10f))
-                val fixing = expanded == "pending/${record.id}"
-                child(actions(listOf(
-                    button("Sync orders", 84) { submit(BazaarAction.OPEN_ORDERS) }.apply { id("bazaar-open-orders-${record.id}") },
-                    button(if (fixing) "Close" else "Fix record", 76) { expanded = "pending/${record.id}".takeUnless { fixing }; render(force = true) }
-                        .apply { id("bazaar-fix-${record.id}") },
-                    button("Dismiss", 64) { submit(BazaarAction.CONFIRM, mapOf("id" to record.id, "ignore" to "true")) }.apply { id("bazaar-dismiss-${record.id}") },
-                    button(if (record.id in reviewDetails) "Hide why" else "Why?", 58) {
-                        if (!reviewDetails.add(record.id)) reviewDetails.remove(record.id); render(force = true)
-                    }.apply { id("bazaar-why-${record.id}") },
-                )))
-                if (record.id in reviewDetails) child(label(record.message, MenuTheme.MUTED, 8.5f))
-                if (fixing) manualInputs(this, record, BazaarAction.CONFIRM)
+        val count = state.pending.size
+        body.child(column().apply {
+            gap(4); padding(Insets.of(2, 2, 2, 2)); surface(MenuTheme.tintedPanel { MenuTheme.alpha(MenuTheme.YELLOW, 12) })
+            child(disclosure("bazaar-review-toggle", if (count == 1) "1 receipt needs review" else "$count receipts need review", reviewOpen) {
+                reviewOpen = !reviewOpen; render(force = true)
             })
-        }
+            if (!reviewOpen) return@apply
+            child(label("These Bazaar receipts couldn't be matched to an order with certainty. Syncing orders usually fixes them; " +
+                "fixed records stay personal and never count toward leaderboards.", MenuTheme.MUTED, 8.5f).apply { margins(Insets.horizontal(6)) })
+            state.pending.take(12).forEach { record ->
+                child(card().apply {
+                    id("bazaar-pending-${record.id}")
+                    child(label(record.product?.let { "${state.name(it)} · unmatched receipt" } ?: "Unmatched Bazaar receipt", MenuTheme.TEXT, 10f))
+                    val fixing = expanded == "pending/${record.id}"
+                    child(actions(listOf(
+                        button(if (fixing) "Close" else "Fix record", 76) { expanded = "pending/${record.id}".takeUnless { fixing }; render(force = true) }
+                            .apply { id("bazaar-fix-${record.id}"); intent = MenuButtonIntent.PRIMARY },
+                        button("Sync orders", 84) { submit(BazaarAction.OPEN_ORDERS) }.apply { id("bazaar-open-orders-${record.id}") },
+                        button("Dismiss", 64) { submit(BazaarAction.CONFIRM, mapOf("id" to record.id, "ignore" to "true")) }.apply { id("bazaar-dismiss-${record.id}") },
+                        button(if (record.id in reviewDetails) "Hide why" else "Why?", 58) {
+                            if (!reviewDetails.add(record.id)) reviewDetails.remove(record.id); render(force = true)
+                        }.apply { id("bazaar-why-${record.id}") },
+                    )))
+                    if (record.id in reviewDetails) child(label(record.message, MenuTheme.MUTED, 8.5f))
+                    if (fixing) manualInputs(this, record, BazaarAction.CONFIRM)
+                })
+            }
+        })
+    }
+
+    /** A full-width header that opens or closes a group; keyboard-activatable like every other control. */
+    private fun disclosure(id: String, title: String, open: Boolean, toggle: () -> Unit) = MenuButton(Component.literal(if (open) "$title · hide" else title)) { toggle() }.apply {
+        id(id); sizing(Sizing.fill(), Sizing.fixed(21)); navigation = true; trailingChevron = true; selected = { open }
+    }
+
+    private fun fillRow(order: BazaarOrder, group: BazaarPositionGroup, position: BazaarPosition) = row().apply {
+        val tone = if (group == BazaarPositionGroup.STALE) MenuTheme.MUTED else if (order.buy) MenuTheme.ACCENT else MenuTheme.GREEN
+        child(BazaarProgressBar(order.filled, order.quantity, tone).apply { horizontalSizing(Sizing.expand()) })
+        child(label("${order.filled}/${order.quantity} ${if (order.buy) "bought" else "sold"}" +
+            (position.pendingItems.takeIf { it > 0 }?.let { " · $it to claim" } ?: ""), MenuTheme.MUTED, 8.5f).apply { horizontalSizing(Sizing.content()) })
     }
 
     private fun history() {
@@ -830,5 +950,67 @@ internal class BazaarChart(private val points: List<BazaarUiPoint>, private val 
         if (zeroLine && low < 0) canvas.line(x().toDouble(), py(0.0), (x() + width()).toDouble(), py(0.0), 1.0, MenuTheme.alpha(MenuTheme.MUTED, 45))
         val color = if (sampled.last().value >= sampled.first().value) MenuTheme.GREEN else MenuTheme.RED
         sampled.zipWithNext().forEach { (a, b) -> canvas.line(px(a.at), py(a.value), px(b.at), py(b.value), 1.5, MenuTheme.alpha(if (zeroLine) color else MenuTheme.ACCENT)) }
+    }
+}
+
+/** Where a position sits under Positions, in display order. Only the first three mirror Hypixel's Manage Orders. */
+internal enum class BazaarPositionGroup(val title: String, val hint: String) {
+    NEEDS_YOU("Needs you", "Claim, list or decide"),
+    FILLING("Filling", "Open orders waiting on the market"),
+    HELD("Held", "Items you own with no offer"),
+    STALE("Possibly stale", "Not in your last sync");
+
+    val color get() = when (this) { NEEDS_YOU -> MenuTheme.YELLOW; FILLING -> MenuTheme.ACCENT; else -> MenuTheme.MUTED }
+}
+
+/** True once Manage Orders has been read after this live order was last seen there, so it may no longer exist. */
+internal fun bazaarOrderUnseen(state: BazaarUiState, order: BazaarOrder): Boolean {
+    val synced = state.ordersSyncedAt ?: return false
+    return order.status.live && (state.orderSeenAt[order.id] ?: 0L) < synced
+}
+
+/** The order a position's row describes: the live one matching its stage, else the latest with something left to claim. */
+internal fun bazaarPrimaryOrder(state: BazaarUiState, position: BazaarPosition): BazaarOrder? {
+    val own = state.orders.filter { it.positionId == position.id }
+    val buying = when (position.stage) { BazaarStage.BUYING -> true; BazaarStage.SELLING -> false; else -> null }
+    return own.filter { it.status.live && (buying == null || it.buy == buying) }.maxByOrNull { it.lastAt }
+        ?: own.filter { it.status.live || it.filled > it.collected }.maxByOrNull { it.lastAt }
+}
+
+internal fun bazaarPositionGroup(state: BazaarUiState, position: BazaarPosition): BazaarPositionGroup {
+    val live = state.orders.filter { it.positionId == position.id && it.status.live }
+    return when {
+        live.isNotEmpty() && live.all { bazaarOrderUnseen(state, it) } -> BazaarPositionGroup.STALE
+        state.nextSteps[position.id]?.actionable == true -> BazaarPositionGroup.NEEDS_YOU
+        live.isNotEmpty() || position.stage == BazaarStage.BUYING || position.stage == BazaarStage.SELLING -> BazaarPositionGroup.FILLING
+        else -> BazaarPositionGroup.HELD
+    }
+}
+
+/** A small pill such as BUY, SELL or HELD. It is static, so reduced motion needs nothing from it. */
+internal class BazaarBadge(private val text: String, private val color: Int, private val filled: Boolean = true) : BaseUIComponent() {
+    private val size = 7.0
+    init { sizing(Sizing.fixed(kotlin.math.ceil(MenuCanvas.textWidth(text, bold = true, size = size)).toInt() + 10), Sizing.fixed(MenuCanvas.lineHeight(size) + 3)) }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        val radius = height() / 2.0
+        if (filled) g.roundedRect(x(), y(), width(), height(), radius, MenuTheme.alpha(color, 22))
+        g.roundedBorder(x(), y(), width(), height(), radius, 1.0, MenuTheme.alpha(color, if (filled) 75 else 50))
+        g.styledText(listOf(MenuCanvas.Run(text, MenuTheme.alpha(color), bold = true)), x() + 5.0, y() + 1.5, size)
+    }
+}
+
+/** How much of an order has filled, as a static track; the numbers beside it carry the exact values. */
+internal class BazaarProgressBar(private val filled: Long, private val total: Long, private val color: Int) : BaseUIComponent() {
+    init { sizing(Sizing.fill(), Sizing.fixed(5)) }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        val radius = height() / 2.0
+        g.roundedRect(x(), y(), width(), height(), radius, MenuTheme.alpha(MenuTheme.blend(MenuTheme.BORDER, MenuTheme.MUTED, 30), 70))
+        val fraction = if (total <= 0) 0.0 else (filled.toDouble() / total).coerceIn(0.0, 1.0)
+        val fill = (width() * fraction).toInt()
+        if (fill > 0) g.roundedRect(x(), y(), maxOf(fill, height()), height(), radius, MenuTheme.alpha(color, 90))
     }
 }

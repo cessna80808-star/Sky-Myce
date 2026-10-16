@@ -80,7 +80,7 @@ interface BazaarUiBridge {
 
 /** Every local action either surface may request. Wire names are the dashboard protocol. */
 enum class BazaarAction(val wire: String) {
-    TOGGLE("toggle"), REFRESH("refresh"), GUIDE("guide"), OPEN_ORDERS("open-orders"),
+    TOGGLE("toggle"), REFRESH("refresh"), GUIDE("guide"), OPEN_ORDERS("open-orders"), OPEN_BAZAAR("open-bazaar"),
     CONFIRM("confirm"), CORRECT("correct"), PREFERENCE("preference"), SETUP("setup"), WEBHOOK("webhook"), SETTINGS_SYNC("settings-sync"),
     EXPORT("export"), DELETE_HISTORY("delete-history"), DELETE_SESSION("delete-session"),
     PUBLISH("publish"), REVOKE("revoke"), DELETE_PUBLICATION("delete-publication"), SESSION_SUMMARY("session-summary"), WEBHOOK_SUMMARY("webhook-summary"),

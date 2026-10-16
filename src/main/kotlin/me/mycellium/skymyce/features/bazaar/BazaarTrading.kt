@@ -604,6 +604,8 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
             BazaarAction.REFRESH -> complete(if (lifecycle.active == null) "Start flipping to load market data" else market.requestRefresh(System.currentTimeMillis()))
             BazaarAction.GUIDE -> complete(guide(fields))
             BazaarAction.OPEN_ORDERS -> complete(if (liveContext() == null) "Join SkyBlock to open your Bazaar orders" else { openBazaarOrders(); "Opening Manage Orders to sync fills" })
+            // Placeholder so the terminal compiles on this branch; the main branch opens /bz here.
+            BazaarAction.OPEN_BAZAAR -> complete("Opening the Bazaar is not available in this build")
             BazaarAction.SETUP -> { BazaarConfig.wizardDone = true; persistPreferences(); complete("Setup saved") }
             BazaarAction.PREFERENCE -> {
                 val key = requireNotNull(fields["key"])
