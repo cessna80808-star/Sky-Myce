@@ -11,6 +11,7 @@ export type SharingHooks = {
   owner(uuid: string): { accountId: string; uuids: string[] } | null;
   session(input: SharingSession): { ok: boolean; error?: string; accountId?: string; uuid?: string };
   blacklisted(uuid: string): boolean;
+  purgeBazaar?(owner: string | null, uuid?: string): void;
 };
 type PolicyRow = { owner: string; policy: string; revision: number; updated_at: number; cutoffs: string };
 const uuidPattern = /^[a-f0-9]{32}$/;
@@ -87,6 +88,7 @@ export class CommunitySharingStore {
     const affected = this.hooks.owner(uuid)?.uuids ?? [uuid];
     if (suppressed.length) this.sql.exec(`DELETE FROM community_contributions WHERE owner=? AND category IN (${suppressed.map(() => "?").join(",")})`, owner, ...suppressed);
     if (!policy.enabled || !policy.leaderboards || hidePreviousNames) this.sql.exec("DELETE FROM community_contributions WHERE owner=?", owner);
+    if (!policy.enabled || !policy.economy || !policy.leaderboards || hidePreviousNames) this.hooks.purgeBazaar?.(owner);
     return { ok: true, policy: state, affectedUuids: [...new Set([...affected, uuid])], suppressedCategories: suppressed };
   }
   check(uuid: string, category: SharingCategory, recordedAt?: number): SharingDecision {
@@ -109,6 +111,7 @@ export class CommunitySharingStore {
     if (uuidPattern.test(uuid) && this.hooks.owner(uuid)?.accountId !== targetAccountId) {
       this.merge(`uuid:${uuid}`, targetAccountId);
       this.sql.exec("DELETE FROM community_contributions WHERE uuid=?", uuid);
+      this.hooks.purgeBazaar?.(null, uuid);
     }
   }
   /** Snapshot consent before ownership is removed; an unlinked identity must not fall back to enabled defaults. */
@@ -124,6 +127,7 @@ export class CommunitySharingStore {
     const disabled = sharingCategories.filter(category => !policy.enabled || !policy[category]);
     if (disabled.length) this.sql.exec(`DELETE FROM community_contributions WHERE uuid=? AND category IN (${disabled.map(() => "?").join(",")})`, uuid, ...disabled);
     if (!policy.enabled || !policy.leaderboards || hidePreviousNames) this.sql.exec("DELETE FROM community_contributions WHERE uuid=?", uuid);
+    if (!policy.enabled || !policy.economy || !policy.leaderboards || hidePreviousNames) this.hooks.purgeBazaar?.(null, uuid);
   }
   private merge(source: string, target: string): void {
     const from = this.state(source), to = this.state(target), merged = defaultSharingPolicy(), notBefore = cutoffs();
@@ -135,6 +139,7 @@ export class CommunitySharingStore {
     const disabled = sharingCategories.filter(category => !merged.enabled || !merged[category]);
     if (disabled.length) this.sql.exec(`DELETE FROM community_contributions WHERE owner=? AND category IN (${disabled.map(() => "?").join(",")})`, target, ...disabled);
     if (!merged.enabled || !merged.leaderboards) this.sql.exec("DELETE FROM community_contributions WHERE owner=?", target);
+    if (!merged.enabled || !merged.economy || !merged.leaderboards) this.hooks.purgeBazaar?.(target);
   }
   recordContribution(uuid: string, raw: unknown, name: string): { ok: boolean; error?: string } {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "invalid_contribution" };

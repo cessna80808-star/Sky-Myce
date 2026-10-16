@@ -1,0 +1,10 @@
+Sky-Myce includes Rinku 3.0.4 for Minecraft 26.1.2 (LGPL).
+Authors: Keksuccino, ds58, CinemaMod Group.
+Source and license: https://github.com/Keksuccino/Rinku/tree/26.1.2
+Published sources: https://keksuccino.github.io/maven/de/keksuccino/rinku-fabric/3.0.4-26.1.2/rinku-fabric-3.0.4-26.1.2-sources.jar
+
+Rinku classes and resources are unchanged. The two startup mixin registrations
+MixinClientPackSource and MixinMinecraft are omitted from the bundled mixin
+configuration. Sky-Myce downloads/initializes Chromium on explicit browser use
+and manages the browser rendering and shutdown lifecycle instead.
+The native Chromium runtime is downloaded separately by Rinku's checked installer.

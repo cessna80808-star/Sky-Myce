@@ -7,11 +7,13 @@ import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload
 import { handleCosmeticAssets } from "./cosmetic-assets";
 import { handleLeaderboardsRequest, handleCommunityFeed } from "./leaderboards";
 import { handleRngTestRequest, handleRngTestInteraction } from "./rng-tester";
+import { handleRngCarouselInteraction } from "./rng-carousel";
 import { RngForwardQueue } from "./rng-forwarding";
 import { verifiedInteraction, discordCommand } from "./discord";
 import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, type DiscordAccountsConfig } from "./discord-accounts";
 import type { DrmConfig } from "./drm";
 import { handleCommunityRequest } from "./community";
+import { handleBazaarRequest } from "./bazaar-routes";
 import { handleCommunityRelease } from "./community-release";
 import type { AccountsConfig, AccountStore } from "./accounts";
 import { RoomIrc, currentIrcSession, verifyBridge, globalChatChannel, GLOBAL_CHAT_ROOM, PARTY_CHAT_UNAVAILABLE, type IrcConfig, type IrcSession, type GlobalChatSender, type GlobalChatSend, type GlobalChatResult, type GlobalChatMessage, type PartyChatIdentity, type PartyChatMessage } from "./irc";
@@ -19,6 +21,8 @@ import type { IrcUpdate } from "./irc-model";
 import { handlePromptInteraction, handlePromptRunner } from "./prompts";
 import type { SharingState, SharingDecision, SharingCategory } from "./community-sharing";
 import { takeTrafficCredit, type TrafficCredit } from "./traffic";
+import { LeapPov, type LeapPovSession } from "./leap-pov";
+import { BazaarNotifications } from "./bazaar-notifications";
 export { AccountStore } from "./accounts";
 
 type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED" | "GLOBAL_CHAT_GATEWAY_CONTROL"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
@@ -35,7 +39,7 @@ const discordEnvironment = (env: RelayEnv): RelayEnv => ({ ...env,
   DISCORD_BACKEND_PUBLIC_KEY: env.BACKEND_BOT_PUBLIC_KEY ?? env.DISCORD_BACKEND_PUBLIC_KEY,
   DISCORD_BACKEND_BOT_TOKEN: env.BACKEND_BOT_TOKEN ?? env.DISCORD_BACKEND_BOT_TOKEN });
 type JoinPolicy = { floor: string; maxPbMillis: number | null; open: boolean; selectedClass?: string };
-type Session = IrcSession & {
+type Session = LeapPovSession & {
   incoming?: TrafficCredit;
   started?: number;
   challenge: string;
@@ -97,13 +101,13 @@ export default {
       if (url.pathname === "/community/news") {
         if (request.method !== "GET") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET" } });
         const source = url.searchParams.get("source");
-        if (source !== "game") return Response.json({ ok: false, error: "invalid_source" }, { status: 400 });
+        if (source !== "game" && source !== "derailious") return Response.json({ ok: false, error: "invalid_source" }, { status: 400 });
         try {
           const result = await env.RELAY_ROOMS.getByName("public-news").publicNews(source);
           return Response.json(result, { headers: { "Cache-Control": "no-store" } });
         } catch { return Response.json({ ok: false, error: "news_unavailable" }, { status: 503 }); }
       }
-      try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleBazaarRequest(request, env, ctx) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
     if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/") || url.pathname === "/discord/loader") {
@@ -123,6 +127,8 @@ export default {
       const data = await verifiedInteraction(request, discordEnv);
       if (!data) return new Response("Invalid signature or interaction", { status: 401 });
       if (data.type === 1) return Response.json({ type: 1 });
+      const rngCarousel = await handleRngCarouselInteraction(data, env, backend);
+      if (rngCarousel) return rngCarousel;
       if (data.type === 4) return handleAccountAutocomplete(data, env, backend ? "backend" : "user");
       const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
       if (promptResponse) return promptResponse;
@@ -163,6 +169,7 @@ export default {
 } satisfies ExportedHandler<RelayEnv>;
 
 export class RelayRoom extends DurableObject<RelayEnv> {
+  private readonly bazaarNotifications: BazaarNotifications;
   private readonly stats: SharedStats;
   private readonly wealth: SharedWealth;
   private readonly news: DigestNews;
@@ -174,6 +181,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly incomingBudgets = new WeakMap<WebSocket, TrafficCredit>();
   private readonly cosmetics: PlayerCosmetics;
   private readonly irc: RoomIrc;
+  private readonly leapPov: LeapPov;
   constructor(ctx: DurableObjectState, env: RelayEnv) {
     env = discordEnvironment(env);
     super(ctx, env);
@@ -193,6 +201,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     ctx.waitUntil(this.rngForward.arm());
     this.cosmetics = new PlayerCosmetics(ctx.storage);
     this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session), uuid => this.cosmetics.get(uuid).name);
+    this.leapPov = new LeapPov(ctx, (ws, session) => this.authorized(ws, session));
+    this.bazaarNotifications = new BazaarNotifications(env, (ws, session) => this.authorized(ws, session));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS account_migration_state (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS cosmetic_migration_state (id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL,done INTEGER NOT NULL)");
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS mod_users (
@@ -205,14 +215,14 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.name && session.uuid && !session.registered) {
         this.registerUser(session.uuid, session.name);
         session.registered = true;
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
       }
     }
   }
 
   /** Public announcements only; callers cannot select arbitrary Discord channels or access room/user state. */
   publicNews(source: NewsSource): Promise<NewsResult> {
-    if (source !== "game") throw Error("invalid_source");
+    if (source !== "game" && source !== "derailious") throw Error("invalid_source");
     if (this.env.COMMUNITY_SERVICES_ENABLED === "false") throw Error("news_unavailable");
     return this.news.get(source);
   }
@@ -301,7 +311,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       credits: 12, updated: now, seen: [], inbox: [], room: url.searchParams.get("room") ?? "friends", ...(bridge ? { bridge: true } : {}),
     };
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment(session);
+    this.leapPov.preserve(server, session);
     server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, richChatVersion: 1, room: session.room, ...(session.room === GLOBAL_CHAT_ROOM ? { globalChat: true } : {}) } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > session.expires) await this.ctx.storage.setAlarm(session.expires);
@@ -318,7 +328,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     session.incoming = this.incomingBudgets.get(ws) ?? session.incoming ?? { credits: burst, updated: incomingAt };
     this.incomingBudgets.set(ws, session.incoming);
     const accepted = takeTrafficCredit(session.incoming, burst, session.bridge ? 25 : 125, incomingAt);
-    ws.serializeAttachment(session);
+    this.leapPov.preserve(ws, session);
     if (!accepted) {
       this.trafficDiagnostic("incoming_message_rate_exceeded");
       ws.close(1013, "Incoming message rate exceeded");
@@ -350,7 +360,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         ws.close(1008, "Authentication required"); return;
       }
       session.checking = true;
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       try {
         const profile = await verifyAccount(data, session.challenge);
         if ("error" in profile || Date.now() > session.expires) {
@@ -390,21 +400,31 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.cosmeticsVersion = data.cosmeticsVersion === 5 ? 5 : data.cosmeticsVersion === 4 ? 4 : data.cosmeticsVersion === 3 ? 3 : data.cosmeticsVersion === 2 ? 2 : 1;
         session.rngMetadataVersion = data.rngMetadataVersion === 1 ? 1 : undefined;
         session.challenge = "";
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 5, cosmeticsNames: true,
           irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
-          account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt }));
+          account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt,
+          ...(!legacyRelay(this.env) && session.accountId ? { leapPovVersion: 1, bazaarVersion: 1 } : {}) }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
 
     const subscription = data.type === "irc_subscribe" && encoder.encode(raw).length <= (data.scope === "global" || data.scope === "party" ? 8192 : 2048)
       ? this.irc.reserveSubscription(ws, session, data) : undefined;
+    const povIntent = data.type === "leap_pov_subscribe" ? this.leapPov.reserve(ws, session, data) : undefined;
+    const bazaarIntent = data.type === "bazaar_session" ? this.bazaarNotifications.reserve(ws, session) : undefined;
+    if ((data.type === "leap_pov_subscribe" || data.type === "leap_pov_pose") && encoder.encode(raw).length > 2048) {
+      this.leapPov.disconnect(ws); ws.close(1009, "POV message too large"); return;
+    }
     if (!await this.authorized(ws, session, true)) return;
     const current = currentIrcSession(ws, session);
     if (!current) return;
     session = current;
     if (!session.name) return;
+    if (data.type === "bazaar_session") { this.bazaarNotifications.update(ws, session, data, bazaarIntent); return; }
+    if (data.type === "bazaar_alert") { await this.bazaarNotifications.alert(ws, session, data); return; }
+    if (data.type === "leap_pov_subscribe") { this.leapPov.subscribe(ws, session, data, povIntent); return; }
+    if (data.type === "leap_pov_pose") { await this.leapPov.pose(ws, session, data, incomingAt); return; }
     if (data.type === "community_contribution") {
       if (encoder.encode(raw).length > 2048 || typeof data.id !== "string" || !uuid.test(data.id)) { ws.close(1008, "Invalid contribution"); return; }
       const result = await this.env.ACCOUNT_STORE.getByName("global").recordCommunitySessionContribution({ sessionId: session.communitySessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! }, data.contribution);
@@ -426,13 +446,13 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       const now = Date.now();
       if (!session.cosmetics || typeof data.id !== "string" || !uuid.test(data.id) || encoder.encode(raw).length > 2048) { ws.close(1008, "Invalid cosmetics request"); return; }
       if (data.type === "cosmetics_subscribe" && data.enabled === false) {
-        session.cosmeticWatching = undefined; ws.serializeAttachment(session);
+        session.cosmeticWatching = undefined; this.leapPov.preserve(ws, session);
         ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, disabled: true })); return;
       }
       session.cosmeticCredits = Math.min(8, (session.cosmeticCredits ?? 8) + (now - (session.cosmeticUpdated ?? now)) / 1000);
       session.cosmeticUpdated = now;
-      if (session.cosmeticCredits < 1) { ws.serializeAttachment(session); ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "rate_limited" })); return; }
-      session.cosmeticCredits--; ws.serializeAttachment(session);
+      if (session.cosmeticCredits < 1) { this.leapPov.preserve(ws, session); ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "rate_limited" })); return; }
+      session.cosmeticCredits--; this.leapPov.preserve(ws, session);
       if (data.type === "cosmetics_link") {
         if (!(this.env.DISCORD_USER_PUBLIC_KEY ?? this.env.DISCORD_PUBLIC_KEY) || !(this.env.DISCORD_USER_APPLICATION_ID ?? this.env.DISCORD_APPLICATION_ID)) { ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, error: "not_configured" })); return; }
         if (!legacyRelay(this.env)) {
@@ -459,7 +479,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         return matches.length === 1 ? matches : []; // A renamed/reassigned name must never pick an ambiguous owner.
       });
       const ids = [...new Set([...(requestedIds as string[]), ...identities.map(value => value.uuid)])];
-      session.cosmeticWatching = watchCosmetics(session.cosmeticWatching, ids); ws.serializeAttachment(session);
+      session.cosmeticWatching = watchCosmetics(session.cosmeticWatching, ids); this.leapPov.preserve(ws, session);
       const profiles = legacyRelay(this.env) ? ids.map(id => this.cosmetics.get(id)) : await this.env.ACCOUNT_STORE.getByName("global").communityCosmeticProfiles(ids);
       if (!await this.authorized(ws, session)) return;
       ws.send(JSON.stringify({ type: "cosmetics_result", id: data.id, records: profiles.map(profile => cosmeticPayload(profile, session.cosmeticsVersion)),
@@ -479,16 +499,16 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (allowed) session.digestCredits--;
       // Turning receiving off is always honored, even after a burst of requests.
       if (data.type === "rng_subscribe" && data.enabled === false) session.rngSubscribed = false;
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       if (!allowed) { ws.send(JSON.stringify({ type, id: data.id, error: "rate_limited", retryAt: now + 5000 })); return; }
       if (data.type === "digest_news_get") {
-        if (data.source !== "game") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_source" })); return; }
+        if (data.source !== "game" && data.source !== "derailious") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_source" })); return; }
         const result = await this.news.get(data.source);
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, id: data.id, ...result }));
       } else if (data.type === "rng_subscribe") {
         if (typeof data.enabled !== "boolean") { ws.send(JSON.stringify({ type, id: data.id, error: "invalid_subscription" })); return; }
         session.rngSubscribed = data.enabled;
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         const rows = data.enabled ? this.rng.recentRecords(now) : [];
         const policies = await this.sharingPermissions(ws, session, rows.map(row => ({ uuid: row.author, category: "rng", recordedAt: row.event.occurredAt })));
         if (ws.readyState !== WebSocket.OPEN) return;
@@ -546,7 +566,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           this.stats.selectClass(session.name, session.uuid!, party.selectedClass);
         }
         session.party = party;
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         if (changed) await this.broadcast(ws, { type: "party_update", name: session.name, uuid: session.uuid, ...party }, party.selectedClass ? [{ uuid: session.uuid!, category: "dungeons" }] : undefined);
         return;
       }
@@ -554,7 +574,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           data.names.some(name => typeof name !== "string" || !username.test(name))) {
         ws.close(1008, "Invalid party lookup"); return;
       }
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       const parties: Record<string, (JoinPolicy & { uuid: string }) | null> = Object.create(null);
       for (const name of data.names as string[]) parties[name.toLowerCase()] = null;
       for (const other of this.ctx.getWebSockets()) {
@@ -585,7 +605,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       session.wealthUploads = (session.wealthUploads ?? []).filter(it => it.expires > now);
       const allowed = session.wealthCredits >= 1;
       if (allowed) session.wealthCredits--;
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       if (!allowed) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "rate_limited", retryAt: now + 5000 })); return; }
       if (!legacyRelay(this.env)) {
         const requests = [{ uuid: session.uuid!, category: "economy" as const }, ...(typeof data.uuid === "string" ? [{ uuid: data.uuid, category: "economy" as const, ...(data.type === "wealth_put" && typeof data.fetchedAt === "number" ? { recordedAt: data.fetchedAt } : {}) }] : [])];
@@ -601,7 +621,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         // Cache-only viewers and clients in provider backoff must not reserve work they cannot perform.
         if (data.canFetch === false) {
           session.wealthUploads = session.wealthUploads.filter(grant => !matches(grant));
-          ws.serializeAttachment(session);
+          this.leapPov.preserve(ws, session);
           ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return;
         }
         if (record) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return; }
@@ -617,7 +637,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         const grant = { name: data.name.toLowerCase(), uuid: data.uuid as string | undefined,
           token: crypto.randomUUID().replaceAll("-", ""), expires: now + 120_000 };
         session.wealthUploads = [...session.wealthUploads.slice(-3), grant];
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, upload: grant.token }));
       } else {
         const grant = session.wealthUploads.find(it => (it.name === (data.name as string).toLowerCase() ||
@@ -629,7 +649,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "invalid_upload" })); return;
         }
         session.wealthUploads = session.wealthUploads.filter(it => it !== grant);
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         if (permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, stored: false, error: "sharing_disabled" })); return; }
         const stored = this.wealth.put({ name: data.name, uuid: data.uuid, wealth, fetchedAt: Math.min(data.fetchedAt as number, now) }, now, session.uuid);
         // Only the requesting client receives totals; avoid broadcasting a wealth update to the entire room.
@@ -646,7 +666,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.cacheCredits < 1) { ws.send(JSON.stringify({ type: "stats_result", id: data.id, error: "rate_limited" })); return; }
       session.cacheCredits--;
       session.uploads = (session.uploads ?? []).filter(it => it.expires > now);
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       if (typeof data.id !== "string" || !uuid.test(data.id) || typeof data.name !== "string" || !username.test(data.name) ||
           (data.uuid !== undefined && (typeof data.uuid !== "string" || !uuid.test(data.uuid)))) { ws.close(1008, "Invalid stats request"); return; }
       if (!legacyRelay(this.env)) {
@@ -662,7 +682,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         const grant: StatsGrant | undefined = record && !ownRefresh || permissions.some(value => !this.sharingCurrent(value.uuid, "dungeons", value.decision)) ? undefined : { name: data.name.toLowerCase(), uuid: data.uuid as string | undefined,
           token: crypto.randomUUID().replaceAll("-", ""), expires: now + 120_000 };
         if (grant) session.uploads = [...session.uploads.filter(it => it.name !== grant.name).slice(-3), grant];
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         ws.send(JSON.stringify({ type: "stats_result", id: data.id, record, upload: grant?.token, ...(!record && !grant ? { error: "sharing_disabled" } : {}) }));
       } else {
         const grant = session.uploads.find(it => it.name === (data.name as string).toLowerCase() && it.token === data.upload && (!it.uuid || it.uuid === data.uuid));
@@ -672,7 +692,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
           ws.send(JSON.stringify({ type: "stats_result", id: data.id, error: "invalid_upload" })); return;
         }
         session.uploads = session.uploads.filter(it => it !== grant);
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         const record = { name: data.name, uuid: data.uuid, stats, fetchedAt: Math.min(data.fetchedAt as number, now) };
         const live = this.ctx.getWebSockets().find(other => other.readyState === WebSocket.OPEN &&
           (other.deserializeAttachment() as Session).uuid === record.uuid)?.deserializeAttachment() as Session | undefined;
@@ -702,7 +722,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     session.credits = Math.min(12, session.credits + (now - session.updated) / 2500);
     session.updated = now;
     if (session.credits < 1) {
-      if (ordinary) { ws.serializeAttachment(session); ws.send(JSON.stringify({ type: "error", id: data.id, code: "rate_limited" })); }
+      if (ordinary) { this.leapPov.preserve(ws, session); ws.send(JSON.stringify({ type: "error", id: data.id, code: "rate_limited" })); }
       else ws.close(1008, "Message rate exceeded");
       return;
     }
@@ -711,7 +731,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       const receipt = session.inbox.find(it => it.id === data.id && it.from.toLowerCase() === (data.to as string).toLowerCase());
       if (!receipt || receipt.expires <= now || (data.type === "reject" && !receipt.user)) {
         // Late/duplicate receipts cannot be distinguished from invented IDs. Never forward either.
-        ws.serializeAttachment(session);
+        this.leapPov.preserve(ws, session);
         ws.send(JSON.stringify({ type: "error", id: data.id, code: "invalid_receipt" })); return;
       }
       session.inbox = session.inbox.filter(it => it !== receipt);
@@ -719,7 +739,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (session.seen.includes(data.id)) { ws.close(1008, "Duplicate message"); return; }
       session.seen = [...session.seen.slice(-7), data.id];
     }
-    ws.serializeAttachment(session);
+    this.leapPov.preserve(ws, session);
 
     // ponytail: scan at most 128 sockets per room; add a recipient index if rooms grow.
     const target = this.ctx.getWebSockets().find(other => other !== ws && other.readyState === WebSocket.OPEN &&
@@ -740,7 +760,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         if (recipient.inbox.length > 16 || encoder.encode(JSON.stringify(recipient)).length > 2048) {
           ws.send(JSON.stringify({ type: "error", id: data.id, code: "recipient_busy" })); return;
         }
-        target.serializeAttachment(recipient);
+        this.leapPov.preserve(target, recipient);
       }
       target.send(JSON.stringify(data.type === "reject" ? { type: "error", id: data.id, code: "recipient_disallowed" } :
         { type: data.type, id: data.id, from: session.name, uuid: session.uuid, text: data.text }));
@@ -874,7 +894,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       if (categories.includes("dungeons") && players.includes(session.uuid ?? "") && session.party) delete session.party.selectedClass;
       if (categories.includes("dungeons")) session.uploads = players.includes(session.uuid ?? "") ? [] : session.uploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
       if (categories.includes("economy")) session.wealthUploads = players.includes(session.uuid ?? "") ? [] : session.wealthUploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
-      ws.serializeAttachment(session);
+      this.leapPov.preserve(ws, session);
       if (ws.readyState !== WebSocket.OPEN || !session.name || !await this.authorized(ws, session)) continue;
       for (let index = 0; index < rng.length; index += 128) ws.send(JSON.stringify({ type: "rng_removed", ids: rng.slice(index, index + 128) }));
       for (let index = 0; index < stats.length; index += 128) ws.send(JSON.stringify({ type: "stats_removed", uuids: stats.slice(index, index + 128) }));
@@ -944,6 +964,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
 
   webSocketClose(ws: WebSocket, code: number, _reason: string, wasClean: boolean): void {
+    this.leapPov.disconnect(ws);
     const session = ws.deserializeAttachment() as Session;
     this.recordDisconnect(session);
     console.info({ event: "websocket_close", code, clean: wasClean, authenticated: !!session.name,
@@ -952,6 +973,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     ws.close(1000, "Client disconnected");
   }
   webSocketError(ws: WebSocket): void {
+    this.leapPov.disconnect(ws);
     this.recordDisconnect(ws.deserializeAttachment() as Session);
     console.error({ event: "websocket_error", authenticated: !!(ws.deserializeAttachment() as Session).name });
     ws.close(1011, "Connection error");

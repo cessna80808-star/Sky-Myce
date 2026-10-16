@@ -13,8 +13,10 @@ import { CommunitySharingStore, type SharingSession, type SharingCategory } from
 import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQuery, type JournalComparisonResult, type FeedReceipt } from "./leaderboards";
 import type { PublicRngEvent } from "./digest";
 import { rngTestOptions, runRngTest, type RngTestResult } from "./rng-tester";
+import { CommunityBazaar, type BazaarStatsResult } from "./bazaar";
+import { BazaarMarket } from "./bazaar-market";
 
-export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket };
+export type AccountsConfig = LicensePolicy & DrmConfig & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket; BAZAAR_MARKET_PROVIDER?: string };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
   device_hash: string | null; hardware_hash: string | null; hwid_reset_at: number | null; hwid_bound_at: number | null; generation: number; activated_at: number | null; created_at: number; last_seen: number; enrollment_blocked: number; is_admin: number };
 type InstallationRow = { installation_id: string; account_id: string; device_hash: string; hardware_hash: string | null; public_key: string; fingerprint: string; revoked_at: number | null; platform: ClientPlatform | null };
@@ -56,6 +58,9 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   private readonly cosmetics: PlayerCosmetics;
   private readonly cosmeticAssets: CosmeticAssets;
   private readonly leaderboards: CommunityLeaderboards;
+  private readonly bazaar: CommunityBazaar;
+  private readonly bazaarMarket: BazaarMarket;
+  private readonly bazaarAlertCooldowns = new Map<string, number>();
   constructor(ctx: DurableObjectState, env: AccountsConfig) {
     super(ctx, env);
     this.prompts = new PromptJobs(ctx.storage, env);
@@ -171,6 +176,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     this.sharing = new CommunitySharingStore(ctx.storage.sql, {
       owner: player => { const account = this.getAccountByUuid(player); return account ? { accountId: account.accountId, uuids: account.uuids.map(p => p.uuid) } : null; },
       session: input => this.community.checkSession(input), blacklisted: player => this.community.blacklistedUuid(player),
+      purgeBazaar: (owner, player) => this.bazaar?.purge(owner, player),
     });
     this.cosmetics = new PlayerCosmetics(ctx.storage);
     this.cosmeticAssets = new CosmeticAssets(ctx.storage, this.cosmetics, {
@@ -178,13 +184,66 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       owner: player => this.getAccountByUuid(player)?.accountId ?? null, allowed: player => !this.community.blacklistedUuid(player),
       limit: (key, count) => this.limit(key, count),
     });
+    this.bazaar = new CommunityBazaar(ctx.storage.sql, { check: (player, category, at) => this.sharing.check(player, category, at) });
+    this.bazaarMarket = new BazaarMarket(ctx.storage.sql, env.BAZAAR_MARKET_PROVIDER);
     this.leaderboards = new CommunityLeaderboards(ctx.storage.sql, {
       check: (player, category, at) => this.sharing.check(player, category, at),
       record: (player, raw, name) => this.sharing.recordContribution(player, raw, name),
+      bazaar: (query, now) => this.bazaar.query(query, now),
     });
   }
   communityChallenge(raw: Record<string, unknown>) { return this.community.challenge(raw); }
   communitySessionForToken(token: string) { return this.community.tokenSession(token); }
+  communityBazaarMarket(active: boolean) { return this.bazaarMarket.get(active); }
+  communityBazaarHistory(product: string, daily: boolean) { return this.bazaarMarket.history(product, daily); }
+  communityBazaarReplay(token: string) { return this.bazaar.replay(token); }
+  communityBazaarGallery() { return this.bazaar.gallery(); }
+  claimCommunityBazaarAlert(session: CommunitySessionCheck, eventId: string, product: string): string | null {
+    const current = this.community.checkSession(session), now = Date.now();
+    if (!current.ok || !session.connectionId || current.connectionId !== session.connectionId || !/^[a-f0-9]{32}$/.test(eventId) || !/^[A-Z0-9_:;.\-]{1,100}$/.test(product)) return null;
+    for (const [key, until] of this.bazaarAlertCooldowns) if (until <= now) this.bazaarAlertCooldowns.delete(key);
+    const owner = session.accountId, keys = [`event:${owner}:${eventId}`, `product:${owner}:${product}`, `owner:${owner}`];
+    if (keys.some(key => (this.bazaarAlertCooldowns.get(key) ?? 0) > now) || this.bazaarAlertCooldowns.size >= 10000) return null;
+    for (const key of keys) this.bazaarAlertCooldowns.set(key, now + (key.startsWith("owner:") ? 60000 : 600000));
+    return current.discordId ?? null;
+  }
+  async communityBazaar(token: string, action: string, raw: Record<string, unknown>) {
+    try {
+      const session = await this.community.tokenSession(token); if (!session.ok) return { ok: false, error: session.error };
+      return this.ctx.storage.transactionSync(() => {
+        const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
+        if (!current.ok) return { ok: false, error: current.error };
+        const account = this.getAccountByUuid(session.uuid!), player = account?.uuids.find(player => player.uuid === session.uuid);
+        if (!account || !player || account.accountId !== session.accountId) return { ok: false, error: "session_identity_changed" };
+        const identity = { accountId: account.accountId, uuid: player.uuid, name: player.name };
+        this.limit(`bazaar:${action}:${account.accountId}`, action === "publish" ? 5 : 30);
+        if (!["stats", "settings-get"].includes(action) && (raw.expectedAccountId !== account.accountId || raw.expectedUuid !== player.uuid)) return { ok: false, error: "session_identity_changed" };
+        switch (action) {
+          case "contributions": return this.bazaar.record(identity, raw);
+          case "contributions-remove": return this.bazaar.remove(identity, raw);
+          case "stats": return this.bazaar.stats(identity, raw);
+          case "summary": return this.bazaar.summary(identity, raw);
+          case "settings-get": return this.bazaar.settings(identity);
+          case "settings": return this.bazaar.settings(identity, raw);
+          case "publish": return this.bazaar.publish(identity, raw);
+          case "revoke": return this.bazaar.revoke(identity, raw, false);
+          case "delete": return this.bazaar.revoke(identity, raw, true);
+          default: return { ok: false, error: "invalid_action" };
+        }
+      });
+    } catch (error) { return failure(error); }
+  }
+  discordBazaar(actor: DeveloperActor, action: string, period: string): BazaarStatsResult {
+    try {
+      if (actor.guildId !== this.env.DISCORD_GUILD_ID || !snowflake.test(actor.id) || !snowflake.test(actor.interactionId) || !this.communityIdentityAllowed(actor.id)) deny("not_authorized");
+      this.interaction(actor); this.limit(`bazaar-discord:${actor.id}`, 30);
+      const account = this.getAccountByDiscordId(actor.id), player = account?.uuids[0];
+      if (!account || !player) return { ok: false, error: "account_required" };
+      const stats = this.bazaar.stats({ accountId: account.accountId, uuid: player.uuid, name: player.name }, { period });
+      const policy = this.sharing.getVerified(player.uuid).policy;
+      return stats.ok && policy ? { ...stats, sharing: { enabled: policy.enabled, economy: policy.economy, leaderboards: policy.leaderboards, publicName: policy.publicName } } : stats;
+    } catch (error) { return failure(error); }
+  }
   communityCosmeticOverview(token: string) { return this.cosmeticAssets.overview(token); }
   communityCosmeticSave(token: string, raw: Record<string, unknown>) { return this.cosmeticAssets.save(token, raw); }
   async communityCosmeticGrant(token: string, raw: Record<string, unknown>) { const result = await this.cosmeticAssets.grant(token, raw); await this.armCosmeticCleanup(); return result; }
@@ -347,6 +406,14 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   suppressCommunityRng(players: string[]) { this.ctx.storage.transactionSync(() => this.leaderboards.suppress(players)); }
   acceptCommunityFeedNonce(nonce: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acceptNonce(nonce)); }
   claimCommunityRng(channel: string, receipts?: FeedReceipt[]) { return this.ctx.storage.transactionSync(() => this.leaderboards.claim(channel, receipts)); }
+  discordRecentRng(actor: DeveloperActor, channel: string) {
+    if (actor.guildId !== this.env.DISCORD_GUILD_ID || channel !== this.env.DISCORD_RNG_CHANNEL_ID || !snowflake.test(actor.id) ||
+      !snowflake.test(actor.interactionId) || !this.communityIdentityAllowed(actor.id)) return { ok: false, events: [] };
+    return this.ctx.storage.transactionSync(() => {
+      this.interaction(actor); this.limit(`rng-carousel:${actor.id}`, 60);
+      return { ok: true, events: this.leaderboards.recentRng(channel) };
+    });
+  }
   acknowledgeCommunityRng(raw: Record<string, unknown>, channel: string) { return this.ctx.storage.transactionSync(() => this.leaderboards.acknowledge(raw, channel)); }
   async promptSubmit(actor: PromptActor, prompt: string, source: Record<string, unknown>) {
     const result = this.prompts.submit(actor, prompt, source); await this.prompts.arm(); return result;

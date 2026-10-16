@@ -21,6 +21,7 @@ fun checkTracker() {
     checkMarketValuedTrackerSummary()
     checkLegacyCostCoverage()
     checkDatedLegacyRuns()
+    checkDungeonWidgetRates()
     check(safeAverage(0.0, 0) == null && safeAverage(Double.NaN, 1) == null && safeAverage(100.0, 2) == 50.0)
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val other = context.copy(profileId = "c".repeat(32), profileName = "Pear")
@@ -530,6 +531,54 @@ private fun checkCombinedDungeonLoot() {
     check(constraints.copy(scope = TrackerScope.CURRENT_PROFILE).clearConstraints().scope == TrackerScope.CURRENT_PROFILE)
     val imported = AcquisitionEvent("e".repeat(32), "SHADOW_WARP_SCROLL", time, "dungeon", null, "M7", origin = "legacy-tracker")
     check(trackerView(archive.copy(events = listOf(imported)), legacy, constraints.clearConstraints(), null).events == listOf(imported))
+}
+
+private fun checkDungeonWidgetRates() {
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val timed = DungeonRunRecord("timed", "session", context, "M7", 1_000, 61_000, 60_000, 1_000.0,
+        chests = listOf(ChestReceipt("paid", 61_000, "BEDROCK", 100.0, listOf(RunLoot("LOOT", 1, 5.0)))),
+        rerolls = 1, rerollCost = 50.0)
+    val untimed = timed.copy(id = "untimed", duration = null, cataXp = 900_000.0,
+        chests = listOf(ChestReceipt("untimed-paid", 70_000, "BEDROCK", 1_000.0, listOf(RunLoot("LOOT", 100, 900_000.0)))))
+    val historical = LegacyFloorView("M7", TrackerSummary(runs = 20, time = 1_140_000, timedRuns = 19, cataXp = 90_000.0),
+        mapOf("BEDROCK" to listOf(TrackerLootRow("LOOT", 20, 1.0, null, 20))),
+        mapOf("BEDROCK" to 2_000.0), mapOf("BEDROCK" to 100.0), mapOf("BEDROCK" to 20))
+    val archive = AcquisitionArchive(runs = listOf(timed, untimed,
+        timed.copy(id = "old-copy", trackingVersion = 1), timed.copy(id = "other-floor", floor = "F7"),
+        timed.copy(id = "not-completed", completedAt = null), timed.copy(id = "no-duration", duration = 0)))
+    val sample = dungeonTrackerRateSample(archive, listOf(historical), "M7")
+    check(sample.summary.runs == 1L && sample.summary.time == 60_000L && sample.summary.cataXp == 1_000.0)
+    check(sample.loot.single().count == 1L && sample.summary.chestCost == 100.0 && sample.summary.knownRerollCost == 50.0)
+    fun valued(view: TrackerView) = marketValuedTrackerSummary(view.summary, marketValuedLoot(view.loot) { 1_000.0 })
+    val rates = valued(sample)
+    check(rates.knownNet == 850.0 && rates.hourlyRate(rates.knownNet) == 51_000.0 && rates.hourlyRate(rates.cataXp) == 60_000.0)
+    val total = valued(trackerView(archive, listOf(historical), TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES), null))
+    val rows = dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, total, rates)
+        .map { it.replace(Regex("§."), "") }
+    check(rows.size == 9 && rows.none { "≥" in it } && rows[3].contains("recorded"))
+    check(rows[4].contains("60/h") && rows[6] == "Rates: 1/${total.runs} matched runs")
+    check(rows[7].contains("51K/h") && rows[8].contains("60K/h")) // Hourly values use this one run, never lifetime profit/XP.
+    check(total.knownNet != rates.knownNet && total.cataXp > rates.cataXp && total.gross == 123_000.0)
+    val duplicated = dungeonTrackerRateSample(archive.copy(runs = listOf(timed, timed)), emptyList(), "M7")
+    check(duplicated.summary.runs == 1L && duplicated.summary.time == 60_000L && duplicated.loot.single().count == 1L)
+    val completeHistorical = historical.copy(summary = historical.summary.copy(time = 1_200_000, timedRuns = 20))
+    val imported = dungeonTrackerRateSample(AcquisitionArchive(), listOf(completeHistorical), "M7")
+    check(imported.summary.runs == 20L && imported.summary.time == 1_200_000L && imported.loot.single().count == 20L)
+    check(valued(imported).hourlyRate(imported.summary.cataXp) == 270_000.0) // Complete imported totals use their own complete timing.
+    val incompleteImported = dungeonTrackerRateSample(AcquisitionArchive(), listOf(historical), "M7")
+    check(incompleteImported.summary.runs == 0L && incompleteImported.summary.hourlyRate(100.0) == null)
+    val noElapsed = dungeonTrackerRateSample(archive.copy(runs = listOf(untimed, timed.copy(duration = 0))), emptyList(), "M7")
+    check(noElapsed.summary.time == 0L && noElapsed.summary.hourlyRate(1.0) == null)
+    val unknownPrice = marketValuedTrackerSummary(sample.summary, marketValuedLoot(sample.loot) { null })
+    val unknownCost = valued(dungeonTrackerRateSample(archive.copy(runs = listOf(timed.copy(rerollCost = null))), emptyList(), "M7"))
+    for (unknown in listOf(unknownPrice, unknownCost)) {
+        check(unknown.profitIncomplete && unknown.net == null)
+        val uncertain = dungeonTrackerWidgetLines(null, total, unknown)
+        check(uncertain[7].contains("—") && !uncertain[4].contains("—") && !uncertain[8].contains("—"))
+    }
+    val unknownXp = dungeonTrackerRateSample(archive.copy(runs = listOf(timed.copy(cataXp = null))), emptyList(), "M7")
+    check(!unknownXp.summary.xpTimingComplete && dungeonTrackerWidgetLines(null, total, valued(unknownXp))[8].contains("—"))
+    check(archive.runs.first() == timed && historical.summary.timedRuns == 19L) // This is a read-only projection.
 }
 
 private fun checkLifetimeDungeonSummary() {

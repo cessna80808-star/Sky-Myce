@@ -3,6 +3,8 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import me.mycellium.mixin.IrcChatAccessor
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
 import me.mycellium.skymyce.config.misc.ThemeConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
+import me.mycellium.skymyce.features.browser.InGameBrowser
 import me.mycellium.skymyce.ui.MenuButton
 import me.mycellium.skymyce.ui.MenuCanvas
 import me.mycellium.skymyce.ui.MenuGraphics
@@ -87,15 +89,22 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         if (!minecraft.options.chatLinks().get()) { browserDisabled = true; return }
         browserDisabled = false
         val original = media.sourceUrl ?: media.url
+        fun open() {
+            if (BrowserLinks.supported(original.toString()) != null) InGameBrowser.open(this, original.toString())
+            else {
+                Util.getPlatform().openUri(original)
+                if (minecraft.screen !== this) minecraft.setScreen(this)
+            }
+        }
         if (minecraft.options.chatLinksPrompt().get()) {
             minecraft.setScreen(ConfirmLinkScreen({ confirmed ->
                 if (!current()) closeExpired()
                 else {
-                    if (confirmed) Util.getPlatform().openUri(original)
-                    minecraft.setScreen(this)
+                    if (confirmed && minecraft.options.chatLinks().get()) open()
+                    else minecraft.setScreen(this)
                 }
             }, original.toString(), false))
-        } else Util.getPlatform().openUri(original)
+        } else open()
     }
 
     private fun fit() { zoom = 1.0; panX = 0.0; panY = 0.0 }

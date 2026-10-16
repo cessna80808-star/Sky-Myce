@@ -29,6 +29,10 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.legacyTrackerVie
 import me.mycellium.skymyce.features.instances.dungeons.tracker.marketValuedLoot
 import me.mycellium.skymyce.features.instances.dungeons.tracker.marketValuedTrackerSummary
 import me.mycellium.skymyce.features.instances.dungeons.tracker.cachedLootUnitPrice
+import me.mycellium.skymyce.features.instances.dungeons.leap.LeapCandidate
+import me.mycellium.skymyce.features.instances.dungeons.leap.LeapIdentity
+import me.mycellium.skymyce.features.instances.dungeons.leap.drawLeapCard
+import me.mycellium.skymyce.features.instances.dungeons.leap.leapQuadrantBounds
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import tech.thatgravyboat.skyblockapi.api.remote.api.SimpleItemAPI
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
@@ -36,6 +40,10 @@ import tech.thatgravyboat.skyblockapi.api.repo.apis.SkyBlockItemsRepo
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
 import me.mycellium.skymyce.features.digest.DailyDigest
+import me.mycellium.skymyce.features.digest.DigestNewsItem
+import me.mycellium.skymyce.features.digest.DigestNewsRepository
+import me.mycellium.skymyce.features.digest.DigestNewsState
+import me.mycellium.skymyce.features.digest.NewsSource
 import me.mycellium.skymyce.features.social.CosmeticsScreen
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.ThemeEditorScreen
@@ -78,10 +86,17 @@ class GuiVisualCheckClient : ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STARTED.register { client ->
             client.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0)
             client.soundManager.updateCategoryVolume(SoundSource.MASTER, 0f)
+            val sodium = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
+            check(me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck.checkSodiumChunkEventsCompatibility() == sodium)
+            println("GUI visual check: transformed Sodium chunk events verified=$sodium")
         }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)
         var trackerHistoryFixture: GuiVisualTrackerHistoryFixture? = null
+        var newsFixture: GuiVisualNewsFixture? = null
+        var browserFixture: GuiVisualBrowserFixture? = null
+        var journalFixture: GuiVisualJournalFixture? = null
+        var bazaarFixture: GuiVisualBazaarFixture? = null
         var rngArchiveSnapshot: AcquisitionArchive? = null
         var savedReceiveRng: Boolean? = null
         fun receiveRngEntry() = settingRows(SkyMyce.config).single { it.element.id() == "receiveRng" }.entry
@@ -91,10 +106,29 @@ class GuiVisualCheckClient : ClientModInitializer {
             AcquisitionRepository.remember(TrackerFilter(page = page, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES))
             return DungeonScreen()
         }
-        val scenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
+        val allScenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
+            Scene("bazaar-terminal", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-positions", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-history", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("history").also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
+            Scene("bazaar-terminal-narrow-positions", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
+            Scene("spirit-leap-layout", ThemePreset.SIGNATURE) { GuiVisualLeapMenuScreen() },
+            Scene("spirit-leap-layout-small", ThemePreset.SIGNATURE, 640, 480, 2) { GuiVisualLeapMenuScreen(missing = true) },
+            Scene("journal-compact-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) {
+                GuiVisualJournalFixture().also { journalFixture = it }.screen()
+            },
+            Scene("journal-compact-narrow", ThemePreset.SIGNATURE, 640, 480, 2) {
+                GuiVisualJournalFixture(narrow = true).also { journalFixture = it }.screen()
+            },
+            Scene("journal-compact-tiny", ThemePreset.SIGNATURE, 320, 240, 1) {
+                GuiVisualJournalFixture(narrow = true).also { journalFixture = it }.screen()
+            },
+            Scene("journal-details", ThemePreset.SIGNATURE) {
+                GuiVisualJournalFixture(details = true).also { journalFixture = it }.screen()
+            },
             Scene("dungeon-tracker-overview", ThemePreset.SIGNATURE) {
                 trackerScreen(TrackerPage.OVERVIEW)
             },
@@ -143,6 +177,10 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
+            Scene("daily-news-video", ThemePreset.SIGNATURE) {
+                newsFixture = GuiVisualNewsFixture()
+                DailyDigestScreen("news")
+            },
             Scene("daily-rng-local-history", ThemePreset.SIGNATURE) {
                 if (AcquisitionRepository.state.events.none { it.item == "IMPLOSION_SCROLL" })
                     trackerHistoryFixture = GuiVisualTrackerHistoryFixture("IMPLOSION_SCROLL")
@@ -160,8 +198,13 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("controls-signature", ThemePreset.SIGNATURE) { GuiVisualControlsScreen() },
             Scene("controls-light", ThemePreset.LIGHT) { GuiVisualControlsScreen() },
             Scene("controls-contrast", ThemePreset.HIGH_CONTRAST, 640, 480, 4) { GuiVisualControlsScreen() },
-            Scene("confirm-light", ThemePreset.LIGHT) { MenuConfirmScreen(MenuHomeScreen(), "Review changes", "A themed confirmation keeps actions and cancellation clear.", "Apply") {} }
+            Scene("confirm-light", ThemePreset.LIGHT) { MenuConfirmScreen(MenuHomeScreen(), "Review changes", "A themed confirmation keeps actions and cancellation clear.", "Apply") {} },
+            Scene("browser-native", ThemePreset.SIGNATURE) { GuiVisualBrowserFixture().also { browserFixture = it }.screen },
+            Scene("browser-native-small", ThemePreset.SIGNATURE, 640, 480, 1) { GuiVisualBrowserFixture().also { browserFixture = it }.screen }
         )
+        val scenePrefix = System.getenv("SKYMYCE_GUI_SCENE_PREFIX")
+        val scenes = allScenes.filter { scenePrefix == null || it.name.startsWith(scenePrefix) }
+        check(scenes.isNotEmpty()) { "No GUI scenes match the requested prefix" }
         val output = Path.of("..", "screenshots").toAbsolutePath().normalize()
         Files.createDirectories(output)
         var scene = 0
@@ -237,6 +280,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 checkMenuItemModels(client)
                 started = true
                 client.options.pauseOnLostFocus = false
+                System.setProperty("skymyce.browserMuted", "true")
                 ThemeConfig.animationMode = GuiMotion.MEDIUM
                 ThemeConfig.menuIntroPlayed = true
                 RuntimeProfiler.start(false)
@@ -365,6 +409,17 @@ class GuiVisualCheckClient : ClientModInitializer {
                     if (ticks == 8) press("Community", navigation = true)
                 }
                 12 -> press("View local history")
+            }
+            if (current.name == "daily-news-video" && ticks == 18) {
+                val components = arrayListOf<UIComponent>()
+                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                check(components.filterIsInstance<MenuButton>().any { it.message.string == "Watch Video" })
+                check(components.filterIsInstance<MenuButton>().any { it.message.string == "Watch Video 1" })
+                check(components.filterIsInstance<MenuButton>().any { it.message.string == "Open Hypixel 2" })
+                check(components.filterIsInstance<MenuLabel>().any { "Derailious" in it.text().string })
+                check(components.filterIsInstance<MenuLabel>().none { "Alpha" in it.text().string })
+                check(DailyDigest.diagnostics().getValue("digest.news_requests") == 0L)
+                check(client.level == null && client.connection == null)
             }
             if (current.name == "dungeon-tracker-timeline-load-older" && ticks in listOf(10, 15)) {
                 val components = arrayListOf<UIComponent>()
@@ -527,11 +582,20 @@ class GuiVisualCheckClient : ClientModInitializer {
                     "Personal-rate screenshot did not show its hover tooltip"
                 }
             }
+            if (current.name.startsWith("browser-native") && browserFixture?.advance(client) != true) return@register
+            if (current.name.startsWith("journal-") && journalFixture?.advance(client) != true) return@register
+            if (current.name.startsWith("bazaar-terminal") && bazaarFixture?.advance(client) != true) return@register
             if (ticks >= captureTick) {
                 pending = true
                 Screenshot.takeScreenshot(client.mainRenderTarget) { image ->
-                    image.use { it.writeToFile(output.resolve("${current.name}.png")) }
+                    val captured = runCatching {
+                        image.use {
+                            it.writeToFile(output.resolve("${current.name}.png"))
+                            if (current.name.startsWith("browser-native")) checkNotNull(browserFixture).checkPaint(it, client)
+                        }
+                    }
                     client.execute {
+                        captured.getOrThrow()
                         if (current.name.startsWith("dungeon-tracker-") || current.name == "daily-rng-local-history") {
                             trackerHistoryFixture?.restore(); trackerHistoryFixture = null
                             previousMouse?.let { (x, y) -> testMouse(client, x, y) }; previousMouse = null
@@ -540,11 +604,42 @@ class GuiVisualCheckClient : ClientModInitializer {
                             check(receiveRngEntry().setBoolean(checkNotNull(savedReceiveRng)))
                             savedReceiveRng = null; rngArchiveSnapshot = null; DailyDigest.screenClosed()
                         }
+                        if (current.name == "daily-news-video") { newsFixture?.restore(); newsFixture = null }
+                        if (current.name.startsWith("browser-native")) { browserFixture?.close(client); browserFixture = null }
+                        if (current.name.startsWith("journal-")) { journalFixture?.restore(); journalFixture = null }
+                        if (current.name.startsWith("bazaar-terminal")) { bazaarFixture?.close(); bazaarFixture = null }
                         scene++; ticks = 0; pending = false
                     }
                 }
             }
         }
+    }
+}
+
+/** Temporarily seed the public-news cache; offline screens never start refresh or thumbnail requests. */
+private class GuiVisualNewsFixture {
+    private val repository = DailyDigest.javaClass.getDeclaredField("news").apply { isAccessible = true }.get(DailyDigest) as DigestNewsRepository
+    @Suppress("UNCHECKED_CAST")
+    private val states = repository.javaClass.getDeclaredField("states").apply { isAccessible = true }.get(repository) as MutableMap<NewsSource, DigestNewsState>
+    private val saved = states.toMap()
+    private val enabled = me.mycellium.skymyce.config.misc.DailyDigestConfig.news
+    init {
+        check(repository.pendingCount == 0 && Minecraft.getInstance().connection == null)
+        me.mycellium.skymyce.config.misc.DailyDigestConfig.news = true
+        val now = System.currentTimeMillis()
+        states[NewsSource.GAME] = DigestNewsState(listOf(DigestNewsItem("fixture-update", NewsSource.GAME,
+            "Game update (layout fixture)", "A cached normal update remains alongside the video card.", now - 120000,
+            links = listOf("https://youtu.be/abcdefghijk", "https://hypixel.net/threads/fixture-update.123/"))), now)
+        states[NewsSource.DERAILIOUS] = DigestNewsState(listOf(DigestNewsItem("fixture-video", NewsSource.DERAILIOUS,
+            "Derailious video (layout fixture)", "Text-first video preview. The browser opens only after confirmation.",
+            now - 60000, "https://www.youtube.com/watch?v=abcdefghijk")), now)
+        DailyDigest.screenClosed()
+    }
+    fun restore() {
+        check(repository.pendingCount == 0)
+        states.clear(); states.putAll(saved)
+        me.mycellium.skymyce.config.misc.DailyDigestConfig.news = enabled
+        DailyDigest.screenClosed()
     }
 }
 
@@ -620,7 +715,7 @@ private fun checkImmediateSendFailure(client: Minecraft) {
     check(saved["socket"] == null && saved["connected"] == false && relay.diagnostics().values.all { it == 0L })
     check(retry.nextAttempt == 0L && retry.delay == 1000L)
     var inline = false; client.execute { inline = true }; check(inline)
-    val packet = relay.javaClass.getDeclaredMethod("packet", Any::class.java).apply { isAccessible = true }
+    val packet = relay.javaClass.getDeclaredMethod("packet", Any::class.java, Function0::class.java).apply { isAccessible = true }
     val writes = arrayListOf<String>(); var aborts = 0
     fun socket(fail: Boolean) = Proxy.newProxyInstance(WebSocket::class.java.classLoader, arrayOf(WebSocket::class.java)) { proxy, method, args ->
         when (method.name) {
@@ -633,17 +728,25 @@ private fun checkImmediateSendFailure(client: Minecraft) {
     } as WebSocket
     try {
         fields.getValue("socket").set(relay, socket(true)); fields.getValue("connected").setBoolean(relay, true)
-        packet.invoke(relay, "test-only")
+        packet.invoke(relay, "test-only", { true })
         val recovered = fields.getValue("sending").get(relay) as CompletableFuture<*>
         check(recovered.isDone && !recovered.isCompletedExceptionally && !relay.connected && aborts == 1)
         check(fields.getValue("socket").get(relay) == null)
         fields.getValue("socket").set(relay, socket(false))
-        packet.invoke(relay, "fresh test-only")
+        packet.invoke(relay, "fresh test-only", { true })
         check(writes == listOf("test-only", "fresh test-only") && aborts == 1)
+        val blocked = CompletableFuture<WebSocket>()
+        fields.getValue("sending").set(relay, blocked)
+        var consent = true
+        packet.invoke(relay, "cancelled test-only", { consent })
+        consent = false
+        blocked.complete(fields.getValue("socket").get(relay) as WebSocket)
+        check((fields.getValue("sending").get(relay) as CompletableFuture<*>).isDone)
+        check(writes == listOf("test-only", "fresh test-only")) { "A queued write survived revoked consent" }
     } finally {
         fields.forEach { (name, field) -> field.set(relay, saved[name]) }; retry.reset()
     }
-    println("Visual fixture relay check passed: immediate send failure resets inline, fresh socket writes once, no replay or network")
+    println("Visual fixture relay check passed: inline failure recovery, fresh writes, revoked pending consent, no replay or network")
 }
 
 /** Render the production widget's editor preview without a world or fabricated tracking state. */
@@ -663,6 +766,28 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         output.fill(0, 0, width, height, 0xFF101725.toInt())
         check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
+}
+
+/** Card/layout verification only; no world exists and these blank windows never claim gameplay. */
+private class GuiVisualLeapMenuScreen(private val missing: Boolean = false) : Screen(Minecraft.getInstance(), Minecraft.getInstance().font, Component.literal("Spirit Leap")) {
+    private val candidates = listOf(LeapCandidate(LeapIdentity("ArcherTeammate"), 11, "Archer"),
+        LeapCandidate(LeapIdentity("BerserkTeammate"), 12, "Berserk"), LeapCandidate(LeapIdentity("HealerTeammate"), 14, "Healer"),
+        LeapCandidate(LeapIdentity("TankTeammate"), 15, "Tank", dead = true))
+    override fun init() {
+        check(minecraft.level == null && minecraft.connection == null && minecraft.player == null)
+        check(minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).get() == 0.0)
+    }
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        output.fill(0, 0, width, height, 0xFF394B42.toInt())
+        repeat(4) { index ->
+            val view = leapQuadrantBounds(width, height, index)
+            if (!missing || index != 2) {
+                val skin = net.minecraft.client.resources.DefaultPlayerSkin.get(java.util.UUID(0, index + 1L))
+                val caption = when (index) { 0 -> "Shared POV"; 1 -> "World not loaded"; else -> null }
+                drawLeapCard(output, view, candidates[index], skin, index == 0, index, caption)
+            }
+        }
     }
 }
 

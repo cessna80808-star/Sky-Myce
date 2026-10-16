@@ -80,7 +80,11 @@ object SkyMyce : ClientModInitializer {
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,
             me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera,
-            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud
+            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud,
+            me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenu,
+            me.mycellium.skymyce.features.instances.dungeons.leap.LeapPovSharing,
+            me.mycellium.skymyce.features.bazaar.BazaarTrading,
+            me.mycellium.skymyce.features.bazaar.BazaarHud
         )
 
         ModuleManager.modules.forEach {

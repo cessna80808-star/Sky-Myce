@@ -94,7 +94,11 @@ fun checkGlobalChat() {
     check(!subscription.complete(retry, "not_authorized", 5_000_000_009L)) // One notice for a continuing failure.
     subscription.reset() // Reconnect invalidates receipts and subscribes again, with no automatic message resend.
     check(!subscription.enabled && !subscription.complete(retry, null, 6_000_000_000L))
-    check(subscription.take(true, 6_000_000_000L) != null)
+    val confirmedSubscribe = requireNotNull(subscription.take(true, 6_000_000_000L))
+    subscription.queued(confirmedSubscribe, true)
+    check(subscription.enabled && !subscription.confirmed) // Queued is not yet authorized by the relay; sends wait.
+    check(!subscription.complete(confirmedSubscribe, null, 6_000_000_001L) && subscription.confirmed)
+    subscription.reset(); check(!subscription.confirmed)
 
     val history = IrcChatStore()
     val historyBoundary = ircHistoryBoundary(account, endpoint)

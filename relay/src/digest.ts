@@ -1,5 +1,5 @@
-export type NewsSource = "game";
-export type NewsItem = { id: string; title: string; content: string; publishedAt: number; url?: string; truncated?: true };
+export type NewsSource = "game" | "derailious";
+export type NewsItem = { id: string; title: string; content: string; publishedAt: number; url?: string; thumbnailUrl?: string; links?: string[]; truncated?: true };
 export type NewsResult = { source: NewsSource; items: NewsItem[]; fetchedAt: number; retryAt: number;
   status: "ready" | "stale" | "unavailable"; error?: string };
 export type DigestConfig = { DISCORD_NEWS_TOKEN?: string; DISCORD_BACKEND_BOT_TOKEN?: string;
@@ -8,14 +8,16 @@ type NewsRow = { items: string; fetched_at: number; retry_at: number; last_id: s
 const snowflake = /^\d{17,20}$/;
 const identifier = /^[a-f0-9]{32}$/;
 const NEWS_TTL = 300_000;
+const VIDEO_TTL = 900_000;
+const DERAILIOUS_CHANNEL = "UCJNSLcZtWJmOHVq3YBEYbeA";
 const encoder = new TextEncoder();
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-/** Bounded upstream body; never buffer an arbitrary Discord response. */
-async function readJson(response: Response): Promise<unknown> {
+/** Both news providers have bounded upstream bodies. */
+async function readBody(response: Response): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("invalid_response");
   const chunks: Uint8Array[] = [];
@@ -32,11 +34,91 @@ async function readJson(response: Response): Promise<unknown> {
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-  try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("invalid_response"); }
+  return new TextDecoder().decode(bytes);
 }
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.replace(/[\x00-\x08\x0b-\x1f\x7f§]/g, "").trim() : "";
+}
+
+function newsLinks(values: unknown[]): string[] {
+  const links = new Set<string>();
+  let length = 0;
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    for (const match of value.matchAll(/https:\/\/[^\s<>`]+/gi)) {
+      if (match[0].length > 2048) continue;
+      let candidate = match[0].replace(/[.,;:!?]+$/, "");
+      for (const [closing, opening] of [[")", "("], ["]", "["], ["}", "{"]])
+        while (candidate.endsWith(closing) && candidate.split(closing).length > candidate.split(opening).length) candidate = candidate.slice(0, -1);
+      try {
+        if (candidate.length > 2048 || /[\x00-\x20\x7f\\]/.test(candidate)) continue;
+        const url = new URL(candidate);
+        if (url.protocol !== "https:" || url.username || url.password || url.port) continue;
+        const videoParameters = [...url.searchParams.keys()];
+        const safeVideo = !videoParameters.some(key => ["url", "redirect", "redirect_url", "q", "u"].includes(key.toLowerCase()));
+        if (url.hostname === "hypixel.net" || url.hostname.endsWith(".hypixel.net") ||
+          safeVideo && (["youtube.com", "www.youtube.com", "m.youtube.com"].includes(url.hostname) &&
+            (url.pathname === "/watch" && url.searchParams.getAll("v").length === 1 && /^[A-Za-z0-9_-]{11}$/.test(url.searchParams.get("v") ?? "") || /^\/(?:shorts|live|embed)\/[A-Za-z0-9_-]{11}$/.test(url.pathname)) ||
+          url.hostname === "youtu.be" && /^\/[A-Za-z0-9_-]{11}$/.test(url.pathname))) {
+          if (!links.has(url.href) && length + url.href.length <= 1024) { links.add(url.href); length += url.href.length; }
+        }
+      } catch { /* Malformed announcement links remain inert text. */ }
+      if (links.size === 8) return [...links];
+    }
+  }
+  return [...links];
+}
+
+function videoUrl(value: string, id: string, thumbnail = false): string | undefined {
+  try {
+    const url = new URL(value);
+    if (value.length > 512 || url.protocol !== "https:" || url.username || url.password || url.port || url.hash) return;
+    if (thumbnail) return ["i.ytimg.com", "i1.ytimg.com", "i2.ytimg.com", "i3.ytimg.com", "i4.ytimg.com"].includes(url.hostname) &&
+      url.pathname === `/vi/${id}/hqdefault.jpg` && !url.search ? url.href : undefined;
+    return ["www.youtube.com", "youtube.com"].includes(url.hostname) &&
+      (url.pathname === "/watch" && url.search === `?v=${id}` || url.pathname === `/shorts/${id}` && !url.search) ? url.href : undefined;
+  } catch { return; }
+}
+
+function xmlText(value: string): string {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, entity => {
+    const named: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
+    if (named[entity]) return named[entity];
+    const code = Number.parseInt(entity.slice(entity[2] === "x" ? 3 : 2, -1), entity[2] === "x" ? 16 : 10);
+    return Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "";
+  });
+}
+
+function xmlTag(xml: string, tag: string): string {
+  return xmlText(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(xml)?.[1] ?? "").trim();
+}
+
+/** Parse only YouTube's bounded Atom upload feed; external entities are never evaluated. */
+function parseVideos(xml: string, now: number): NewsItem[] {
+  const header = xml.split(/<entry(?:\s|>)/, 1)[0];
+  if (!/<feed\s/.test(xml) || !/<\/feed>\s*$/.test(xml) || /<!DOCTYPE|<!ENTITY/i.test(xml) ||
+    ![DERAILIOUS_CHANNEL, DERAILIOUS_CHANNEL.slice(2)].includes(xmlTag(header, "yt:channelId")) || xmlTag(header, "title") !== "Derailious")
+    throw new Error("invalid_response");
+  const entries = [...xml.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/g)];
+  if (entries.length > 30 || (/<entry(?:\s|>)/.test(xml) && !entries.length)) throw new Error("invalid_response");
+  const items: NewsItem[] = [];
+  for (const [, entry] of entries) {
+    const id = xmlTag(entry, "yt:videoId"), title = text(xmlTag(entry, "title"));
+    const publishedAt = Date.parse(xmlTag(entry, "published"));
+    if (!/^[A-Za-z0-9_-]{11}$/.test(id) || xmlTag(entry, "yt:channelId") !== DERAILIOUS_CHANNEL || !title ||
+      !Number.isSafeInteger(publishedAt) || publishedAt < 1577836800000 || publishedAt > now + 60_000) continue;
+    const link = /<link\s[^>]*rel=["']alternate["'][^>]*>/i.exec(entry)?.[0] ?? "";
+    const url = videoUrl(xmlText(/\bhref=["']([^"']+)["']/.exec(link)?.[1] ?? ""), id);
+    if (!url) continue;
+    const thumbnail = /<media:thumbnail\s[^>]*>/i.exec(entry)?.[0] ?? "";
+    const thumbnailUrl = videoUrl(xmlText(/\burl=["']([^"']+)["']/.exec(thumbnail)?.[1] ?? ""), id, true);
+    const content = text(xmlTag(entry, "media:description"));
+    items.push({ id: `derailious:${id}`, title: title.slice(0, 160), content: content.slice(0, 2500), publishedAt, url,
+      ...(thumbnailUrl ? { thumbnailUrl } : {}), ...(content.length > 2500 ? { truncated: true as const } : {}) });
+  }
+  if (entries.length && !items.length) throw new Error("invalid_response");
+  return items;
 }
 
 function parseNews(value: unknown, source: NewsSource, channel: string, now: number): { items: NewsItem[]; lastId: string } {
@@ -51,10 +133,11 @@ function parseNews(value: unknown, source: NewsSource, channel: string, now: num
     // Followed announcements have ordinary content/embeds; forwarded messages may use snapshots.
     const snapshot = Array.isArray(data.message_snapshots) ? record(record(data.message_snapshots[0])?.message) : null;
     const message = text(data.content) || (Array.isArray(data.embeds) && data.embeds.length) ? data : snapshot ?? data;
-    const pieces = [text(message.content)];
+    const pieces = [text(message.content)], urls: unknown[] = [];
     if (Array.isArray(message.embeds)) for (const rawEmbed of message.embeds.slice(0, 10)) {
       const embed = record(rawEmbed);
       if (!embed) continue;
+      urls.push(embed.url);
       pieces.push(text(embed.title), text(embed.description));
       if (Array.isArray(embed.fields)) for (const field of embed.fields.slice(0, 25)) {
         const item = record(field);
@@ -63,6 +146,7 @@ function parseNews(value: unknown, source: NewsSource, channel: string, now: num
     }
     const full = pieces.filter(Boolean).join("\n\n");
     if (!full) continue;
+    const links = newsLinks([full, ...urls]);
     const reference = record(data.message_reference);
     const linked = [reference?.guild_id, reference?.channel_id, reference?.message_id];
     const own = [data.guild_id, channel, data.id];
@@ -70,7 +154,7 @@ function parseNews(value: unknown, source: NewsSource, channel: string, now: num
     const url = target.every(part => typeof part === "string" && snowflake.test(part)) ? `https://discord.com/channels/${target.join("/")}` : undefined;
     const title = full.split("\n").find(line => /[\p{L}\p{N}]/u.test(line))?.replace(/^[#>*\s]+|[*_`]/g, "").trim() || "SkyBlock update";
     items.push({ id: `${source}:${data.id}`, title: title.slice(0, 160), content: full.slice(0, 2500), publishedAt,
-      ...(url ? { url } : {}), ...(full.length > 2500 ? { truncated: true as const } : {}) });
+      ...(url ? { url } : {}), ...(links.length ? { links } : {}), ...(full.length > 2500 ? { truncated: true as const } : {}) });
     if (!lastId || BigInt(data.id) > BigInt(lastId)) lastId = data.id;
   }
   // Missing message-content access can return HTTP 200 with IDs but no text. Never replace a good cache with that.
@@ -97,27 +181,31 @@ export class DigestNews {
 
   private async refresh(source: NewsSource): Promise<NewsResult> {
     const now = Date.now();
+    const ttl = source === "derailious" ? VIDEO_TTL : NEWS_TTL;
     const row = this.sql.exec<NewsRow>("SELECT * FROM digest_news WHERE source = ?", source).toArray()[0];
     let items: NewsItem[] = [];
     if (row) { try { items = JSON.parse(row.items); } catch { /* A damaged cache never prevents a refresh. */ } }
     const result: NewsResult = { source, items, fetchedAt: row?.fetched_at ?? 0, retryAt: row?.retry_at ?? 0,
-      status: row?.fetched_at && row.fetched_at > now - NEWS_TTL && !row.error ? "ready" : items.length ? "stale" : "unavailable",
+      status: row?.fetched_at && row.fetched_at > now - ttl && !row.error ? "ready" : items.length ? "stale" : "unavailable",
       ...(row?.error ? { error: row.error } : {}) };
     if (row && row.retry_at > now) return result;
     const channel = this.config.DIGEST_GAME_CHANNEL;
     const token = this.config.DISCORD_NEWS_TOKEN ?? this.config.DISCORD_BACKEND_BOT_TOKEN;
-    if (!token || !channel || !snowflake.test(channel)) {
+    if (source === "game" && (!token || !channel || !snowflake.test(channel))) {
       return { ...result, retryAt: now + NEWS_TTL, error: "not_configured" };
     }
     let lastId = row?.last_id ?? "";
     let failures = row?.failures ?? 0;
     let error = "";
-    let retryAt = now + NEWS_TTL;
+    let retryAt = now + ttl;
     let fetchedAt = row?.fetched_at ?? 0;
     try {
-      const after = lastId ? `&after=${lastId}` : "";
-      const response = await fetch(`https://discord.com/api/v10/channels/${channel}/messages?limit=8${after}`, {
-        headers: { Authorization: `Bot ${token}` }, signal: AbortSignal.timeout(8000), redirect: "manual",
+      // Reparse recent announcements so edits and newly supported embed links update cached IDs.
+      const response = await fetch(source === "derailious"
+        ? `https://www.youtube.com/feeds/videos.xml?channel_id=${DERAILIOUS_CHANNEL}`
+        : `https://discord.com/api/v10/channels/${channel}/messages?limit=8`, {
+        headers: source === "game" ? { Authorization: `Bot ${token}` } : { Accept: "application/atom+xml, application/xml" },
+        signal: AbortSignal.timeout(8000), redirect: "manual",
       });
       if (!response.ok) {
         if (response.status === 429) {
@@ -127,7 +215,14 @@ export class DigestNews {
         await response.body?.cancel();
         throw new Error(response.status === 429 ? "rate_limited" : response.status === 401 || response.status === 403 ? "authentication" : "offline");
       }
-      const parsed = parseNews(await readJson(response), source, channel, now);
+      const body = await readBody(response);
+      let parsed: { items: NewsItem[]; lastId: string };
+      if (source === "derailious") parsed = { items: parseVideos(body, now), lastId: "" };
+      else {
+        let json: unknown;
+        try { json = JSON.parse(body); } catch { throw new Error("invalid_response"); }
+        parsed = parseNews(json, source, channel!, now);
+      }
       const unique = new Map([...items, ...parsed.items].map(item => [item.id, item]));
       items = [...unique.values()].sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 8);
       // Unicode escaping and embed text also count toward the wire limit.
@@ -139,7 +234,7 @@ export class DigestNews {
       error = cause instanceof Error && ["invalid_response", "authentication", "rate_limited", "offline"].includes(cause.message)
         ? cause.message : cause instanceof Error && ["TimeoutError", "AbortError"].includes(cause.name) ? "timeout" : "offline";
       failures = Math.min(failures + 1, 5);
-      retryAt = Math.max(retryAt, now + Math.min(NEWS_TTL * 2 ** (failures - 1), 1_800_000));
+      retryAt = Math.max(retryAt, now + Math.min(ttl * 2 ** (failures - 1), 1_800_000));
     }
     this.sql.exec("INSERT OR REPLACE INTO digest_news VALUES (?, ?, ?, ?, ?, ?, ?)",
       source, JSON.stringify(items), fetchedAt, retryAt, lastId, failures, error);

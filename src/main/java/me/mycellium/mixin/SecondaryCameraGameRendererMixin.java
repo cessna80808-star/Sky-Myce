@@ -31,11 +31,11 @@ public abstract class SecondaryCameraGameRendererMixin {
 
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void skyMyce$cameraWorldChanged(ClientLevel level, CallbackInfo info) {
-        SecondaryWorldCamera.stop();
+        SecondaryWorldCamera.stopAll();
     }
 
     @Inject(method = "close", at = @At("HEAD"))
     private void skyMyce$closeCamera(CallbackInfo info) {
-        SecondaryWorldCamera.stop();
+        SecondaryWorldCamera.stopAll();
     }
 }

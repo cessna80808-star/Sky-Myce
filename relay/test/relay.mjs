@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { configureTrafficLimits } from './traffic-fixture.mjs';
 import { checkTraffic } from './traffic.mjs';
 import { readFile } from "node:fs/promises";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { checkDigest } from "./digest.mjs";
 import { checkSocial } from "./social.mjs";
@@ -58,6 +58,7 @@ if (process.argv.includes("--cosmetics-only")) { await checkStrictCosmetics(scri
 if (process.argv.includes("--studio-only")) { await checkCosmeticStudio(script, proof); process.exit(0); }
 if (process.argv.includes("--privacy-only")) { await checkCommunityPrivacy(script, proof); process.exit(0); }
 if (process.argv.includes("--digest-only")) { await checkDigest(script, proof); process.exit(0); }
+if (process.argv.includes("--bazaar-protocol-only")) { await checkBazaarProtocol(); process.exit(0); }
 const options = convertV4MiniflareOptions({
   name: "relay-check",
   modules: true, script, compatibilityDate: "2026-09-21",
@@ -105,7 +106,9 @@ try {
   assert.equal((await mf.dispatchFetch("http://localhost/websocket")).status, 426);
   assert.equal((await mf.dispatchFetch("http://localhost/websocket?room=unlisted", { headers: { Upgrade: "websocket" } })).status, 403);
   const alice = await connect("Alice"); alice.authenticate({ ...proof("Alice", alice.challenge), liveUpdates: true });
-  assert.equal((await alice.next()).liveUpdates, true);
+  const aliceReady = await alice.next();
+  assert.equal(aliceReady.liveUpdates, true);
+  assert.equal(aliceReady.bazaarVersion, undefined, "Legacy sessions must not advertise authenticated Bazaar community notifications");
   alice.ws.send(JSON.stringify({ type: "digest_news_get", id: "f".repeat(32), source: "game" }));
   const unconfiguredNews = await alice.next();
   assert.equal(unconfiguredNews.error, "not_configured"); assert.deepEqual(unconfiguredNews.items, []);
@@ -437,3 +440,50 @@ await checkIrc(script, proof);
 await checkGlobalChat(script, proof);
 await checkRichIrc(script, proof);
 await checkDiscordUx(script, proof);
+await checkBazaarProtocol();
+
+async function checkBazaarProtocol() {
+  const options = convertV4MiniflareOptions({ name: "bazaar-protocol-check", modules: true, script, compatibilityDate: "2026-09-27",
+    bindings: { ROOMS: "friends", SKYMYCE_ENVIRONMENT: "staging" },
+    durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true }, ACCOUNT_STORE: { className: "AccountStore", useSQLite: true } },
+    outboundService: () => { throw Error("Bazaar protocol checks never contact a real account, bot or provider"); } });
+  options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112099", simple: { limit: 1000, period: 60 } };
+  configureTrafficLimits(options); options.unsafeInspectDurableObjects = true;
+  const protocolMf = new Miniflare(options);
+  let socket;
+  try {
+    await protocolMf.dispatchFetch("https://bazaar-protocol.test/community/challenge", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ purpose: "connect", clientNonce: randomBytes(32).toString("base64url") }) });
+    const sql = await protocolMf.unsafeGetDurableObjectStorage("bazaar-protocol-check", "AccountStore", { name: "global" });
+    const now = Date.now(), account = randomUUID(), player = identities.get("Alice"), token = randomBytes(32).toString("base64url");
+    const hash = value => createHash("sha256").update(value).digest("hex");
+    await sql.exec("INSERT INTO sky_accounts(account_id,discord_id,created_at,last_seen) VALUES(?,?,?,?)", account, "90000000000000099", now, now);
+    await sql.exec("INSERT INTO minecraft_accounts VALUES(?,?,?,?,?)", player, account, "Alice", now, now);
+    await sql.exec("INSERT INTO community_sessions VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,NULL,NULL)", randomUUID(), account, player, 0,
+      hash(randomBytes(32)), now + 86400000, hash(token), now + 300000, now, now, "2.7.0");
+    const response = await protocolMf.dispatchFetch("https://bazaar-protocol.test/websocket?room=friends", {
+      headers: { Upgrade: "websocket", "CF-Connecting-IP": "bazaar-protocol-fixture" } });
+    assert.equal(response.status, 101);
+    socket = response.webSocket;
+    const next = inbox(socket);
+    socket.accept();
+    const challenge = await next();
+    assert.equal(challenge.protocol, 3);
+    socket.send(JSON.stringify({ ...proof("Alice", challenge.serverId), communityToken: token }));
+    const ready = await next();
+    assert.equal(ready.type, "ready");
+    assert.equal(ready.bazaarVersion, 1, "A modern authenticated server explicitly advertises Bazaar packet support");
+    const epoch = "2".repeat(32), id = "1".repeat(32);
+    socket.send(JSON.stringify({ type: "bazaar_session", id, epoch, active: true, dmEnabled: false }));
+    assert.deepEqual(await next(), { type: "bazaar_session_result", id, active: true, dmEnabled: false });
+    socket.send("ping"); assert.equal(await next(), "pong", "A supported Bazaar state update must not cause a 1008/re-authentication loop");
+    const stopped = "3".repeat(32);
+    socket.send(JSON.stringify({ type: "bazaar_session", id: stopped, epoch, active: false, dmEnabled: false }));
+    assert.deepEqual(await next(), { type: "bazaar_session_result", id: stopped, active: false, dmEnabled: false });
+    socket.send("ping"); assert.equal(await next(), "pong");
+    console.log("Bazaar relay protocol checks passed: explicit modern capability, bounded start/stop acknowledgments and a persistent authenticated socket without real services");
+  } finally {
+    try { socket?.close(); } catch { }
+    await protocolMf.dispose();
+  }
+}

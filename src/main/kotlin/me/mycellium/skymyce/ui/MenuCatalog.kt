@@ -85,6 +85,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
             MenuFeature("healer-crush-camera", "Crush Camera", "Class-specific fixed views from 26 seconds into Storm until Storm dies", MenuCategory.DUNGEONS, "Boss", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
+            MenuFeature("leap-menu", "Spirit Leap Menu", "Choose a teammate with four local gameplay previews", MenuCategory.DUNGEONS, "Parties", listOf("spirit", "leap", "teleport", "pov", "camera", "teammates"), enabledPath = "Dungeons/Leap Menu/enabled"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
             MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
@@ -94,6 +95,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
             MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
             MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
+            MenuFeature("bazaar-flipping", "Bazaar Trading", "Manual order flips, private realized-profit history, forecasts and session replays", MenuCategory.ECONOMY, "Bazaar", listOf("bazaar", "flip", "trading", "orders", "portfolio", "profit", "replay", "dashboard"), tool = "bazaar-flipping"),
             MenuFeature("loans", "Loans & Lending", "Local trade history and the items lent to friends", MenuCategory.ECONOMY, "Loans", listOf("friends", "gear", "trade", "lending", "borrow"), tool = "loans"),
             MenuFeature("player-economy", "Player Wealth", "Compare cached friend networth, purse, bank and wardrobe estimates", MenuCategory.ECONOMY, "Players", listOf("friends", "player", "wealth", "networth", "compare"), tool = "player-economy"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
@@ -149,10 +151,12 @@ class MenuCatalog(rows: List<SettingRow>) {
         fun settingLocation(path: String): MenuSettingLocation {
             val key = path.substringAfterLast('/')
             val feature = when {
+                path.startsWith("Bazaar Flipping/") -> "bazaar-flipping"
                 path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"
                 path.startsWith("Dungeons/Healer Crush Camera/") -> "healer-crush-camera"
+                path.startsWith("Dungeons/Leap Menu/") -> "leap-menu"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"
                 path.startsWith("Dungeons/") && key == "dungeonWinScreen" -> "dungeon-summary"
                 path.startsWith("Dungeons/") && key == "dungeonMessageFilter" -> "dungeon-chat"

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sky-Myce / Bazaar</title>
+    <link rel="stylesheet" href="/dashboard.css" />
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <span class="eyebrow">SKY-MYCE / PRIVATE LOCAL TERMINAL</span>
+        <h1>Bazaar desk<span class="dot"></span></h1>
+      </div>
+      <div class="header-actions">
+        <button id="toggle">Start flipping</button><button id="refresh">Refresh market</button
+        ><button id="close">Close dashboard</button>
+      </div>
+    </header>
+    <div class="shell">
+      <aside>
+        <span class="eyebrow">YOUR WORKSPACE</span>
+        <nav aria-label="Trading pages">
+          <button data-page="Overview" class="selected">Overview</button><button data-page="Finder">Finder</button
+          ><button data-page="Planner">Planner</button><button data-page="Orders">Orders</button
+          ><button data-page="History">History</button><button data-page="Sessions">Sessions</button
+          ><button data-page="Preferences">Preferences</button>
+        </nav>
+        <p>Local by default.<br />Every trade is manual.</p>
+        <span id="connection"></span>
+      </aside>
+      <main>
+        <section class="status-bar" aria-live="polite">
+          <span id="status">Connecting to the local ledger…</span><span id="market"></span>
+        </section>
+        <div class="page-heading">
+          <h2 id="page-title">Overview</h2>
+          <input
+            id="search"
+            type="search"
+            placeholder="Search products or records"
+            aria-label="Search products or records"
+            maxlength="80"
+          />
+        </div>
+        <p id="notice" role="status"></p>
+        <section id="content" aria-live="polite"></section>
+      </main>
+    </div>
+    <footer>
+      Realized profit, inventory estimates and forecasts are separate. No order is placed, changed, cancelled or
+      collected by this dashboard.
+    </footer>
+    <dialog id="replay">
+      <div class="replay-top">
+        <span class="eyebrow">SKY-MYCE / PRIVATE SESSION REPLAY</span><button id="replay-close">Close replay</button>
+      </div>
+      <h2 id="replay-title"></h2>
+      <p id="replay-dates"></p>
+      <div class="counter" id="replay-profit">0</div>
+      <p class="muted">Realized net profit · local recording</p>
+      <div id="replay-chart" class="chart"></div>
+      <div class="replay-controls">
+        <button id="replay-play">Play</button
+        ><label
+          >Speed
+          <select id="replay-speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+          </select></label
+        ><input id="replay-seek" type="range" min="0" max="1000" value="0" aria-label="Replay progress" /><span
+          id="replay-progress"
+          >0%</span
+        >
+      </div>
+      <div id="replay-timeline"></div>
+      <section class="publication">
+        <h3>Publish a selected representation</h3>
+        <p>Nothing is uploaded until you confirm. These choices remove fields from the uploaded data.</p>
+        <label><input id="pub-detail" type="checkbox" />Full-detail replay instead of summary</label
+        ><label><input id="pub-items" type="checkbox" checked />Redact item names</label
+        ><label><input id="pub-transactions" type="checkbox" checked />Redact individual transactions</label
+        ><label><input id="pub-values" type="checkbox" />Redact exact coin values</label
+        ><label><input id="pub-identity" type="checkbox" checked />Hide Minecraft identity</label
+        ><label><input id="pub-listed" type="checkbox" />List in the community gallery (separate opt-in)</label
+        ><button id="publish">Publish selected replay</button>
+        <p id="pub-status" role="status"></p>
+        <div id="publications"></div>
+      </section>
+    </dialog>
+  </body>
+</html>

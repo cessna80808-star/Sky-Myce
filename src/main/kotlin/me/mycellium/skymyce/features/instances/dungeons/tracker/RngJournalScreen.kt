@@ -9,6 +9,7 @@ import me.mycellium.skymyce.features.digest.DigestRngCatalog
 import me.mycellium.skymyce.features.digest.DigestRngParser
 import me.mycellium.skymyce.community.*
 import me.mycellium.skymyce.ui.*
+import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
 import net.minecraft.network.chat.Component
@@ -30,6 +31,7 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
     private var edited = false
     private var page = 0
     private var charts = false
+    private var expanded: String? = null
     private var lastDay = LocalDate.now(ZoneOffset.UTC)
     private var periodCounts = emptyMap<JournalPeriod, Long>()
     private var comparison: JournalCommunityComparison? = null
@@ -48,6 +50,9 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
     }
     private lateinit var results: ScrollContainer<FlowLayout>
     private lateinit var status: MenuLabel
+    private lateinit var previousPage: MenuButton
+    private lateinit var nextPage: MenuButton
+    private lateinit var pageLabel: MenuLabel
     override fun isPauseScreen() = false
     override fun init() { closed = false; comparisonKey = ""; super.init() }
     override fun removed() { closed = true; generation++; localWorker.cancel(this); comparisonEpoch++; comparisonWorker.cancel(this); super.removed() }
@@ -55,51 +60,65 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
     override fun buildContent(root: FlowLayout) {
         root.surface(Surface.BLANK)
         root.child(column().apply {
+            id("journal-panel")
             sizing(Sizing.fixed(menuWidth), Sizing.fixed(menuHeight)); padding(Insets.of(8)); surface(MenuTheme.panel())
-            child(label("PERSONAL / RNG JOURNAL", MenuTheme.ACCENT))
-            child(label("Permanent local observations · UTC periods · works offline", MenuTheme.MUTED))
             child(row().apply {
-                child(button(filter.period.title, 125) { b -> openMenuDropdown(b) { d -> JournalPeriod.entries.forEach { period ->
-                    d.button(Component.literal(period.title)) { change(filter.copy(period = period)); rebuildMenu() }
-                } } })
-                child(button(if (charts) "History" else "Trends", 65) { button ->
-                    charts = !charts; button.message = Component.literal(if (charts) "History" else "Trends")
-                    comparisonKey = ""; comparisonEpoch++; comparisonWorker.cancel(this); comparison = null
-                    page = 0; renderResults()
-                })
+                child(label("RNG Journal", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()); fontSize = 12f })
+                listOf("History" to false, "Trends" to true).forEach { (title, trends) ->
+                    child(button(title, 48) {
+                        charts = trends; comparisonKey = ""; comparisonEpoch++; comparisonWorker.cancel(this@RngJournalScreen); comparison = null
+                        page = 0; expanded = null; renderResults()
+                    }.apply { navigation = true; centeredNavigation = true; selected = { charts == trends } })
+                }
             })
             child(MenuTextBox(Sizing.fill()).apply {
-                setMaxLength(100); text(this@RngJournalScreen.filter.query); setHint(Component.literal("Search item, variant or recorded player…"))
+                id("journal-search")
+                setMaxLength(100); text(this@RngJournalScreen.filter.query); setHint(Component.literal("Search drops or players…"))
                 onChanged().subscribe { change(this@RngJournalScreen.filter.copy(query = it)) }
             })
-            child(row().apply {
-                child(button(filter.activity ?: "All activities", 100) { b -> openMenuDropdown(b) { d ->
+            val controls = listOf(
+                button(filter.period.title, 95) { b -> openMenuDropdown(b) { d -> JournalPeriod.entries.forEach { period ->
+                    d.button(Component.literal(period.title)) { change(filter.copy(period = period)); rebuildMenu() }
+                } } },
+                button(scopeTitle(filter.scope), 100) { b -> openMenuDropdown(b) { d ->
+                    TrackerScope.entries.forEach { scope -> d.button(Component.literal(scopeTitle(scope))) {
+                        change(filter.copy(scope = scope, includeLegacy = filter.includeLegacy || scope == TrackerScope.UNSCOPED_LEGACY)); rebuildMenu()
+                    } }
+                } },
+                button(filter.activity?.replaceFirstChar(Char::uppercase) ?: "All activities", 96) { b -> openMenuDropdown(b) { d ->
                     (listOf<String?>(null) + DigestRngParser.catalog.values.map { it.activity }.distinct()).forEach { activity ->
-                        d.button(Component.literal(activity ?: "All activities")) { change(filter.copy(activity = activity)); rebuildMenu() }
+                        d.button(Component.literal(activity?.replaceFirstChar(Char::uppercase) ?: "All activities")) { change(filter.copy(activity = activity)); rebuildMenu() }
                     }
-                } })
-                child(button(filter.floor ?: "All floors", 86) { b -> openMenuDropdown(b) { d ->
+                } },
+                button(filter.floor ?: "All floors", 72) { b -> openMenuDropdown(b) { d ->
                     (listOf<String?>(null) + (1..7).flatMap { listOf("F$it", "M$it") }).forEach { floor ->
                         d.button(Component.literal(floor ?: "All floors")) { change(filter.copy(floor = floor)); rebuildMenu() }
                     }
-                } })
-            })
-            child(row().apply {
-                child(button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 79) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuildMenu() })
-                child(button(if (filter.includeLegacy) "Legacy ✓" else "Legacy off", 86) { change(filter.copy(includeLegacy = !filter.includeLegacy)); rebuildMenu() })
-            })
-            child(button("Scope: ${filter.scope.name.replace('_', ' ')}", (menuWidth - 16).coerceAtMost(290)) { b -> openMenuDropdown(b) { d ->
-                TrackerScope.entries.forEach { scope -> d.button(Component.literal(scope.name.replace('_', ' '))) {
-                    change(filter.copy(scope = scope, includeLegacy = filter.includeLegacy || scope == TrackerScope.UNSCOPED_LEGACY)); rebuildMenu()
-                } }
-            } })
+                } },
+                button(if (filter.oldestFirst) "Oldest ↑" else "Newest ↓", 72) { change(filter.copy(oldestFirst = !filter.oldestFirst)); rebuildMenu() },
+                button(if (filter.includeLegacy) "Imported ✓" else "Imported off", 78) { change(filter.copy(includeLegacy = !filter.includeLegacy)); rebuildMenu() }
+                    .wrappedTooltip(Component.literal("Include older saved reports"))
+            )
+            var line = row().apply { id("journal-controls-0") }
+            var used = 0
+            controls.forEachIndexed { index, control ->
+                val width = control.horizontalSizing().get().value
+                if (used > 0 && used + 4 + width > menuWidth - 16) {
+                    child(line); line = row().apply { id("journal-controls-$index") }; used = 0
+                }
+                line.child(control); used += width + if (used == 0) 0 else 4
+            }
+            child(line)
             if (filter.period == JournalPeriod.CUSTOM) child(row().apply { child(dateField(true)); child(dateField(false)) })
-            status = label("Loading local archive…", MenuTheme.MUTED); child(status)
-            results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply { scrollStep(24); scrollbarThiccness(2) }; child(results)
+            status = label("Loading local archive…", MenuTheme.MUTED).apply { id("journal-status"); fontSize = 9f }; child(status)
+            results = menuScroll(Sizing.fill(), Sizing.expand(), column()).apply { id("journal-results"); scrollStep(24); scrollbarThiccness(2) }; child(results)
             child(row().apply {
-                child(button("‹", 28) { page = (page - 1).coerceAtLeast(0); renderResults() })
-                child(button("›", 28) { page++; renderResults() })
-                child(button("Reset filters", 87) { change(JournalFilter()); rebuildMenu() })
+                previousPage = button("‹", 28) { page = (page - 1).coerceAtLeast(0); expanded = null; renderResults() }.apply { id("journal-previous") }; child(previousPage)
+                pageLabel = label("").apply { id("journal-page"); horizontalSizing(Sizing.expand()); horizontalTextAlignment(HorizontalAlignment.CENTER) }; child(pageLabel)
+                nextPage = button("›", 28) { page++; expanded = null; renderResults() }.apply { id("journal-next") }; child(nextPage)
+                child(button("Clear filters", 78) {
+                    change(filter.copy(period = JournalPeriod.ALL_TIME, query = "", activity = null, floor = null, from = "", until = "")); rebuildMenu()
+                }.apply { id("journal-clear") }.wrappedTooltip(Component.literal("Keep saved drops and selected scope")))
             })
         })
         renderResults()
@@ -116,7 +135,7 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
         }
     }
     private fun change(next: JournalFilter) {
-        filter = next; edited = true; page = 0; generation++; comparisonKey = ""; comparisonEpoch++
+        filter = next; edited = true; page = 0; expanded = null; generation++; comparisonKey = ""; comparisonEpoch++
         comparisonWorker.cancel(this); comparison = null; AcquisitionRepository.rememberJournal(next)
     }
     override fun tick() {
@@ -144,27 +163,78 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
     }
     private fun renderResults() {
         if (!::results.isInitialized) return
+        val focus = uiAdapter.rootComponent.focusHandler()
+        val focusedId = focus?.focused()?.id()?.takeIf { it.startsWith("journal-details-toggle-") }
         val pages = ((view.events.size + 19) / 20).coerceAtLeast(1); page = page.coerceIn(0, pages - 1)
-        status.text(Component.literal("${view.counts.values.sum()} observed drops · ${view.events.size} reports · ${page + 1}/$pages · ${AcquisitionRepository.status}").withColor(MenuTheme.MUTED))
-        results.child(column().apply {
+        val warning = AcquisitionRepository.status.takeUnless { it == "Confirmed tracking • historical profit preserved separately" }
+        status.text(Component.literal(listOfNotNull("${view.events.size} entries", warning).joinToString(" · ")).withColor(MenuTheme.MUTED))
+        previousPage.active(page > 0); nextPage.active(page + 1 < pages)
+        pageLabel.text(Component.literal("${page + 1} / $pages").withColor(MenuTheme.MUTED))
+        val content = column().apply {
             if (charts) trends(this) else {
                 if (view.events.isEmpty()) child(label(if (AcquisitionRepository.currentContext() == null && filter.scope == TrackerScope.CURRENT_PROFILE)
-                    "Offline: choose All local profiles to view saved observations." else "No saved acquisitions match these filters. Only confirmed personal drops enter this journal.", MenuTheme.MUTED))
-                view.events.drop(page * 20).take(20).forEach { event -> child(column().apply {
-                    surface(MenuTheme.panel(true)); padding(Insets.of(8))
-                    child(label("${event.displayName ?: DigestRngCatalog.name(event.item)} ×${event.quantity}", MenuTheme.ACCENT))
-                    child(label("${Instant.ofEpochMilli(event.occurredAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))} UTC · ${event.floor ?: event.activity} · ${event.chest ?: "Chest not recorded"}", MenuTheme.MUTED))
-                    child(label("${event.player ?: "Player not recorded"} · ${event.context?.profileName ?: "Unscoped"} · ${event.origin}", MenuTheme.MUTED))
-                    child(label("Item ${event.item} · recorded estimate ${money(event.value)} · chest cost ${money(event.chestCost)}", MenuTheme.MUTED))
-                    child(label("Observed rarity: ${event.rarity ?: "Unknown"} · variant: ${event.item}", MenuTheme.MUTED))
-                    child(label(event.valuationAt?.let { "Estimate evaluated ${Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))} UTC · market cache age unknown" }
-                        ?: "Valuation timestamp not recorded", MenuTheme.MUTED))
-                    event.run?.let { child(label("Run ${it.take(8)} · ${view.runCounts[it] ?: 0} observed drops", MenuTheme.MUTED)) }
-                    child(label(if (event.origin == "confirmed") "Locally confirmed acquisition; community publication remains unverified." else "Historical source retained; missing verification, prices and context are not inferred.", MenuTheme.MUTED))
-                }) }
+                    "Choose All profiles to view saved drops offline." else "No drops match these filters.", MenuTheme.MUTED))
+                var day = ""
+                view.events.drop(page * 20).take(20).forEach { event ->
+                    val time = Instant.ofEpochMilli(event.occurredAt).atZone(ZoneOffset.UTC)
+                    val date = time.toLocalDate().toString()
+                    if (date != day) {
+                        day = date
+                        child(label("$date UTC", MenuTheme.SECONDARY).apply { fontSize = 9f; margins(Insets.top(5)) })
+                    }
+                    child(column().apply {
+                        id("journal-event-${event.id}"); gap(2); surface(MenuTheme.panel(true)); padding(Insets.of(4))
+                        val wide = menuWidth >= 560
+                        val context = listOfNotNull(time.format(DateTimeFormatter.ofPattern("HH:mm")),
+                            event.floor ?: event.activity.replaceFirstChar(Char::uppercase),
+                            event.chest?.lowercase(java.util.Locale.ROOT)?.replaceFirstChar(Char::uppercase),
+                            if (event.origin != "confirmed") "Imported" else null)
+                        val metadata = label(context.joinToString(" · "), MenuTheme.MUTED).apply {
+                            fontSize = 9f; horizontalSizing(if (wide) Sizing.fixed(145) else Sizing.expand())
+                        }
+                        val detailsButton = button(if (expanded == event.id) "Hide" else "Details", 44) {
+                            expanded = event.id.takeUnless { expanded == it }; renderResults()
+                        }.apply { id("journal-details-toggle-${event.id}"); verticalSizing(Sizing.fixed(18)) }
+                        child(row().apply {
+                            child(label("${event.displayName ?: DigestRngCatalog.name(event.item)} ×${event.quantity}", MenuTheme.ACCENT)
+                                .apply { horizontalSizing(Sizing.expand()) })
+                            if (wide) child(metadata)
+                            child(label(event.value?.let { "${money(it)} est." } ?: "Unpriced", MenuTheme.SECONDARY).apply {
+                                horizontalSizing(Sizing.fixed(76)); horizontalTextAlignment(HorizontalAlignment.RIGHT)
+                                wrappedTooltip(Component.literal("Recorded loot estimate"))
+                            })
+                            if (wide) child(detailsButton)
+                        })
+                        if (!wide) child(row().apply { child(metadata); child(detailsButton) })
+                        if (expanded == event.id) child(details(event))
+                    })
+                }
             }
-        })
+        }
+        results.child(content)
+        if (focusedId != null) {
+            val children = arrayListOf<UIComponent>()
+            content.collectDescendants(children)
+            children.firstOrNull { it.id() == focusedId }?.let { focus.focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE) }
+        }
     }
+    private fun details(event: AcquisitionEvent) = column().apply {
+        id("journal-details-${event.id}"); gap(3); padding(Insets.top(5))
+        val lines = listOfNotNull(
+            "Recorded: ${timestamp(event.occurredAt)}",
+            "${event.player ?: "Player not recorded"} · ${event.context?.profileName ?: "Unscoped"}",
+            "Recorded estimate: ${money(event.value)} · Chest cost: ${money(event.chestCost)}" +
+                (event.rerollCost?.let { " · Rerolls: ${money(it)}" } ?: ""),
+            "Item: ${event.item} · Rarity: ${event.rarity ?: "Unknown"}",
+            event.valuationAt?.let { "Estimate evaluated: ${timestamp(it)} · Market cache age unknown" } ?: "Valuation date not saved",
+            event.run?.let { run -> "Run: ${run.take(8)}" + (view.runCounts[run]?.let { " · $it observed drops" } ?: "") },
+            if (event.origin == "confirmed") "Source: Local confirmation · Community publication unverified"
+                else "Source: ${event.origin} · Imported report"
+        )
+        lines.forEach { child(label(it, MenuTheme.MUTED).apply { fontSize = 9f }) }
+    }
+    private fun timestamp(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneOffset.UTC)
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'"))
     private fun trends(content: FlowLayout) {
         content.child(label("Observed drop counts · selected scope and period", MenuTheme.SECONDARY))
         content.child(label("Same scope and filters · UTC period comparison", MenuTheme.SECONDARY))
@@ -244,8 +314,13 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
         content.child(label("Source: ${data.source} · ${data.coverage}. Observed frequency is not game drop probability.", MenuTheme.MUTED))
     }
     private fun money(value: Double?) = value?.let(NumberUtils::condense) ?: "Unknown"
+    private fun scopeTitle(scope: TrackerScope) = when (scope) {
+        TrackerScope.CURRENT_PROFILE -> "Current profile"
+        TrackerScope.ALL_LOCAL_PROFILES -> "All profiles"
+        TrackerScope.UNSCOPED_LEGACY -> "Unscoped imports"
+    }
     private fun column() = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(5) }
-    private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4) }
+    private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
     private fun button(text: String, width: Int, action: (io.wispforest.owo.ui.component.ButtonComponent) -> Unit) = MenuButton(Component.literal(text), action).apply { sizing(Sizing.fixed(width), Sizing.fixed(22)) }
 }

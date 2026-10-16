@@ -40,3 +40,7 @@ explicit intended environment. Preserve bindings, secrets and persisted state.
 Upload the standalone Fabric JAR privately before publishing its signed manifest,
 then verify the live signature and artifact hash. Retain previous releases.
 Deployment and persistent User Bot startup are separate operations.
+
+Bazaar protocol, provider-policy review, immutable local-calendar attribution, replay
+privacy, Discord controls, and measured storage costs are documented in [BAZAAR.md](BAZAAR.md).
+The Bazaar feature requires separate authorization before deployment or Discord command registration.

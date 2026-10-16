@@ -251,7 +251,7 @@ object DailyDigest : SkyMyceModule() {
         if (contextReady()) { DigestActivities.manual(id, complete); changed() }
     }
 
-    private fun enabledNews(): List<NewsSource> = if (DailyDigestConfig.news) listOf(NewsSource.GAME) else emptyList()
+    private fun enabledNews(): List<NewsSource> = if (DailyDigestConfig.news) NewsSource.entries else emptyList()
 
     private fun updateSubscription() {
         val wanted = DailyDigestConfig.receiveRng && contextReady()
@@ -390,11 +390,14 @@ object DailyDigest : SkyMyceModule() {
         val failure = sources.zip(states).firstNotNullOfOrNull { (source, state) -> state.failure?.let { "${source.label}: ${it.label}" } }
         val entries = items.map { item -> DigestEntry("${item.source.wire}:${item.id}", item.title,
             item.content.replace('\n', ' ').take(160), item.content + if (item.truncated) "\n\nOpen the original update for the remaining text." else "",
-            DigestTone.INFO, item.source.label, item.publishedAt, url = item.url) }
+            if (item.source == NewsSource.DERAILIOUS) DigestTone.SPECIAL else DigestTone.INFO,
+            item.source.label + if (item.source == NewsSource.DERAILIOUS) " · YouTube video" else "", item.publishedAt,
+            url = item.url, video = item.source == NewsSource.DERAILIOUS,
+            links = digestNewsLinks(item.content, item.links).filter { it != item.url }) }
         return DigestCardState("news", "Daily News", items.firstOrNull()?.title ?: if (sources.isEmpty()) "News is disabled" else "No cached updates yet",
             when { sources.isEmpty() -> "Enable news in settings"; failure != null -> "$failure${if (items.isNotEmpty()) " · available updates retained" else ""}";
                 states.any { it.loading } -> "Refreshing in the background"; states.any { it.fetchedAt > 0 && now - it.fetchedAt > 300000 } -> "Saved updates · refresh when connected";
-                items.isEmpty() -> "Latest game updates will appear here"; else -> "${items.size} recent game updates" },
+                items.isEmpty() -> "Game updates and Derailious videos will appear here"; else -> "${items.size} recent updates and videos" },
             if (failure != null || items.isEmpty()) DigestTone.MUTED else DigestTone.INFO, entries,
             states.maxOfOrNull { it.fetchedAt }?.takeIf { it > 0 }, states.any { it.loading })
     }

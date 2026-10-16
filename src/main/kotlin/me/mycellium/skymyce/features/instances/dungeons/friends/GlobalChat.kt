@@ -106,7 +106,10 @@ internal class GlobalChatSubscription {
     private var revision = 0L
     private var retryAfter = 0L
     private var lastError: String? = null
+    private var confirmedRevision = -1L
     val enabled get() = queued == true
+    /** The relay authorizes subscriptions asynchronously; sends must wait for its receipt or they overtake it. */
+    val confirmed get() = enabled && confirmedRevision == revision
     fun current(token: Long) = token == revision
     fun reset() {
         desired = null; queued = null; revision++; retryAfter = 0L; lastError = null
@@ -119,7 +122,7 @@ internal class GlobalChatSubscription {
     fun queued(token: Long, enabled: Boolean) { if (token == revision) queued = enabled }
     fun complete(token: Long, reason: String?, now: Long): Boolean {
         if (token != revision) return false
-        if (reason == null) { lastError = null; return false }
+        if (reason == null) { lastError = null; confirmedRevision = token; return false }
         queued = null
         retryAfter = now + 5_000_000_000L
         val notify = desired == true && reason != lastError && reason !in setOf("receipt_timeout", "connection_lost")

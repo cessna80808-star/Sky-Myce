@@ -14,9 +14,12 @@ import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
+import me.mycellium.skymyce.features.browser.InGameBrowser
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
+import java.net.URI
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -209,7 +212,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             tip("Open ${state.title}\n${state.summary}\n${state.status}")
         })
         val summary = if (state.id == "news" && state.entries.isNotEmpty()) {
-            if (compactOverview) state.entries.first().title.let { if (it.length > 53) it.take(52).trimEnd() + "…" else it } else "Latest from Cowshed"
+            if (compactOverview) state.entries.first().title.let { if (it.length > 53) it.take(52).trimEnd() + "…" else it } else "Latest from Cowshed and Derailious"
         } else if (compactOverview && state.id == "global" && nextEvent == null) state.summary + "\n" + digestText(state.status, 52) else state.summary
         panel.child(label(digestText(summary.ifBlank { "No information available yet." }, 240)))
         if (!compactOverview && state.id == "news" && state.entries.isNotEmpty()) state.entries.take(2).forEach { entry ->
@@ -288,7 +291,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         if (entry.detail.isNotBlank()) {
             if (page == "news") {
                 val isExpanded = entry.id in expanded
-                child(button(if (isExpanded) "Show less" else "Read update", 88) {
+                child(button(if (isExpanded) "Show less" else if (entry.video) "Description" else "Read update", 88) {
                     if (!expanded.add(entry.id)) expanded.remove(entry.id)
                     updateContent()
                 })
@@ -301,11 +304,11 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         entry.manualId?.let { id -> child(button(if (entry.manualComplete) "Clear manual note" else "Mark done manually", 130) {
             DailyDigest.setManual(id, !entry.manualComplete)
         }.tip("A local note for this profile, clearly labelled as manual. It does not change the game or claim automatic verification.")) }
-        digestLink(entry.url)?.let { uri -> child(button("Open source", 90) {
-            navigateMenu(MenuConfirmScreen(this@DailyDigestScreen, "Open source in your browser?", uri.toString(), "Open browser") {
-                net.minecraft.util.Util.getPlatform().openUri(uri)
-            })
-        }.tip("Open ${uri.host} in your browser after confirmation")) }
+        digestLink(entry.url)?.let { uri -> child(linkButton(if (entry.video) "Watch Video" else "Open source", uri)) }
+        entry.links.mapNotNull(BrowserLinks::supported).distinct().forEachIndexed { index, uri ->
+            val label = if (uri.host.equals("hypixel.net", true) || uri.host.endsWith(".hypixel.net", true)) "Open Hypixel" else "Watch Video"
+            child(linkButton(label + if (entry.links.size > 1) " ${index + 1}" else "", uri))
+        }
         if (page == "rng") child(MenuButton(Component.literal("Share…")) { anchor ->
             val report = digestShareText(entry)
             openMenuDropdown(anchor) { menu ->
@@ -315,6 +318,22 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             }
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
     }
+
+    private fun linkButton(text: String, uri: URI) = button(text, 100) {
+        if (!MC.instance.options.chatLinks().get()) return@button
+        val inGame = BrowserLinks.supported(uri.toString()) != null
+        val open = {
+            if (MC.instance.options.chatLinks().get()) {
+                if (inGame) InGameBrowser.open(this, uri.toString())
+                else net.minecraft.util.Util.getPlatform().openUri(uri)
+            }
+        }
+        if (MC.instance.options.chatLinksPrompt().get())
+            navigateMenu(MenuConfirmScreen(this, if (inGame) "Open in-game browser?" else "Open source in your browser?",
+                uri.toString(), "Open browser", open))
+        else open()
+    }.apply { active(MC.instance.options.chatLinks().get()) }
+        .tip("Open ${uri.host} ${if (BrowserLinks.supported(uri.toString()) != null) "in game" else "in your browser"}")
 
     private fun refreshButton() = button("Refresh", if (mergedHeader) 54 else 64) { DailyDigest.refresh(page) }
         .tip("Refresh available sources asynchronously. Cached data stays visible and cooldowns prevent repeated requests.").also { refresh = it }
