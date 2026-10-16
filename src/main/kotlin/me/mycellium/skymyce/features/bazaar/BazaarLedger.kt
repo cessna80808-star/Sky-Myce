@@ -137,6 +137,7 @@ private class BazaarReconciler(private val context: BazaarContext, events: List<
             BazaarEventKind.COINS_COLLECT -> collectCoins(event, existing)
             BazaarEventKind.CANCEL, BazaarEventKind.EXPIRE -> close(event, existing)
             BazaarEventKind.RELIST -> relist(event, positionId)
+            BazaarEventKind.SYNC_CLOSE -> syncClose(event, existing)
             else -> Unit
         }
     }
@@ -271,6 +272,21 @@ private class BazaarReconciler(private val context: BazaarContext, events: List<
         if (existing == null || !existing.status.live) { fail(event, "Cancellation/expiry has no matching open order"); return }
         val status = if (event.kind == BazaarEventKind.CANCEL) BazaarOrderStatus.CANCELLED else BazaarOrderStatus.EXPIRED
         orders[existing.id] = existing.copy(status = status, lastAt = event.at)
+    }
+
+    /**
+     * Manage Orders no longer lists the order, so whatever filled was claimed and the unfilled rest was cancelled or
+     * expired. A buy order that vanished before filling may have filled unseen, so its position needs a check.
+     */
+    private fun syncClose(event: BazaarEvent, existing: BazaarOrder?) {
+        if (existing == null || !existing.status.live) return
+        val complete = existing.filled >= existing.quantity
+        orders[existing.id] = existing.copy(collected = existing.filled, lastAt = event.at,
+            status = if (complete) BazaarOrderStatus.FILLED else BazaarOrderStatus.CANCELLED)
+        positions[existing.positionId]?.let { state ->
+            state.last = maxOf(state.last, event.at)
+            if (existing.buy && !complete && existing.filled > 0) state.uncertain = true
+        }
     }
 
     /** Relists count against the acquired position, so recreating an offer never resets fatigue. */

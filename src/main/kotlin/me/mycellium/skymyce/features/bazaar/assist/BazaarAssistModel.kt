@@ -80,7 +80,7 @@ fun assistView(screen: AssistScreen): AssistView = when (screen.kind) {
             title == "How many are you selling?" -> AssistView.SELL_AMOUNT
             title == "At what price are you selling?" -> AssistView.SELL_PRICE
             title == "Confirm Sell Offer" -> AssistView.SELL_CONFIRM
-            title == "Bazaar Orders" || title == "Your Bazaar Orders" -> AssistView.ORDERS
+            me.mycellium.skymyce.features.bazaar.bazaarOrdersMenu(title) -> AssistView.ORDERS
             title == "Order options" -> AssistView.ORDER_OPTIONS
             title.startsWith("$BAZAAR_TITLE\"") -> AssistView.SEARCH_RESULTS
             "Create Buy Order" in names || "Create Sell Offer" in names || "View Graphs" in names -> AssistView.PRODUCT
@@ -166,9 +166,9 @@ fun assistStep(mission: AssistMission, phase: AssistPhase, screen: AssistScreen,
             AssistView.ORDERS -> AssistStep(AssistKind.CLICK, "Claim your $what", "Click your ${if (buy) "BUY" else "SELL"} ${mission.name} order",
                 slot = assistOrderSlot(screen, mission, buy), target = "${if (buy) "BUY" else "SELL"} ${mission.name}")
             AssistView.MAIN, AssistView.SEARCH_RESULTS, AssistView.PRODUCT -> click("Open your orders", "Manage Orders")
-            AssistView.NONE -> AssistStep(AssistKind.COMMAND, "Open your orders", "Run /bz, then click Manage Orders", command = "bz")
+            AssistView.NONE -> AssistStep(AssistKind.COMMAND, "Open your orders", "Run /managebazaarorders", command = "managebazaarorders")
             AssistView.ORDER_OPTIONS -> AssistStep(AssistKind.WAIT, "Claim your $what", "Choose the claim option in this menu")
-            else -> AssistStep(AssistKind.CLOSE, "Close this menu", "Press Esc, then run /bz and open Manage Orders")
+            else -> AssistStep(AssistKind.CLOSE, "Close this menu", "Press Esc, then run /managebazaarorders", command = "managebazaarorders")
         }
     }
     return when (phase) {

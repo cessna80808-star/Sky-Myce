@@ -6,6 +6,20 @@ import kotlin.math.abs
 data class BazaarObservedSlot(val slot: Int, val productId: String? = null, val name: String, val lore: List<String>, val orderId: String? = null)
 
 /**
+ * One read of the order menu. [complete] means every own order on it was understood, so orders it no longer lists were
+ * closed; [seen] maps tracked order ids to this read's time.
+ */
+data class BazaarSyncResult(val at: Long, val read: Int, val closed: Int, val complete: Boolean, val seen: Map<String, Long>, val others: Int)
+
+/** "Read 3 orders · 2 no longer listed were closed", in the player's terms. */
+fun bazaarSyncNote(result: BazaarSyncResult): String = buildString {
+    append("read ${result.read} order${if (result.read == 1) "" else "s"}")
+    if (result.closed > 0) append(" · closed ${result.closed} no longer listed")
+    if (result.others > 0) append(" · ${result.others} by co-op members ignored")
+    if (!result.complete) append(" · some couldn't be read, so none were closed")
+}.replaceFirstChar { it.uppercase() }
+
+/**
  * Turns server chat receipts and the native Manage Orders menu into journal events. It only reads; it has no
  * input, screen or packet API. Event identities derive from order progress, so replays and duplicates collapse.
  */
@@ -17,10 +31,13 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
     private val pendingFlips = ArrayDeque<PendingFlip>()
     private var scope: BazaarContext? = null
     private var sequence = 0L
+    /** The latest order-menu read, for the terminal's sync status. */
+    var lastSync: BazaarSyncResult? = null
+        private set
 
     fun reset() {
         emitted.clear(); messages.clear(); aliases.clear(); pendingSetups.clear(); pendingFlips.clear()
-        scope = null; sequence = 0
+        scope = null; sequence = 0; lastSync = null
     }
 
     private fun enter(value: BazaarContext) {
@@ -92,7 +109,7 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
             val price = if (quantity != null && quantity > 0 && coins != null) coins / quantity else null
             val duplicate = previous != null || ledger.orders.any {
                 it.product == product && it.buy == buy && it.quantity == quantity && it.status == BazaarOrderStatus.OPEN &&
-                    price != null && it.price?.let { p -> abs(p - price) <= PRICE_EPSILON } == true
+                    price != null && it.price?.let { p -> priceMatches(p, price) } == true
             }
             val held = ledger.positions.filter { it.product == product && it.remaining - it.pendingItems >= (quantity ?: Long.MAX_VALUE) && !it.uncertain }
             // An unrecognized item name waits for the native order menu to supply its product identity.
@@ -143,10 +160,10 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
             val price = money(match.groupValues[4])
             val order = ledger.orders.filter {
                 it.buy && it.product == product && claimable(it) >= quantity &&
-                    (price == null || it.price == null || abs(price - it.price) <= PRICE_EPSILON)
+                    (price == null || it.price == null || priceMatches(price, it.price))
             }.singleOrNull()
             if (shortDuplicate && (order == null || order.filled - order.collected < quantity)) return emptyList()
-            if (order == null || total == null || quantity <= 0 || price == null || abs(price * quantity - total) > maxOf(1.0, total * .00001)) {
+            if (order == null || total == null || quantity <= 0 || price == null || abs(price * quantity - total) > maxOf(1.0, quantity * .051, total * .00001)) {
                 note("Item collection has no unique matching order/cost receipt; confirm acquisition quantities and cost", product)
                 return done()
             }
@@ -174,10 +191,10 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
             val product = product(match.groupValues[3]) ?: "BAZAAR"
             val price = money(match.groupValues[4]) ?: return emptyList()
             val order = ledger.orders.filter {
-                !it.buy && it.product == product && claimable(it) >= quantity && (it.price == null || abs(it.price - price) <= PRICE_EPSILON)
+                !it.buy && it.product == product && claimable(it) >= quantity && (it.price == null || priceMatches(it.price, price))
             }.singleOrNull()
             if (shortDuplicate && (order == null || order.filled - order.collected < quantity)) return emptyList()
-            if (order == null || quantity <= 0 || total > price * quantity + 1) {
+            if (order == null || quantity <= 0 || total > (price + .051) * quantity + 1) {
                 note("Coin collection lacks a unique supported sale/order; it is not net profit by itself", product)
                 return done()
             }
@@ -239,19 +256,50 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
         private fun corroboration(order: BazaarOrder) = if (order.uncertain) BazaarEvidence.ESTIMATED else BazaarEvidence.CORROBORATED
     }
 
+    /**
+     * Reads the order menu. [self] is the player's name: on co-op profiles the menu also lists other members' orders,
+     * which are never tracked as the player's own. A complete read is the source of truth, so tracked orders it no
+     * longer lists are closed; a read with anything unparsed, a further page or missing navigation closes nothing.
+     */
     fun container(title: String, rows: List<BazaarObservedSlot>, context: BazaarContext, ledger: BazaarLedger,
-                  products: List<BazaarProduct>, now: Long, sessionId: String?): List<BazaarEvent> {
+                  products: List<BazaarProduct>, now: Long, sessionId: String?, self: String? = null): List<BazaarEvent> {
         enter(context)
-        if (strip(title) !in orderMenus || rows.size > 90 || now <= 0) return emptyList()
+        if (!bazaarOrdersMenu(title) || rows.size > 90 || now <= 0) return emptyList()
         val result = mutableListOf<BazaarEvent>()
         while (pendingSetups.firstOrNull()?.let { now - it.at > PENDING_MILLIS } == true) pendingSetups.removeFirst()
         while (pendingFlips.firstOrNull()?.let { now - it.at > PENDING_MILLIS } == true) pendingFlips.removeFirst()
         val names = products.groupBy { normalize(it.name) }
-        val parsed = rows.mapNotNull { nativeOrder(it, products, names) }
+        val orderSlots = rows.filter { orderName.matches(strip(it.name)) }
+        val own = orderSlots.filter { slot -> owner(slot)?.let { self == null || it.equals(self, true) } ?: true }
+        val parsed = own.mapNotNull { nativeOrder(it, products, names) }
         val duplicateStable = parsed.mapNotNull { it.id }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
-        parsed.filter { it.id !in duplicateStable }.forEach { observeOrder(it, parsed, context, ledger, now, sessionId, result) }
+        // Buy orders this read no longer lists: their filled items were claimed, so a new sell offer may use them.
+        val vanished = ledger.orders.filter { order ->
+            order.buy && order.filled > order.collected && parsed.none { it.buy && it.product == order.product && it.amount == order.quantity &&
+                order.price?.let { price -> priceMatches(price, it.price) } == true }
+        }
+        val seen = linkedSetOf<String>()
+        parsed.filter { it.id !in duplicateStable }.forEach { observeOrder(it, parsed, context, ledger, now, sessionId, result, seen, vanished) }
+        val complete = parsed.size == own.size && duplicateStable.isEmpty() &&
+            rows.none { strip(it.name).equals("Next Page", true) } && rows.any { strip(it.name) in navigation }
+        var closed = 0
+        if (complete) {
+            ledger.orders.filter { order ->
+                (order.status == BazaarOrderStatus.OPEN || order.status == BazaarOrderStatus.FILLED && order.filled > order.collected) &&
+                    order.id !in seen && now - order.at > RECENT_ORDER_MILLIS
+            }.forEach { order ->
+                emit(BazaarEvent(id("sync-close|${order.id}"), context, order.product, BazaarEventKind.SYNC_CLOSE, now,
+                    orderId = order.id, positionId = order.positionId, sessionId = sessionId, evidence = BazaarEvidence.ESTIMATED,
+                    note = "No longer listed in Manage Orders"), result)
+                closed++
+            }
+        }
+        lastSync = BazaarSyncResult(now, parsed.size, closed, complete, seen.associateWith { now }, orderSlots.size - own.size)
         return result
     }
+
+    /** The "By:" line names who placed an order; it is absent on solo profiles. */
+    private fun owner(slot: BazaarObservedSlot): String? = slot.lore.firstNotNullOfOrNull { ownerLine.matchEntire(strip(it))?.groupValues?.get(1) }
 
     private fun nativeOrder(slot: BazaarObservedSlot, products: List<BazaarProduct>, names: Map<String, List<BazaarProduct>>): NativeOrder? {
         if (slot.slot !in 0..89 || slot.lore.size > 64 || slot.name.length > 160 || slot.lore.any { it.length > 400 }) return null
@@ -278,14 +326,17 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
     }
 
     private fun observeOrder(native: NativeOrder, parsed: List<NativeOrder>, context: BazaarContext, ledger: BazaarLedger,
-                             now: Long, sessionId: String?, result: MutableList<BazaarEvent>) {
+                             now: Long, sessionId: String?, result: MutableList<BazaarEvent>, seen: MutableSet<String>,
+                             vanished: List<BazaarOrder>) {
         val same = ledger.orders.filter {
             it.product == native.product && it.buy == native.buy && it.quantity == native.amount &&
                 (it.status == BazaarOrderStatus.OPEN || it.status == BazaarOrderStatus.FILLED && it.filled > it.collected) &&
-                it.price?.let { price -> abs(price - native.price) <= PRICE_EPSILON } == true
+                it.price?.let { price -> priceMatches(price, native.price) } == true
         }
         val original = if (native.id != null) ledger.orders.firstOrNull { it.id == native.id } else same.singleOrNull()
         val twins = parsed.count { it.product == native.product && it.buy == native.buy && it.amount == native.amount && it.price == native.price }
+        // Every order this read could stand for stays open, even when it cannot be told apart from its twin.
+        seen += same.map { it.id }
         if (native.id == null && (same.size > 1 || twins > 1)) {
             val pendingId = id("ambiguous|${native.product}|${native.buy}|${native.amount}|${native.price}")
             if (ledger.pending.none { it.eventId == pendingId })
@@ -294,14 +345,17 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
             return
         }
         val setup = pendingSetups.filter {
-            it.name == native.name && it.buy == native.buy && it.quantity == native.amount && abs(it.price - native.price) <= PRICE_EPSILON && it.at <= now
+            it.name == native.name && it.buy == native.buy && it.quantity == native.amount && priceMatches(it.price, native.price) && it.at <= now
         }.singleOrNull()
         val flip = if (!native.buy) pendingFlips.filter { it.name == native.name && it.quantity == native.amount && it.at <= now }.singleOrNull() else null
         val orderId = original?.id ?: native.id ?: setup?.id ?: flip?.id
             ?: "local-${id("${native.product}|${native.buy}|${native.amount}|${native.price}").take(32)}"
-        val held = ledger.positions.filter {
-            it.product == native.product && !it.uncertain && it.remaining >= native.amount &&
-                (it.remaining - it.pendingItems >= native.amount || flip != null && it.pendingItems >= native.amount)
+        seen += orderId
+        val held = ledger.positions.filter { position ->
+            // Items of a buy order this read no longer lists were claimed, so they are held now.
+            val claimed = vanished.filter { it.positionId == position.id }.sumOf { it.filled - it.collected }
+            position.product == native.product && !position.uncertain && position.remaining >= native.amount &&
+                (position.remaining - position.pendingItems + claimed >= native.amount || flip != null && position.pendingItems >= native.amount)
         }
         val positionId = original?.positionId ?: if (native.buy) "${native.product}:$orderId" else held.singleOrNull()?.id ?: "${native.product}:$orderId"
         val reliable = (native.id != null || setup != null || flip != null || original != null && !original.uncertain && same.size == 1) &&
@@ -350,10 +404,13 @@ class BazaarObserver(private val canonicalProduct: (String) -> String? = { null 
     private data class PendingFlip(val id: String, val name: String, val quantity: Long, val at: Long, val session: String?)
 
     companion object {
-        private const val PRICE_EPSILON = .000001
         private const val PENDING_MILLIS = 600_000L
         private const val NUMBER = "([0-9][0-9,]*(?:\\.[0-9]{1,6})?)"
-        private val orderMenus = setOf("Manage Orders", "Your Bazaar Orders", "Bazaar Orders", "Bazaar ➜ Orders")
+        private const val RECENT_ORDER_MILLIS = 10_000L
+        private val navigation = setOf("Close", "Go Back")
+        private val ownerLine = Regex("^By: (?:\\[[^\\]]+] )?([A-Za-z0-9_]{1,16})$")
+        /** The menu shows unit prices to one decimal; chat receipts give totals, so their unit price can differ slightly. */
+        private fun priceMatches(a: Double, b: Double) = abs(a - b) <= maxOf(.051, maxOf(a, b) * .00001)
         private val closedLines = setOf("Status: Cancelled", "Status: Expired", "Expired!")
         private val setupPattern = Regex("^\\[Bazaar] (Buy Order|Sell Offer) Setup! $NUMBER[x×] (.+) for $NUMBER coins[.!]$")
         private val filledPattern = Regex("^\\[Bazaar] Your (Buy Order|Sell Offer) for $NUMBER[x×] (.+) was filled!$")

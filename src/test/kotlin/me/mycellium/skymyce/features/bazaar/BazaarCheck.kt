@@ -21,6 +21,7 @@ fun main() {
     checkBazaarFinder()
     checkBazaarLifecycleAndReplay()
     checkBazaarObservations()
+    checkCoopOrderSync()
     checkCanonicalBazaarReceipts()
     checkNativeBazaarPartialFills()
     checkDelayedBazaarReceipts()
@@ -567,4 +568,69 @@ private fun checkBazaarDepthAndNames() {
     near(wheat.buyOrderPrice, 7.0); near(wheat.sellOfferPrice, 8.0)
     near(wheat.buyVolume, 500.0); near(wheat.sellVolume, 500.0)
     check(wheat.name == "Wheat" && bazaarFallbackName("ENCHANTED_RAW_SALMON") == "Enchanted Raw Salmon")
+}
+
+/** The 2026-10-16 recordings: a co-op profile's "Co-op Bazaar Orders", Cofl lore additions and a co-op member's order. */
+private fun checkCoopOrderSync() {
+    val observer = BazaarObserver()
+    val products = listOf(BazaarProduct("SHARD_DUNG_BEETLE", "Dung Beetle Shard", 15_000.0, 316_000.0),
+        BazaarProduct("ENCHANTED_CACTUS_GREEN", "Enchanted Cactus Green", 621.3, 1_400.0), BazaarProduct("HEAVY_PEARL", "Heavy Pearl", 270_000.0, 290_000.0),
+        BazaarProduct("SHARD_CHOCOBUN", "Chocobun Shard", 500_000.0, 800_000.0))
+    var archive = BazaarArchive()
+    fun ledger() = reconcileBazaar(archive, context)
+    fun apply(events: List<BazaarEvent>) { events.forEach { archive = recordBazaarEvent(archive, it) } }
+    fun chat(text: String, at: Long) = apply(observer.chat(text, context, ledger(), products, at, "session-a"))
+    fun order(slot: Int, id: String, name: String, vararg lore: String) = BazaarObservedSlot(slot, id, name, lore.toList())
+    val navigation = listOf(BazaarObservedSlot(30, null, "Go Back", listOf("To Bazaar")), BazaarObservedSlot(31, null, "Close", emptyList()))
+
+    chat("[Bazaar] Buy Order Setup! 2x Dung Beetle Shard for 31,841.1 coins.", NOW)
+    chat("[Bazaar] Buy Order Setup! 30x Heavy Pearl for 8,375,670 coins.", NOW + 1_000)
+    chat("[Bazaar] Buy Order Setup! 647x Enchanted Cactus Green for 401,981.1 coins.", NOW + 2_000)
+    chat("[Bazaar] Your Buy Order for 647x Enchanted Cactus Green was filled!", NOW + 3_000)
+    chat("[Bazaar] Your Buy Order for 2x Dung Beetle Shard was filled!", NOW + 60_000)
+    chat("[Bazaar] Claimed 2x Dung Beetle Shard worth 31,841 coins bought for 15,920.6 each!", NOW + 61_000)
+    check(ledger().positions.single { it.product == "SHARD_DUNG_BEETLE" }.pendingItems == 0L) { "Claim receipt did not settle: ${ledger().pending}" }
+    chat("[Bazaar] Sell Offer Setup! 2x Dung Beetle Shard for 631,997.2 coins.", NOW + 62_000)
+    check(ledger().orders.count { !it.buy && it.product == "SHARD_DUNG_BEETLE" } == 1) { "Sell setup did not attach: ${ledger().pending}" }
+
+    // The real menu: the cactus buy was claimed elsewhere and relisted, the pearl order is gone, a co-op member has an order.
+    val menu = listOf(
+        order(10, "SHARD_DUNG_BEETLE", "SELL Dung Beetle Shard", "Worth 624.9k coins", "You have best offer (316K)", "", "Offer amount: 2x", "",
+            "Price per unit: 315,998.6 coins", "", "By: [MVP+] MisterKrister", "", "Click to view options!", "Buy: 316K Sell: 15.92K", "Vol: 2.2K/3.73K"),
+        order(11, "ENCHANTED_CACTUS_GREEN", "SELL Enchanted Cactus Green", "Worth 980.7k coins", "18.57K available for better price", "",
+            "Offer amount: 647x", "Filled: 433/647 (66.9%)", "", "Price per unit: 1,487.9 coins", "", "Customers:", "- 242x [VIP] nameless 5m ago",
+            "", "By: [MVP+] MisterKrister", "", "Click to view options!"),
+        order(12, "SHARD_CHOCOBUN", "BUY Chocobun Shard", "Worth 8.5M coins", "", "Order amount: 17x", "", "Price per unit: 500,000.0 coins", "",
+            "By: [VIP] CoopFriend", "", "Click to view options!"),
+    ) + navigation
+    val events = observer.container("Co-op Bazaar Orders", menu, context, ledger(), products, NOW + 120_000, "session-a", "MisterKrister")
+    apply(events)
+    val sync = checkNotNull(observer.lastSync)
+    check(sync.complete && sync.read == 2 && sync.others == 1) { "Sync result: $sync" }
+    val after = ledger()
+    check(after.orders.none { it.product == "SHARD_CHOCOBUN" }) { "A co-op member's order was tracked as the player's" }
+    check(after.orders.single { it.product == "HEAVY_PEARL" }.status == BazaarOrderStatus.CANCELLED) { "Vanished open buy order stayed open" }
+    check(after.positions.filter { it.product == "HEAVY_PEARL" }.none { it.open }) { "Vanished pearl order still shows as a position" }
+    val cactus = after.positions.filter { it.product == "ENCHANTED_CACTUS_GREEN" }
+    check(cactus.size == 1) { "Cactus split into ${cactus.size} positions: $cactus" }
+    check(cactus.single().pendingItems == 0L && cactus.single().stage == BazaarStage.SELLING && cactus.single().listed == 214L) { "Cactus: ${cactus.single()}" }
+    check(after.orders.single { it.buy && it.product == "ENCHANTED_CACTUS_GREEN" }.collected == 647L)
+    check(after.realizations.filter { it.product == "ENCHANTED_CACTUS_GREEN" }.sumOf { it.quantity } == 433L) { "Partial sale not recorded" }
+    val beetle = after.positions.single { it.product == "SHARD_DUNG_BEETLE" }
+    check(beetle.stage == BazaarStage.SELLING && beetle.pendingItems == 0L) { "Beetle: $beetle" }
+    check(bazaarSyncNote(sync) == "Read 2 orders · closed 2 no longer listed · 1 by co-op members ignored") { bazaarSyncNote(sync) }
+    // Re-reading the same menu changes nothing.
+    check(observer.container("Co-op Bazaar Orders", menu, context, ledger(), products, NOW + 121_000, "session-a", "MisterKrister").isEmpty())
+
+    // A partial read (an order it can't parse, or no navigation) closes nothing.
+    val cautious = BazaarObserver()
+    val broken = listOf(order(10, "SHARD_DUNG_BEETLE", "SELL Dung Beetle Shard", "Offer amount: lots")) + navigation
+    check(cautious.container("Co-op Bazaar Orders", broken, context, after, products, NOW + 130_000, "session-a", "MisterKrister")
+        .none { it.kind == BazaarEventKind.SYNC_CLOSE } && cautious.lastSync?.complete == false)
+    check(BazaarObserver().container("Co-op Bazaar Orders", emptyList(), context, after, products, NOW + 130_000, "session-a", "MisterKrister")
+        .none { it.kind == BazaarEventKind.SYNC_CLOSE }) { "A menu without navigation may still be loading" }
+    // An empty but loaded menu closes everything still open.
+    val emptied = BazaarObserver().container("Co-op Bazaar Orders", navigation, context, after, products, NOW + 140_000, "session-a", "MisterKrister")
+    check(emptied.count { it.kind == BazaarEventKind.SYNC_CLOSE } == after.orders.count { it.status == BazaarOrderStatus.OPEN || it.status == BazaarOrderStatus.FILLED && it.filled > it.collected })
+    check(bazaarOrdersMenu("Co-op Bazaar Orders") && bazaarOrdersMenu("§7Your Bazaar Orders") && bazaarOrdersMenu("Manage Orders") && !bazaarOrdersMenu("Bazaar ➜ Farming"))
 }
