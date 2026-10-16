@@ -39,6 +39,7 @@ public final class CameraRenderCheck {
         checkFeedBounds();
         checkChunkEvents();
         checkMainFrameOrder();
+        checkPreviewCadence();
         int[] overlayCalls = {0};
         Object[] overlays = {
             (LevelRenderEvents.AfterBlockOutlineExtraction) (context, hit) -> overlayCalls[0]++,
@@ -176,6 +177,36 @@ public final class CameraRenderCheck {
         reject(() -> CameraMath.targetSize(100, 100, Double.POSITIVE_INFINITY));
         reject(() -> CameraMath.previewTargetSize(100, 100, Double.POSITIVE_INFINITY));
         System.out.println("Camera rendering checks passed: dispatcher/cache ownership, scoped Sodium visibility, independent frusta, entity extraction/submission diagnostics, four-feed bounds, projections and strict viewpoints. Actual GPU pixels and Storm require visual verification.");
+    }
+
+    /** Leap previews at a 144 Hz game loop: even spacing, the shared budget, and no catch-up burst after a stall. */
+    private static void checkPreviewCadence() {
+        long frame = 1_000_000_000L / 144;
+        java.util.function.BiFunction<long[], Integer, long[]> intervals = (settings, frames) -> {
+            long due = 0, last = -1;
+            long[] gaps = new long[frames];
+            int count = 0;
+            for (int i = 1; i <= frames * 40 && count < frames; i++) {
+                long now = i * frame;
+                if (now < due) continue;
+                if (last >= 0) gaps[count++] = now - last;
+                last = now;
+                due = CameraMath.nextPreviewFrame(due, now, (int) settings[0], settings[1], (int) settings[2]);
+            }
+            return java.util.Arrays.copyOf(gaps, count);
+        };
+        long[] smooth = intervals.apply(new long[] {30, 3_000_000L, 3}, 60);
+        long target = 1_000_000_000L / 30;
+        require(smooth.length == 60 && java.util.Arrays.stream(smooth).allMatch(gap -> Math.abs(gap - target) <= frame),
+            "previews keep an even 30 FPS cadence within one game frame");
+        double mean = java.util.Arrays.stream(smooth).average().orElse(0);
+        require(Math.abs(mean - target) < frame / 4.0, "the cadence does not drift with frame timing");
+        long[] budgeted = intervals.apply(new long[] {60, 10_000_000L, 4}, 20);
+        require(java.util.Arrays.stream(budgeted).allMatch(gap -> gap >= 80_000_000L - frame && gap <= 80_000_000L + frame),
+            "four 10 ms previews share half the frame time: one frame every 80 ms each");
+        long stalled = CameraMath.nextPreviewFrame(1_000_000L, 5_000_000_000L, 30, 0, 1);
+        require(stalled == 5_000_000_000L + target, "a stall restarts the cadence instead of rendering a burst");
+        require(CameraMath.nextPreviewFrame(0, 7, 2, 2_000_000_000L, 4) == 7 + 1_000_000_000L, "a very slow preview waits at most one second");
     }
 
     private static void checkMainFrameOrder() {

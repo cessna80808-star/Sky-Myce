@@ -335,7 +335,7 @@ object LeapMenu : SkyMyceModule() {
         return viewpoint(pose)
     }
 
-    private fun viewpoint(pose: LeapCameraPose) = SecondaryWorldCamera.View(pose.x, pose.y, pose.z, pose.yaw, pose.pitch, 70f, 4, Settings.framesPerSecond)
+    private fun viewpoint(pose: LeapCameraPose) = SecondaryWorldCamera.View(pose.x, pose.y, pose.z, pose.yaw, pose.pitch, 70f, 4, Settings.previewFramesPerSecond)
 
     private fun drawCard(active: State, quadrant: Int, graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, caption: String?) {
         val candidate = active.candidates[quadrant] ?: return
