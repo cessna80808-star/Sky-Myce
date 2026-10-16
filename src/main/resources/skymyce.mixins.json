@@ -44,7 +44,8 @@
     "LabelComponentMixin",
     "ResourcefulConfigScreenBuilderMixin",
     "SkijaMenuRenderMixin",
-    "BazaarAssistSignAccessor"
+    "BazaarAssistSignAccessor",
+    "BazaarAssistContainerAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

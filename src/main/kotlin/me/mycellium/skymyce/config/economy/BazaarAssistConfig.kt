@@ -5,6 +5,7 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 import me.mycellium.skymyce.features.bazaar.assist.AssistPriceMode
 
 enum class AssistHighlightShape(val label: String) { OUTLINE_FILL("Outline and fill"), OUTLINE("Outline"), FILL("Fill"), CORNERS("Corner brackets") }
+enum class AssistPanelPlacement(val label: String) { BESIDE_MENU("Beside the open menu"), SAVED("Where I put it") }
 enum class AssistPulse(val label: String) { ALWAYS("Always pulse"), ON_CHANGE("Pulse when the target changes"), NONE("No pulse") }
 
 /** Property names are persisted config keys. Start, stop and send-command keys live in Minecraft's Controls. */
@@ -31,6 +32,10 @@ object BazaarAssistConfig : CategoryKt("Bazaar Assistant") {
     }
     var panelInMenus by boolean(true) {
         name = TranslatableValue.literal("Show the panel over Bazaar menus")
+    }
+    var panelPlacement by enum(AssistPanelPlacement.BESIDE_MENU) {
+        name = TranslatableValue.literal("Panel position in menus")
+        description = TranslatableValue.literal("Beside the open menu, or where you put it. Dragging the panel inside a menu switches to where you put it")
     }
     var profitNotices by boolean(true) {
         name = TranslatableValue.literal("Profit pop-ups")
@@ -61,10 +66,12 @@ object BazaarAssistConfig : CategoryKt("Bazaar Assistant") {
     // Explained and confirmed from the Bazaar terminal before either can be turned on.
     var autoCommand by boolean(false) { condition = { false } }
     var autoSign by boolean(false) { condition = { false } }
+    // How often Tab filled the command; the "Tab" hint disappears after the first few uses.
+    var tabFills by int(0) { condition = { false } }
 
     fun resetAppearance() {
         enabled = true; priceMode = AssistPriceMode.MATCH_ORDER_BOOK; ghostText = true; tabFill = true; signHelper = true
-        panelInMenus = true; profitNotices = true; animations = true; highlightColor = ""; highlightShape = AssistHighlightShape.OUTLINE_FILL
+        panelInMenus = true; panelPlacement = AssistPanelPlacement.BESIDE_MENU; profitNotices = true; animations = true; highlightColor = ""; highlightShape = AssistHighlightShape.OUTLINE_FILL
         highlightThickness = 2; highlightOpacity = 80; highlightPulse = AssistPulse.ON_CHANGE; autoCommand = false; autoSign = false
     }
 }

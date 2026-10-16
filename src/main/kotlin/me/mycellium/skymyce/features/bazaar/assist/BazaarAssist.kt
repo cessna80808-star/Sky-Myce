@@ -1,27 +1,36 @@
 package me.mycellium.skymyce.features.bazaar.assist
 
+import me.mycellium.mixin.BazaarAssistContainerAccessor
 import me.mycellium.mixin.BazaarAssistSignAccessor
 import me.mycellium.mixin.IrcChatScreenAccessor
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.economy.BazaarAssistConfig as Settings
 import me.mycellium.skymyce.features.bazaar.BazaarFreshness
+import me.mycellium.skymyce.features.bazaar.BazaarLedger
 import me.mycellium.skymyce.features.bazaar.BazaarNames
 import me.mycellium.skymyce.features.bazaar.BazaarOpportunity
 import me.mycellium.skymyce.features.bazaar.BazaarPosition
+import me.mycellium.skymyce.features.bazaar.BazaarProduct
 import me.mycellium.skymyce.features.bazaar.BazaarStage
 import me.mycellium.skymyce.features.bazaar.BazaarTrading
+import me.mycellium.skymyce.features.bazaar.bazaarCompactCoins
 import me.mycellium.skymyce.features.bazaar.bazaarGuideName
 import me.mycellium.skymyce.features.bazaar.bazaarSignedCoins
 import me.mycellium.skymyce.utils.MC
+import me.mycellium.skymyce.utils.Utils
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
+import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
+import net.minecraft.client.input.KeyEvent
 import net.minecraft.world.entity.player.Inventory
 import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -38,7 +47,25 @@ enum class AssistStatus(val label: String) {
 
 enum class AssistTone { INFO, SUCCESS, WARNING, ERROR }
 internal data class AssistNotice(val text: String, val tone: AssistTone, val at: Long, val until: Long)
-internal data class AssistPop(val id: String, val amount: Double, val at: Long)
+
+/** What the assistant reads from the existing Bazaar systems; one seam, so a test world can supply its own records. */
+internal interface AssistSource {
+    val ledger: BazaarLedger
+    val opportunities: List<BazaarOpportunity>
+    val trading: Boolean
+    fun quote(product: String): BazaarProduct?
+    fun freshness(): BazaarFreshness
+    fun startSession()
+}
+
+internal object TradingAssistSource : AssistSource {
+    override val ledger get() = BazaarTrading.assistLedger
+    override val opportunities get() = BazaarTrading.assistOpportunities
+    override val trading get() = BazaarTrading.active
+    override fun quote(product: String) = BazaarTrading.assistQuote(product)
+    override fun freshness() = BazaarTrading.assistFreshness()
+    override fun startSession() = BazaarTrading.assistStartSession()
+}
 
 /**
  * Guides one flip from the existing recommendations and order tracking. It reads screens and highlights; the player
@@ -47,6 +74,11 @@ internal data class AssistPop(val id: String, val amount: Double, val at: Long)
  */
 object BazaarAssist : SkyMyceModule() {
     private data class Mission(val target: AssistMission, val startedAt: Long, val positionId: String? = null)
+    private data class SlotClick(val screenId: Int, val x: Int, val y: Int, val at: Long)
+
+    internal var source: AssistSource = TradingAssistSource
+    /** Lets the in-game test world stand in for a SkyBlock island; never set by the mod itself. */
+    internal var simulatedSkyBlock = false
 
     private var mission: Mission? = null
     var status = AssistStatus.OFF
@@ -59,16 +91,25 @@ object BazaarAssist : SkyMyceModule() {
         private set
     internal var notice: AssistNotice? = null
         private set
-    internal val pops = ArrayDeque<AssistPop>()
+    internal var pops = emptyList<AssistPopEvent>()
+        private set
+    internal var lastRun: AssistRunSummary? = null
+        private set
     /** Changes whenever the panel content changes; the HUD rebuilds only then. */
     var revision = 0L
         private set
     var stepChangedAt = 0L
         private set
+    /** How many slots on the open menu carry the current click target's name; more than one is never guessed between. */
+    internal var targetMatches = 0
+        private set
 
-    private lateinit var startKey: KeyMapping
-    private lateinit var stopKey: KeyMapping
-    private lateinit var commandKey: KeyMapping
+    internal lateinit var startKey: KeyMapping
+        private set
+    internal lateinit var stopKey: KeyMapping
+        private set
+    internal lateinit var commandKey: KeyMapping
+        private set
     private var screen = AssistScreen()
     private var screenDirty = true
     private var observedScreen: Any? = null
@@ -76,18 +117,22 @@ object BazaarAssist : SkyMyceModule() {
     private var filledSign = 0
     private var lastCommand: String? = null
     private var lastCommandAt = 0L
+    private var lastClick: SlotClick? = null
     private var pendingPickUntil = 0L
     private var runStartedAt = 0L
     private val runPositions = linkedSetOf<String>()
     private val seenRealizations = hashSetOf<String>()
 
     val active get() = status != AssistStatus.OFF
+    internal val onSkyBlock get() = simulatedSkyBlock || LocationAPI.isOnSkyBlock
     internal val product get() = mission?.target?.product
     internal val productName get() = mission?.target?.name
+    /** The command the current step shows, if any; shared by the panel, chat ghost text and Auto Command. */
+    internal val shownCommand get() = step?.takeIf { active && status != AssistStatus.PAUSED && it.kind in setOf(AssistKind.COMMAND, AssistKind.CLOSE) }?.command
 
     override fun init() {
-        startKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Start Bazaar Assistant", GLFW.GLFW_KEY_UNKNOWN, KeyMapping.Category.MISC))
-        stopKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Stop Bazaar Assistant", GLFW.GLFW_KEY_UNKNOWN, KeyMapping.Category.MISC))
+        startKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Start Bazaar Assistant", GLFW.GLFW_KEY_RIGHT_BRACKET, KeyMapping.Category.MISC))
+        stopKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Stop Bazaar Assistant", GLFW.GLFW_KEY_LEFT_BRACKET, KeyMapping.Category.MISC))
         commandKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Send Bazaar Assistant command", GLFW.GLFW_KEY_UNKNOWN, KeyMapping.Category.MISC))
         ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) onTick() }
         ScreenEvents.AFTER_INIT.register { _, opened, _, _ ->
@@ -98,10 +143,20 @@ object BazaarAssist : SkyMyceModule() {
                     ScreenEvents.afterExtract(opened).register { _, graphics, _, _, _ -> drawGhost(opened, graphics) }
                 }
                 is AbstractSignEditScreen -> ScreenEvents.afterExtract(opened).register { _, graphics, _, _, partial ->
-                    drawSignHelper(opened, graphics); BazaarAssistHud.drawOverScreen(graphics, partial)
+                    drawSignHelper(opened, graphics); BazaarAssistHud.drawOverScreen(opened, graphics, partial)
                 }
-                is AbstractContainerScreen<*> -> ScreenEvents.afterExtract(opened).register { _, graphics, _, _, partial ->
-                    BazaarAssistHud.drawOverScreen(graphics, partial)
+                is AbstractContainerScreen<*> -> {
+                    ScreenEvents.afterExtract(opened).register { _, graphics, _, _, partial -> BazaarAssistHud.drawOverScreen(opened, graphics, partial) }
+                    // Start, stop and send keys also work inside menus, unless a text field (such as a search box) has focus.
+                    ScreenKeyboardEvents.allowKeyPress(opened).register { current, key -> current.focused is EditBox || !menuKey(key) }
+                    // Passive: remember which slot was clicked, so realized profit can rise from it. Nothing is clicked for you.
+                    ScreenMouseEvents.beforeMouseClick(opened).register { current, _ ->
+                        val accessor = current as BazaarAssistContainerAccessor
+                        val slot = accessor.`skymyce$getHoveredSlot`() ?: return@register
+                        lastClick = SlotClick(System.identityHashCode(current), accessor.`skymyce$getLeftPos`() + slot.x + 8,
+                            accessor.`skymyce$getTopPos`() + slot.y, System.currentTimeMillis())
+                    }
+                    BazaarAssistHud.attachDrag(opened)
                 }
             }
         }
@@ -112,11 +167,10 @@ object BazaarAssist : SkyMyceModule() {
     // ---- Lifecycle ----
 
     /** Guide [opportunity]; called by the terminal's Guide button and by the start key. */
-    fun begin(opportunity: BazaarOpportunity, name: String = bazaarGuideName(opportunity.product) ?: BazaarNames.name(opportunity.product)) {
-        val now = System.currentTimeMillis()
-        val target = AssistMission(opportunity.product, name, opportunity.quantity, opportunity.buyPrice, opportunity.sellPrice)
-        launch(Mission(target, now), "Guiding ${target.name}")
-    }
+    fun begin(opportunity: BazaarOpportunity, name: String = bazaarGuideName(opportunity.product) ?: BazaarNames.name(opportunity.product)) =
+        guide(AssistMission(opportunity.product, name, opportunity.quantity, opportunity.buyPrice, opportunity.sellPrice))
+
+    internal fun guide(target: AssistMission) = launch(Mission(target, System.currentTimeMillis()), "Guiding ${target.name}")
 
     /** Follow an existing position, for example one waiting to be claimed or sold. */
     private fun follow(position: BazaarPosition) {
@@ -126,12 +180,12 @@ object BazaarAssist : SkyMyceModule() {
     }
 
     private fun launch(next: Mission, message: String) {
-        if (!Settings.enabled) { say("Bazaar Assistant is turned off in settings", AssistTone.WARNING); return }
+        if (!Settings.enabled) { feedback("Bazaar Assistant is turned off in its settings", AssistTone.WARNING); return }
         val now = System.currentTimeMillis()
         mission = next; pendingPickUntil = 0
         if (runStartedAt == 0L) runStartedAt = now
-        seenRealizations.clear()
-        BazaarTrading.assistLedger.realizations.filter { it.product == next.target.product }.mapTo(seenRealizations) { it.id }
+        next.positionId?.let { runPositions += it }
+        source.ledger.realizations.filter { it.product == next.target.product }.mapTo(seenRealizations) { it.id }
         status = AssistStatus.ACTIVE; filledSign = 0; screenDirty = true
         say(message, AssistTone.INFO)
         update(now)
@@ -139,24 +193,32 @@ object BazaarAssist : SkyMyceModule() {
 
     /** Start key: resume, follow a position that needs you, or take the best current recommendation. */
     fun start() {
-        if (!Settings.enabled) { say("Bazaar Assistant is turned off in settings", AssistTone.WARNING); return }
-        mission?.takeIf { status != AssistStatus.DONE }?.let { status = AssistStatus.ACTIVE; say("Resumed", AssistTone.INFO); update(System.currentTimeMillis()); return }
-        val ledger = BazaarTrading.assistLedger
+        if (!Settings.enabled) { feedback("Bazaar Assistant is turned off in its settings", AssistTone.WARNING); return }
+        mission?.takeIf { status != AssistStatus.DONE }?.let {
+            status = AssistStatus.ACTIVE; say("Resumed", AssistTone.INFO); screenDirty = true; update(System.currentTimeMillis()); return
+        }
+        val ledger = source.ledger
         val waiting = ledger.positions.filter { it.pendingItems > 0 || it.stage == BazaarStage.READY }.maxByOrNull { it.lastAt }
         if (waiting != null) { follow(waiting); return }
-        val best = BazaarTrading.assistOpportunities.firstOrNull()
+        val best = source.opportunities.firstOrNull()
         if (best != null) { begin(best); return }
-        BazaarTrading.assistStartSession()
+        source.startSession()
         pendingPickUntil = System.currentTimeMillis() + 60_000
+        if (runStartedAt == 0L) runStartedAt = System.currentTimeMillis()
         status = AssistStatus.WAITING; mission = null; step = null; phase = null
         say("Loading recommendations…", AssistTone.INFO)
-        bump()
     }
 
     fun stop() {
         if (!active && mission == null) return
+        lastRun = assistRunSummary(source.ledger.realizations, runPositions, runStartedAt, System.currentTimeMillis())
+        lastRun?.let { run ->
+            Utils.displayModMessage("Bazaar Assistant run: ${bazaarSignedCoins(run.profit)} from ${run.sales} sale${if (run.sales == 1) "" else "s"}" +
+                " in ${assistDuration(run.millis)}" + (run.perHour?.let { " · ${bazaarCompactCoins(it)}/h" } ?: "") +
+                (run.bestProduct?.takeIf { run.sales > 1 }?.let { " · best ${BazaarNames.name(it)}" } ?: ""))
+        }
         mission = null; step = null; phase = null; warning = null; pendingPickUntil = 0
-        status = AssistStatus.OFF; filledSign = 0; runStartedAt = 0; runPositions.clear(); pops.clear()
+        status = AssistStatus.OFF; filledSign = 0; runStartedAt = 0; runPositions.clear(); seenRealizations.clear(); pops = emptyList()
         bump()
     }
 
@@ -166,19 +228,25 @@ object BazaarAssist : SkyMyceModule() {
         bump()
     }
 
+    /** Notices show in the panel; while it is hidden they go to chat instead, so a key press never seems ignored. */
+    private fun feedback(text: String, tone: AssistTone) {
+        if (active) say(text, tone)
+        else if (MC.instance.player != null) Utils.displayModMessage((if (tone == AssistTone.INFO) "§7" else "§e") + text)
+    }
+
     private fun bump() { revision++ }
 
-    // ---- Per tick ----
+    // ---- Keys ----
 
     private fun onTick() {
-        while (startKey.consumeClick()) start()
-        while (stopKey.consumeClick()) { stop(); say("Stopped", AssistTone.INFO) }
+        while (startKey.consumeClick()) startFromKey()
+        while (stopKey.consumeClick()) stopFromKey()
         while (commandKey.consumeClick()) sendCommand()
         val now = System.currentTimeMillis()
         notice?.takeIf { now > it.until }?.let { notice = null; bump() }
-        while (pops.firstOrNull()?.let { now - it.at > 3500 } == true) { pops.removeFirst(); bump() }
+        if (pops.isNotEmpty() && pops.all { now - it.at > POP_MILLIS }) { pops = emptyList(); bump() }
         if (pendingPickUntil > 0) {
-            val best = BazaarTrading.assistOpportunities.firstOrNull()
+            val best = source.opportunities.firstOrNull()
             when {
                 best != null -> begin(best)
                 now > pendingPickUntil -> { pendingPickUntil = 0; status = AssistStatus.ERROR; say("No flips match your filters right now", AssistTone.WARNING) }
@@ -190,6 +258,22 @@ object BazaarAssist : SkyMyceModule() {
         autoSign()
     }
 
+    private fun startFromKey() { if (onSkyBlock) start() else feedback("Join SkyBlock to use the Bazaar Assistant", AssistTone.INFO) }
+    private fun stopFromKey() { if (active) { stop(); feedback("Bazaar Assistant stopped", AssistTone.INFO) } }
+
+    /** Handles the assistant's own keys inside a menu; true consumes the key. */
+    private fun menuKey(key: KeyEvent): Boolean {
+        if (!onSkyBlock) return false
+        return when {
+            !startKey.isUnbound && startKey.matches(key) -> { startFromKey(); true }
+            !stopKey.isUnbound && stopKey.matches(key) -> { stopFromKey(); true }
+            !commandKey.isUnbound && commandKey.matches(key) && Settings.autoCommand && shownCommand != null -> { say("Close the menu first", AssistTone.INFO); true }
+            else -> false
+        }
+    }
+
+    // ---- Events ----
+
     @Subscription fun containerOpened(@Suppress("UNUSED_PARAMETER") event: ContainerInitializedEvent) { screenDirty = true }
     @Subscription fun containerChanged(event: InventoryChangeEvent) { if (!event.isInPlayerInventory) screenDirty = true }
     @Subscription(ServerDisconnectEvent::class) fun disconnected() {
@@ -197,9 +281,10 @@ object BazaarAssist : SkyMyceModule() {
     }
 
     @Subscription(receiveCancelled = true)
-    fun chat(event: ChatReceivedEvent.Pre) {
+    fun chat(event: ChatReceivedEvent.Pre) = chatLine(event.text.trim())
+
+    internal fun chatLine(text: String) {
         val target = mission?.target ?: return
-        val text = event.text.trim()
         when {
             text.startsWith("[Bazaar] Buy Order Setup!") && text.contains(target.name, true) -> say("Buy order placed", AssistTone.SUCCESS)
             text.startsWith("[Bazaar] Sell Offer Setup!") && text.contains(target.name, true) -> say("Sell offer listed", AssistTone.SUCCESS)
@@ -212,28 +297,31 @@ object BazaarAssist : SkyMyceModule() {
         }
     }
 
+    // ---- Step ----
+
     private fun update(now: Long) {
         val current = mission ?: return
         if (screenDirty) { screen = snapshot(); screenDirty = false; observedScreen = MC.screen }
-        if (!LocationAPI.isOnSkyBlock) {
+        if (!onSkyBlock) {
             if (status != AssistStatus.PAUSED) { status = AssistStatus.PAUSED; bump() }
             return
         }
-        val ledger = BazaarTrading.assistLedger
+        val ledger = source.ledger
         val position = current.positionId?.let { id -> ledger.positions.firstOrNull { it.id == id } }
             ?: ledger.positions.filter { it.product == current.target.product && it.openedAt >= current.startedAt - 10_000 }.singleOrNull()
         if (position != null && current.positionId != position.id) { mission = current.copy(positionId = position.id); runPositions += position.id }
-        val quote = BazaarTrading.assistQuote(current.target.product)
-        val live = BazaarTrading.assistFreshness() == BazaarFreshness.FRESH
+        val live = source.freshness() == BazaarFreshness.FRESH
+        val quote = source.quote(current.target.product)
+        // Undercut the live best offer by 0.1 when typing the sell price; without live data keep the recommendation.
         val sellPrice = quote?.sellOfferPrice?.takeIf { live }?.let { (kotlin.math.ceil(it * 10 - 1e-7) - 1) / 10 } ?: current.target.sellPrice
         val target = current.target.copy(sellPrice = sellPrice)
         val nextPhase = assistPhase(position, ledger.orders)
         val nextStep = assistStep(target, nextPhase, screen, Settings.priceMode, position?.remaining?.takeIf { it > 0 } ?: target.quantity)
         val nextWarning = when {
-            nextPhase != AssistPhase.PLACE_BUY -> null
-            !BazaarTrading.active -> "Start flipping for live prices before placing the order"
-            BazaarTrading.assistFreshness() != BazaarFreshness.FRESH -> "Market data is not live; prices may have moved"
-            BazaarTrading.assistOpportunities.none { it.product == target.product } -> "This flip no longer ranks; consider another"
+            nextPhase != AssistPhase.PLACE_BUY && nextPhase != AssistPhase.PLACE_SELL -> null
+            !source.trading -> "Start flipping for live prices before placing the order"
+            !live -> "Market data is not live; prices may have moved"
+            nextPhase == AssistPhase.PLACE_BUY && source.opportunities.none { it.product == target.product } -> "This flip no longer ranks; consider another"
             else -> null
         }
         val nextStatus = when {
@@ -242,6 +330,8 @@ object BazaarAssist : SkyMyceModule() {
             nextStep.kind == AssistKind.CLICK && nextStep.slot == null && screen.kind == AssistScreenKind.CONTAINER -> AssistStatus.ERROR
             else -> AssistStatus.ACTIVE
         }
+        val matches = nextStep.target?.let { target -> screen.slots.count { it.name.equals(target, true) } } ?: 0
+        if (matches != targetMatches) { targetMatches = matches; bump() }
         if (nextStep != step || nextPhase != phase || nextWarning != warning || nextStatus != status) {
             if (nextStep.kind != step?.kind || nextStep.label != step?.label || nextStep.slot != step?.slot) stepChangedAt = now
             if (nextPhase == AssistPhase.DONE && phase != AssistPhase.DONE) say("Flip complete", AssistTone.SUCCESS)
@@ -251,90 +341,100 @@ object BazaarAssist : SkyMyceModule() {
         position?.let { realized(it.id, now) }
     }
 
-    /** Realized results come from the existing ledger; each sale portion pops once. */
+    /** Realized results come from the existing ledger; each record pops once and close records merge. */
     private fun realized(positionId: String, now: Long) {
-        val fresh = BazaarTrading.assistLedger.realizations.filter { it.positionId == positionId && it.netProfit != null && seenRealizations.add(it.id) }
+        val fresh = source.ledger.realizations.filter { it.positionId == positionId && it.netProfit != null && seenRealizations.add(it.id) }
         if (fresh.isEmpty() || !Settings.profitNotices) return
-        pops.addLast(AssistPop(fresh.first().id, fresh.sumOf { it.netProfit ?: 0.0 }, now))
-        while (pops.size > 3) pops.removeFirst()
+        val click = lastClick?.takeIf { now - it.at <= 4000 && it.screenId == System.identityHashCode(MC.screen) && MC.screen is AbstractContainerScreen<*> }
+        pops = assistMergePop(pops.filter { now - it.at <= POP_MILLIS }, AssistPopEvent(fresh.sumOf { it.netProfit ?: 0.0 }, now, click?.x, click?.y))
         bump()
     }
 
     /** Realized profit of positions guided since the assistant started, and its hourly rate once meaningful. */
-    internal fun runProfit(): Pair<Double, Double?>? {
-        if (runPositions.isEmpty() || runStartedAt == 0L) return null
-        val profit = BazaarTrading.assistLedger.positions.filter { it.id in runPositions }.sumOf { it.realizedProfit }
-        if (profit == 0.0) return null
-        val hours = (System.currentTimeMillis() - runStartedAt) / 3_600_000.0
-        return profit to (profit / hours).takeIf { hours >= 5.0 / 60 }
-    }
+    internal fun runProfit(): AssistRunSummary? = if (runStartedAt == 0L) null
+        else assistRunSummary(source.ledger.realizations, runPositions, runStartedAt, System.currentTimeMillis())
 
-    private fun snapshot(): AssistScreen = when (val open = MC.screen) {
+    /** Screen reads so far; they happen on screen changes and every half second, never per frame. */
+    internal var snapshots = 0L
+        private set
+
+    private fun snapshot(): AssistScreen = also { snapshots++ }.let { when (val open = MC.screen) {
         null, is ChatScreen -> AssistScreen(AssistScreenKind.NONE)
         is AbstractSignEditScreen -> AssistScreen(AssistScreenKind.SIGN,
             signLines = (open as BazaarAssistSignAccessor).`skymyce$getMessages`()?.map { it.orEmpty() }.orEmpty(), id = System.identityHashCode(open))
         is AbstractContainerScreen<*> -> AssistScreen(AssistScreenKind.CONTAINER, open.title.string.replace(colorCode, ""),
             open.menu.slots.filter { it.container !is Inventory && !it.item.isEmpty }.take(90).map { slot ->
-                AssistSlot(slot.index, slot.item.hoverName.string.replace(colorCode, "").trim(), slot.item.getSkyBlockId()?.bazaarId?.uppercase())
+                AssistSlot(slot.index, slotName(slot.item), slot.item.getSkyBlockId()?.bazaarId?.uppercase())
             }, id = System.identityHashCode(open))
         else -> AssistScreen(AssistScreenKind.OTHER, id = System.identityHashCode(open))
-    }
+    } }
     private val colorCode = Regex("§.")
+    private fun slotName(stack: net.minecraft.world.item.ItemStack) = stack.hoverName.string.replace(colorCode, "").trim()
 
-    /** Highlight only the current container's own target, never a remembered index from another screen. */
+    /**
+     * Highlight only the current container's own target, and only while that slot still shows what the step was
+     * computed from; a menu that changed since the last read shows nothing rather than a guess.
+     */
     internal fun highlightTarget(container: AbstractContainerScreen<*>): Int? {
         if (!Settings.enabled || status == AssistStatus.OFF || status == AssistStatus.PAUSED) return null
-        val current = step?.takeIf { it.kind == AssistKind.CLICK } ?: return null
+        val index = step?.takeIf { it.kind == AssistKind.CLICK }?.slot ?: return null
         if (screen.id != System.identityHashCode(container)) return null
-        return current.slot
+        val expected = screen.slots.firstOrNull { it.index == index }?.name ?: return null
+        val live = container.menu.slots.firstOrNull { it.index == index }?.item ?: return null
+        return index.takeIf { !live.isEmpty && slotName(live) == expected }
     }
 
-    // ---- Command helpers ----
-
-    private fun commandStep() = step?.takeIf { active && status != AssistStatus.PAUSED && it.command != null && it.kind in setOf(AssistKind.COMMAND, AssistKind.CLOSE) }
+    // ---- Commands ----
 
     /** Auto Command: one key press sends the one command the current step shows, never while a menu is open. */
     private fun sendCommand() {
-        val current = commandStep()
-        if (!Settings.autoCommand) { say("Turn on Auto Command in the Bazaar terminal to use this key", AssistTone.WARNING); return }
-        if (current == null) { say("No command to send for this step", AssistTone.INFO); return }
-        if (MC.screen != null) { say("Close the menu first", AssistTone.WARNING); return }
-        val command = current.command ?: return
-        if (MC.instance.connection == null || MC.instance.player == null || !LocationAPI.isOnSkyBlock) return
+        if (!onSkyBlock) return
+        if (!Settings.autoCommand) { feedback("Turn on Auto Command in the Bazaar terminal to use this key", AssistTone.WARNING); return }
+        val command = shownCommand
+        if (command == null) { feedback("No command to send for this step", AssistTone.INFO); return }
+        if (MC.screen != null) { say("Close the menu first", AssistTone.INFO); return }
+        val connection = MC.instance.connection ?: return
         val now = System.currentTimeMillis()
         if (command == lastCommand && now - lastCommandAt < 3000) { say("Already sent; waiting for the menu", AssistTone.INFO); return }
         lastCommand = command; lastCommandAt = now
-        MC.instance.connection?.sendCommand(command)
+        connection.sendCommand(command)
         say("Sent /$command", AssistTone.SUCCESS, 2500)
     }
 
-    /** Tab completes the expected command only while the typed text is a prefix of it; otherwise vanilla Tab runs. */
+    /** Tab completes the expected command only while the box is on its way to it; otherwise vanilla Tab runs. */
     private fun tabFill(chat: ChatScreen): Boolean {
-        if (!Settings.tabFill || !LocationAPI.isOnSkyBlock) return false
-        val command = commandStep()?.command ?: return false
+        if (!Settings.tabFill || !onSkyBlock) return false
+        val command = shownCommand ?: return false
         val input = (chat as IrcChatScreenAccessor).`skymyce$getInput`()
-        if (assistGhost(input.value, command) == null) return false
+        assistChatGuide(input.value, command) ?: return false
         input.value = "/$command"
         input.moveCursorToEnd(false)
+        if (Settings.tabFills < TAB_HINTS) { Settings.tabFills++; SkyMyce.config.save() }
         return true
     }
 
     private fun drawGhost(chat: ChatScreen, graphics: GuiGraphicsExtractor) {
-        if (!Settings.ghostText || !LocationAPI.isOnSkyBlock) return
-        val command = commandStep()?.command ?: return
+        if (!Settings.ghostText || !onSkyBlock) return
+        val command = shownCommand ?: return
         val input = (chat as IrcChatScreenAccessor).`skymyce$getInput`()
         val typed = input.value
-        val ghost = assistGhost(typed, command) ?: return
+        val guide = assistChatGuide(typed, command) ?: return
         val font = MC.instance.font
-        val typedWidth = font.width(typed)
-        val hint = if (Settings.tabFill) "  Tab" else ""
-        if (typedWidth + font.width(ghost + hint) > input.innerWidth) return
-        // Our ghost takes the inline slot; vanilla's suggestion list stays open and keeps its arrow keys.
-        input.setSuggestion(null)
-        val x = input.x + typedWidth
+        val x = input.x
         val y = input.y // The chat box is unbordered, so its text sits at the top edge.
-        graphics.text(font, ghost, x, y, 0x80B8C2CC.toInt(), false)
-        if (hint.isNotEmpty()) graphics.text(font, hint, x + font.width(ghost), y, 0x80FFC857.toInt(), false)
+        // Our guidance takes the inline slot; vanilla's suggestion list stays open and keeps its keys.
+        input.setSuggestion(null)
+        guide.mismatchAt?.let { at ->
+            val wrong = typed.substring(at)
+            if (font.width(typed) > input.innerWidth) return
+            graphics.text(font, wrong, x + font.width(typed.substring(0, at)), y, 0xFFFF6B6B.toInt(), false)
+            return
+        }
+        val hint = if (Settings.tabFill && Settings.tabFills < TAB_HINTS) "  Tab" else ""
+        val typedWidth = font.width(typed)
+        if (typedWidth + font.width(guide.ghost + hint) > input.innerWidth) return
+        graphics.text(font, guide.ghost, x + typedWidth, y, 0x80B8C2CC.toInt(), false)
+        if (hint.isNotEmpty()) graphics.text(font, hint, x + typedWidth + font.width(guide.ghost), y, 0x80FFC857.toInt(), false)
     }
 
     // ---- Signs ----
@@ -352,7 +452,7 @@ object BazaarAssist : SkyMyceModule() {
         return current.takeIf { matches }
     }
 
-    /** Auto Sign types the expected value once per sign, into an empty first line; the player still presses Enter. */
+    /** Auto Sign types the expected value once per sign, into an empty first line; the player still clicks Done. */
     private fun autoSign() {
         if (!Settings.autoSign) return
         val signScreen = MC.screen as? AbstractSignEditScreen ?: return
@@ -366,27 +466,34 @@ object BazaarAssist : SkyMyceModule() {
         val field = accessor.`skymyce$getSignField`() ?: return
         field.selectAll()
         field.insertText(value)
-        say("Typed $value: check it, then press Enter", AssistTone.INFO, 3000)
+        say("Typed $value: check it, then click Done", AssistTone.INFO, 3000)
     }
 
     private fun drawSignHelper(signScreen: AbstractSignEditScreen, graphics: GuiGraphicsExtractor) {
         if (!Settings.signHelper) return
         val current = signStep(signScreen) ?: return
         val expected = current.value ?: return
-        val typed = (signScreen as BazaarAssistSignAccessor).`skymyce$getMessages`()?.firstOrNull().orEmpty()
+        val accessor = signScreen as BazaarAssistSignAccessor
+        val typed = accessor.`skymyce$getMessages`()?.firstOrNull().orEmpty()
         val font = MC.instance.font
         val center = signScreen.width / 2
         val what = when (current.sign) { AssistSign.SEARCH -> "Search"; AssistSign.AMOUNT -> "Amount"; else -> "Price" }
         graphics.centeredText(font, "Bazaar Assistant · $what: $expected", center, 10, 0xFFFFC857.toInt())
-        val (line, color) = when (assistSignCheck(typed, expected)) {
-            AssistSignCheck.EMPTY -> "Type it on the first line" to 0xFFB8C2CC.toInt()
-            AssistSignCheck.PARTIAL -> "Keep typing…" to 0xFFB8C2CC.toInt()
-            AssistSignCheck.MATCH -> "$expected is right: press Enter" to 0xFF7CE38B.toInt()
-            AssistSignCheck.MISMATCH -> "You typed ${typed.trim().take(24)}; it should be $expected" to 0xFFFF7A7A.toInt()
+        val check = assistSignCheck(typed, expected)
+        val (line, color) = when {
+            accessor.`skymyce$getLine`() != 0 && check != AssistSignCheck.MATCH -> "Use the first line: press ↑ to go back" to 0xFFFF7A7A.toInt()
+            check == AssistSignCheck.EMPTY -> "Type it on the first line" to 0xFFB8C2CC.toInt()
+            check == AssistSignCheck.PARTIAL -> "Keep typing…" to 0xFFB8C2CC.toInt()
+            check == AssistSignCheck.MATCH -> "$expected is right: click Done" to 0xFF7CE38B.toInt()
+            else -> "You typed ${typed.trim().take(24)}; it should be $expected" to 0xFFFF7A7A.toInt()
         }
         graphics.centeredText(font, line, center, 22, color)
     }
 
     fun commandKeyName(): String? = if (::commandKey.isInitialized && !commandKey.isUnbound) commandKey.translatedKeyMessage.string else null
     fun startKeyName(): String? = if (::startKey.isInitialized && !startKey.isUnbound) startKey.translatedKeyMessage.string else null
+    fun stopKeyName(): String? = if (::stopKey.isInitialized && !stopKey.isUnbound) stopKey.translatedKeyMessage.string else null
+
+    internal const val POP_MILLIS = 3500L
+    private const val TAB_HINTS = 3
 }
