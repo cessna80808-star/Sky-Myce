@@ -32,4 +32,20 @@ public final class CameraMath {
         if (!Double.isFinite(guiScale)) throw new IllegalArgumentException("Invalid camera viewport scale");
         return targetSize(width, height, Math.min(guiScale, Math.min(320.0 / width, 180.0 / height)));
     }
+
+    /** Leap previews may together use at most half of the frame time; each gets an equal share. */
+    static final int PREVIEW_BUDGET_DIVISOR = 2;
+
+    /**
+     * When a preview may render next. Frames advance from the previous due time, so spacing stays even instead of
+     * drifting with frame timing; the step slows only to keep all previews within their shared time budget.
+     */
+    public static long nextPreviewFrame(long due, long now, int framesPerSecond, long renderCost, int activeFeeds) {
+        long interval = 1_000_000_000L / Math.clamp(framesPerSecond, 2, 60);
+        long budget = Math.min(Math.max(renderCost, 0) * Math.max(activeFeeds, 1) * PREVIEW_BUDGET_DIVISOR, 1_000_000_000L);
+        long step = Math.max(interval, budget);
+        long next = due + step;
+        // A first frame, or a stall longer than one step, restarts the cadence instead of rendering a catch-up burst.
+        return due == 0 || next <= now ? now + step : next;
+    }
 }

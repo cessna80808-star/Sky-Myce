@@ -70,6 +70,8 @@ public final class SecondaryWorldCamera {
     private static final List<Feed> feeds = new ArrayList<>(4);
     private static Feed scheduledFeed;
     private static int nextFeed;
+    /** Previews shown last frame; they share one render-time budget. */
+    private static int activeFeeds = 1;
     private static RenderTarget activeOutput;
 
     private SecondaryWorldCamera() { }
@@ -148,6 +150,7 @@ public final class SecondaryWorldCamera {
                 nextFeed = (index + 1) % feeds.size();
             }
         }
+        activeFeeds = Math.max(1, (int) feeds.stream().filter(feed -> feed.requested).count());
         feeds.forEach(feed -> feed.requested = false);
     }
 
@@ -202,7 +205,8 @@ public final class SecondaryWorldCamera {
                     long extractionStarted = System.nanoTime();
                     withRenderer(pipeline.renderer, () -> pipeline.extract(client, view, size[0], size[1]));
                     extractionCost = System.nanoTime() - extractionStarted;
-                    nextFrame = System.nanoTime() + Math.max(1_000_000_000L / view.framesPerSecond(), auxiliary ? Math.min(renderCost * 16, 1_000_000_000L) : 0);
+                    nextFrame = auxiliary ? CameraMath.nextPreviewFrame(nextFrame, System.nanoTime(), view.framesPerSecond(), renderCost, activeFeeds)
+                        : System.nanoTime() + 1_000_000_000L / view.framesPerSecond();
                 });
                 if (pipeline == null || status == Status.PREPARING) return;
                 int color = (Math.round(Math.clamp(opacity, 0f, 1f) * 255) << 24) | 0xFFFFFF;
@@ -249,8 +253,8 @@ public final class SecondaryWorldCamera {
                     nextDiagnosticLog = System.nanoTime() + 10_000_000_000L;
                 }
                 long elapsed = extractionCost + System.nanoTime() - started;
-                renderCost = renderCost == 0 ? elapsed : (renderCost * 3 + elapsed) / 4;
-                if (auxiliary) nextFrame = Math.max(nextFrame, System.nanoTime() + Math.min(renderCost * 16, 1_000_000_000L));
+                // A slowly moving average keeps one slow frame from changing the preview cadence.
+                renderCost = renderCost == 0 ? elapsed : (renderCost * 7 + elapsed) / 8;
             } catch (RuntimeException error) { fail(error); }
         }
     }

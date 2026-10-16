@@ -16,9 +16,10 @@ object LeapMenuConfig : CategoryKt("Leap Menu") {
         name = TranslatableValue.literal("Share party viewpoints")
         description = TranslatableValue.literal("Share your position and viewing direction with current teammates through Community. Both players must enable this.")
     }
-    var framesPerSecond by int(6) {
-        name = TranslatableValue.literal("POV frame limit")
-        description = TranslatableValue.literal("Target maximum updates per teammate each second. Slow views update less often.")
+    // Replaces the old 6 fps "framesPerSecond" limit, so existing configs pick up the smoother default.
+    var previewFramesPerSecond by int(30) {
+        name = TranslatableValue.literal("POV frame rate")
+        description = TranslatableValue.literal("Target updates per teammate each second. Previews slow down automatically if together they would take more than half the frame time.")
         range = 2..60; slider = true
     }
 }
