@@ -7,7 +7,7 @@ Sky-Myce suggests Bazaar flips and keeps your own profit history. It never place
 1. Join a SkyBlock island and make sure your purse shows on the scoreboard.
 2. Run `/sm bazaar` (or open **Economy → Bazaar Trading**) and click **Start flipping**.
 3. In **Flips**, pick **Steady**, **Balanced** or **Bold**. Each card shows the estimated profit after tax, the coins needed and a rough fill time. **Details** explains the numbers.
-4. Click **Guide this flip**. The Bazaar search opens and the suggested amount is copied. Place the buy order yourself.
+4. Click **Guide this flip**. The Bazaar search opens, the suggested amount is copied and the **Bazaar Assistant** starts guiding you. Place the buy order yourself.
 5. Follow the **Next step** banner at the top of the terminal (or the HUD): claim the bought items, create a sell offer at the suggested price, then claim your coins.
 6. Click **Stop flipping**, or run `/sm bazaar off`, when you're done. Leaving the island also stops the session; start it again yourself.
 
@@ -23,9 +23,28 @@ The four tiles show **Purse** (coins you can spend now), coins **in buy orders**
 | **Positions** | What you are flipping now and the next step for each, relist advice, and receipts that need your review. |
 | **History** | Realized profit, ROI, completed sales and the leaderboard. Correct a personal record here. |
 | **Replays** | Private recordings of each session. Watch them in the browser dashboard, send a summary, or publish one. |
-| **More** | Alert toggles, the browser dashboard, your personal webhook, settings sync, export and delete. |
+| **More** | The Bazaar Assistant, alert toggles, the browser dashboard, your personal webhook, settings sync, export and delete. |
 
 **All Bazaar settings** (under **More**) holds the finder filters, tax estimate, relist threshold, alert thresholds and cooldowns, keybinds and timezone.
+
+## Bazaar Assistant
+
+The assistant walks you through one flip at a time: buy order, claim, sell offer, claim. It never clicks, confirms or places anything; you do every step yourself.
+
+- Start it with **Guide this flip**, **More → Guide the best flip**, `/sm bazaar assist`, or the **Start Bazaar Assistant** key (set it in **Options → Controls → Miscellaneous**). Stop it with `/sm bazaar assist stop` or its key.
+- Its panel says what to do next. In Bazaar menus, the button to click is highlighted, but only when exactly one slot matches; otherwise nothing is highlighted and the panel explains why.
+- In chat, the expected command appears as faint ghost text. Press **Tab** to fill it in. Other commands keep normal Tab completion.
+- On Bazaar signs, the expected search, amount or price shows above the sign and turns green once what you typed matches.
+- **Price entry** chooses between matching the order book (Top Order +0.1 / Best Offer -0.1) and typing the recommended price.
+- When a guided sale is claimed, its realized profit pops up and the panel shows this run's profit per hour, from the same records as **History**.
+- Highlight color, shape, thickness, opacity, pulse and animations are under **More → All assistant settings**. Move or resize the panel and profit pop-ups with **Move the HUD**. **Reset to defaults** restores everything.
+
+Two helpers are off by default and explained before you turn them on:
+
+- **Auto Command** sends the shown command when you press the **Send Bazaar Assistant command** key: one key press, one command, only with no menu open and never twice in a row.
+- **Auto Sign** pre-types the expected value into an empty Bazaar sign. You still check it and press Enter.
+
+Hypixel's rules on client modifications apply to you. Leave both helpers off if you're unsure.
 
 ## Profit and records
 

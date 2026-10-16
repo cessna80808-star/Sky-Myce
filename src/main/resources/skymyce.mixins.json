@@ -43,7 +43,8 @@
     "MenuItemLayersAccessor",
     "LabelComponentMixin",
     "ResourcefulConfigScreenBuilderMixin",
-    "SkijaMenuRenderMixin"
+    "SkijaMenuRenderMixin",
+    "BazaarAssistSignAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

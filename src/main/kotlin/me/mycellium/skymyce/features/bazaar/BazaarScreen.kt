@@ -5,6 +5,7 @@ import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
+import me.mycellium.skymyce.config.economy.BazaarAssistConfig as Assist
 import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.ui.*
 import net.minecraft.client.Minecraft
@@ -541,6 +542,7 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
     }
 
     private fun more() {
+        body.child(assistantCard())
         body.child(card().apply {
             child(label("Settings", MenuTheme.TEXT, 11f))
             child(label("Filters, tax estimate, alert thresholds and cooldowns live in the Bazaar settings page.", MenuTheme.MUTED, 8.5f))
@@ -596,6 +598,79 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
             child(label(state.connectionStatus, MenuTheme.MUTED, 8f))
         })
     }
+
+    // ---- Bazaar Assistant ----
+
+    private fun assistantCard() = card().apply {
+        id("bazaar-assistant")
+        val assist = me.mycellium.skymyce.features.bazaar.assist.BazaarAssist
+        child(row().apply {
+            child(label("Bazaar Assistant", MenuTheme.TEXT, 11f).apply { horizontalSizing(Sizing.expand()) })
+            child(label(assist.status.label + (assist.productName?.let { " · $it" } ?: ""), MenuTheme.MUTED, 8.5f).apply { horizontalSizing(Sizing.content()) })
+        })
+        child(label("Guides one flip step by step: the command to run, the button to click and the value to type. You click, type and confirm everything yourself.",
+            MenuTheme.MUTED, 8.5f))
+        child(actions(listOf(
+            if (assist.active) button("Stop guiding", 96) { assist.stop(); render(force = true) }.apply { id("bazaar-assist-stop") }
+            else button("Guide the best flip", 120) { assist.start(); feedback("Bazaar Assistant started"); render(force = true) }
+                .apply { id("bazaar-assist-start"); intent = MenuButtonIntent.PRIMARY; active(Assist.enabled) },
+            button(if (Assist.priceMode == me.mycellium.skymyce.features.bazaar.assist.AssistPriceMode.CUSTOM) "Price: type it" else "Price: match the book", 132) { anchor ->
+                openMenuDropdown(anchor) { menu ->
+                    menu.button(Component.literal("Match the order book (Top Order +0.1 / Best Offer -0.1)")) {
+                        Assist.priceMode = me.mycellium.skymyce.features.bazaar.assist.AssistPriceMode.MATCH_ORDER_BOOK; saveAssist() }
+                    menu.button(Component.literal("Type the recommended price on a sign")) {
+                        Assist.priceMode = me.mycellium.skymyce.features.bazaar.assist.AssistPriceMode.CUSTOM; saveAssist() }
+                }
+            }.apply { id("bazaar-assist-price") },
+        )))
+        child(assistToggle("Assistant enabled", "enabled", { Assist.enabled }) { Assist.enabled = it; if (!it) assist.stop() })
+        child(assistToggle("Auto Command", "auto-command", { Assist.autoCommand }, "Turn on Auto Command?",
+            "Sends the command the assistant shows (such as /bz Enchanted Carrot) when you press its key in Options → Controls. " +
+                "One key press sends one command, only with no menu open, and never twice in a row. It never clicks, " +
+                "confirms or places anything. Hypixel's rules on modifications still apply to you; leave this off if you're unsure.") { Assist.autoCommand = it })
+        child(assistToggle("Auto Sign", "auto-sign", { Assist.autoSign }, "Turn on Auto Sign?",
+            "Pre-types the expected search, amount or price into an empty Bazaar sign. You still check it and press Enter yourself; " +
+                "it never submits, closes or confirms. Hypixel's rules on modifications still apply to you.") { Assist.autoSign = it })
+        child(row().apply {
+            child(label("Highlight", MenuTheme.TEXT, 9f).apply { horizontalSizing(Sizing.expand()) })
+            child(me.mycellium.skymyce.features.bazaar.assist.AssistHighlightPreview())
+            child(button(Assist.highlightShape.label, 104) { anchor ->
+                openMenuDropdown(anchor) { menu ->
+                    me.mycellium.skymyce.config.economy.AssistHighlightShape.entries.forEach { shape ->
+                        menu.button(Component.literal(shape.label)) { Assist.highlightShape = shape; saveAssist() }
+                    }
+                }
+            }.apply { id("bazaar-assist-shape") })
+        })
+        val keys = listOfNotNull(assist.startKeyName()?.let { "start $it" }, assist.commandKeyName()?.let { "send command $it" })
+        child(label(if (keys.isEmpty()) "Set start, stop and send-command keys in Options → Controls → Miscellaneous. Color, pulse and animations are in the settings."
+            else "Keys: ${keys.joinToString(" · ")}. Change them in Options → Controls.", MenuTheme.MUTED, 8f))
+        child(actions(listOf(
+            button("All assistant settings", 132) { openSettings() }.apply { id("bazaar-assist-settings") },
+            button("Move the HUD", 92) { openMenu(MenuPage.HUD) },
+            button("Reset to defaults", 108) {
+                confirm("Reset the Bazaar Assistant?", "Its settings return to their defaults, Auto Command and Auto Sign turn off, and its HUD returns to its default place.") {
+                    Assist.resetAppearance()
+                    val hud = me.mycellium.skymyce.features.bazaar.assist.BazaarAssistHud
+                    listOf(hud.panel, hud.popups).forEach { it.defaultLayout.copy(theme = it.theme).applyConfig(it) }
+                    me.mycellium.skymyce.hud.widget.WidgetManager.save()
+                    saveAssist()
+                }
+            }.apply { id("bazaar-assist-reset") },
+        )))
+    }
+
+    private fun assistToggle(title: String, key: String, value: () -> Boolean, confirmTitle: String? = null, explanation: String = "",
+                             set: (Boolean) -> Unit) = row().apply {
+        child(label(title, MenuTheme.TEXT, 9f).apply { horizontalSizing(Sizing.expand()) })
+        child(MenuButton(Component.empty()) {
+            val enable = !value()
+            if (enable && confirmTitle != null) confirm(confirmTitle, explanation) { set(true); saveAssist() }
+            else { set(enable); saveAssist() }
+        }.apply { id("bazaar-assist-$key"); sizing(Sizing.fixed(54), Sizing.fixed(20)); toggled = value })
+    }
+
+    private fun saveAssist() { me.mycellium.skymyce.SkyMyce.config.save(); render(force = true) }
 
     // ---- Record repair ----
 

@@ -161,6 +161,13 @@ internal class GuiVisualBazaarFixture(private val finalTab: String = "flips") : 
             }
             15 -> {
                 check(labels().any { it == "Personal Discord webhook" } && labels().any { it == "Your data" } && components.any { it.id() == "bazaar-settings" })
+                check(labels().any { it == "Bazaar Assistant" } && components.any { it.id() == "bazaar-assist-start" } &&
+                    components.any { it.id() == "bazaar-assist-auto-command" } && components.any { it.id() == "bazaar-assist-auto-sign" }) {
+                    "The Bazaar Assistant card is missing its start and opt-in controls"
+                }
+                check(!me.mycellium.skymyce.config.economy.BazaarAssistConfig.autoCommand && !me.mycellium.skymyce.config.economy.BazaarAssistConfig.autoSign) {
+                    "Auto Command and Auto Sign must be off by default"
+                }
                 press("bazaar-toggle")
             }
             16 -> {
