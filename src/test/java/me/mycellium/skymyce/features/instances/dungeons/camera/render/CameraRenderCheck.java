@@ -17,6 +17,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.PlayerModelType;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
+import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
@@ -27,6 +28,7 @@ import java.util.Map;
 public final class CameraRenderCheck {
     public static void main(String[] args) {
         checkDispatcherOwnership();
+        checkMainFrameOrder();
         int[] overlayCalls = {0};
         Object[] overlays = {
             (LevelRenderEvents.AfterBlockOutlineExtraction) (context, hit) -> overlayCalls[0]++,
@@ -157,6 +159,69 @@ public final class CameraRenderCheck {
         reject(() -> CameraMath.projection(70, 640, 360, Float.NaN, false));
         reject(() -> CameraMath.targetSize(100, 100, Double.POSITIVE_INFINITY));
         System.out.println("Camera rendering checks passed: dispatcher/cache ownership after teardown, avatar selection, scoped render distance and terrain projection, independent rotations, Minecraft yaw/pitch, both depth conventions, aspect, target bounds, and invalid views.");
+    }
+
+    private static void checkMainFrameOrder() {
+        try {
+            boolean[] headHook = {false};
+            int[] secondaryDraws = {0};
+            try (var source = CameraRenderCheck.class.getResourceAsStream("/me/mycellium/mixin/SecondaryCameraGameRendererMixin.class")) {
+                new ClassReader(java.util.Objects.requireNonNull(source)).accept(new ClassVisitor(Opcodes.ASM9) {
+                    @Override public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                        if (!name.equals("skyMyce$drawSecondaryWorld")) return null;
+                        return new MethodVisitor(Opcodes.ASM9) {
+                            @Override public AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
+                                if (!descriptor.equals("Lorg/spongepowered/asm/mixin/injection/Inject;")) return null;
+                                return new AnnotationVisitor(Opcodes.ASM9) {
+                                    @Override public AnnotationVisitor visitArray(String name) {
+                                        if (!name.equals("at")) return null;
+                                        return new AnnotationVisitor(Opcodes.ASM9) {
+                                            @Override public AnnotationVisitor visitAnnotation(String name, String descriptor) {
+                                                return new AnnotationVisitor(Opcodes.ASM9) {
+                                                    @Override public void visit(String name, Object value) {
+                                                        if (name.equals("value")) headHook[0] = value.equals("HEAD");
+                                                    }
+                                                };
+                                            }
+                                        };
+                                    }
+                                };
+                            }
+                            @Override public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean itf) {
+                                if (owner.equals("me/mycellium/skymyce/features/instances/dungeons/camera/render/SecondaryWorldCamera") && name.equals("render")) secondaryDraws[0]++;
+                            }
+                        };
+                    }
+                }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            }
+            require(headHook[0] && secondaryDraws[0] == 1, "secondary world renders before the main frame, never over the completed world and hand");
+            boolean[] lightmapReady = {false}, mainWorld = {false}, projectionReady = {false}, fogReady = {false}, handAfterWorld = {false};
+            try (var source = CameraRenderCheck.class.getResourceAsStream("/net/minecraft/client/renderer/GameRenderer.class")) {
+                new ClassReader(java.util.Objects.requireNonNull(source)).accept(new ClassVisitor(Opcodes.ASM9) {
+                    @Override public MethodVisitor visitMethod(int access, String method, String descriptor, String signature, String[] exceptions) {
+                        if (!method.equals("render") && !method.equals("renderLevel")) return null;
+                        return new MethodVisitor(Opcodes.ASM9) {
+                            @Override public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean itf) {
+                                if (method.equals("render")) {
+                                    if (owner.equals("net/minecraft/client/renderer/Lightmap") && name.equals("render")) lightmapReady[0] = true;
+                                    if (owner.equals("net/minecraft/client/renderer/GameRenderer") && name.equals("renderLevel"))
+                                        require(lightmapReady[0], "the main lightmap is ready before the secondary render hook");
+                                } else {
+                                    if (owner.equals("com/mojang/blaze3d/systems/RenderSystem") && name.equals("setProjectionMatrix")) projectionReady[0] = true;
+                                    if (owner.equals("net/minecraft/client/renderer/fog/FogRenderer") && name.equals("updateBuffer")) fogReady[0] = true;
+                                    if (owner.equals("net/minecraft/client/renderer/LevelRenderer") && name.equals("renderLevel")) {
+                                        require(projectionReady[0] && fogReady[0], "the main projection and fog are rebound after the secondary hook");
+                                        mainWorld[0] = true;
+                                    }
+                                    if (name.equals("renderItemInHand")) handAfterWorld[0] = mainWorld[0];
+                                }
+                            }
+                        };
+                    }
+                }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            }
+            require(mainWorld[0] && handAfterWorld[0], "the main world and hand draw after the auxiliary passes");
+        } catch (java.io.IOException failure) { throw new AssertionError(failure); }
     }
 
     private static void checkDispatcherOwnership() {

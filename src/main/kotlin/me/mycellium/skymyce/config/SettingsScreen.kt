@@ -26,6 +26,7 @@ import net.minecraft.network.chat.Component
 import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlin.time.Duration
 
@@ -143,6 +144,45 @@ internal fun settingsSectionHeader(title: UIComponent, action: UIComponent?, ava
         action?.let { child(it) }
     }
 }
+
+internal data class SettingsBreadcrumbLink(val title: String, val section: String? = null, val featureId: String? = null)
+
+internal fun settingsBreadcrumbLinks(category: MenuCategory, feature: MenuFeature?): List<SettingsBreadcrumbLink> = buildList {
+    add(SettingsBreadcrumbLink(category.title))
+    feature?.let {
+        add(SettingsBreadcrumbLink(it.subcategory, section = it.subcategory))
+        add(SettingsBreadcrumbLink(it.title, featureId = it.id))
+    }
+}.distinctBy { it.title }
+
+internal fun settingsBreadcrumb(category: MenuCategory, feature: MenuFeature?, availableWidth: Int,
+                                changed: () -> Boolean = { false }, openSection: (String?) -> Unit,
+                                openFeature: (String) -> Unit): FlowLayout {
+    val buttons = settingsBreadcrumbLinks(category, feature).mapIndexed { index, link ->
+        val text = Component.literal(if (index == 0) link.title else "→ ${link.title}")
+        val lines = menuTextLines(text, availableWidth.coerceAtLeast(1), 17.0)
+        val width = ceil(lines.maxOfOrNull { menuTextWidth(it, 17.0) } ?: 0.0).toInt().coerceIn(1, availableWidth.coerceAtLeast(1))
+        object : MenuButton(text, { if (link.featureId != null) openFeature(link.featureId) else openSection(link.section) }) {
+            override fun interactionPose(hover: Double, press: Double) = MotionPose()
+            override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
+                val color = MenuTheme.alpha(if (changed() || hover > 0.0 || isFocused) MenuTheme.ACCENT else MenuTheme.TEXT)
+                lines.forEachIndexed { line, value ->
+                    graphics.styledText(menuTextRuns(value, color), x.toDouble(), (y + line * MenuCanvas.lineHeight(17.0)).toDouble(), 17.0)
+                }
+                if (isFocused) MenuTheme.focus(graphics, x, y, this.width, height)
+            }
+        }.apply {
+            sizing(Sizing.fixed(width), Sizing.fixed(lines.size * MenuCanvas.lineHeight(17.0)))
+            cursorStyle(CursorStyle.HAND); tooltip(Component.literal("Open ${link.title}"))
+        }
+    }
+    return UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+        gap(2)
+        menuActionRows(buttons.map { it.horizontalSizing().get().value }, availableWidth, 5).forEach { indices ->
+            child(settingsRow().apply { indices.forEach { child(buttons[it]) } })
+        }
+    }
+}
 /** Only the theme editor's public overrides are exposed from hidden config entries. */
 internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = settingRows(config) +
     config.categories()["Theme & Appearance"]?.elements().orEmpty()
@@ -181,7 +221,7 @@ class SettingsScreen @JvmOverloads constructor(
     private var changed = false
     private var query = ""
     private lateinit var body: FlowLayout
-    private lateinit var heading: LabelComponent
+    private lateinit var heading: FlowLayout
     private lateinit var summary: LabelComponent
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
@@ -230,7 +270,7 @@ class SettingsScreen @JvmOverloads constructor(
             tip("Search names, descriptions and aliases across every category. Ctrl+F focuses search.")
             onChanged().subscribe { query = it; keyCapture = null; closeMenuDropdown(); populate(animate = false) }
         }
-        heading = label(category.title, MenuTheme.TEXT, 17f)
+        heading = column()
         summary = label("", MenuTheme.MUTED, 9f)
         contentScroll = settingsScroll(body)
         root.child(settingsPage(search, column().apply { gap(4); child(heading); child(summary) }, contentScroll, settingsRow().apply {
@@ -243,9 +283,10 @@ class SettingsScreen @JvmOverloads constructor(
     private fun populate(animate: Boolean = true) {
         if (animate) contentChanged()
         controls.clear(); body.clearChildren()
-        heading.text(Component.literal(if (query.isBlank()) {
-            if (featureScoped) catalog.findFeature(featureId)?.breadcrumb ?: category.title else category.title
-        } else "Search results"))
+        heading.clearChildren()
+        heading.child(if (query.isBlank()) settingsBreadcrumb(category, catalog.findFeature(featureId).takeIf { featureScoped },
+            detailWidth, { changed }, { section -> navigateMenu(MenuDirectoryScreen(category, section = section)) }, { openMenuFeature(it) })
+        else label("Search results", MenuTheme.TEXT, 17f))
         val matches = commandCenterSettings(catalog, commandRows, category, query, featureId.takeIf { featureScoped })
         val results = if (query.isBlank()) MenuCatalog.extraSettings.filter {
             if (featureScoped) it.featureId == featureId else it.category == category
@@ -591,7 +632,6 @@ class SettingsScreen @JvmOverloads constructor(
     override fun onClose() { keyCapture = null; closeMenuTo(menuParent) }
     private fun edited() {
         changed = true; PartyFinder.invalidateMatcher()
-        heading.color(Color.ofRgb(MenuTheme.ACCENT))
         HudTheme.changed()
     }
     private fun keyName(key: Int) = if (key == GLFW.GLFW_KEY_UNKNOWN) "Unbound" else InputConstants.Type.KEYSYM.getOrCreate(key).displayName.string

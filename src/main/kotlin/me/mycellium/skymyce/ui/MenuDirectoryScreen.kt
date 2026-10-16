@@ -21,14 +21,14 @@ internal enum class MenuDirectoryView(val title: String, val description: String
 /** Category browsing and shortcuts are views over the same inventory, not separate destinations. */
 internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                                    private var view: MenuDirectoryView = MenuDirectoryView.SEARCH,
-                                   private val parent: Screen? = null) :
+                                   private val parent: Screen? = null,
+                                   private var section: String? = null) :
     MenuScreen(Component.literal(category?.title ?: view.title)) {
     override val menuCategory get() = category
     override val menuParent get() = menuBackScreen(menuBackTarget(category, categoryRoot = true))
     private val catalog get() = MenuDirectory.catalog
     private var query = ""
     private var filter = 0
-    private var section: String? = null
     private var limit = 50
     private lateinit var heading: MenuLabel
     private lateinit var description: MenuLabel

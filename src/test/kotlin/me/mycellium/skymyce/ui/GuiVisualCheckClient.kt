@@ -54,6 +54,8 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
+import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.client.input.MouseButtonInfo
 import net.minecraft.network.chat.Component
 import net.minecraft.sounds.SoundSource
 import net.minecraft.core.component.DataComponents
@@ -133,6 +135,8 @@ class GuiVisualCheckClient : ClientModInitializer {
             },
             Scene("settings-signature", ThemePreset.SIGNATURE) { SettingsScreen(null, SettingsTab.PARTY) },
             Scene("settings-light", ThemePreset.LIGHT) { SettingsScreen(null, SettingsTab.THEME) },
+            Scene("settings-routing-breadcrumbs", ThemePreset.SIGNATURE) { SettingsScreen.forFeature(null, "starred-routes") },
+            Scene("settings-routing-breadcrumbs-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { SettingsScreen.forFeature(null, "starred-routes") },
             Scene("themes-signature", ThemePreset.SIGNATURE) { ThemeEditorScreen(null) },
             Scene("themes-light", ThemePreset.LIGHT) { ThemeEditorScreen(null) },
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
@@ -191,6 +195,34 @@ class GuiVisualCheckClient : ClientModInitializer {
             checkNotNull(ui.rootComponent.focusHandler()).focus(control, UIComponent.FocusSource.KEYBOARD_CYCLE)
             screen.keyPressed(KeyEvent(GLFW.GLFW_KEY_ENTER, 0, 0))
         }
+        fun clickBreadcrumb(title: String) {
+            val client = Minecraft.getInstance()
+            val screen = client.screen as SettingsScreen
+            val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
+            val control = components.filterIsInstance<MenuButton>().single { !it.navigation && it.message.string == title }
+            fun pose(name: String) = MenuScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen) as MotionPose
+            val content = pose("paintedContent"); val shell = pose("paintedShell")
+            val x = content.pivotX + (control.x + control.width / 2.0 - content.pivotX) * content.scale + content.x
+            val y = content.pivotY + (control.y + control.height / 2.0 - content.pivotY) * content.scale + content.y
+            val mouse = MouseButtonEvent(
+                (shell.pivotX + (x - shell.pivotX) * shell.scale + shell.x) * client.window.guiScaledWidth / screen.width,
+                (shell.pivotY + (y - shell.pivotY) * shell.scale + shell.y) * client.window.guiScaledHeight / screen.height,
+                MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0))
+            check(screen.mouseClicked(mouse, false)) { "Breadcrumb $title did not handle its painted mouse position" }
+            client.screen?.mouseReleased(mouse)
+        }
+        fun checkBreadcrumbDirectory(section: String?) {
+            val screen = checkNotNull(Minecraft.getInstance().screen)
+            check(screen is MenuDirectoryScreen) { "Breadcrumb did not open its category directory" }
+            val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
+            check(components.filterIsInstance<MenuButton>().any { it.message.string == (section ?: "All sections") }) {
+                "Breadcrumb opened the wrong section selector: $section"
+            }
+            val featureTitles = components.filterIsInstance<MenuLabel>().map { it.text().string }
+            check("Dungeon Routing" in featureTitles && (section == null || "Party Finder" !in featureTitles)) {
+                "Section breadcrumb did not filter the category's features"
+            }
+        }
         fun trackerFilter() = DungeonScreen::class.java.getDeclaredField("filter").apply { isAccessible = true }
             .get(checkNotNull(Minecraft.getInstance().screen) as DungeonScreen) as TrackerFilter
         fun trackerView() = DungeonScreen::class.java.getDeclaredField("view").apply { isAccessible = true }
@@ -245,6 +277,30 @@ class GuiVisualCheckClient : ClientModInitializer {
                             "Keyboard-focused Home shortcut remained outside the visible scroll area"
                         }
                     }
+                }
+            }
+            if (current.name.startsWith("settings-routing-breadcrumbs")) when (ticks) {
+                8 -> {
+                    val screen = checkNotNull(client.screen)
+                    val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
+                    val links = components.filterIsInstance<MenuButton>().filter { it.message.string in listOf("Dungeons", "→ Routes", "→ Dungeon Routing") && !it.navigation }
+                    check(links.size == 3 && links.all { link ->
+                        val row = checkNotNull(link.parent())
+                        link.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) && link.width > 0 &&
+                            link.x >= row.x() && link.x + link.width <= row.x() + row.width()
+                    }) { "A settings breadcrumb was clipped or could not receive keyboard focus" }
+                    clickBreadcrumb("Dungeons"); checkBreadcrumbDirectory(null)
+                }
+                12, 22 -> navigateMenu(SettingsScreen.forFeature(null, "starred-routes"))
+                18 -> { clickBreadcrumb("→ Routes"); checkBreadcrumbDirectory("Routes") }
+                28 -> {
+                    val previous = client.screen
+                    press("→ Dungeon Routing")
+                    check(client.screen is SettingsScreen && client.screen !== previous &&
+                        (client.screen as MenuScreen).canonicalFeatureId == "starred-routes") {
+                        "Keyboard activation of the feature breadcrumb did not open its canonical settings"
+                    }
+                    println("Visual breadcrumb check passed: mouse category/section, keyboard feature and ${current.width}px layout")
                 }
             }
             if (current.name == "leaderboards-community-return") when (ticks) {
@@ -459,6 +515,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 screen.mouseMoved(x * client.window.guiScaledWidth, y * client.window.guiScaledHeight)
             }
             val captureTick = when (current.name) {
+                "settings-routing-breadcrumbs", "settings-routing-breadcrumbs-narrow" -> 38
                 "dungeon-tracker-filter-return" -> 30
                 "dungeon-tracker-personal-rate-tooltip" -> 40
                 "item-models-skyblock" -> 31
