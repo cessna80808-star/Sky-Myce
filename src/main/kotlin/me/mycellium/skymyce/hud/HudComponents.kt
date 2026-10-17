@@ -111,11 +111,14 @@ fun FlowLayout.updateTextLines(lines: List<String>, opacities: List<Double> = em
     }
 }
 
-fun hudPanel(padding: Int = HudTheme.PADDING, decorated: Boolean = true): FlowLayout = hudColumn().apply {
+/** [fade] scales the background from invisible (0) to the theme's panel opacity (100); text is never faded. */
+fun hudPanel(padding: Int = HudTheme.PADDING, decorated: Boolean = true, fade: () -> Int = { 100 }): FlowLayout = hudColumn().apply {
     padding(Insets.of(padding))
-    surface(HudTheme.panel().let { background ->
+    surface(HudTheme.panel(fade = fade).let { background ->
         if (!decorated) background else background.and { graphics, panel ->
-            graphics.fill(panel.x(), panel.y() + 3, panel.x() + 2, panel.y() + panel.height() - 3, HudTheme.alpha(HudTheme.HUD_ACCENT))
+            val percent = fade().coerceIn(0, 100)
+            if (percent > 0) graphics.fill(panel.x(), panel.y() + 3, panel.x() + 2, panel.y() + panel.height() - 3,
+                HudTheme.alpha(HudTheme.HUD_ACCENT, HudTheme.OPACITY * percent / 100))
         }
     })
 }

@@ -54,6 +54,12 @@ object DungeonSplitsConfig : CategoryKt("Dungeon Splits") {
         description = TranslatableValue.literal("Which time the HUD compares with your bests: real time, which includes lag, or server time, which leaves it out")
     }
 
+    val backgroundOpacity by int(100) {
+        name = TranslatableValue.literal("Background Opacity")
+        description = TranslatableValue.literal("How visible the splits HUD's background is: 100% follows your theme's panel opacity, 0% leaves only the text")
+        range = 0..100; slider = true
+    }
+
     val precise by boolean(true) {
         name = TranslatableValue.literal("Hundredths")
         description = TranslatableValue.literal("Show split times to a hundredth of a second")

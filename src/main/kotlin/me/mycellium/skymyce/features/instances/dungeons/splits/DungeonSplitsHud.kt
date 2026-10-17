@@ -123,7 +123,7 @@ object DungeonSplitsHud : SkyMyceModule() {
         val servers = hudColumn()
         val deltas = hudColumn()
         val footer = hudColumn()
-        val panel = hudPanel(padding = 6).apply {
+        val panel = hudPanel(padding = 6, fade = { Settings.backgroundOpacity }).apply {
             child(heading)
             child(UIContainers.horizontalFlow(Sizing.content(), Sizing.content()).gap(6).apply {
                 allowOverflow(true); children(listOf(names, times, servers, deltas))

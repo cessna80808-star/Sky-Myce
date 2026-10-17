@@ -62,13 +62,16 @@ object HudTheme {
         g.fill(x + corner, y + height - 1, x + width - corner, y + height, color)
     }
 
-    fun panel(card: Boolean = false): Surface = Surface { g, c ->
-        rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(if (card) CARD else PANEL))
+    /** [fade] scales the whole panel, outline included, from invisible (0) to the theme's opacity (100). */
+    fun panel(card: Boolean = false, fade: () -> Int = { 100 }): Surface = Surface { g, c ->
+        val percent = fade().coerceIn(0, 100)
+        if (percent == 0) return@Surface
+        rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(if (card) CARD else PANEL, OPACITY * percent / 100))
         if (BORDERS && c.width() > 5 && c.height() > 5) {
             val x = c.x(); val y = c.y(); val w = c.width(); val h = c.height()
             val inset = if (ROUNDED) STYLE.radius.coerceIn(1, 3) else 0
             // Opaque, one-pixel outline; the panel interior retains exactly the selected opacity.
-            val border = alpha(BORDER, 100)
+            val border = alpha(BORDER, percent)
             if (g is me.mycellium.skymyce.ui.MenuGraphics) {
                 g.roundedBorder(x, y, w, h, if (ROUNDED) STYLE.radius.coerceAtLeast(2).toDouble() else 0.0, STYLE.borderWidth, border)
             } else {
