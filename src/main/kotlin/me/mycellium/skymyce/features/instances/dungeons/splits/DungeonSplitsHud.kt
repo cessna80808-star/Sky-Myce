@@ -19,7 +19,9 @@ internal data class SplitHudView(val title: String, val rows: List<SplitHudRow>,
 internal data class SplitHudRun(val marks: Map<SplitMilestone, Long>, val ticks: Map<SplitMilestone, Long>, val startObserved: Boolean,
                                 val elapsed: Long, val elapsedTicks: Long?, val finished: Boolean, val estimate: Int?,
                                 /** Steady live lag lost ([LagMeter]); a finished run uses its exact final splits instead. */
-                                val lag: Long? = null)
+                                val lag: Long? = null,
+                                /** [estimate] is Hypixel's own score from the boss. */
+                                val scoreExact: Boolean = false)
 
 internal data class SplitHudOptions(val compare: Boolean = true, val upcoming: Boolean = true, val total: Boolean = true,
                                     val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL)
@@ -112,7 +114,7 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
         rows += when {
             real != null -> SplitHudRow("§b${definition.title(marker)}", "§f${time(real)}", server(srv), delta(compared(real, srv), bestMarker))
             marker in marks -> SplitHudRow("§b${definition.title(marker)}", "§7reached")
-            marker == SplitMilestone.SCORE_300 && run.estimate != null && !run.finished -> SplitHudRow("§8${definition.title(marker)}", "§7est. ${run.estimate}")
+            marker == SplitMilestone.SCORE_300 && run.estimate != null && !run.finished -> SplitHudRow("§8${definition.title(marker)}", "§7${if (run.scoreExact) "score" else "est."} ${run.estimate}")
             else -> continue
         }
     }
@@ -176,7 +178,7 @@ object DungeonSplitsHud : SkyMyceModule() {
         if (key != statsKey) { statsKey = key; stats = floorSplitStats(DungeonSplitStore.runs, run.definition, SplitWindow.ALL, clock) }
         val timeline = run.timeline
         live.show(splitHudView(run.definition, SplitHudRun(timeline.marks, timeline.ticks, timeline.startObserved, timeline.elapsed(now),
-            timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate, run.lag.shown), stats,
+            timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate, run.lag.shown, run.scoreExact), stats,
             SplitHudOptions(Settings.comparison == Settings.Comparison.SECTION_PB, Settings.showUpcoming, Settings.showTotal, Settings.precise,
                 Settings.showServerTime, clock)))
     }

@@ -53,6 +53,8 @@ object DungeonSplits : SkyMyceModule() {
         var defeated = false
         var score = ScoreInputs(definition.floor)
         var estimate: Int? = null
+        /** [estimate] is Hypixel's own score from the boss, not an estimate. */
+        var scoreExact = false
         var sawBelow300 = false
         var outcome: SplitOutcome? = null
     }
@@ -280,12 +282,19 @@ object DungeonSplits : SkyMyceModule() {
 
     private inline fun updateScore(run: LiveRun, at: Long, change: (ScoreInputs) -> ScoreInputs) {
         run.score = change(run.score).copy(inBoss = DungeonAPI.inBoss, paul = MayorPerks.EZPZ.active)
-        val estimate = estimateDungeonScore(run.score)
-        if (estimate != run.estimate) { run.estimate = estimate; revision++ }
-        if (estimate == null || run.outcome != null) return
-        // Below 300 only counts once every input was read, so a late join's first, partial estimate is not a crossing.
-        if (estimate < 300) { if (run.score.complete) run.sawBelow300 = true; return }
-        // Only a crossing seen in this session is a time; joining or returning above 300 is not.
-        if (run.sawBelow300) mark(run, SplitMilestone.SCORE_300, at)
+        val score = dungeonScore(run.score)
+        if (score != run.estimate || run.score.exact != run.scoreExact) { run.estimate = score; run.scoreExact = run.score.exact; revision++ }
+        if (score == null || run.outcome != null) return
+        // Below 300 only counts once every input was read or Hypixel showed it, so a late join's first, partial
+        // estimate is not a crossing.
+        if (score < 300) { if (run.score.complete || run.score.shownScore != null) run.sawBelow300 = true; return }
+        when {
+            // Hypixel's score in the boss is final for the clear: the run had 300 when it entered, even if the estimate
+            // missed something along the way.
+            run.score.exact -> if ((run.sawBelow300 || run.timeline.startObserved) &&
+                run.timeline.markAt(SplitMilestone.SCORE_300, SplitMilestone.BOSS_ENTRY) == MarkResult.ACCEPTED) revision++
+            // Only a crossing seen in this session is a time; joining or returning above 300 is not.
+            run.sawBelow300 -> mark(run, SplitMilestone.SCORE_300, at)
+        }
     }
 }

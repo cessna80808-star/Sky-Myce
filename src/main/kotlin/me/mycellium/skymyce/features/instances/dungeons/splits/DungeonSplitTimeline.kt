@@ -112,6 +112,17 @@ class SplitTimeline(val definition: SplitDefinition, val startObserved: Boolean,
         return result
     }
 
+    /** Marks [marker] at the moment [same] was marked, on both clocks: a score confirmed later but reached by then. */
+    fun markAt(marker: SplitMilestone, same: SplitMilestone): MarkResult {
+        if (marker !in definition.markers) return MarkResult.NOT_APPLICABLE
+        if (marker in marked) return MarkResult.DUPLICATE
+        if (finished) return MarkResult.OUT_OF_ORDER
+        val at = marked[same] ?: return MarkResult.NOT_APPLICABLE
+        marked[marker] = at
+        tickMarks[same]?.let { tickMarks[marker] = it }
+        return MarkResult.ACCEPTED
+    }
+
     private fun markTicks(milestone: SplitMilestone, at: Long, atTicks: Long?) {
         val ticks = elapsedTicks(atTicks) ?: return
         // No game time for a while, or more server time than real time: the tick source is not trustworthy for this run.

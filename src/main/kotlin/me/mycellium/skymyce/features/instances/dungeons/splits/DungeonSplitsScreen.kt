@@ -92,10 +92,10 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
         body.child(row().apply {
             child(card("Personal best", time(stats.actualPb?.duration), stats.actualPb?.let { "Set ${source(it)}" } ?: "No completed run yet"))
             child(card("Best possible", time(stats.theoreticalPb), when {
-                stats.theoreticalPb != null -> "Sum of your best sections"
+                stats.theoreticalPb != null -> "Best entry + best boss sections"
                 stats.completedRuns == 0 -> "Needs a complete run"
                 else -> "A section has no complete time yet"
-            }).wrappedTooltip(Component.literal("Adds your best time for each section, each from any fully split completed run. Those bests can come from different runs.")))
+            }).wrappedTooltip(Component.literal("Your best boss entry, one run's whole clear, plus your best time for each boss section from any fully split completed run. The clear's fastest sections rarely happen together, so they are not added up.")))
             child(card("Average run", average(stats.averageTotal), "${window.title} · ${stats.averageSamples} run${if (stats.averageSamples == 1) "" else "s"}"))
         })
         body.child(label(listOfNotNull("${stats.completedRuns} completed · ${stats.savedRuns} saved on ${definition.floor}",
@@ -117,15 +117,15 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
             stats.checkpoints.firstOrNull { it.milestone == section.section.milestone }?.let { checkpoint ->
                 body.child(tableRow("${definition.title(checkpoint.milestone)} ✱", time(checkpoint.best?.duration), average(checkpoint.average),
                     source(checkpoint.best), MenuTheme.ACCENT)
-                    .wrappedTooltip(Component.literal("Time from the run start to ${definition.title(checkpoint.milestone).lowercase()}: the whole clear in one number. Its best is a single run's time.")))
+                    .wrappedTooltip(Component.literal("Time from the run start to ${definition.title(checkpoint.milestone).lowercase()}: the whole clear in one number. Its best is a single run's time and starts Best possible.")))
             }
         }
         for (marker in stats.markers) {
             body.child(tableRow("${definition.title(marker.milestone)} ✱", time(marker.best?.duration),
                 average(marker.average), source(marker.best), MenuTheme.MUTED)
-                .wrappedTooltip(Component.literal("Time from the run start until the estimated score reached 300. It can happen before or after boss entry, so it is not a section.")))
+                .wrappedTooltip(Component.literal("Time from the run start until the score reached 300. Hypixel's own score in the boss settles it: if it shows 300 the estimate missed, the time is boss entry. It can happen before or after boss entry, so it is not a section.")))
         }
-        body.child(label("✱ Timed from the start; not part of Best possible. Bests use completed runs with every split seen; averages also use sections seen in other runs.", MenuTheme.MUTED))
+        body.child(label("✱ Timed from the start. Best possible uses Boss Entry in place of the clear sections. Bests use completed runs with every split seen; averages also use sections seen in other runs.", MenuTheme.MUTED))
 
         body.child(label("RECENT RUNS", MenuTheme.SECONDARY).apply { margins(Insets.top(6)) })
         val recent = runs.filter { it.floor == definition.floor }.sortedByDescending { it.recordedAt }.take(15)

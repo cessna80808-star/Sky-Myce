@@ -83,7 +83,10 @@ data class FloorSplitStats(
     val clock: SplitClock,
     val markers: List<MarkerStats>,
     val actualPb: SectionBest?,
-    /** Null when any section has no eligible best; a missing section is never counted as zero. */
+    /**
+     * The best checkpoint (boss entry) plus the best of each section after it; null when any of those has no best, as a
+     * missing section is never counted as zero.
+     */
     val theoreticalPb: Long?,
     val sections: List<SectionStats>,
     val groups: List<GroupStats>,
@@ -125,7 +128,6 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         val observed = windowed(floorRuns.filter { it.conflicts == 0 }.mapNotNull { durations.getValue(it.id)[section.milestone] })
         SectionStats(section, best, observed.takeIf { it.isNotEmpty() }?.average(), observed.size)
     }
-    val theoretical = sections.takeIf { list -> list.isNotEmpty() && list.all { it.best != null } }?.sumOf { it.best!!.duration }
     val groups = definition.groups.map { group ->
         val best = fastest(eligible.mapNotNull { run -> spanDuration(run, group.from, group.to, clock)?.let { SectionBest(it, run.id, run.recordedAt) } })
         val observed = windowed(floorRuns.filter { it.conflicts == 0 }.mapNotNull { spanDuration(it, group.from, group.to, clock) })
@@ -140,9 +142,16 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         return MarkerStats(milestone, fastest(observed), window.takeIf { it.isNotEmpty() }?.average(), window.size)
     }
     val markers = definition.markers.map(::fromStart)
+    val checkpoints = definition.checkpoints.map(::fromStart)
+    // The clear's fastest sections rarely happen in one run, so the best boss entry, a real run's time, stands in for
+    // every section before it.
+    val cut = checkpoints.filter { it.best != null }.maxByOrNull { definition.chain.indexOf(it.milestone) }
+    val after = cut?.let { c -> sections.filter { definition.chain.indexOf(it.section.milestone) > definition.chain.indexOf(c.milestone) } } ?: sections
+    val theoretical = after.takeIf { list -> (cut != null || list.isNotEmpty()) && list.all { it.best != null } }
+        ?.sumOf { it.best!!.duration }?.plus(cut?.best?.duration ?: 0L)
     val lag = windowed(floorRuns.mapNotNull { it.lagLost })
     return FloorSplitStats(definition, clock, markers, actual, theoretical, sections, groups, totals.takeIf { it.isNotEmpty() }?.average(),
-        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), definition.checkpoints.map(::fromStart))
+        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), checkpoints)
 }
 
 /** Live comparison against the saved section PB; null when no comparable best exists yet. */

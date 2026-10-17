@@ -21,8 +21,12 @@ data class ScoreInputs(
     val mimic: Boolean = false,
     val prince: Boolean = false,
     val paul: Boolean = false,
+    /** Hypixel's own score, shown on the sidebar after the cleared percentage: `Cleared: 100% (301)`. */
+    val shownScore: Int? = null,
 ) {
     val complete get() = secretPercent != null && clearedPercent != null && completedRooms != null && elapsedSeconds != null
+    /** In the boss with Hypixel's score read: nothing from the clear can still change it, so it is the score, not an estimate. */
+    val exact get() = inBoss && shownScore != null
 }
 
 private val requiredSecrets = mapOf("F1" to 0.3, "F2" to 0.4, "F3" to 0.5, "F4" to 0.6, "F5" to 0.7, "F6" to 0.85, "F7" to 1.0)
@@ -65,13 +69,23 @@ fun estimateDungeonScore(input: ScoreInputs): Int? {
     return secretScore + roomScore + skill + bonus + speed
 }
 
+/**
+ * The run's score: Hypixel's own once in the boss, where it is final; during the clear the higher of it and the
+ * estimate, since the estimate also counts rooms still to come but can miss a bonus such as a mimic killed out of sight.
+ */
+fun dungeonScore(input: ScoreInputs): Int? {
+    val estimate = estimateDungeonScore(input)
+    val shown = input.shownScore ?: return estimate
+    return if (input.inBoss) shown else maxOf(shown, estimate ?: shown)
+}
+
 private val secretPercentLine = Regex("^\\s*Secrets Found: ([\\d.]+)%$")
 private val cryptsLine = Regex("^\\s*Crypts: (\\d+)$")
 private val completedRoomsLine = Regex("^\\s*Completed Rooms: (\\d+)$")
 private val deathsLine = Regex("^\\s*Team Deaths: (\\d+)$")
 private val puzzlesHeader = Regex("^\\s*Puzzles: \\((\\d+)\\)$")
 private val puzzleLine = Regex("^\\s*.+: \\[([✦✔✖])].*$")
-private val clearedLine = Regex("^\\s*Cleared: (\\d+)%.*$")
+private val clearedLine = Regex("^\\s*Cleared: (\\d+)%(?: \\((\\d+)\\))?.*$")
 private val elapsedLine = Regex("^\\s*Time Elapsed: (?:(\\d+)h )?(?:(\\d+)m )?(?:(\\d+)s)?$")
 
 /** Reads the tab list (stripped lines in column order) into [input]; lines that are absent leave values unchanged. */
@@ -107,6 +121,7 @@ fun readScoreSidebar(input: ScoreInputs, lines: List<String>, watcherCleared: Bo
             val cleared = match.groupValues[1].toInt().coerceIn(0, 100)
             if (watcherCleared && result.clearedPercent != null && cleared != result.clearedPercent) result = result.copy(bloodDone = true)
             result = result.copy(clearedPercent = cleared)
+            match.groupValues[2].toIntOrNull()?.takeIf { it in 0..1000 }?.let { result = result.copy(shownScore = it) }
         }
         elapsedLine.matchEntire(line)?.takeIf { match -> match.groupValues.drop(1).any { it.isNotEmpty() } }?.let { match ->
             val (h, m, s) = match.destructured

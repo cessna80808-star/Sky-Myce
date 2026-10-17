@@ -64,7 +64,14 @@ private fun checkTimeline() {
     check(t.mark(BOSS_ENTRY, 90_000 * MS) == MarkResult.ACCEPTED) // Watcher clear missed: kept missing, not invented
     check(BLOOD_CLEAR !in t.marks)
     check(t.mark(BLOOD_CLEAR, 91_000 * MS) == MarkResult.OUT_OF_ORDER && t.conflicts == 1) { "A late earlier phase is rejected and noted" }
+    check(t.markAt(SCORE_300, BLOOD_CLEAR) == MarkResult.NOT_APPLICABLE && t.markAt(MAXOR, BOSS_ENTRY) == MarkResult.NOT_APPLICABLE)
     check(t.mark(SCORE_300, 95_000 * MS) == MarkResult.ACCEPTED) { "Markers are independent of chain order" }
+    check(t.markAt(SCORE_300, BOSS_ENTRY) == MarkResult.DUPLICATE && t.marks.getValue(SCORE_300) == 94_000L)
+    // A 300 only confirmed in the boss is dated to boss entry on both clocks.
+    val confirmed = SplitTimeline(f7, true, 0L, 0L)
+    confirmed.mark(BOSS_ENTRY, 90_000 * MS, 1_760L); confirmed.mark(MAXOR, 120_000 * MS, 2_350L)
+    check(confirmed.markAt(SCORE_300, BOSS_ENTRY) == MarkResult.ACCEPTED && confirmed.marks.getValue(SCORE_300) == 90_000L &&
+        confirmed.ticks.getValue(SCORE_300) == 1_760L) { "${confirmed.marks}" }
     check(t.mark(RELICS, 96_000 * MS) == MarkResult.NOT_APPLICABLE) { "F7 has no relic phase" }
     check(t.current() == MAXOR)
     check(t.mark(START, 99_000 * MS) == MarkResult.DUPLICATE && t.marks.getValue(START) == 0L) { "Phase transitions never restart the run" }
@@ -101,11 +108,16 @@ private fun checkStats() {
     val otherFloor = run("F", "F7", 500, chained(f7, List(f7.sections.size) { 500L }))
     val stats = floorSplitStats(listOf(a, b, partial, conflicted, otherFloor), m7, SplitWindow.ALL)
     check(stats.actualPb == SectionBest(20_000L * n, "A", 100)) { "Actual PB is a real completed run" }
-    val expected = (0 until n).sumOf { minOf(20_000L, bDurations[it]) }
-    check(stats.theoreticalPb == expected) { "Theoretical PB sums each section's best: ${stats.theoreticalPb} != $expected" }
+    // Best possible is the best boss entry (one run's clear: B's 57 s, not A and B's best sections) plus each boss section's best.
+    val clear = m7.chain.indexOf(BOSS_ENTRY)
+    val onlyFinished = floorSplitStats(listOf(a, b), m7, SplitWindow.ALL)
+    val expected = 57_000L + (clear until n).sumOf { minOf(20_000L, bDurations[it]) }
+    check(onlyFinished.theoreticalPb == expected) { "Best possible starts from the best boss entry: ${onlyFinished.theoreticalPb} != $expected" }
+    check(onlyFinished.checkpoints.single().best?.duration == 57_000L && (0 until clear).sumOf { minOf(20_000L, bDurations[it]) } < 57_000L)
+    check(stats.theoreticalPb == 3 * 1_000L + (clear until n).sumOf { minOf(20_000L, bDurations[it]) }) { "A failed run's boss entry is still a real clear" }
     check(stats.theoreticalPb!! < stats.actualPb!!.duration)
     check(stats.sections[1].best?.run == "B" && stats.sections[0].best?.run == "A") { "Each section best keeps its source run" }
-    check(stats.sections.sumOf { it.best!!.duration } == stats.theoreticalPb) { "Theoretical total is traceable to its sections" }
+    check(stats.checkpoints.single().best!!.duration + stats.sections.drop(clear).sumOf { it.best!!.duration } == stats.theoreticalPb) { "Traceable to its parts" }
     check(stats.completedRuns == 2 && stats.savedRuns == 4) { "F7 is never mixed into M7" }
     check(stats.sections[0].samples == 3) { "Section averages include sections seen in partial runs, never conflicting ones" }
     check(stats.averageSamples == 2 && stats.averageTotal == (a.total!! + b.total!!) / 2.0)
@@ -175,6 +187,14 @@ private fun checkScore() {
     check(board.elapsedSeconds == 312 && board.clearedPercent == 70 && !board.bloodDone)
     check(readScoreSidebar(board, listOf("Cleared: 74% (240)"), watcherCleared = true).bloodDone)
     check(readScoreSidebar(board, listOf("Cleared: 70% (240)"), watcherCleared = true).bloodDone.not())
+    // Hypixel's own score: final in the boss, a floor under the estimate during the clear.
+    check(board.shownScore == 231 && readScoreSidebar(ScoreInputs("M7"), listOf("Cleared: 70%"), false).shownScore == null)
+    val boss = readScoreSidebar(perfect.copy(secretPercent = 90.0, crypts = 1, mimic = false, prince = false, inBoss = true),
+        listOf("Cleared: 100% (301)"), watcherCleared = true)
+    check(estimateDungeonScore(boss)!! < 300 && dungeonScore(boss) == 301 && boss.exact) { "${dungeonScore(boss)}" }
+    check(dungeonScore(boss.copy(inBoss = false)) == 301 && !boss.copy(inBoss = false).exact) { "A higher shown score lifts the estimate" }
+    check(dungeonScore(boss.copy(inBoss = false, shownScore = 250)) == estimateDungeonScore(boss.copy(inBoss = false)))
+    check(dungeonScore(boss.copy(shownScore = 296)) == 296) { "In the boss Hypixel's score wins either way" }
 }
 
 private fun checkHud() {
@@ -195,6 +215,10 @@ private fun checkHud() {
     check(rows.getValue("Maxor").time == "§e10.00" && rows.getValue("Maxor").server == "§7(§b10.00§7)") { "The running section counts from the last split" }
     check(rows.getValue("Storm").time == "§8—")
     check(rows.getValue("300 Score").time == "§f1:35.0" && rows.getValue("300 Score").server == "§7(§b1:33.8§7)")
+    val unmarked = SplitHudRun(marks - SCORE_300, ticks, true, 100_000L, 1_976L, false, 298)
+    check(splitHudView(f7, unmarked, null, SplitHudOptions()).rows.first { it.name.endsWith("300 Score") }.time == "§7est. 298")
+    check(splitHudView(f7, unmarked.copy(estimate = 299, scoreExact = true), null, SplitHudOptions()).rows
+        .first { it.name.endsWith("300 Score") }.time == "§7score 299") { "Hypixel's own score is not shown as an estimate" }
     check(view.footer[0] == "§7Run §f1:40.0 §7(§b1:38.8§7)" && view.footer[1] == "§7Lag lost §c+1.20") { "${view.footer}" }
     // Terms heads S1–S4, which are indented; Goldor is not.
     val names = view.rows.map { it.name.drop(2) }
@@ -242,13 +266,14 @@ private fun checkServerTime() {
     check(real.actualPb?.run == "R" && server.actualPb?.run == "L") { "Each clock has its own PB" }
     check(server.completedRuns == 1 && server.theoreticalPb == 19_900L * n) { "Runs without ticks never count on the server clock" }
     check(real.averageLag == 100.0 * n)
-    // Boss entry's best is the fastest single clear; it is not a section and not part of Best possible.
+    // Boss entry's best is the fastest single clear; it is not a section, and Best possible starts from it.
     check(real.checkpoints.single().let { it.milestone == BOSS_ENTRY && it.best?.duration == 3 * 19_950L && it.best?.run == "R" && it.samples == 2 })
     check(sectionDurations(laggy, m7, SplitClock.SERVER).getValue(MAXOR) == 19_900L)
     val terms = server.groups.single()
     check(terms.group.title == "Terms" && terms.best?.duration == 4 * 19_900L && terms.samples == 1)
     check(real.groups.single().best?.duration == 4 * 19_950L) { "Terms best is one run's terminals, not a sum of section bests" }
-    check(server.sections.sumOf { it.best!!.duration } == server.theoreticalPb) { "Terms is not added to Best possible" }
+    check(server.checkpoints.single().best!!.duration + server.sections.drop(m7.chain.indexOf(BOSS_ENTRY)).sumOf { it.best!!.duration } ==
+        server.theoreticalPb) { "Terms is not added to Best possible" }
     // Stored ticks survive a round trip; a 2.7.12 `CORE` mark is read back as S4.
     check(parseSplitRun(encodeSplitRun(laggy)) == laggy)
     val legacy = encodeSplitRun(realOnly).apply {
