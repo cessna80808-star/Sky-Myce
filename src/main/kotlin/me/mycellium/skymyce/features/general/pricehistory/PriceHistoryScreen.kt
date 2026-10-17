@@ -82,9 +82,9 @@ class PriceHistoryScreen(private val parent: Screen, private val tag: String, pr
             history.secondStats?.let { child(card(market.second, it, PriceChart.SECOND)) }
             if (market == PriceMarket.BAZAAR && history.firstStats != null && history.secondStats != null) {
                 val spread = history.firstStats.latest - history.secondStats.latest
-                child(summary("Spread", formatCoins(spread), "%.1f%% of the sell price".format(spread / history.secondStats.latest * 100)))
+                child(summary("Spread", formatCoins(spread), "%.1f%% of the sell price".format(java.util.Locale.ROOT, spread / history.secondStats.latest * 100)))
             }
-            if (market == PriceMarket.AUCTION) child(summary("Sales", "%,d".format(history.sales), "in ${range.title.lowercase()}"))
+            if (market == PriceMarket.AUCTION) child(summary("Sales", "%,d".format(java.util.Locale.ROOT, history.sales), "in ${range.title.lowercase()}"))
         })
     }
 
@@ -95,7 +95,7 @@ class PriceHistoryScreen(private val parent: Screen, private val tag: String, pr
         child(label(title, color))
         child(MenuLabel(Component.literal(formatCoins(stats.latest)).withColor(MenuTheme.TEXT)).apply { fontSize = 14f; horizontalSizing(Sizing.fill()) })
         val change = stats.change
-        child(MenuLabel(Component.literal("%+.1f%%".format(change)).withColor(if (change >= 0) MenuTheme.GREEN else MenuTheme.RED)
+        child(MenuLabel(Component.literal("%+.1f%%".format(java.util.Locale.ROOT, change)).withColor(if (change >= 0) MenuTheme.GREEN else MenuTheme.RED)
             .append(Component.literal(" · low ${formatCoins(stats.low)} · high ${formatCoins(stats.high)} · avg ${formatCoins(stats.mean)}").withColor(MenuTheme.MUTED)))
             .apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
     }
@@ -112,6 +112,9 @@ class PriceHistoryScreen(private val parent: Screen, private val tag: String, pr
     private fun button(text: String, width: Int, action: () -> Unit) =
         MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fixed(width), Sizing.fixed(20)) }
 }
+
+/** Canvas text needs an opaque ARGB colour; theme colours are plain RGB. */
+private fun run(text: String, color: Int) = MenuCanvas.Run(text, MenuTheme.alpha(color))
 
 /** Two price lines with a price axis, date labels and a crosshair that reads out the hovered point. */
 internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
@@ -144,7 +147,7 @@ internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
             val value = min + (max - min) * step / 4
             val lineY = py(value)
             canvas.line(left, lineY, right, lineY, 1.0, MenuTheme.alpha(MenuTheme.BORDER, if (step == 0) 70 else 30))
-            canvas.text(listOf(MenuCanvas.Run(formatCoins(value), MenuTheme.MUTED)), x() + 4.0, lineY - 4, 8.0)
+            canvas.text(listOf(run(formatCoins(value), MenuTheme.MUTED)), x() + 4.0, lineY - 4, 8.0)
         }
         // Date labels under the plot.
         val dates = if (span <= 2 * 86_400_000L) DateTimeFormatter.ofPattern("HH:mm") else if (span <= 120 * 86_400_000L) DateTimeFormatter.ofPattern("MMM d")
@@ -153,7 +156,7 @@ internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
             val at = start + span * step / 4
             val text = dates.format(Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault()))
             val width = MenuCanvas.textWidth(text, size = 8.0)
-            canvas.text(listOf(MenuCanvas.Run(text, MenuTheme.MUTED)), (px(at) - width / 2).coerceIn(left, right - width), plotBottom + 3, 8.0)
+            canvas.text(listOf(run(text, MenuTheme.MUTED)), (px(at) - width / 2).coerceIn(left, right - width), plotBottom + 3, 8.0)
         }
         fun series(value: (PriceSample) -> Double?, color: Int) {
             var previous: Pair<Double, Double>? = null
@@ -170,7 +173,7 @@ internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
         var legendX = left + 4
         for ((name, color) in listOf(market.first to FIRST, market.second to SECOND)) {
             canvas.fill(legendX, plotTop + 3, 6.0, 6.0, MenuTheme.alpha(color))
-            canvas.text(listOf(MenuCanvas.Run(name, MenuTheme.TEXT)), legendX + 9, plotTop + 2, 8.0)
+            canvas.text(listOf(run(name, MenuTheme.TEXT)), legendX + 9, plotTop + 2, 8.0)
             legendX += 16 + MenuCanvas.textWidth(name, size = 8.0)
         }
         if (mouseX < left || mouseX > right || mouseY < plotTop || mouseY > plotBottom) return
@@ -180,10 +183,10 @@ internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
         hovered.first?.let { canvas.roundedRect(hoverX - 2, py(it) - 2, 4.0, 4.0, 2.0, MenuTheme.alpha(FIRST)) }
         hovered.second?.let { canvas.roundedRect(hoverX - 2, py(it) - 2, 4.0, 4.0, 2.0, MenuTheme.alpha(SECOND)) }
         val lines = listOfNotNull(
-            MenuCanvas.Run((if (span <= 14 * 86_400_000L) hourFormat else dayFormat).format(Instant.ofEpochMilli(hovered.at).atZone(ZoneId.systemDefault())), MenuTheme.MUTED),
-            hovered.first?.let { MenuCanvas.Run("${market.first}: ${"%,.1f".format(it)}", FIRST) },
-            hovered.second?.let { MenuCanvas.Run("${market.second}: ${"%,.1f".format(it)}", SECOND) },
-            hovered.volume.takeIf { market == PriceMarket.AUCTION }?.let { MenuCanvas.Run("Sales: $it", MenuTheme.TEXT) },
+            run((if (span <= 14 * 86_400_000L) hourFormat else dayFormat).format(Instant.ofEpochMilli(hovered.at).atZone(ZoneId.systemDefault())), MenuTheme.MUTED),
+            hovered.first?.let { run("${market.first}: ${"%,.1f".format(java.util.Locale.ROOT, it)}", FIRST) },
+            hovered.second?.let { run("${market.second}: ${"%,.1f".format(java.util.Locale.ROOT, it)}", SECOND) },
+            hovered.volume.takeIf { market == PriceMarket.AUCTION }?.let { run("Sales: $it", MenuTheme.TEXT) },
         )
         val boxWidth = lines.maxOf { MenuCanvas.textWidth(it.text, size = 8.0) } + 10
         val boxHeight = lines.size * 10.0 + 6
