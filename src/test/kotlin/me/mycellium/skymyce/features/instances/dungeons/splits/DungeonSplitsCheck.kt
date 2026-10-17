@@ -261,6 +261,24 @@ private fun checkServerTime() {
     check(parseSplitRun(pingCounts)?.let { it.ticks.isEmpty() && it.marks == laggy.marks } == true) { "2.7.13 ping counts are not server time" }
 }
 
+private fun checkLagMeter() {
+    val meter = LagMeter()
+    check(meter.shown == null)
+    // Packet jitter of ±0.2 s around a steady 1.0 s: the late (high) readings never show, and it never goes down.
+    val shownValues = listOf(1_000L, 1_180L, 1_020L, 1_150L, 990L, 1_200L, 1_010L).map { meter.read(it); meter.shown!! }
+    check(shownValues.zipWithNext().all { (a, b) -> b >= a } && shownValues.last() <= 1_020L) { "$shownValues" }
+    // Real lag persists across readings, so it shows once it is the lowest of the window.
+    repeat(3) { meter.read(2_500L) }
+    check(meter.shown == 2_500L)
+    meter.read(-300L)
+    check(meter.shown == 2_500L) { "Never goes down" }
+    // The HUD shows the steady value live and the exact splits once finished.
+    val f7 = splitDefinitions.getValue("F7")
+    val marks = mapOf(START to 0L, BLOOD_OPEN to 20_000L)
+    val live = splitHudView(f7, SplitHudRun(marks, mapOf(START to 0L, BLOOD_OPEN to 380L), true, 30_000L, 563L, false, null, lag = 1_000L), null, SplitHudOptions())
+    check(live.footer[1] == "§7Lag lost §c+1.00") { "${live.footer}" }
+}
+
 private fun checkServerClock() {
     val clock = ServerTickClock()
     clock.ping()
@@ -285,6 +303,6 @@ private fun checkServerClock() {
 }
 
 fun main() {
-    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock()
+    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock(); checkLagMeter()
     println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, Terms and server time")
 }

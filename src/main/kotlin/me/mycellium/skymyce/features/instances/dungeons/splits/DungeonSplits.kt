@@ -47,6 +47,7 @@ object DungeonSplits : SkyMyceModule() {
         /** False once any part of the run was missed; first-of-kind fallbacks then cannot be trusted. */
         var continuous = timeline.startObserved
         val terminals = TerminalSections()
+        val lag = LagMeter()
         var terminalsReliable = true
         var necronArgh = false
         var defeated = false
@@ -125,8 +126,14 @@ object DungeonSplits : SkyMyceModule() {
         if (packet is ClientboundPingPacket || packet is ClientboundSetTimePacket) {
             if (LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
             if (packet is ClientboundSetTimePacket) packet.gameTime.let { time ->
-                // A jump means another world; server time from before it no longer lines up.
-                MC.instance.execute { if (!serverClock.time(time)) live?.timeline?.stopTicks() }
+                val at = System.nanoTime()
+                MC.instance.execute {
+                    // A jump means another world; server time from before it no longer lines up.
+                    if (!serverClock.time(time)) live?.timeline?.stopTicks()
+                    live?.takeIf { it.outcome == null && !it.timeline.finished }?.let { run ->
+                        run.timeline.elapsedTicks(serverClock.now)?.let { ticks -> run.lag.read(run.timeline.elapsed(at) - ticks * TICK_MILLIS) }
+                    }
+                }
             } else if ((packet as ClientboundPingPacket).id != 0) MC.instance.execute { serverClock.ping() }
             return
         }

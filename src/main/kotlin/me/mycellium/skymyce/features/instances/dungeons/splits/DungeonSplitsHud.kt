@@ -17,7 +17,9 @@ internal data class SplitHudView(val title: String, val rows: List<SplitHudRow>,
 
 /** What the HUD needs from the live run; [ticks] are server ticks since the same origin as [marks]. */
 internal data class SplitHudRun(val marks: Map<SplitMilestone, Long>, val ticks: Map<SplitMilestone, Long>, val startObserved: Boolean,
-                                val elapsed: Long, val elapsedTicks: Long?, val finished: Boolean, val estimate: Int?)
+                                val elapsed: Long, val elapsedTicks: Long?, val finished: Boolean, val estimate: Int?,
+                                /** Steady live lag lost ([LagMeter]); a finished run uses its exact final splits instead. */
+                                val lag: Long? = null)
 
 internal data class SplitHudOptions(val compare: Boolean = true, val upcoming: Boolean = true, val total: Boolean = true,
                                     val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL)
@@ -120,8 +122,8 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
             val (real, srv) = span(run, SplitMilestone.START, SplitMilestone.END.takeIf { run.finished })
             footer += "§7Run §f${time(real)} ${server(srv)}".trimEnd()
             // Real time keeps running through lag; server ticks do not. The difference is what lag cost this run.
-            if (options.server && real != null && srv != null) {
-                val lost = (real - srv).coerceAtLeast(0)
+            val lost = if (run.finished || run.lag == null) real?.let { r -> srv?.let { (r - it).coerceAtLeast(0) } } else run.lag
+            if (options.server && srv != null && lost != null) {
                 footer += "§7Lag lost ${if (lost >= 1_000) "§c" else "§7"}+${formatSplitTime(lost)}"
             }
         } else footer += "§7Run §8joined late · not timed"
@@ -174,7 +176,7 @@ object DungeonSplitsHud : SkyMyceModule() {
         if (key != statsKey) { statsKey = key; stats = floorSplitStats(DungeonSplitStore.runs, run.definition, SplitWindow.ALL, clock) }
         val timeline = run.timeline
         live.show(splitHudView(run.definition, SplitHudRun(timeline.marks, timeline.ticks, timeline.startObserved, timeline.elapsed(now),
-            timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate), stats,
+            timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate, run.lag.shown), stats,
             SplitHudOptions(Settings.comparison == Settings.Comparison.SECTION_PB, Settings.showUpcoming, Settings.showTotal, Settings.precise,
                 Settings.showServerTime, clock)))
     }

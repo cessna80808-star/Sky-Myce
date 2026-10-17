@@ -10,6 +10,25 @@ const val TICK_MILLIS = 50L
  * NoammAddons and Devonian read it; between those updates, each per-tick ping advances it, at most to the next update.
  * Hypixel sends more pings than ticks (about 4% more in M7), so pings are never added up on their own.
  */
+/**
+ * Lag lost while a run is live, read once per server time update. A late packet can only make lag look larger, and a
+ * server never runs extra ticks to catch up, so the lowest of the last few readings is the honest one and the shown
+ * value only ever rises. This keeps the HUD steady instead of swinging with packet jitter.
+ */
+class LagMeter(private val window: Int = 3) {
+    private val readings = ArrayDeque<Long>()
+    /** Null until a first reading. */
+    var shown: Long? = null
+        private set
+
+    fun read(lagMillis: Long) {
+        readings.addLast(lagMillis)
+        while (readings.size > window) readings.removeFirst()
+        val floor = readings.min().coerceAtLeast(0)
+        shown = maxOf(shown ?: 0L, floor)
+    }
+}
+
 class ServerTickClock {
     private var gameTime: Long? = null
     private var pings = 0

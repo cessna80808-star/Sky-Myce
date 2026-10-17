@@ -28,6 +28,10 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
     init { startClock?.let { clock = it } }
     private lateinit var body: FlowLayout
     private lateinit var results: ScrollContainer<FlowLayout>
+    private lateinit var swap: MenuSwap
+    private lateinit var floorButton: ButtonComponent
+    private lateinit var windowButton: ButtonComponent
+    private lateinit var clockButton: ButtonComponent
     private var seenRevision = -1L
     private val selectedFloor get() = floor ?: DungeonSplits.live?.definition?.floor ?: DungeonSplitStore.runs.lastOrNull()?.floor ?: "M7"
 
@@ -38,24 +42,36 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
             child(button("Close", 46) { onClose() })
         })
         root.child(row().apply {
-            child(button(selectedFloor, 56) { b -> openMenuDropdown(b) { d ->
+            // Switching keeps the controls and fades only the results, as the Dungeon Tracker does.
+            floorButton = button(selectedFloor, 56) { b -> openMenuDropdown(b) { d ->
                 splitDefinitions.keys.sortedWith(compareBy({ it.first() }, { it.drop(1).toInt() })).forEach { name ->
-                    d.button(Component.literal(name)) { floor = name; rebuildMenu() }
+                    d.button(Component.literal(name)) { floor = name; switched() }
                 }
-            } }.wrappedTooltip(Component.literal("Floor. Normal and Master Mode are always kept apart.")))
-            child(button(window.title, 70) { b -> openMenuDropdown(b) { d ->
-                SplitWindow.entries.forEach { option -> d.button(Component.literal(option.title)) { window = option; rebuildMenu() } }
-            } }.wrappedTooltip(Component.literal("Which runs the averages use. Bests always use every saved run.")))
-            child(button(clock.title, 84) { b -> openMenuDropdown(b) { d ->
-                SplitClock.entries.forEach { option -> d.button(Component.literal(option.title)) { clock = option; rebuildMenu() } }
-            } }.wrappedTooltip(Component.literal("Real time is the stopwatch and includes lag. Server time counts server ticks, so lag is left out. Runs from before 2.7.13 only have real time.")))
+            } }
+            child(floorButton.wrappedTooltip(Component.literal("Floor. Normal and Master Mode are always kept apart.")))
+            windowButton = button(window.title, 70) { b -> openMenuDropdown(b) { d ->
+                SplitWindow.entries.forEach { option -> d.button(Component.literal(option.title)) { window = option; switched() } }
+            } }
+            child(windowButton.wrappedTooltip(Component.literal("Which runs the averages use. Bests always use every saved run.")))
+            clockButton = button(clock.title, 84) { b -> openMenuDropdown(b) { d ->
+                SplitClock.entries.forEach { option -> d.button(Component.literal(option.title)) { clock = option; switched() } }
+            } }
+            child(clockButton.wrappedTooltip(Component.literal("Real time is the stopwatch and includes lag. Server time counts server ticks, so lag is left out. Runs from before 2.7.14 only have real time.")))
             // Run counts are in the summary; only loading and unreadable-file states need a note here.
             child(label(DungeonSplitStore.status.takeUnless { it.endsWith("saved runs") }.orEmpty(), MenuTheme.YELLOW).apply { horizontalSizing(Sizing.expand()) })
         })
         body = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(4) }
         results = menuScroll(Sizing.fill(), Sizing.expand(), body).apply { scrollStep(24); scrollbarThiccness(2) }
-        root.child(results)
+        swap = MenuSwap("dungeon-splits-results", Sizing.fill(), Sizing.expand()).apply { child(results) }
+        root.child(swap)
         render()
+    }
+
+    private fun switched() {
+        floorButton.message = Component.literal(selectedFloor)
+        windowButton.message = Component.literal(window.title)
+        clockButton.message = Component.literal(clock.title)
+        swap.change(); render()
     }
 
     override fun tick() {
