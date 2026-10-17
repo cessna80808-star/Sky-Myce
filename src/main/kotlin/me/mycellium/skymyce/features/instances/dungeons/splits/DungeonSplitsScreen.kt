@@ -18,12 +18,14 @@ import java.time.format.DateTimeFormatter
 private val runDate = DateTimeFormatter.ofPattern("MMM d, HH:mm")
 
 /** Statistics for one floor at a time; the live HUD never shows history. */
-class DungeonSplitsScreen : MenuScreen(Component.literal("Dungeon Splits"), MenuPage.SPLITS) {
+class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component.literal("Dungeon Splits"), MenuPage.SPLITS) {
     override val menuCategory get() = MenuCategory.DUNGEONS
     private companion object {
         var floor: String? = null
         var window = SplitWindow.ALL
+        var clock = SplitClock.REAL
     }
+    init { startClock?.let { clock = it } }
     private lateinit var body: FlowLayout
     private lateinit var results: ScrollContainer<FlowLayout>
     private var seenRevision = -1L
@@ -44,6 +46,9 @@ class DungeonSplitsScreen : MenuScreen(Component.literal("Dungeon Splits"), Menu
             child(button(window.title, 70) { b -> openMenuDropdown(b) { d ->
                 SplitWindow.entries.forEach { option -> d.button(Component.literal(option.title)) { window = option; rebuildMenu() } }
             } }.wrappedTooltip(Component.literal("Which runs the averages use. Bests always use every saved run.")))
+            child(button(clock.title, 84) { b -> openMenuDropdown(b) { d ->
+                SplitClock.entries.forEach { option -> d.button(Component.literal(option.title)) { clock = option; rebuildMenu() } }
+            } }.wrappedTooltip(Component.literal("Real time is the stopwatch and includes lag. Server time counts server ticks, so lag is left out. Runs from before 2.7.13 only have real time.")))
             // Run counts are in the summary; only loading and unreadable-file states need a note here.
             child(label(DungeonSplitStore.status.takeUnless { it.endsWith("saved runs") }.orEmpty(), MenuTheme.YELLOW).apply { horizontalSizing(Sizing.expand()) })
         })
@@ -63,7 +68,7 @@ class DungeonSplitsScreen : MenuScreen(Component.literal("Dungeon Splits"), Menu
         body.clearChildren()
         val definition = splitDefinitions[selectedFloor] ?: return
         val runs = DungeonSplitStore.runs
-        val stats = floorSplitStats(runs, definition, window)
+        val stats = floorSplitStats(runs, definition, window, clock)
         fun time(value: Long?) = formatSplitTime(value)
         fun average(value: Double?) = value?.let { formatSplitTime(it.toLong()) } ?: "—"
         fun source(best: SectionBest?) = best?.let { runDate.format(Instant.ofEpochMilli(it.recordedAt).atZone(ZoneId.systemDefault())) } ?: ""
@@ -77,11 +82,20 @@ class DungeonSplitsScreen : MenuScreen(Component.literal("Dungeon Splits"), Menu
             }).wrappedTooltip(Component.literal("Adds your best time for each section, each from any fully split completed run. Those bests can come from different runs.")))
             child(card("Average run", average(stats.averageTotal), "${window.title} · ${stats.averageSamples} run${if (stats.averageSamples == 1) "" else "s"}"))
         })
-        body.child(label("${stats.completedRuns} completed · ${stats.savedRuns} saved on ${definition.floor}", MenuTheme.MUTED))
+        body.child(label(listOfNotNull("${stats.completedRuns} completed · ${stats.savedRuns} saved on ${definition.floor}",
+            stats.averageLag?.let { "lag lost ${formatSplitDelta(it.toLong())} per run on average" }).joinToString(" · "), MenuTheme.MUTED))
 
         body.child(tableRow("SECTION", "BEST", "AVERAGE", "BEST FROM", MenuTheme.SECONDARY))
         for (section in stats.sections) {
-            body.child(tableRow(definition.title(section.section.milestone), time(section.best?.duration),
+            val position = definition.chain.indexOf(section.section.milestone)
+            val group = definition.groups.firstOrNull { definition.chain.indexOf(it.from) < position && position <= definition.chain.indexOf(it.to) }
+            // A group's total heads its sections, which are indented beneath it; it is a real run's time, not a sum of bests.
+            if (group != null && section.section.from == group.from) stats.groups.firstOrNull { it.group == group }?.let { total ->
+                body.child(tableRow(group.title, time(total.best?.duration), if (total.samples == 0) "—" else "${average(total.average)} (${total.samples})",
+                    source(total.best), MenuTheme.ACCENT)
+                    .wrappedTooltip(Component.literal("All terminal sections, from ${definition.title(group.from)} to ${definition.title(group.to)}, timed within one run. Not added to Best possible, which already counts each section.")))
+            }
+            body.child(tableRow((if (group != null) "    " else "") + definition.title(section.section.milestone), time(section.best?.duration),
                 if (section.samples == 0) "—" else "${average(section.average)} (${section.samples})", source(section.best), MenuTheme.TEXT)
                 .wrappedTooltip(Component.literal("From ${definition.title(section.section.from)} to ${definition.title(section.section.milestone)}")))
         }
@@ -104,7 +118,8 @@ class DungeonSplitsScreen : MenuScreen(Component.literal("Dungeon Splits"), Menu
                 "Older split layout".takeIf { run.definition != definition.version },
             )
             body.child(tableRow(runDate.format(Instant.ofEpochMilli(run.recordedAt).atZone(ZoneId.systemDefault())), time(run.total),
-                "", notes.joinToString(" · "), if (run.total != null) MenuTheme.TEXT else MenuTheme.MUTED))
+                run.total(SplitClock.SERVER)?.let { "(${time(it)})" } ?: "", (listOfNotNull(run.lagLost?.let { "lag ${formatSplitDelta(it)}" }) + notes).joinToString(" · "),
+                if (run.total != null) MenuTheme.TEXT else MenuTheme.MUTED))
         }
     }
 

@@ -21,7 +21,11 @@ internal fun encodeSplitRun(run: SplitRunRecord) = JsonObject().apply {
     addProperty("outcome", run.outcome.name)
     if (run.conflicts > 0) addProperty("conflicts", run.conflicts)
     add("marks", JsonObject().apply { run.marks.forEach { (milestone, at) -> addProperty(milestone.name, at) } })
+    if (run.ticks.isNotEmpty()) add("ticks", JsonObject().apply { run.ticks.forEach { (milestone, at) -> addProperty(milestone.name, at) } })
 }
+
+/** 2.7.12 saved the fourth terminal section as `CORE`; it has the same boundary as [SplitMilestone.S4]. */
+private fun savedMilestone(name: String) = if (name == "CORE") SplitMilestone.S4 else SplitMilestone.entries.firstOrNull { it.name == name }
 
 /** Rejects malformed rows instead of repairing them, so a damaged record can never produce a better time. */
 internal fun parseSplitRun(element: JsonElement?): SplitRunRecord? = runCatching {
@@ -36,15 +40,23 @@ internal fun parseSplitRun(element: JsonElement?): SplitRunRecord? = runCatching
     val start = row.get("startObserved")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: return null
     val outcome = SplitOutcome.entries.firstOrNull { it.name == string("outcome") } ?: return null
     val conflicts = row.get("conflicts")?.let { long(it)?.toInt() ?: return null } ?: 0
-    val marks = row.get("marks")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
-    val parsed = LinkedHashMap<SplitMilestone, Long>()
-    for ((key, value) in marks.entrySet()) {
-        // A milestone from a newer definition is unknown here; the record keeps only what this version understands.
-        val milestone = SplitMilestone.entries.firstOrNull { it.name == key } ?: continue
-        parsed[milestone] = long(value)?.takeIf { it in 0..MAX_MARK } ?: return null
+    fun times(key: String, limit: Long): Map<SplitMilestone, Long>? {
+        val source = row.get(key) ?: return emptyMap()
+        if (!source.isJsonObject) return null
+        val parsed = LinkedHashMap<SplitMilestone, Long>()
+        for ((name, value) in source.asJsonObject.entrySet()) {
+            // A milestone from a newer definition is unknown here; the record keeps only what this version understands.
+            val milestone = savedMilestone(name) ?: continue
+            parsed[milestone] = long(value)?.takeIf { it in 0..limit } ?: return null
+        }
+        return parsed
     }
+    val parsed = row.get("marks")?.takeIf { it.isJsonObject }?.let { times("marks", MAX_MARK) } ?: return null
+    // Server ticks may be missing (older saves, no pings); a damaged tick row drops only the server times.
+    val ticks = times("ticks", MAX_MARK / TICK_MILLIS)?.filterKeys { it in parsed } ?: emptyMap()
     if (start && parsed[SplitMilestone.START]?.let { it != 0L } == true) return null
-    SplitRunRecord(id, floor, definition, recordedAt, start, parsed, outcome, conflicts.coerceAtLeast(0))
+    SplitRunRecord(id, floor, definition, recordedAt, start, parsed, outcome, conflicts.coerceAtLeast(0),
+        ticks.takeIf { it[SplitMilestone.START]?.let { first -> first == 0L } ?: true } ?: emptyMap())
 }.getOrNull()
 
 internal fun encodeSplitStore(runs: List<SplitRunRecord>) = JsonObject().apply {

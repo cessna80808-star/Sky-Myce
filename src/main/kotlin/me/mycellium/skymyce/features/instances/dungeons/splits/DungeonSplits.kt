@@ -5,6 +5,7 @@ import me.mycellium.skymyce.config.instances.dungeons.DungeonSplitsConfig as Set
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonCompletionFloor
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
+import net.minecraft.network.protocol.common.ClientboundPingPacket
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket
 import net.minecraft.network.protocol.game.ClientboundSoundPacket
 import net.minecraft.sounds.SoundEvents
@@ -59,6 +60,13 @@ object DungeonSplits : SkyMyceModule() {
         private set
     private var suspended: Suspended? = null
     private var pendingStart: Long? = null
+    private var pendingStartTicks: Long? = null
+    /**
+     * Server ticks seen while in a dungeon. Hypixel sends a non-zero ping every server tick; counting them on the client
+     * thread keeps them in order with chat and other packets (NoammAddons `MixinConnection`/`DungeonListener`).
+     */
+    internal var serverTicks = 0L
+        private set
     private var server: String? = null
     var revision = 0L
         private set
@@ -87,7 +95,7 @@ object DungeonSplits : SkyMyceModule() {
             is SplitSignal.Milestone -> mark(run, signal.milestone, at)
             SplitSignal.WatcherLine -> if (run.continuous) mark(run, SplitMilestone.BLOOD_OPEN, at)
             SplitSignal.BossLine -> if (run.continuous) mark(run, SplitMilestone.BOSS_ENTRY, at)
-            is SplitSignal.Terminal -> if (run.terminalsReliable && SplitMilestone.STORM in run.timeline.marks && SplitMilestone.CORE !in run.timeline.marks)
+            is SplitSignal.Terminal -> if (run.terminalsReliable && SplitMilestone.STORM in run.timeline.marks && SplitMilestone.S4 !in run.timeline.marks)
                 run.terminals.accept(signal.done, signal.total)?.let { mark(run, it, at) }
             SplitSignal.NecronArgh -> run.necronArgh = true
             SplitSignal.Defeated -> { run.defeated = true; finish(run, at) }
@@ -104,6 +112,10 @@ object DungeonSplits : SkyMyceModule() {
     @Subscription
     fun onPacket(event: PacketReceivedEvent) {
         val packet = event.packet
+        if (packet is ClientboundPingPacket) {
+            if (packet.id != 0 && LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) MC.instance.execute { serverTicks++ }
+            return
+        }
         if (live == null) return
         if (packet is ClientboundSoundPacket) {
             if (packet.sound.value() != SoundEvents.WITHER_HURT || packet.volume != 15f || packet.pitch != 1f) return
@@ -136,7 +148,7 @@ object DungeonSplits : SkyMyceModule() {
         if (!active()) return
         event.new.firstNotNullOfOrNull { serverLine.matchEntire(it)?.groupValues?.get(1) }?.let { server = it }
         resume()
-        pendingStart?.let { at -> DungeonAPI.dungeonFloor?.name?.let(splitDefinitions::get)?.let { start(it, true, at) } }
+        pendingStart?.let { at -> DungeonAPI.dungeonFloor?.name?.let(splitDefinitions::get)?.let { start(it, true, at, pendingStartTicks) } }
         val run = live ?: return
         if (run.server == null) run.server = server
         val at = System.nanoTime()
@@ -158,7 +170,7 @@ object DungeonSplits : SkyMyceModule() {
 
     @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class, ProfileChangeEvent::class)
     fun onLeave() {
-        pendingStart = null; server = null
+        pendingStart = null; pendingStartTicks = null; server = null
         val run = live ?: return
         live = null; revision++
         if (run.outcome != null) return
@@ -172,13 +184,13 @@ object DungeonSplits : SkyMyceModule() {
         live = null; suspended = null
         val floor = DungeonAPI.dungeonFloor?.name
         val definition = floor?.let(splitDefinitions::get)
-        if (definition == null) { pendingStart = at.takeIf { floor == null }; return }
-        start(definition, true, at)
+        if (definition == null) { pendingStart = at.takeIf { floor == null }; pendingStartTicks = serverTicks; return }
+        start(definition, true, at, serverTicks)
     }
 
-    private fun start(definition: SplitDefinition, observed: Boolean, at: Long): LiveRun =
-        LiveRun(UUID.randomUUID().toString(), SplitTimeline(definition, observed, at), System.currentTimeMillis(), server).also {
-            live = it; pendingStart = null; revision++
+    private fun start(definition: SplitDefinition, observed: Boolean, at: Long, ticks: Long?): LiveRun =
+        LiveRun(UUID.randomUUID().toString(), SplitTimeline(definition, observed, at, ticks), System.currentTimeMillis(), server).also {
+            live = it; pendingStart = null; pendingStartTicks = null; revision++
             if (!observed) displayDevMessage { "Dungeon splits: joined ${definition.floor} after its start; only directly observed sections are kept" }
         }
 
@@ -187,11 +199,11 @@ object DungeonSplits : SkyMyceModule() {
         live?.let { return it }
         val floor = DungeonAPI.dungeonFloor?.name ?: return null
         val definition = splitDefinitions[floor] ?: return null
-        pendingStart?.let { return start(definition, true, it) }
+        pendingStart?.let { return start(definition, true, it, pendingStartTicks) }
         resume()?.let { return it }
         // Rejoining before the sidebar names the server: wait for it rather than splitting the run in two.
         if (suspended?.run?.definition?.floor == floor && server == null) return null
-        return start(definition, false, at)
+        return start(definition, false, at, serverTicks)
     }
 
     private fun resume(): LiveRun? {
@@ -203,6 +215,8 @@ object DungeonSplits : SkyMyceModule() {
         suspended = null
         return held.run.also { run ->
             run.continuous = false; run.necronArgh = false; run.sawBelow300 = false
+            // Ticks were not counted while away, so server time stops here; real time still covers the whole run.
+            run.timeline.stopTicks()
             // A terminal section may have finished while away, so later counts could be off by one.
             if (SplitMilestone.STORM in run.timeline.marks) run.terminalsReliable = false
             live = run; revision++
@@ -212,7 +226,7 @@ object DungeonSplits : SkyMyceModule() {
 
     private fun mark(run: LiveRun, milestone: SplitMilestone, at: Long) {
         if (run.outcome != null && milestone != SplitMilestone.END) return
-        when (run.timeline.mark(milestone, at)) {
+        when (run.timeline.mark(milestone, at, serverTicks)) {
             MarkResult.ACCEPTED -> revision++
             MarkResult.OUT_OF_ORDER -> displayDevMessage { "Dungeon splits: ignored ${milestone.title} out of order on ${run.definition.floor}" }
             MarkResult.DUPLICATE, MarkResult.NOT_APPLICABLE -> {}

@@ -249,6 +249,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         { index -> if (index == null) openMenu() else openMenuCategory(MenuCategory.entries[index]) },
         { navigateMenu(MenuDirectoryScreen()) },
         { navigateMenu(MenuDirectoryScreen(view = MenuDirectoryView.QUICK)) },
+        { navigateMenu(me.mycellium.skymyce.hud.widget.WidgetEditorScreen(this)) },
         { if (introductionClaimed) ThemeConfig.animationMode else GuiMotion.OFF },
         { !introductionClaimed || opening.sample() >= .85 }, home)
 

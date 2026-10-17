@@ -25,7 +25,8 @@ enum class SplitMilestone(val title: String) {
     S1("S1"),
     S2("S2"),
     S3("S3"),
-    CORE("Core"),
+    /** Ends when the Core entrance opens. Saved as `CORE` by 2.7.12, which is read back as this milestone. */
+    S4("S4"),
     GOLDOR("Goldor"),
     NECRON("Necron"),
     RELICS("Relics"),
@@ -44,15 +45,23 @@ data class SplitDefinition(
     val chain: List<SplitMilestone>,
     val markers: List<SplitMilestone> = listOf(SplitMilestone.SCORE_300),
     private val titles: Map<SplitMilestone, String> = emptyMap(),
+    /** Totals over consecutive sections, such as all terminals; shown and tracked, never added to the theoretical PB. */
+    val groups: List<SplitGroup> = emptyList(),
 ) {
     init {
         require(chain.first() == SplitMilestone.START && chain.last() == SplitMilestone.END && chain.distinct().size == chain.size)
         require(markers.none { it in chain })
+        require(groups.all { chain.indexOf(it.from) in 0 until chain.indexOf(it.to) })
     }
     val sections: List<SplitSection> = chain.zipWithNext { from, to -> SplitSection(to, from) }
     fun title(milestone: SplitMilestone) = titles[milestone] ?: milestone.title
     val applicable: Set<SplitMilestone> = (chain + markers).toSet()
 }
+
+/** The sections from just after [from] up to and including [to], timed as one block. */
+data class SplitGroup(val title: String, val from: SplitMilestone, val to: SplitMilestone)
+
+private val terms = SplitGroup("Terms", SplitMilestone.STORM, SplitMilestone.S4)
 
 private val clear = listOf(SplitMilestone.START, SplitMilestone.BLOOD_OPEN, SplitMilestone.BLOOD_CLEAR, SplitMilestone.BOSS_ENTRY)
 
@@ -60,7 +69,7 @@ private fun floors(number: Int, boss: List<SplitMilestone>, endTitle: String, ex
     listOf("F$number", "M$number").map { SplitDefinition(it, 1, clear + boss + SplitMilestone.END, titles = extra + (SplitMilestone.END to endTitle)) }
 
 private val f7Boss = listOf(SplitMilestone.MAXOR, SplitMilestone.STORM, SplitMilestone.S1, SplitMilestone.S2, SplitMilestone.S3,
-    SplitMilestone.CORE, SplitMilestone.GOLDOR, SplitMilestone.NECRON)
+    SplitMilestone.S4, SplitMilestone.GOLDOR, SplitMilestone.NECRON)
 
 /** Floor name (F1–F7, M1–M7) to its definition; the Entrance has no boss phases and is not split. */
 val splitDefinitions: Map<String, SplitDefinition> = (
@@ -70,9 +79,10 @@ val splitDefinitions: Map<String, SplitDefinition> = (
         floors(4, listOf(SplitMilestone.THORN_DIALOGUE), "Thorn") +
         floors(5, listOf(SplitMilestone.LIVID_DIALOGUE, SplitMilestone.LIVID_KILL), "End Dialogue") +
         floors(6, listOf(SplitMilestone.TERRACOTTAS, SplitMilestone.GIANTS), "Sadan") +
-        SplitDefinition("F7", 1, clear + f7Boss + SplitMilestone.END, titles = mapOf(SplitMilestone.END to "End Dialogue")) +
+        SplitDefinition("F7", 1, clear + f7Boss + SplitMilestone.END, titles = mapOf(SplitMilestone.END to "End Dialogue"), groups = listOf(terms)) +
         // Only Master Mode continues into the Wither King phase: relics, then dragons until the run ends.
-        SplitDefinition("M7", 1, clear + f7Boss + SplitMilestone.RELICS + SplitMilestone.END, titles = mapOf(SplitMilestone.END to "Drags"))
+        SplitDefinition("M7", 1, clear + f7Boss + SplitMilestone.RELICS + SplitMilestone.END, titles = mapOf(SplitMilestone.END to "Drags"),
+            groups = listOf(terms))
     ).associateBy { it.floor }
 
 /** The boss's opening line on each floor number, sent when the first player enters the boss room. */
@@ -100,7 +110,7 @@ internal val bossPhaseLines: Map<String, SplitMilestone> = mapOf(
     "[BOSS] Sadan: You did it. I understand now, you have earned my respect." to SplitMilestone.GIANTS,
     "[BOSS] Storm: Pathetic Maxor, just like expected." to SplitMilestone.MAXOR,
     "[BOSS] Goldor: Who dares trespass into my domain?" to SplitMilestone.STORM,
-    "The Core entrance is opening!" to SplitMilestone.CORE,
+    "The Core entrance is opening!" to SplitMilestone.S4,
     "[BOSS] Necron: You went further than any human before, congratulations." to SplitMilestone.GOLDOR,
 )
 
@@ -156,6 +166,7 @@ class TerminalSections {
     private var armed = true
     fun accept(done: Int, total: Int): SplitMilestone? {
         if (done < total) { armed = true; return null }
+        // The fourth section ends on the Core entrance line instead.
         if (!armed || completed >= 3) return null
         armed = false
         return listOf(SplitMilestone.S1, SplitMilestone.S2, SplitMilestone.S3)[completed++]

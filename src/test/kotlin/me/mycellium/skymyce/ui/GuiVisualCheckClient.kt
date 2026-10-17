@@ -123,6 +123,9 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeon-splits-stats", ThemePreset.SIGNATURE) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-wide", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
+            Scene("dungeon-splits-stats-server", ThemePreset.SIGNATURE) {
+                GuiVisualSplitsFixture().also { splitsFixture = it }.screen(me.mycellium.skymyce.features.instances.dungeons.splits.SplitClock.SERVER)
+            },
             Scene("spirit-leap-layout", ThemePreset.SIGNATURE) { GuiVisualLeapMenuScreen() },
             Scene("spirit-leap-layout-small", ThemePreset.SIGNATURE, 640, 480, 2) { GuiVisualLeapMenuScreen(missing = true) },
             Scene("journal-compact-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) {
@@ -786,7 +789,8 @@ private class GuiVisualDungeonSplitsPreviewScreen : Screen(Minecraft.getInstance
         val components = arrayListOf<UIComponent>()
         checkNotNull(widget.adapter).rootComponent.collectDescendants(components)
         val rows = components.filterIsInstance<me.mycellium.skymyce.hud.HudTextLabel>().map { it.text().string.trim() }
-        check("M7 Splits" in rows && "S1" in rows && "S2" in rows && "Drags" in rows && "300 Score" in rows) { "$rows" }
+        check("M7 Splits" in rows && "Terms" in rows && "S1" in rows && "S4" in rows && "Goldor" in rows && "Drags" in rows && "300 Score" in rows) { "$rows" }
+        check(rows.any { it.startsWith("Lag lost") } && rows.any { it.startsWith("(") }) { "Server time and lag lost must be visible: $rows" }
         check(widget.width in 1..width && widget.height in 1..height)
     }
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
@@ -810,12 +814,16 @@ internal class GuiVisualSplitsFixture {
             definition.sections.forEachIndexed { section, it -> at += 9_000L + ((index * 7 + section * 13) % 11) * 1_100L; marks[it.milestone] = at }
             marks[me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.SCORE_300] = 95_000L + index * 1_300L
             if (index % 5 == 4) marks.remove(me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.RELICS)
+            // Server ticks for most runs, with a little lag that grows through the run; two older runs have real time only.
+            val ticks = if (index >= 12) emptyMap() else marks.mapValues { (_, value) -> (value - value * (index % 4 + 1) / 150) / 50 }
             me.mycellium.skymyce.features.instances.dungeons.splits.SplitRunRecord("fixture-$index", "M7", 1, now - index * 1_900_000L, index != 9, marks,
-                if (index == 6) me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.FAILED else me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.COMPLETED)
+                if (index == 6) me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.FAILED else me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.COMPLETED,
+                ticks = ticks)
         }
         saved.set(store, runs)
     }
-    fun screen() = me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen()
+    fun screen(clock: me.mycellium.skymyce.features.instances.dungeons.splits.SplitClock = me.mycellium.skymyce.features.instances.dungeons.splits.SplitClock.REAL) =
+        me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen(clock)
     fun restore() { saved.set(store, previous) }
 }
 

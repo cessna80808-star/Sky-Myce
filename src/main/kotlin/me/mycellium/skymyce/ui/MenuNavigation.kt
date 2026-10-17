@@ -63,10 +63,13 @@ internal fun menuNavigationDescription(index: Int, width: Int, feature: MenuFeat
     }
 }
 
+/** Space under the category rail for the utility rows: Search, then Quick settings, then Edit HUD when they fit. */
+internal fun menuNavigationFooter(height: Int) = when { height >= 360 -> 100; height >= 320 -> 70; else -> 34 }
+
 /** Categories keep their identity and position on Home and every submenu. */
 internal fun menuNavigationRect(layout: MenuLayout, index: Int): MenuRect {
     require(index in menuSectionTitles.indices)
-    val footer = if (layout.height >= 320) 70.0 else 34.0
+    val footer = menuNavigationFooter(layout.height).toDouble()
     val step = ((layout.height - 64.0 - footer) / menuSectionTitles.size).coerceIn(1.0, 38.0)
     val inset = minOf(8.0, layout.sidebar / 5.0)
     return MenuRect(inset, (64 + index * step).toInt().toDouble(), (layout.sidebar - inset * 2).coerceAtLeast(1.0),
@@ -190,6 +193,9 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
         7 -> { line(1.0, 1.0, 15.0, 1.0); line(1.0, 1.0, 1.0, 15.0); line(1.0, 15.0, 15.0, 15.0); line(15.0, 15.0, 15.0, 1.0); line(6.0, 1.0, 6.0, 15.0); line(6.0, 7.0, 15.0, 7.0) }
         9 -> { ring(8.0, 8.0, 5.0); ring(8.0, 8.0, 1.5); line(8.0, 0.0, 8.0, 4.0); line(8.0, 12.0, 8.0, 16.0); line(0.0, 8.0, 4.0, 8.0); line(12.0, 8.0, 16.0, 8.0) }
         10 -> { ring(6.0, 6.0, 4.5); line(9.5, 9.5, 15.0, 15.0) }
+        // A screen with two placed widgets.
+        12 -> { line(1.0, 2.0, 15.0, 2.0); line(1.0, 2.0, 1.0, 14.0); line(1.0, 14.0, 15.0, 14.0); line(15.0, 14.0, 15.0, 2.0)
+            line(3.5, 5.0, 7.5, 5.0); line(3.5, 5.0, 3.5, 8.0); line(3.5, 8.0, 7.5, 8.0); line(7.5, 8.0, 7.5, 5.0); line(9.5, 11.0, 12.5, 11.0) }
         11 -> { for (index in 0..2) { val row = 3.0 + index * 5; val knob = when (index) { 0 -> 5.0; 1 -> 11.0; else -> 7.0 }; line(1.0, row, 15.0, row); ring(knob, row, 2.0) } }
         else -> { ring(8.0, 8.0, 4.0); ring(8.0, 8.0, 1.8); for (i in 0..7) { val angle = i * Math.PI / 4; line(8 + kotlin.math.cos(angle) * 5, 8 + kotlin.math.sin(angle) * 5, 8 + kotlin.math.cos(angle) * 7, 8 + kotlin.math.sin(angle) * 7) } }
     }
@@ -197,7 +203,7 @@ internal fun paintMenuIcon(canvas: MenuCanvas, id: Int, x: Double, y: Double, si
 
 internal class MenuNavigation(private val layout: MenuLayout, private val activeSection: () -> Int,
                               private val indicator: MotionValue, private val action: (Int?) -> Unit,
-                              search: () -> Unit, quick: () -> Unit,
+                              search: () -> Unit, quick: () -> Unit, editHud: () -> Unit,
                               private val revealMode: () -> GuiMotion, private val revealReady: () -> Boolean,
                               private val home: Boolean) :
     FlowLayout(Sizing.fixed(layout.sidebar), Sizing.fixed(layout.height), Algorithm.VERTICAL) {
@@ -238,6 +244,7 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
                 tooltip(Component.literal("$title · ${MenuCategory.entries[index].description}"))
             })
         }
+        if (layout.height >= 360) child(utility("Edit HUD", 12, layout.height - 94) { editHud() })
         if (layout.height >= 320) child(utility("Quick settings", 11, layout.height - 64) { quick() })
         child(utility("Search", 10, (layout.height - 34).coerceAtLeast(0)) { search() })
     }

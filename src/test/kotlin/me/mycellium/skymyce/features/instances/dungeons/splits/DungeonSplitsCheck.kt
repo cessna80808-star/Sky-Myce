@@ -25,7 +25,7 @@ private fun checkSignals() {
     check(splitSignal("[BOSS] Maxor: WELL! WELL! WELL! LOOK WHO'S HERE!", 3) == null) { "Another floor's boss line is not boss entry" }
     check(splitSignal("[BOSS] Storm: Pathetic Maxor, just like expected.", 7) == SplitSignal.Milestone(MAXOR))
     check(splitSignal("[BOSS] Goldor: Who dares trespass into my domain?", 7) == SplitSignal.Milestone(STORM))
-    check(splitSignal("The Core entrance is opening!", 7) == SplitSignal.Milestone(CORE))
+    check(splitSignal("The Core entrance is opening!", 7) == SplitSignal.Milestone(S4))
     check(splitSignal("[BOSS] Necron: You went further than any human before, congratulations.", 7) == SplitSignal.Milestone(GOLDOR))
     check(splitSignal("[BOSS] Necron: ARGH!", 7) == SplitSignal.NecronArgh)
     check(splitSignal("Steve activated a terminal! (3/7)", 7) == SplitSignal.Terminal(3, 7))
@@ -46,8 +46,8 @@ private fun checkDefinitions() {
     for (number in 1..7) for (mode in listOf("F", "M")) check("$mode$number" in splitDefinitions)
     check("E" !in splitDefinitions)
     val f7 = splitDefinitions.getValue("F7"); val m7 = splitDefinitions.getValue("M7")
-    check(listOf(BLOOD_OPEN, BLOOD_CLEAR, BOSS_ENTRY, MAXOR, STORM, S1, S2, S3, CORE, GOLDOR, NECRON).all { it in f7.chain })
-    check(S1 != S2 && f7.sections.map { it.milestone }.containsAll(listOf(S1, S2, S3, CORE))) { "Terminal sections stay independent" }
+    check(listOf(BLOOD_OPEN, BLOOD_CLEAR, BOSS_ENTRY, MAXOR, STORM, S1, S2, S3, S4, GOLDOR, NECRON).all { it in f7.chain })
+    check(S1 != S2 && f7.sections.map { it.milestone }.containsAll(listOf(S1, S2, S3, S4))) { "Terminal sections stay independent" }
     check(RELICS !in f7.applicable && RELICS in m7.applicable) { "Relics and dragons only exist in Master Mode 7" }
     check(m7.title(END) == "Drags" && f7.title(END) == "End Dialogue")
     check(splitDefinitions.values.all { SCORE_300 in it.markers && SCORE_300 !in it.chain })
@@ -171,20 +171,78 @@ private fun checkScore() {
 private fun checkHud() {
     val f7 = splitDefinitions.getValue("F7")
     val marks = mapOf(START to 0L, BLOOD_OPEN to 20_000L, BOSS_ENTRY to 90_000L, SCORE_300 to 95_000L)
-    val view = splitHudView(f7, marks, true, 100_000L, null, false, 287, compare = true, upcoming = true, total = true, precise = true)
-    val rows = view.rows.associateBy { it.name.drop(2) }
-    check(rows.getValue("Blood Open").time == "§f20.00")
+    // Server ticks: 1.2 s of lag before blood opened, none after.
+    val ticks = mapOf(START to 0L, BLOOD_OPEN to 376L, BOSS_ENTRY to 1_776L, SCORE_300 to 1_876L)
+    val view = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), null, SplitHudOptions())
+    val rows = view.rows.associateBy { it.name.drop(2).trim() }
+    check(rows.getValue("Blood Open").time == "§f20.00" && rows.getValue("Blood Open").server == "§7(§b18.80§7)") { "${view.rows}" }
     check(rows.getValue("Watcher Clear").delta == "§8missed" && rows.getValue("Boss Entry").time == "§8—") { "${view.rows}" }
-    check(rows.getValue("Maxor").time == "§e10.00") { "The running section counts from the last split" }
+    check(rows.getValue("Maxor").time == "§e10.00" && rows.getValue("Maxor").server == "§7(§b10.00§7)") { "The running section counts from the last split" }
     check(rows.getValue("Storm").time == "§8—")
-    check(rows.getValue("300 Score").time == "§f1:35.0")
-    check(view.footer.first() == "§7Run §f1:40.0")
-    val late = splitHudView(f7, mapOf(MAXOR to 0L), false, 5_000L, null, false, null, compare = false, upcoming = false, total = true, precise = false)
+    check(rows.getValue("300 Score").time == "§f1:35.0" && rows.getValue("300 Score").server == "§7(§b1:33.8§7)")
+    check(view.footer[0] == "§7Run §f1:40.0 §7(§b1:38.8§7)" && view.footer[1] == "§7Lag lost §c+1.20") { "${view.footer}" }
+    // Terms heads S1–S4, which are indented; Goldor is not.
+    val names = view.rows.map { it.name.drop(2) }
+    check(names.indexOf("Terms") == names.indexOf("  S1") - 1 && "  S4" in names && "Goldor" in names) { "$names" }
+    val noServer = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), null, SplitHudOptions(server = false))
+    check(noServer.rows.all { it.server.isEmpty() } && noServer.footer.size == 1)
+    val late = splitHudView(f7, SplitHudRun(mapOf(MAXOR to 0L), emptyMap(), false, 5_000L, null, false, null), null,
+        SplitHudOptions(compare = false, upcoming = false, precise = false))
     check(late.footer.first().contains("not timed") && late.rows.map { it.name } == listOf("§7Maxor", "§eStorm")) { "${late.rows}" }
+
+    // Terms while terminals are running, then complete.
+    val inTerms = mapOf(START to 0L, BLOOD_OPEN to 1L, BLOOD_CLEAR to 2L, BOSS_ENTRY to 3L, MAXOR to 4L, STORM to 100_000L, S1 to 112_000L)
+    val running = splitHudView(f7, SplitHudRun(inTerms, emptyMap(), true, 120_000L, null, false, null), null, SplitHudOptions(compare = false))
+    check(running.rows.first { it.name.endsWith("Terms") }.time == "§e20.00" && running.rows.first { it.name.endsWith("S2") }.time == "§e8.00")
+    val done = inTerms + mapOf(S2 to 125_000L, S3 to 140_000L, S4 to 150_000L)
+    val finished = splitHudView(f7, SplitHudRun(done, emptyMap(), true, 151_000L, null, false, null), null, SplitHudOptions(compare = false))
+    check(finished.rows.first { it.name.endsWith("Terms") }.time == "§f50.00")
     check(formatSplitTime(61_250L) == "1:01.2" && formatSplitTime(null) == "—" && formatSplitDelta(-1_230L) == "-1.23")
 }
 
+private fun checkServerTime() {
+    val m7 = splitDefinitions.getValue("M7")
+    val t = SplitTimeline(m7, true, 0L, 1_000L)
+    check(t.mark(BLOOD_OPEN, 20_000 * MS, 1_380L) == MarkResult.ACCEPTED && t.ticks.getValue(BLOOD_OPEN) == 380L)
+    check(t.ticks.getValue(START) == 0L && t.elapsedTicks(1_500L) == 500L)
+    // More server time than real time means the tick source is wrong: stop server timing, keep real time.
+    check(t.mark(BLOOD_CLEAR, 30_000 * MS, 2_000L) == MarkResult.ACCEPTED && BLOOD_CLEAR in t.marks && BLOOD_CLEAR !in t.ticks && !t.ticksAvailable)
+    check(t.mark(BOSS_ENTRY, 40_000 * MS, 2_100L) == MarkResult.ACCEPTED && BOSS_ENTRY !in t.ticks)
+    val silent = SplitTimeline(m7, true, 0L, 500L)
+    silent.mark(BLOOD_OPEN, 15_000 * MS, 500L)
+    check(!silent.ticksAvailable && BLOOD_OPEN !in silent.ticks) { "No pings for a long time: server time unavailable, not zero" }
+    val resumed = SplitTimeline(m7, true, 0L, 0L)
+    resumed.mark(BLOOD_OPEN, 20_000 * MS, 400L); resumed.stopTicks(); resumed.mark(BLOOD_CLEAR, 60_000 * MS, 1_000L)
+    check(resumed.ticks.keys == setOf(START, BLOOD_OPEN)) { "Ticks missed while away are never filled in" }
+
+    val n = m7.sections.size
+    val marks = chained(m7, List(n) { 20_000L })
+    // Each section lost 100 ms to lag: 19.9 s on the server clock.
+    val ticks = mapOf(START to 0L) + chained(m7, List(n) { 19_900L }).mapValues { it.value / TICK_MILLIS }
+    val laggy = run("L", "M7", 100, marks).copy(ticks = ticks)
+    val realOnly = run("R", "M7", 200, chained(m7, List(n) { 19_950L }))
+    check(laggy.total(SplitClock.SERVER) == 19_900L * n && laggy.lagLost == 100L * n && realOnly.lagLost == null)
+    val real = floorSplitStats(listOf(laggy, realOnly), m7, SplitWindow.ALL, SplitClock.REAL)
+    val server = floorSplitStats(listOf(laggy, realOnly), m7, SplitWindow.ALL, SplitClock.SERVER)
+    check(real.actualPb?.run == "R" && server.actualPb?.run == "L") { "Each clock has its own PB" }
+    check(server.completedRuns == 1 && server.theoreticalPb == 19_900L * n) { "Runs without ticks never count on the server clock" }
+    check(real.averageLag == 100.0 * n)
+    check(sectionDurations(laggy, m7, SplitClock.SERVER).getValue(MAXOR) == 19_900L)
+    val terms = server.groups.single()
+    check(terms.group.title == "Terms" && terms.best?.duration == 4 * 19_900L && terms.samples == 1)
+    check(real.groups.single().best?.duration == 4 * 19_950L) { "Terms best is one run's terminals, not a sum of section bests" }
+    check(server.sections.sumOf { it.best!!.duration } == server.theoreticalPb) { "Terms is not added to Best possible" }
+    // Stored ticks survive a round trip; a 2.7.12 `CORE` mark is read back as S4.
+    check(parseSplitRun(encodeSplitRun(laggy)) == laggy)
+    val legacy = encodeSplitRun(realOnly).apply {
+        val marksJson = getAsJsonObject("marks"); val s4 = marksJson.remove("S4"); marksJson.add("CORE", s4)
+    }
+    check(parseSplitRun(legacy)?.marks?.get(S4) == realOnly.marks[S4] && parseSplitRun(legacy) == realOnly)
+    val badTicks = encodeSplitRun(laggy).apply { getAsJsonObject("ticks").addProperty("MAXOR", -1) }
+    check(parseSplitRun(badTicks)?.let { it.ticks.isEmpty() && it.marks == laggy.marks } == true) { "Damaged ticks drop only server time" }
+}
+
 fun main() {
-    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud()
-    println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score and HUD rows")
+    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime()
+    println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, Terms and server time")
 }

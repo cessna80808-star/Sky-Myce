@@ -210,6 +210,8 @@ fun main() {
             val r = rail[index]
             check(r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0)
             check(r.x + r.width <= railLayout.sidebar && r.y + r.height < railLayout.height - 34)
+            // Edit HUD, Quick settings and Search sit below the rail and never under a category.
+            check(r.y + r.height <= railLayout.height - menuNavigationFooter(railLayout.height) + 4) { "A category overlaps the sidebar utilities" }
             check(r.x + r.width < railLayout.sidebar + 1) { "Categories covered their content panel" }
             for (other in rail.indices.filter { it != index }) {
                 check(!rail[other].contains(r.x + r.width / 2, r.y + r.height / 2))
