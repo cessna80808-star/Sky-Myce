@@ -163,7 +163,7 @@ object StarredClearRouting : SkyMyceModule() {
     override fun init() {
         reload()
         RoomTemplateRecorder.init()
-        ClientTickEvents.END_CLIENT_TICK.register { tickRouting() }
+        ClientTickEvents.END_CLIENT_TICK.register { guardedTick() }
         ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, false) }
         ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, true) }
     }
@@ -301,6 +301,23 @@ object StarredClearRouting : SkyMyceModule() {
         nextRecognition = 0L
         nextPositionSample = 0L
         nextHandoff = 0L
+    }
+
+    private var lastFailureLog = 0L
+
+    /**
+     * Routing is an optional overlay: an unexpected failure clears the route and is logged at most once a minute,
+     * instead of crashing the game (2.5.11 crashed here when a starred mob vanished mid-refresh).
+     */
+    private fun guardedTick() {
+        try { tickRouting() } catch (failure: RuntimeException) {
+            val now = System.currentTimeMillis()
+            if (now - lastFailureLog >= 60_000) {
+                lastFailureLog = now
+                SkyMyce.logger.error("Dungeon routing failed; clearing the route", failure)
+            }
+            runCatching { resetRun() }
+        }
     }
 
     private fun tickRouting() {
