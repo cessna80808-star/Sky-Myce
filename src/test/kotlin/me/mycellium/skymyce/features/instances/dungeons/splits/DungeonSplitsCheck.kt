@@ -185,7 +185,13 @@ private fun checkHud() {
     val view = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), null, SplitHudOptions())
     val rows = view.rows.associateBy { it.name.drop(2).trim() }
     check(rows.getValue("Blood Open").time == "§f20.00" && rows.getValue("Blood Open").server == "§7(§b18.80§7)") { "${view.rows}" }
-    check(rows.getValue("Watcher Clear").delta == "§8missed" && rows.getValue("Boss Entry").time == "§8—") { "${view.rows}" }
+    check(rows.getValue("Watcher Clear").delta == "§8missed" && rows.getValue("Portal").time == "§8—") { "${view.rows}" }
+    // Boss entry is its own row after Portal, timed from the run start on both clocks.
+    check(rows.getValue("Boss Entry").time == "§a1:30.0" && rows.getValue("Boss Entry").server == "§7(§b1:28.8§7)") { "${view.rows}" }
+    val clearNames = view.rows.map { it.name.drop(2) }
+    check(clearNames.indexOf("Boss Entry") == clearNames.indexOf("Portal") + 1 && clearNames.indexOf("Maxor") == clearNames.indexOf("Boss Entry") + 1)
+    val clearing = splitHudView(f7, SplitHudRun(mapOf(START to 0L, BLOOD_OPEN to 20_000L), emptyMap(), true, 50_000L, null, false, null), null, SplitHudOptions())
+    check(clearing.rows.first { it.name.endsWith("Boss Entry") }.time == "§e50.00") { "Boss entry counts up from the start during the clear" }
     check(rows.getValue("Maxor").time == "§e10.00" && rows.getValue("Maxor").server == "§7(§b10.00§7)") { "The running section counts from the last split" }
     check(rows.getValue("Storm").time == "§8—")
     check(rows.getValue("300 Score").time == "§f1:35.0" && rows.getValue("300 Score").server == "§7(§b1:33.8§7)")
@@ -236,6 +242,8 @@ private fun checkServerTime() {
     check(real.actualPb?.run == "R" && server.actualPb?.run == "L") { "Each clock has its own PB" }
     check(server.completedRuns == 1 && server.theoreticalPb == 19_900L * n) { "Runs without ticks never count on the server clock" }
     check(real.averageLag == 100.0 * n)
+    // Boss entry's best is the fastest single clear; it is not a section and not part of Best possible.
+    check(real.checkpoints.single().let { it.milestone == BOSS_ENTRY && it.best?.duration == 3 * 19_950L && it.best?.run == "R" && it.samples == 2 })
     check(sectionDurations(laggy, m7, SplitClock.SERVER).getValue(MAXOR) == 19_900L)
     val terms = server.groups.single()
     check(terms.group.title == "Terms" && terms.best?.duration == 4 * 19_900L && terms.samples == 1)

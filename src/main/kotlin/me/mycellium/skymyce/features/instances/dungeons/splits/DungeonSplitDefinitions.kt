@@ -37,6 +37,8 @@ enum class SplitMilestone(val title: String) {
  * One floor's split layout. [chain] runs from START to END; each later entry ends one section that starts at the entry
  * before it, so section durations always add up to the run time. [markers] are timed from the run start but are not
  * sections, because they can happen before or after other milestones (300 score may come before or after boss entry).
+ * [checkpoints] are chain milestones that are also timed from the start, such as boss entry; the section ending there
+ * keeps its own name (Portal) so the two rows read apart.
  * Increase [version] whenever a boundary changes so records with different boundaries are never combined.
  */
 data class SplitDefinition(
@@ -47,14 +49,19 @@ data class SplitDefinition(
     private val titles: Map<SplitMilestone, String> = emptyMap(),
     /** Totals over consecutive sections, such as all terminals; shown and tracked, never added to the theoretical PB. */
     val groups: List<SplitGroup> = emptyList(),
+    val checkpoints: List<SplitMilestone> = listOf(SplitMilestone.BOSS_ENTRY),
+    private val sectionTitles: Map<SplitMilestone, String> = mapOf(SplitMilestone.BOSS_ENTRY to "Portal"),
 ) {
     init {
         require(chain.first() == SplitMilestone.START && chain.last() == SplitMilestone.END && chain.distinct().size == chain.size)
         require(markers.none { it in chain })
         require(groups.all { chain.indexOf(it.from) in 0 until chain.indexOf(it.to) })
+        require(checkpoints.all { it in chain && it != SplitMilestone.START })
     }
     val sections: List<SplitSection> = chain.zipWithNext { from, to -> SplitSection(to, from) }
     fun title(milestone: SplitMilestone) = titles[milestone] ?: milestone.title
+    /** The name of the section ending at [milestone]; differs from [title] only where a checkpoint shares the milestone. */
+    fun sectionTitle(milestone: SplitMilestone) = sectionTitles[milestone] ?: title(milestone)
     val applicable: Set<SplitMilestone> = (chain + markers).toSet()
 }
 

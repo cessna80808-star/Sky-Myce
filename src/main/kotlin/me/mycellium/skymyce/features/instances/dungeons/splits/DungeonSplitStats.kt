@@ -72,7 +72,7 @@ data class SectionStats(
     val samples: Int,
 )
 
-/** A marker such as 300 score, timed from the run start and kept out of the theoretical total. */
+/** A marker such as 300 score, or a checkpoint such as boss entry, timed from the run start and kept out of the theoretical total. */
 data class MarkerStats(val milestone: SplitMilestone, val best: SectionBest?, val average: Double?, val samples: Int)
 
 /** A block of sections (Terms) timed within single runs; its best is a real run's time, not a sum of section bests. */
@@ -93,6 +93,8 @@ data class FloorSplitStats(
     val savedRuns: Int,
     /** Average real-minus-server time over the window's completed runs that have both clocks. */
     val averageLag: Double?,
+    /** Checkpoints such as boss entry, timed from the start. */
+    val checkpoints: List<MarkerStats> = emptyList(),
 )
 
 /** Time from [from] to [to] in one run on [clock], when both were observed. */
@@ -131,15 +133,16 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
     }
     val totals = windowed(completed.map { it.total(clock)!! })
     // Time from the observed start; the run need not finish for the moment it reached 300 to be real.
-    val markers = definition.markers.map { marker ->
+    fun fromStart(milestone: SplitMilestone): MarkerStats {
         val observed = floorRuns.filter { it.startObserved && it.conflicts == 0 }
-            .mapNotNull { run -> spanDuration(run, SplitMilestone.START, marker, clock)?.let { SectionBest(it, run.id, run.recordedAt) } }
+            .mapNotNull { run -> spanDuration(run, SplitMilestone.START, milestone, clock)?.let { SectionBest(it, run.id, run.recordedAt) } }
         val window = windowed(observed.map { it.duration })
-        MarkerStats(marker, fastest(observed), window.takeIf { it.isNotEmpty() }?.average(), window.size)
+        return MarkerStats(milestone, fastest(observed), window.takeIf { it.isNotEmpty() }?.average(), window.size)
     }
+    val markers = definition.markers.map(::fromStart)
     val lag = windowed(floorRuns.mapNotNull { it.lagLost })
     return FloorSplitStats(definition, clock, markers, actual, theoretical, sections, groups, totals.takeIf { it.isNotEmpty() }?.average(),
-        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average())
+        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), definition.checkpoints.map(::fromStart))
 }
 
 /** Live comparison against the saved section PB; null when no comparable best exists yet. */

@@ -95,9 +95,14 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
                     source(total.best), MenuTheme.ACCENT)
                     .wrappedTooltip(Component.literal("All terminal sections, from ${definition.title(group.from)} to ${definition.title(group.to)}, timed within one run. Not added to Best possible, which already counts each section.")))
             }
-            body.child(tableRow((if (group != null) "    " else "") + definition.title(section.section.milestone), time(section.best?.duration),
+            body.child(tableRow((if (group != null) "    " else "") + definition.sectionTitle(section.section.milestone), time(section.best?.duration),
                 average(section.average), source(section.best), MenuTheme.TEXT)
                 .wrappedTooltip(Component.literal("From ${definition.title(section.section.from)} to ${definition.title(section.section.milestone)}")))
+            stats.checkpoints.firstOrNull { it.milestone == section.section.milestone }?.let { checkpoint ->
+                body.child(tableRow("${definition.title(checkpoint.milestone)} ✱", time(checkpoint.best?.duration), average(checkpoint.average),
+                    source(checkpoint.best), MenuTheme.ACCENT)
+                    .wrappedTooltip(Component.literal("Time from the run start to ${definition.title(checkpoint.milestone).lowercase()}: the whole clear in one number. Its best is a single run's time.")))
+            }
         }
         for (marker in stats.markers) {
             body.child(tableRow("${definition.title(marker.milestone)} ✱", time(marker.best?.duration),

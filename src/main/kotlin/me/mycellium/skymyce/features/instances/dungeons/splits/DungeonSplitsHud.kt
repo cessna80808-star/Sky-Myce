@@ -52,6 +52,7 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
     fun pending(best: SectionBest?) = best?.takeIf { options.compare }?.let { "§8${time(it.duration)}" } ?: ""
     val bests = stats?.sections?.associate { it.section.milestone to it.best }.orEmpty()
     val groupBests = stats?.groups?.associate { it.group to it.best }.orEmpty()
+    val checkpointBests = stats?.checkpoints?.associate { it.milestone to it.best }.orEmpty()
     val marks = run.marks
     val rows = ArrayList<SplitHudRow>()
     val latest = definition.chain.indexOfLast { it in marks || it == SplitMilestone.START && run.startObserved }
@@ -75,7 +76,7 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
                 else -> null
             }?.let(rows::add)
         }
-        val name = (if (group != null) "  " else "") + definition.title(section.milestone)
+        val name = (if (group != null) "  " else "") + definition.sectionTitle(section.milestone)
         val best = bests[section.milestone]
         val to = marks[section.milestone]
         val (real, srv) = span(run, section.from, section.milestone)
@@ -87,6 +88,20 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
                 if (now != null) rows += SplitHudRow("§e$name", "§e${time(now)}", server(nowServer), pending(best))
             }
             options.upcoming && !run.finished -> rows += SplitHudRow("§8$name", "§8${best?.takeIf { options.compare }?.let { time(it.duration) } ?: "—"}")
+        }
+        // A checkpoint (boss entry) follows its section with the time from the run start, counting up until it is reached.
+        if (section.milestone in definition.checkpoints && run.startObserved) {
+            val title = definition.title(section.milestone)
+            val checkpointBest = checkpointBests[section.milestone]
+            val (total, totalServer) = span(run, SplitMilestone.START, section.milestone)
+            when {
+                to != null && total != null ->
+                    rows += SplitHudRow("§a$title", "§a${time(total)}", server(totalServer), delta(compared(total, totalServer), checkpointBest))
+                to != null || position <= latest -> rows += SplitHudRow("§7$title", "§8—", "", "§8missed")
+                !run.finished -> span(run, SplitMilestone.START, null).let { (now, nowServer) ->
+                    if (now != null) rows += SplitHudRow("§e$title", "§e${time(now)}", server(nowServer), pending(checkpointBest))
+                }
+            }
         }
     }
     for (marker in definition.markers) {

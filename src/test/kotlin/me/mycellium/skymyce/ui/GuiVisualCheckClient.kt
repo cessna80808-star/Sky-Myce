@@ -789,7 +789,7 @@ private class GuiVisualDungeonSplitsPreviewScreen : Screen(Minecraft.getInstance
         val components = arrayListOf<UIComponent>()
         checkNotNull(widget.adapter).rootComponent.collectDescendants(components)
         val rows = components.filterIsInstance<me.mycellium.skymyce.hud.HudTextLabel>().map { it.text().string.trim() }
-        check("M7 Splits" in rows && "Terms" in rows && "S1" in rows && "S4" in rows && "Goldor" in rows && "Drags" in rows && "300 Score" in rows) { "$rows" }
+        check("M7 Splits" in rows && "Terms" in rows && "S1" in rows && "S4" in rows && "Goldor" in rows && "Drags" in rows && "Portal" in rows && "Boss Entry" in rows && "300 Score" in rows) { "$rows" }
         check(rows.any { it.startsWith("Lag lost") } && rows.any { it.startsWith("(") }) { "Server time and lag lost must be visible: $rows" }
         check(widget.width in 1..width && widget.height in 1..height)
     }
