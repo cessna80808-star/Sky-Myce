@@ -97,6 +97,7 @@ class GuiVisualCheckClient : ClientModInitializer {
         var browserFixture: GuiVisualBrowserFixture? = null
         var journalFixture: GuiVisualJournalFixture? = null
         var bazaarFixture: GuiVisualBazaarFixture? = null
+        var splitsFixture: GuiVisualSplitsFixture? = null
         var rngArchiveSnapshot: AcquisitionArchive? = null
         var savedReceiveRng: Boolean? = null
         fun receiveRngEntry() = settingRows(SkyMyce.config).single { it.element.id() == "receiveRng" }.entry
@@ -118,6 +119,10 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("bazaar-terminal-narrow-positions", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
+            Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
+            Scene("dungeon-splits-stats", ThemePreset.SIGNATURE) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
+            Scene("dungeon-splits-stats-wide", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
+            Scene("dungeon-splits-stats-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("spirit-leap-layout", ThemePreset.SIGNATURE) { GuiVisualLeapMenuScreen() },
             Scene("spirit-leap-layout-small", ThemePreset.SIGNATURE, 640, 480, 2) { GuiVisualLeapMenuScreen(missing = true) },
             Scene("journal-compact-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) {
@@ -611,6 +616,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                         if (current.name.startsWith("browser-native")) { browserFixture?.close(client); browserFixture = null }
                         if (current.name.startsWith("journal-")) { journalFixture?.restore(); journalFixture = null }
                         if (current.name.startsWith("bazaar-terminal")) { bazaarFixture?.close(); bazaarFixture = null }
+                        if (current.name.startsWith("dungeon-splits-stats")) { splitsFixture?.restore(); splitsFixture = null }
                         scene++; ticks = 0; pending = false
                     }
                 }
@@ -770,6 +776,47 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
         output.fill(0, 0, width, height, 0xFF101725.toInt())
         check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
     }
+}
+
+private class GuiVisualDungeonSplitsPreviewScreen : Screen(Minecraft.getInstance(), Minecraft.getInstance().font, Component.literal("Dungeon Splits preview")) {
+    private val widget = me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud.widget
+    override fun init() {
+        super.init()
+        check(widget.prepareEditor()) { "Dungeon Splits editor preview did not mount" }
+        val components = arrayListOf<UIComponent>()
+        checkNotNull(widget.adapter).rootComponent.collectDescendants(components)
+        val rows = components.filterIsInstance<me.mycellium.skymyce.hud.HudTextLabel>().map { it.text().string.trim() }
+        check("M7 Splits" in rows && "S1" in rows && "S2" in rows && "Drags" in rows && "300 Score" in rows) { "$rows" }
+        check(widget.width in 1..width && widget.height in 1..height)
+    }
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        output.fill(0, 0, width, height, 0xFF101725.toInt())
+        check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
+}
+
+/** Synthetic in-memory runs for the statistics menu; the saved history file is never written. */
+internal class GuiVisualSplitsFixture {
+    private val store = me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitStore
+    private val saved = store.javaClass.getDeclaredField("saved").apply { isAccessible = true }
+    private val previous = store.runs
+    init {
+        check(Minecraft.getInstance().connection == null)
+        val definition = me.mycellium.skymyce.features.instances.dungeons.splits.splitDefinitions.getValue("M7")
+        val now = System.currentTimeMillis()
+        val runs = (0 until 14).map { index ->
+            var at = 0L
+            val marks = linkedMapOf(me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.START to 0L)
+            definition.sections.forEachIndexed { section, it -> at += 9_000L + ((index * 7 + section * 13) % 11) * 1_100L; marks[it.milestone] = at }
+            marks[me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.SCORE_300] = 95_000L + index * 1_300L
+            if (index % 5 == 4) marks.remove(me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.RELICS)
+            me.mycellium.skymyce.features.instances.dungeons.splits.SplitRunRecord("fixture-$index", "M7", 1, now - index * 1_900_000L, index != 9, marks,
+                if (index == 6) me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.FAILED else me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome.COMPLETED)
+        }
+        saved.set(store, runs)
+    }
+    fun screen() = me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen()
+    fun restore() { saved.set(store, previous) }
 }
 
 /** Card/layout verification only; no world exists and these blank windows never claim gameplay. */

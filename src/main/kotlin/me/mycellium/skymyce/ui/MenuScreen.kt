@@ -520,6 +520,7 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "daily-digest" -> DailyDigestScreen()
         "party-finder" -> DungeonFriendsScreen()
         "dungeon-tracker" -> DungeonScreen()
+        "dungeon-splits" -> me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen()
         "healer-crush-camera" -> me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()
         "auction-browser" -> AuctionHouseScreen()
         "bazaar-flipping" -> me.mycellium.skymyce.features.bazaar.BazaarScreen()

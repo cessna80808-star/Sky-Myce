@@ -84,6 +84,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
+            MenuFeature("dungeon-splits", "Dungeon Splits", "Live run splits, personal bests, best possible time and averages per floor", MenuCategory.DUNGEONS, "Runs", listOf("splits", "timer", "pb", "personal best", "theoretical", "average", "300", "terminals", "necron", "relics"), tool = "dungeon-splits", enabledPath = "Dungeons/Dungeon Splits/enabled"),
             MenuFeature("healer-crush-camera", "Crush Camera", "Class-specific fixed views from 26 seconds into Storm until Storm dies", MenuCategory.DUNGEONS, "Boss", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
             MenuFeature("leap-menu", "Spirit Leap Menu", "Choose a teammate with four local gameplay previews", MenuCategory.DUNGEONS, "Parties", listOf("spirit", "leap", "teleport", "pov", "camera", "teammates"), enabledPath = "Dungeons/Leap Menu/enabled"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
@@ -158,6 +159,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("Dungeons/Healer Crush Camera/") -> "healer-crush-camera"
                 path.startsWith("Dungeons/Leap Menu/") -> "leap-menu"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"
+                path.startsWith("Dungeons/Dungeon Splits/") -> "dungeon-splits"
                 path.startsWith("Dungeons/") && key == "dungeonWinScreen" -> "dungeon-summary"
                 path.startsWith("Dungeons/") && key == "dungeonMessageFilter" -> "dungeon-chat"
                 path.startsWith("Dungeons/") -> "dungeon-chests"

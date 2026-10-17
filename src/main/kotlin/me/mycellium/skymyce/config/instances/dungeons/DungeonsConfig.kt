@@ -7,6 +7,7 @@ import me.mycellium.skymyce.features.instances.dungeons.DungeonCleanChat
 object DungeonsConfig : CategoryKt("Dungeons") {
     init {
         category(DungeonTrackerConfig)
+        category(DungeonSplitsConfig)
         category(DungeonFriendsConfig)
         category(StarredClearRoutingConfig)
         category(HealerCrushCameraConfig)

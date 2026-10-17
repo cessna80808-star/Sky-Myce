@@ -1,0 +1,190 @@
+package me.mycellium.skymyce.features.instances.dungeons.splits
+
+import me.mycellium.skymyce.features.instances.dungeons.splits.SplitMilestone.*
+
+private const val MS = 1_000_000L
+
+private fun run(id: String, floor: String, recordedAt: Long, marks: Map<SplitMilestone, Long>, outcome: SplitOutcome = SplitOutcome.COMPLETED,
+                start: Boolean = true, conflicts: Int = 0) =
+    SplitRunRecord(id, floor, 1, recordedAt, start, (if (start) mapOf(START to 0L) else emptyMap<SplitMilestone, Long>()) + marks, outcome, conflicts)
+
+/** Marks for a fully split run from consecutive section durations, in chain order. */
+private fun chained(definition: SplitDefinition, durations: List<Long>): Map<SplitMilestone, Long> {
+    check(durations.size == definition.sections.size)
+    var at = 0L
+    return definition.sections.mapIndexed { index, section -> at += durations[index]; section.milestone to at }.toMap()
+}
+
+private fun checkSignals() {
+    check(splitSignal(MORT_START, 7) == SplitSignal.Start)
+    check(splitSignal("The BLOOD DOOR has been opened!", 7) == SplitSignal.Milestone(BLOOD_OPEN))
+    check(splitSignal("[BOSS] The Watcher: You have proven yourself. You may pass.", 7) == SplitSignal.Milestone(BLOOD_CLEAR))
+    check(splitSignal("[BOSS] The Watcher: Things feel a little more roomy now, eh?", 7) == SplitSignal.WatcherLine)
+    check(splitSignal("[BOSS] Maxor: WELL! WELL! WELL! LOOK WHO'S HERE!", 7) == SplitSignal.Milestone(BOSS_ENTRY))
+    check(splitSignal("[BOSS] Maxor: YOU TRICKED ME!", 7) == SplitSignal.BossLine)
+    check(splitSignal("[BOSS] Maxor: WELL! WELL! WELL! LOOK WHO'S HERE!", 3) == null) { "Another floor's boss line is not boss entry" }
+    check(splitSignal("[BOSS] Storm: Pathetic Maxor, just like expected.", 7) == SplitSignal.Milestone(MAXOR))
+    check(splitSignal("[BOSS] Goldor: Who dares trespass into my domain?", 7) == SplitSignal.Milestone(STORM))
+    check(splitSignal("The Core entrance is opening!", 7) == SplitSignal.Milestone(CORE))
+    check(splitSignal("[BOSS] Necron: You went further than any human before, congratulations.", 7) == SplitSignal.Milestone(GOLDOR))
+    check(splitSignal("[BOSS] Necron: ARGH!", 7) == SplitSignal.NecronArgh)
+    check(splitSignal("Steve activated a terminal! (3/7)", 7) == SplitSignal.Terminal(3, 7))
+    check(splitSignal("Alex_99 completed a device! (8/8)", 7) == SplitSignal.Terminal(8, 8))
+    // Relayed player chat cannot impersonate server progress lines.
+    check(splitSignal("Party > [MVP+] Steve: Steve activated a terminal! (7/7)", 7) == null)
+    check(splitSignal("Steve: Bob activated a terminal! (7/7)", 7) == null)
+    check(splitSignal("[BOSS] Hockey Livid: Impossible! How did you figure out which one I was?!", 5) == SplitSignal.Milestone(LIVID_KILL))
+    check(splitSignal("[BOSS] Livid: Welcome, you've arrived right on time. I am Livid, the Master of Shadows.", 5) == SplitSignal.Milestone(BOSS_ENTRY))
+    check(splitSignal("[BOSS] Livid: I respect you for making it to here, but I'll be your undoing.", 5) == SplitSignal.Milestone(LIVID_DIALOGUE))
+    check(splitSignal("[BOSS] Sadan: ENOUGH!", 6) == SplitSignal.Milestone(TERRACOTTAS))
+    check(splitSignal("                ☠ Defeated Maxor, Storm, Goldor, and Necron in 05m 21s", 7) == SplitSignal.Defeated)
+    check(splitSignal("☠ Defeated Bonzo in 01m 02s (NEW RECORD!)", 1) == SplitSignal.Defeated)
+    for (number in 1..7) check(splitSignal(bossEntryLines.getValue(number), number) == SplitSignal.Milestone(BOSS_ENTRY))
+}
+
+private fun checkDefinitions() {
+    for (number in 1..7) for (mode in listOf("F", "M")) check("$mode$number" in splitDefinitions)
+    check("E" !in splitDefinitions)
+    val f7 = splitDefinitions.getValue("F7"); val m7 = splitDefinitions.getValue("M7")
+    check(listOf(BLOOD_OPEN, BLOOD_CLEAR, BOSS_ENTRY, MAXOR, STORM, S1, S2, S3, CORE, GOLDOR, NECRON).all { it in f7.chain })
+    check(S1 != S2 && f7.sections.map { it.milestone }.containsAll(listOf(S1, S2, S3, CORE))) { "Terminal sections stay independent" }
+    check(RELICS !in f7.applicable && RELICS in m7.applicable) { "Relics and dragons only exist in Master Mode 7" }
+    check(m7.title(END) == "Drags" && f7.title(END) == "End Dialogue")
+    check(splitDefinitions.values.all { SCORE_300 in it.markers && SCORE_300 !in it.chain })
+    check(splitDefinitions.getValue("F1").chain.none { it in listOf(MAXOR, S1, RELICS) })
+    check(splitDefinitions.values.all { def -> def.sections.zipWithNext().all { (a, b) -> a.milestone == b.from } })
+}
+
+private fun checkTimeline() {
+    val f7 = splitDefinitions.getValue("F7")
+    val t = SplitTimeline(f7, true, 1_000 * MS)
+    check(t.mark(BLOOD_OPEN, 21_000 * MS) == MarkResult.ACCEPTED)
+    check(t.mark(BLOOD_OPEN, 22_000 * MS) == MarkResult.DUPLICATE && t.marks.getValue(BLOOD_OPEN) == 20_000L) { "Duplicates never move a split" }
+    check(t.mark(BOSS_ENTRY, 90_000 * MS) == MarkResult.ACCEPTED) // Watcher clear missed: kept missing, not invented
+    check(BLOOD_CLEAR !in t.marks)
+    check(t.mark(BLOOD_CLEAR, 91_000 * MS) == MarkResult.OUT_OF_ORDER && t.conflicts == 1) { "A late earlier phase is rejected and noted" }
+    check(t.mark(SCORE_300, 95_000 * MS) == MarkResult.ACCEPTED) { "Markers are independent of chain order" }
+    check(t.mark(RELICS, 96_000 * MS) == MarkResult.NOT_APPLICABLE) { "F7 has no relic phase" }
+    check(t.current() == MAXOR)
+    check(t.mark(START, 99_000 * MS) == MarkResult.DUPLICATE && t.marks.getValue(START) == 0L) { "Phase transitions never restart the run" }
+    check(t.mark(END, 400_000 * MS) == MarkResult.ACCEPTED && t.finished)
+    check(t.mark(NECRON, 401_000 * MS) == MarkResult.OUT_OF_ORDER)
+    val record = t.record("a", 5, SplitOutcome.COMPLETED)
+    check(record.conflicts == 1 && record.total == null) { "A run with conflicting events is never a PB candidate" }
+
+    val late = SplitTimeline(f7, false, 50_000 * MS)
+    check(late.mark(MAXOR, 60_000 * MS) == MarkResult.ACCEPTED && START !in late.marks && late.marks.getValue(MAXOR) == 10_000L)
+    check(late.mark(STORM, 100_000 * MS) == MarkResult.ACCEPTED)
+    val lateRecord = late.record("late", 1, SplitOutcome.COMPLETED)
+    check(sectionDurations(lateRecord, f7) == mapOf(STORM to 40_000L)) { "Late joins keep only sections seen end to end" }
+    check(lateRecord.total == null)
+
+    val terminals = TerminalSections()
+    check(terminals.accept(1, 7) == null && terminals.accept(7, 7) == S1)
+    check(terminals.accept(7, 7) == null) { "A repeated full count is not the next section" }
+    check(terminals.accept(1, 8) == null && terminals.accept(8, 8) == S2)
+    check(terminals.accept(2, 7) == null && terminals.accept(7, 7) == S3)
+    check(terminals.accept(1, 7) == null && terminals.accept(7, 7) == null) { "Section four ends at the Core entrance line" }
+}
+
+private fun checkStats() {
+    val m7 = splitDefinitions.getValue("M7")
+    val n = m7.sections.size
+    val a = run("A", "M7", 100, chained(m7, List(n) { 20_000L }) + (SCORE_300 to 110_000L))
+    val bDurations = MutableList(n) { 21_000L }.also { it[1] = 15_000L; it[5] = 18_000L }
+    val b = run("B", "M7", 200, chained(m7, bDurations) + (SCORE_300 to 100_000L))
+    // Faster on paper but incomplete: its sections must never become bests.
+    val partial = run("P", "M7", 300, chained(m7, List(n) { 1_000L }).filterKeys { it != NECRON && it != RELICS && it != END }, SplitOutcome.FAILED)
+    val conflicted = run("C", "M7", 400, chained(m7, List(n) { 1_000L }), conflicts = 1)
+    val f7 = splitDefinitions.getValue("F7")
+    val otherFloor = run("F", "F7", 500, chained(f7, List(f7.sections.size) { 500L }))
+    val stats = floorSplitStats(listOf(a, b, partial, conflicted, otherFloor), m7, SplitWindow.ALL)
+    check(stats.actualPb == SectionBest(20_000L * n, "A", 100)) { "Actual PB is a real completed run" }
+    val expected = (0 until n).sumOf { minOf(20_000L, bDurations[it]) }
+    check(stats.theoreticalPb == expected) { "Theoretical PB sums each section's best: ${stats.theoreticalPb} != $expected" }
+    check(stats.theoreticalPb!! < stats.actualPb!!.duration)
+    check(stats.sections[1].best?.run == "B" && stats.sections[0].best?.run == "A") { "Each section best keeps its source run" }
+    check(stats.sections.sumOf { it.best!!.duration } == stats.theoreticalPb) { "Theoretical total is traceable to its sections" }
+    check(stats.completedRuns == 2 && stats.savedRuns == 4) { "F7 is never mixed into M7" }
+    check(stats.sections[0].samples == 3) { "Section averages include sections seen in partial runs, never conflicting ones" }
+    check(stats.averageSamples == 2 && stats.averageTotal == (a.total!! + b.total!!) / 2.0)
+    check(stats.markers.single().best?.duration == 100_000L)
+
+    // A section with no eligible best leaves the theoretical PB unavailable instead of counting it as zero.
+    val missing = run("M", "M7", 600, chained(m7, List(n) { 10_000L }).filterKeys { it != RELICS })
+    val onlyMissing = floorSplitStats(listOf(missing), m7, SplitWindow.ALL)
+    check(onlyMissing.theoreticalPb == null && onlyMissing.actualPb?.run == "M")
+    // Zero is a valid, known duration.
+    val zero = chained(m7, MutableList(n) { 10_000L }.also { it[3] = 0L })
+    check(floorSplitStats(listOf(run("Z", "M7", 700, zero)), m7, SplitWindow.ALL).sections[3].best?.duration == 0L)
+
+    val many = (1..30).map { i -> run("r$i", "M7", i.toLong() * 1000, chained(m7, List(n) { if (i > 20) 30_000L else 10_000L })) }
+    check(floorSplitStats(many, m7, SplitWindow.LAST_10).averageTotal == 30_000.0 * n) { "Last 10 uses the newest ten runs" }
+    check(floorSplitStats(many, m7, SplitWindow.LAST_10).averageSamples == 10)
+    check(floorSplitStats(many, m7, SplitWindow.ALL).averageSamples == 30)
+    check(floorSplitStats(many, m7, SplitWindow.LAST_25).sections[0].samples == 25)
+    check(floorSplitStats(many, m7, SplitWindow.LAST_50).sections[0].average == (20 * 10_000.0 + 10 * 30_000.0) / 30)
+
+    val older = a.copy(id = "old", definition = 0)
+    check(floorSplitStats(listOf(older), m7, SplitWindow.ALL).savedRuns == 0) { "Different split layouts are never combined" }
+}
+
+private fun checkStore() {
+    val m7 = splitDefinitions.getValue("M7")
+    val record = run("id-1", "M7", 1234, chained(m7, List(m7.sections.size) { 1_500L }) + (SCORE_300 to 7_000L), conflicts = 0)
+    val parsed = parseSplitStore(encodeSplitStore(listOf(record, record.copy(id = "id-2", outcome = SplitOutcome.ABANDONED, startObserved = false,
+        marks = mapOf(MAXOR to 5L))))).associateBy { it.id }
+    check(parsed["id-1"] == record && parsed["id-2"]?.outcome == SplitOutcome.ABANDONED)
+    val bad = encodeSplitRun(record).apply { getAsJsonObject("marks").addProperty("MAXOR", -5) }
+    check(parseSplitRun(bad) == null) { "A damaged time is rejected, not repaired" }
+    check(parseSplitRun(encodeSplitRun(record).apply { addProperty("floor", "E") }) == null)
+    val future = encodeSplitRun(record).apply { getAsJsonObject("marks").addProperty("SOMETHING_NEW", 5) }
+    check(parseSplitRun(future)?.marks == record.marks) { "Unknown future milestones are ignored" }
+    check(parseSplitStore(com.google.gson.JsonObject().apply { addProperty("version", 99) }).isEmpty())
+}
+
+private fun checkScore() {
+    val perfect = ScoreInputs("M7", secretPercent = 100.0, clearedPercent = 93, completedRooms = 28, crypts = 5, elapsedSeconds = 300,
+        mimic = true, prince = true)
+    check(estimateDungeonScore(perfect) == 40 + 60 + 100 + 8 + 100) { "${estimateDungeonScore(perfect)}" }
+    check(estimateDungeonScore(perfect.copy(secretPercent = 90.0, crypts = 1, mimic = false, prince = false)) == 297)
+    check(estimateDungeonScore(perfect.copy(openPuzzles = 1))!! < estimateDungeonScore(perfect)!!)
+    check(estimateDungeonScore(perfect.copy(deaths = 2)) == estimateDungeonScore(perfect)!! - 3)
+    check(estimateDungeonScore(perfect.copy(secretPercent = null)) == null) { "Unknown inputs never estimate" }
+    check(estimateDungeonScore(perfect.copy(clearedPercent = 0)) == null)
+    check(estimateDungeonScore(perfect.copy(elapsedSeconds = 1000))!! < estimateDungeonScore(perfect)!!)
+    check(estimateDungeonScore(ScoreInputs("F5", secretPercent = 70.0, clearedPercent = 93, completedRooms = 28, crypts = 5, elapsedSeconds = 100)) ==
+        40 + 60 + 100 + 5 + 100)
+    check(speedDeduction(0.0) == 0.0 && speedDeduction(20.0) == 10.0)
+
+    val tab = readScoreTabList(ScoreInputs("F7"), listOf(
+        listOf("Party (5)", " Team Deaths: 1"),
+        listOf("Dungeon: Catacombs", " Secrets Found: 13", " Secrets Found: 54.3%", " Crypts: 3", " Completed Rooms: 21",
+            "Puzzles: (3)", " Water Board: [✔]", " Three Weirdos: [✖]", " ???: [✦]")))
+    check(tab.secretPercent == 54.3 && tab.crypts == 3 && tab.completedRooms == 21 && tab.deaths == 1 && tab.openPuzzles == 2) { "$tab" }
+    val board = readScoreSidebar(tab, listOf("Time Elapsed: 5m 12s", "Cleared: 70% (231)"), watcherCleared = false)
+    check(board.elapsedSeconds == 312 && board.clearedPercent == 70 && !board.bloodDone)
+    check(readScoreSidebar(board, listOf("Cleared: 74% (240)"), watcherCleared = true).bloodDone)
+    check(readScoreSidebar(board, listOf("Cleared: 70% (240)"), watcherCleared = true).bloodDone.not())
+}
+
+private fun checkHud() {
+    val f7 = splitDefinitions.getValue("F7")
+    val marks = mapOf(START to 0L, BLOOD_OPEN to 20_000L, BOSS_ENTRY to 90_000L, SCORE_300 to 95_000L)
+    val view = splitHudView(f7, marks, true, 100_000L, null, false, 287, compare = true, upcoming = true, total = true, precise = true)
+    val rows = view.rows.associateBy { it.name.drop(2) }
+    check(rows.getValue("Blood Open").time == "§f20.00")
+    check(rows.getValue("Watcher Clear").delta == "§8missed" && rows.getValue("Boss Entry").time == "§8—") { "${view.rows}" }
+    check(rows.getValue("Maxor").time == "§e10.00") { "The running section counts from the last split" }
+    check(rows.getValue("Storm").time == "§8—")
+    check(rows.getValue("300 Score").time == "§f1:35.0")
+    check(view.footer.first() == "§7Run §f1:40.0")
+    val late = splitHudView(f7, mapOf(MAXOR to 0L), false, 5_000L, null, false, null, compare = false, upcoming = false, total = true, precise = false)
+    check(late.footer.first().contains("not timed") && late.rows.map { it.name } == listOf("§7Maxor", "§eStorm")) { "${late.rows}" }
+    check(formatSplitTime(61_250L) == "1:01.2" && formatSplitTime(null) == "—" && formatSplitDelta(-1_230L) == "-1.23")
+}
+
+fun main() {
+    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud()
+    println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score and HUD rows")
+}

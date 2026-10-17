@@ -123,6 +123,9 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(literal("leaderboard").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.community.LeaderboardScreen()) }; 1
             })
+            .then(literal("splits").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen()) }; 1
+            })
             .then(literal("journal").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
             })
