@@ -6,8 +6,11 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonCompletio
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import net.minecraft.network.protocol.common.ClientboundPingPacket
+import net.minecraft.network.chat.Component
+import net.minecraft.network.protocol.game.ClientboundBossEventPacket
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket
+import net.minecraft.world.BossEvent
 import net.minecraft.world.entity.EquipmentSlot
 import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.monster.zombie.Zombie
@@ -45,6 +48,7 @@ object DungeonSplits : SkyMyceModule() {
         var continuous = timeline.startObserved
         val terminals = TerminalSections()
         var terminalsReliable = true
+        var necronArgh = false
         var defeated = false
         var score = ScoreInputs(definition.floor)
         var estimate: Int? = null
@@ -64,6 +68,16 @@ object DungeonSplits : SkyMyceModule() {
     /** The server's tick count, or null before its game time has arrived. */
     internal val serverTicks: Long? get() = serverClock.now
     private var server: String? = null
+    /** Boss bar names by id; Hypixel's withers reach the client as boss bars. */
+    private val bossBars = HashMap<UUID, String>()
+    private var bossBarAt = 0L
+    private val bossBarHandler = object : ClientboundBossEventPacket.Handler {
+        override fun add(id: UUID, name: Component, progress: Float, color: BossEvent.BossBarColor, overlay: BossEvent.BossBarOverlay,
+                         darkenScreen: Boolean, playMusic: Boolean, createWorldFog: Boolean) { bossBars[id] = name.stripped; bossProgress(id, progress) }
+        override fun updateName(id: UUID, name: Component) { bossBars[id] = name.stripped }
+        override fun updateProgress(id: UUID, progress: Float) = bossProgress(id, progress)
+        override fun remove(id: UUID) { bossBars.remove(id) }
+    }
     var revision = 0L
         private set
 
@@ -93,6 +107,7 @@ object DungeonSplits : SkyMyceModule() {
             SplitSignal.BossLine -> if (run.continuous) mark(run, SplitMilestone.BOSS_ENTRY, at)
             is SplitSignal.Terminal -> if (run.terminalsReliable && SplitMilestone.STORM in run.timeline.marks && SplitMilestone.S4 !in run.timeline.marks)
                 run.terminals.accept(signal.done, signal.total)?.let { mark(run, it, at) }
+            SplitSignal.NecronArgh -> run.necronArgh = true
             SplitSignal.Defeated -> { run.defeated = true; finish(run, at) }
             SplitSignal.Start, null -> {
                 if (signal != null) return
@@ -115,6 +130,12 @@ object DungeonSplits : SkyMyceModule() {
             } else if ((packet as ClientboundPingPacket).id != 0) MC.instance.execute { serverClock.ping() }
             return
         }
+        if (packet is ClientboundBossEventPacket) {
+            if (LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
+            val at = System.nanoTime()
+            MC.instance.execute { bossBarAt = at; packet.dispatch(bossBarHandler) }
+            return
+        }
         if (live == null) return
         if (packet is ClientboundEntityEventPacket && packet.eventId.toInt() == 3) {
             val at = System.nanoTime()
@@ -125,6 +146,13 @@ object DungeonSplits : SkyMyceModule() {
                 if ((packet.getEntity(level) as? Zombie)?.isBaby == true) updateScore(run, at) { it.copy(mimic = true) }
             }
         }
+    }
+
+    /** Necron's bar emptying after his "ARGH!" is his death, even when boss chat is hidden (NoammAddons `F7Titles`). */
+    private fun bossProgress(id: UUID, progress: Float) {
+        if (progress > 0f) return
+        val run = live?.takeIf { it.necronArgh && it.floorNumber == 7 && active() } ?: return
+        if (bossBars[id]?.contains("Necron") == true) mark(run, SplitMilestone.NECRON, bossBarAt)
     }
 
     @Subscription
@@ -164,7 +192,7 @@ object DungeonSplits : SkyMyceModule() {
     @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class, ProfileChangeEvent::class)
     fun onLeave() {
         pendingStart = null; pendingStartTicks = null; server = null
-        serverClock.reset()
+        serverClock.reset(); bossBars.clear()
         val run = live ?: return
         live = null; revision++
         if (run.outcome != null) return
@@ -208,7 +236,7 @@ object DungeonSplits : SkyMyceModule() {
         if (server == null || held.run.server == null || server != held.run.server) return null
         suspended = null
         return held.run.also { run ->
-            run.continuous = false; run.sawBelow300 = false
+            run.continuous = false; run.necronArgh = false; run.sawBelow300 = false
             // Ticks were not counted while away, so server time stops here; real time still covers the whole run.
             run.timeline.stopTicks()
             // A terminal section may have finished while away, so later counts could be off by one.

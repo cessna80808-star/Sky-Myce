@@ -28,7 +28,7 @@ private fun checkSignals() {
     check(splitSignal("The Core entrance is opening!", 7) == SplitSignal.Milestone(S4))
     check(splitSignal("[BOSS] Necron: You went further than any human before, congratulations.", 7) == SplitSignal.Milestone(GOLDOR))
     check(splitSignal("[BOSS] Necron: All this, for nothing...", 7) == SplitSignal.Milestone(NECRON))
-    check(splitSignal("[BOSS] Necron: ARGH!", 7) == null) { "Necron's mid-fight lines are not his death" }
+    check(splitSignal("[BOSS] Necron: ARGH!", 7) == SplitSignal.NecronArgh) { "Arms the boss bar check; not his death itself" }
     check(splitSignal("Steve activated a terminal! (3/7)", 7) == SplitSignal.Terminal(3, 7))
     check(splitSignal("Alex_99 completed a device! (8/8)", 7) == SplitSignal.Terminal(8, 8))
     // Relayed player chat cannot impersonate server progress lines.
