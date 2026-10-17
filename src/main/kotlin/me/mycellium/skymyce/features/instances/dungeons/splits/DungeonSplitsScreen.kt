@@ -91,17 +91,17 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
             val group = definition.groups.firstOrNull { definition.chain.indexOf(it.from) < position && position <= definition.chain.indexOf(it.to) }
             // A group's total heads its sections, which are indented beneath it; it is a real run's time, not a sum of bests.
             if (group != null && section.section.from == group.from) stats.groups.firstOrNull { it.group == group }?.let { total ->
-                body.child(tableRow(group.title, time(total.best?.duration), if (total.samples == 0) "—" else "${average(total.average)} (${total.samples})",
+                body.child(tableRow(group.title, time(total.best?.duration), average(total.average),
                     source(total.best), MenuTheme.ACCENT)
                     .wrappedTooltip(Component.literal("All terminal sections, from ${definition.title(group.from)} to ${definition.title(group.to)}, timed within one run. Not added to Best possible, which already counts each section.")))
             }
             body.child(tableRow((if (group != null) "    " else "") + definition.title(section.section.milestone), time(section.best?.duration),
-                if (section.samples == 0) "—" else "${average(section.average)} (${section.samples})", source(section.best), MenuTheme.TEXT)
+                average(section.average), source(section.best), MenuTheme.TEXT)
                 .wrappedTooltip(Component.literal("From ${definition.title(section.section.from)} to ${definition.title(section.section.milestone)}")))
         }
         for (marker in stats.markers) {
             body.child(tableRow("${definition.title(marker.milestone)} ✱", time(marker.best?.duration),
-                if (marker.samples == 0) "—" else "${average(marker.average)} (${marker.samples})", source(marker.best), MenuTheme.MUTED)
+                average(marker.average), source(marker.best), MenuTheme.MUTED)
                 .wrappedTooltip(Component.literal("Time from the run start until the estimated score reached 300. It can happen before or after boss entry, so it is not a section.")))
         }
         body.child(label("✱ Timed from the start; not part of Best possible. Bests use completed runs with every split seen; averages also use sections seen in other runs.", MenuTheme.MUTED))

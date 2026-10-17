@@ -21,7 +21,7 @@ internal fun encodeSplitRun(run: SplitRunRecord) = JsonObject().apply {
     addProperty("outcome", run.outcome.name)
     if (run.conflicts > 0) addProperty("conflicts", run.conflicts)
     add("marks", JsonObject().apply { run.marks.forEach { (milestone, at) -> addProperty(milestone.name, at) } })
-    if (run.ticks.isNotEmpty()) add("ticks", JsonObject().apply { run.ticks.forEach { (milestone, at) -> addProperty(milestone.name, at) } })
+    if (run.ticks.isNotEmpty()) add("serverTicks", JsonObject().apply { run.ticks.forEach { (milestone, at) -> addProperty(milestone.name, at) } })
 }
 
 /** 2.7.12 saved the fourth terminal section as `CORE`; it has the same boundary as [SplitMilestone.S4]. */
@@ -52,8 +52,9 @@ internal fun parseSplitRun(element: JsonElement?): SplitRunRecord? = runCatching
         return parsed
     }
     val parsed = row.get("marks")?.takeIf { it.isJsonObject }?.let { times("marks", MAX_MARK) } ?: return null
-    // Server ticks may be missing (older saves, no pings); a damaged tick row drops only the server times.
-    val ticks = times("ticks", MAX_MARK / TICK_MILLIS)?.filterKeys { it in parsed } ?: emptyMap()
+    // Server ticks may be missing (older saves, no game time); a damaged tick row drops only the server times. 2.7.13
+    // saved counted pings as "ticks", which run fast on Hypixel, so those are not read as server time.
+    val ticks = times("serverTicks", MAX_MARK / TICK_MILLIS)?.filterKeys { it in parsed } ?: emptyMap()
     if (start && parsed[SplitMilestone.START]?.let { it != 0L } == true) return null
     SplitRunRecord(id, floor, definition, recordedAt, start, parsed, outcome, conflicts.coerceAtLeast(0),
         ticks.takeIf { it[SplitMilestone.START]?.let { first -> first == 0L } ?: true } ?: emptyMap())

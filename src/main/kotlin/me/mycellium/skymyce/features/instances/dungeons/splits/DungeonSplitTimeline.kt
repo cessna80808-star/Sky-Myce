@@ -6,6 +6,38 @@ enum class MarkResult { ACCEPTED, DUPLICATE, OUT_OF_ORDER, NOT_APPLICABLE }
 const val TICK_MILLIS = 50L
 
 /**
+ * The server's tick count. The server sends its game time about once a second (every 20 ticks), as tick timers in
+ * NoammAddons and Devonian read it; between those updates, each per-tick ping advances it, at most to the next update.
+ * Hypixel sends more pings than ticks (about 4% more in M7), so pings are never added up on their own.
+ */
+class ServerTickClock {
+    private var gameTime: Long? = null
+    private var pings = 0
+    // Never reported lower than before, even when an update lands a tick behind the pings.
+    private var floor = 0L
+
+    /** Null until the first game time arrives. */
+    val now: Long? get() = gameTime?.let { maxOf(it + pings, floor) }
+
+    /** False when the clock jumped (another world, or a gap of minutes), so timing from before it is not comparable. */
+    fun time(value: Long): Boolean {
+        val previous = now
+        val continuous = previous == null || value >= previous - UPDATE_TICKS && value - previous <= MAX_GAP_TICKS
+        gameTime = value; pings = 0; floor = if (continuous) previous ?: value else value
+        return continuous
+    }
+
+    fun ping() { if (gameTime != null && pings < UPDATE_TICKS) pings++ }
+
+    fun reset() { gameTime = null; pings = 0; floor = 0L }
+
+    private companion object {
+        const val UPDATE_TICKS = 20
+        const val MAX_GAP_TICKS = 20L * 60 * 5
+    }
+}
+
+/**
  * Live, single-run split state. Times are monotonic nanoseconds from the caller; they are stored as milliseconds from
  * the run's origin. Each milestone is accepted once, chain milestones only in chain order, and nothing is back-filled.
  *
@@ -35,7 +67,7 @@ class SplitTimeline(val definition: SplitDefinition, val startObserved: Boolean,
     val ticksAvailable get() = tickOrigin != null
 
     fun elapsed(nowNanos: Long): Long = ((nowNanos - originNanos) / 1_000_000L).coerceAtLeast(0)
-    fun elapsedTicks(nowTicks: Long): Long? = tickOrigin?.let { (nowTicks - it).coerceAtLeast(0) }
+    fun elapsedTicks(nowTicks: Long?): Long? = tickOrigin?.let { origin -> nowTicks?.let { (it - origin).coerceAtLeast(0) } }
 
     /** Stop server timing for the rest of the run, e.g. after ticks were missed while disconnected. */
     fun stopTicks() { tickOrigin = null }
@@ -62,8 +94,8 @@ class SplitTimeline(val definition: SplitDefinition, val startObserved: Boolean,
     }
 
     private fun markTicks(milestone: SplitMilestone, at: Long, atTicks: Long?) {
-        val ticks = atTicks?.let(::elapsedTicks) ?: return
-        // No pings for a while, or more server time than real time: the tick source is not trustworthy for this run.
+        val ticks = elapsedTicks(atTicks) ?: return
+        // No game time for a while, or more server time than real time: the tick source is not trustworthy for this run.
         if (at > 10_000 && ticks == 0L || ticks * TICK_MILLIS > at + at / 20 + 1_000) { stopTicks(); return }
         tickMarks[milestone] = ticks
     }

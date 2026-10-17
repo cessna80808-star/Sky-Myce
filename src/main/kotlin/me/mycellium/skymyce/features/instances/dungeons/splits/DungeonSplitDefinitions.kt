@@ -112,12 +112,13 @@ internal val bossPhaseLines: Map<String, SplitMilestone> = mapOf(
     "[BOSS] Goldor: Who dares trespass into my domain?" to SplitMilestone.STORM,
     "The Core entrance is opening!" to SplitMilestone.S4,
     "[BOSS] Necron: You went further than any human before, congratulations." to SplitMilestone.GOLDOR,
+    // Necron's death line (Devonian `Stages`, NoammAddons `M7Relics`); M7 continues into the Wither King phase.
+    "[BOSS] Necron: All this, for nothing..." to SplitMilestone.NECRON,
 )
 
 internal const val MORT_START = "[NPC] Mort: Here, I found this map when I first entered the dungeon."
 internal const val BLOOD_DOOR = "The BLOOD DOOR has been opened!"
 internal const val WATCHER_CLEAR = "[BOSS] The Watcher: You have proven yourself. You may pass."
-internal const val NECRON_ARGH = "[BOSS] Necron: ARGH!"
 internal val watcherLine = Regex("^\\[BOSS] The Watcher: .+$")
 /** Hypixel prefixes the real Livid's name with a colour word, e.g. `[BOSS] Hockey Livid:`. */
 internal val lividKill = Regex("^\\[BOSS] \\w+ Livid: Impossible! How did you figure out which one I was\\?!$")
@@ -134,7 +135,6 @@ sealed interface SplitSignal {
     data object WatcherLine : SplitSignal
     /** Any line from the floor's boss: boss entry only when the run has been watched continuously since its start. */
     data object BossLine : SplitSignal
-    data object NecronArgh : SplitSignal
     data object Defeated : SplitSignal
 }
 
@@ -147,7 +147,6 @@ fun splitSignal(text: String, floorNumber: Int): SplitSignal? {
     if (bossEntryLines[floorNumber] == text) return SplitSignal.Milestone(SplitMilestone.BOSS_ENTRY)
     bossPhaseLines[text]?.let { return SplitSignal.Milestone(it) }
     if (lividKill.matches(text)) return SplitSignal.Milestone(SplitMilestone.LIVID_KILL)
-    if (text == NECRON_ARGH) return SplitSignal.NecronArgh
     bossChatNames[floorNumber]?.let { if (text.startsWith("[BOSS] $it: ")) return SplitSignal.BossLine }
     terminalProgress.matchEntire(text)?.let {
         val done = it.groupValues[2].toInt(); val total = it.groupValues[3].toInt()

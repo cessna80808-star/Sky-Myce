@@ -27,7 +27,8 @@ private fun checkSignals() {
     check(splitSignal("[BOSS] Goldor: Who dares trespass into my domain?", 7) == SplitSignal.Milestone(STORM))
     check(splitSignal("The Core entrance is opening!", 7) == SplitSignal.Milestone(S4))
     check(splitSignal("[BOSS] Necron: You went further than any human before, congratulations.", 7) == SplitSignal.Milestone(GOLDOR))
-    check(splitSignal("[BOSS] Necron: ARGH!", 7) == SplitSignal.NecronArgh)
+    check(splitSignal("[BOSS] Necron: All this, for nothing...", 7) == SplitSignal.Milestone(NECRON))
+    check(splitSignal("[BOSS] Necron: ARGH!", 7) == null) { "Necron's mid-fight lines are not his death" }
     check(splitSignal("Steve activated a terminal! (3/7)", 7) == SplitSignal.Terminal(3, 7))
     check(splitSignal("Alex_99 completed a device! (8/8)", 7) == SplitSignal.Terminal(8, 8))
     // Relayed player chat cannot impersonate server progress lines.
@@ -238,11 +239,36 @@ private fun checkServerTime() {
         val marksJson = getAsJsonObject("marks"); val s4 = marksJson.remove("S4"); marksJson.add("CORE", s4)
     }
     check(parseSplitRun(legacy)?.marks?.get(S4) == realOnly.marks[S4] && parseSplitRun(legacy) == realOnly)
-    val badTicks = encodeSplitRun(laggy).apply { getAsJsonObject("ticks").addProperty("MAXOR", -1) }
+    val badTicks = encodeSplitRun(laggy).apply { getAsJsonObject("serverTicks").addProperty("MAXOR", -1) }
     check(parseSplitRun(badTicks)?.let { it.ticks.isEmpty() && it.marks == laggy.marks } == true) { "Damaged ticks drop only server time" }
+    val pingCounts = encodeSplitRun(laggy).apply { add("ticks", remove("serverTicks")) }
+    check(parseSplitRun(pingCounts)?.let { it.ticks.isEmpty() && it.marks == laggy.marks } == true) { "2.7.13 ping counts are not server time" }
+}
+
+private fun checkServerClock() {
+    val clock = ServerTickClock()
+    clock.ping()
+    check(clock.now == null) { "Pings alone are not a clock" }
+    check(clock.time(10_000L) && clock.now == 10_000L)
+    repeat(25) { clock.ping() }
+    check(clock.now == 10_020L) { "Pings advance at most to the next game time update" }
+    check(clock.time(10_019L) && clock.now == 10_020L) { "Never reported lower than before" }
+    check(clock.time(10_040L) && clock.now == 10_040L)
+    // Five minutes at 20 TPS with Hypixel's extra pings (about 21 per 20 ticks) stays exact on the server's clock.
+    val start = clock.now!!
+    for (second in 1..300) { repeat(21) { clock.ping() }; clock.time(start + second * 20L) }
+    check(clock.now == start + 6_000L)
+    // A lag spike: no updates or pings for 3 s, then the server resumes; server time only counts ticks it ran.
+    val beforeLag = clock.now!!
+    clock.time(beforeLag + 20L)
+    check(clock.now == beforeLag + 20L)
+    check(!clock.time(500L) && clock.now == 500L) { "Another world's game time is a jump" }
+    check(!clock.time(500L + 20L * 60 * 10)) { "Minutes without updates is a jump" }
+    clock.reset()
+    check(clock.now == null)
 }
 
 fun main() {
-    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime()
+    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock()
     println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, Terms and server time")
 }

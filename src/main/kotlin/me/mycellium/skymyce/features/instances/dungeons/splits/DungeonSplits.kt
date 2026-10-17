@@ -7,8 +7,7 @@ import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import net.minecraft.network.protocol.common.ClientboundPingPacket
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket
-import net.minecraft.network.protocol.game.ClientboundSoundPacket
-import net.minecraft.sounds.SoundEvents
+import net.minecraft.network.protocol.game.ClientboundSetTimePacket
 import net.minecraft.world.entity.EquipmentSlot
 import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.monster.zombie.Zombie
@@ -28,7 +27,7 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import java.util.UUID
 
-/** Relic cauldrons in the M7 Wither King arena (block x/z), from NoammAddons `WitherRelic` (CC0). */
+/** Relic cauldrons in the M7 Wither King arena (block x/z); placed relics stand on them (NoammAddons `M7Relics`, CC0). */
 private val relicCauldrons = listOf(52 to 43, 58 to 43, 50 to 45, 60 to 45, 55 to 42)
 private val serverLine = Regex("^\\s*\\d{1,2}/\\d{1,2}/\\d{2} (\\w{2,12})(?: .*)?$")
 private const val RESUME_WINDOW_NANOS = 15L * 60 * 1_000_000_000
@@ -46,7 +45,6 @@ object DungeonSplits : SkyMyceModule() {
         var continuous = timeline.startObserved
         val terminals = TerminalSections()
         var terminalsReliable = true
-        var necronArgh = false
         var defeated = false
         var score = ScoreInputs(definition.floor)
         var estimate: Int? = null
@@ -61,12 +59,10 @@ object DungeonSplits : SkyMyceModule() {
     private var suspended: Suspended? = null
     private var pendingStart: Long? = null
     private var pendingStartTicks: Long? = null
-    /**
-     * Server ticks seen while in a dungeon. Hypixel sends a non-zero ping every server tick; counting them on the client
-     * thread keeps them in order with chat and other packets (NoammAddons `MixinConnection`/`DungeonListener`).
-     */
-    internal var serverTicks = 0L
-        private set
+    /** Updated on the client thread, so it stays in order with chat and other packets. */
+    private val serverClock = ServerTickClock()
+    /** The server's tick count, or null before its game time has arrived. */
+    internal val serverTicks: Long? get() = serverClock.now
     private var server: String? = null
     var revision = 0L
         private set
@@ -97,7 +93,6 @@ object DungeonSplits : SkyMyceModule() {
             SplitSignal.BossLine -> if (run.continuous) mark(run, SplitMilestone.BOSS_ENTRY, at)
             is SplitSignal.Terminal -> if (run.terminalsReliable && SplitMilestone.STORM in run.timeline.marks && SplitMilestone.S4 !in run.timeline.marks)
                 run.terminals.accept(signal.done, signal.total)?.let { mark(run, it, at) }
-            SplitSignal.NecronArgh -> run.necronArgh = true
             SplitSignal.Defeated -> { run.defeated = true; finish(run, at) }
             SplitSignal.Start, null -> {
                 if (signal != null) return
@@ -112,20 +107,16 @@ object DungeonSplits : SkyMyceModule() {
     @Subscription
     fun onPacket(event: PacketReceivedEvent) {
         val packet = event.packet
-        if (packet is ClientboundPingPacket) {
-            if (packet.id != 0 && LocationAPI.island == SkyBlockIsland.THE_CATACOMBS) MC.instance.execute { serverTicks++ }
+        if (packet is ClientboundPingPacket || packet is ClientboundSetTimePacket) {
+            if (LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
+            if (packet is ClientboundSetTimePacket) packet.gameTime.let { time ->
+                // A jump means another world; server time from before it no longer lines up.
+                MC.instance.execute { if (!serverClock.time(time)) live?.timeline?.stopTicks() }
+            } else if ((packet as ClientboundPingPacket).id != 0) MC.instance.execute { serverClock.ping() }
             return
         }
         if (live == null) return
-        if (packet is ClientboundSoundPacket) {
-            if (packet.sound.value() != SoundEvents.WITHER_HURT || packet.volume != 15f || packet.pitch != 1f) return
-            val at = System.nanoTime()
-            MC.instance.execute {
-                // Necron's death hurt sound, only after his final "ARGH!" line (NoammAddons F7Listener).
-                val run = live?.takeIf { it.necronArgh && active() } ?: return@execute
-                mark(run, SplitMilestone.NECRON, at)
-            }
-        } else if (packet is ClientboundEntityEventPacket && packet.eventId.toInt() == 3) {
+        if (packet is ClientboundEntityEventPacket && packet.eventId.toInt() == 3) {
             val at = System.nanoTime()
             MC.instance.execute {
                 val run = live?.takeIf { it.floorNumber >= 6 && !it.score.mimic && !DungeonAPI.inBoss && active() } ?: return@execute
@@ -158,7 +149,9 @@ object DungeonSplits : SkyMyceModule() {
     @Subscription(TickEvent::class)
     fun onTick() {
         val run = live ?: return
-        if (!active() || run.definition.floor != "M7" || SplitMilestone.NECRON !in run.timeline.marks || SplitMilestone.RELICS in run.timeline.marks) return
+        val marks = run.timeline.marks
+        // Relics only exist once Necron is down; the scan does not wait for his split, so a missed line costs only that one.
+        if (!active() || run.definition.floor != "M7" || SplitMilestone.GOLDOR !in marks && SplitMilestone.NECRON !in marks || SplitMilestone.RELICS in marks) return
         val level = MC.instance.level ?: return
         val placed = HashSet<Pair<Int, Int>>()
         for (entity in level.entitiesForRendering()) {
@@ -171,6 +164,7 @@ object DungeonSplits : SkyMyceModule() {
     @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class, ProfileChangeEvent::class)
     fun onLeave() {
         pendingStart = null; pendingStartTicks = null; server = null
+        serverClock.reset()
         val run = live ?: return
         live = null; revision++
         if (run.outcome != null) return
@@ -214,7 +208,7 @@ object DungeonSplits : SkyMyceModule() {
         if (server == null || held.run.server == null || server != held.run.server) return null
         suspended = null
         return held.run.also { run ->
-            run.continuous = false; run.necronArgh = false; run.sawBelow300 = false
+            run.continuous = false; run.sawBelow300 = false
             // Ticks were not counted while away, so server time stops here; real time still covers the whole run.
             run.timeline.stopTicks()
             // A terminal section may have finished while away, so later counts could be off by one.
