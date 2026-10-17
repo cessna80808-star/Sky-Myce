@@ -59,7 +59,7 @@ fun checkSettings() {
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
     val catalog = me.mycellium.skymyce.ui.MenuCatalog(rows)
     val allScopedPaths = catalog.features.flatMap { feature -> settingGroups(rows, feature.id).values.flatten().map { it.path } }
-    check(allScopedPaths.sorted() == rows.map { it.path }.sorted()) { "Every persisted setting must have exactly one canonical feature/global owner" }
+    check(allScopedPaths.sorted() == rows.map { it.path }.sorted()) { "Every persisted setting must have exactly one canonical feature/global owner: missing ${rows.map { it.path } - allScopedPaths.toSet()}, duplicated ${allScopedPaths.groupBy { it }.filterValues { it.size > 1 }.keys}" }
     catalog.features.forEach { feature ->
         val groups = settingGroups(rows, feature.id)
         check(groups.values.flatten().map { it.path }.toSet() == feature.settings.map { it.path }.toSet())

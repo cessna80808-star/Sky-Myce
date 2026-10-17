@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.ui
 
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.settingRows
@@ -121,6 +122,19 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
             Scene("goldor-map-widget", ThemePreset.SIGNATURE) { GuiVisualGoldorMapPreviewScreen() },
+            Scene("status-bars-widget", ThemePreset.SIGNATURE) { GuiVisualWidgetPreviewScreen(me.mycellium.skymyce.features.general.overlays.StatusBars.widget) },
+            Scene("dungeon-tracker-levels", ThemePreset.SIGNATURE) {
+                // A profile reading for the dev player, as Skyblocker or the API would provide it.
+                val xp = me.mycellium.skymyce.features.instances.dungeons.friends.dungeonXpForLevel(52) + 172_400_000.0
+                val classes = mapOf(DungeonClass.HEALER to 45, DungeonClass.MAGE to 50, DungeonClass.BERSERKER to 47, DungeonClass.ARCHER to 46, DungeonClass.TANK to 45)
+                    .mapValues { me.mycellium.skymyce.features.instances.dungeons.friends.dungeonXpForLevel(it.value) + 3_000_000.0 }
+                val now = System.currentTimeMillis()
+                me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache.storeFetched(Minecraft.getInstance().user.name.lowercase(), 0,
+                    me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStats(me.mycellium.skymyce.features.instances.dungeons.friends.StatsState.AVAILABLE,
+                        52, classes.mapValues { me.mycellium.skymyce.features.instances.dungeons.friends.dungeonLevel(it.value) }, catacombsXp = xp, classXp = classes,
+                        selectedClass = DungeonClass.MAGE), null, now, now)
+                trackerScreen(TrackerPage.LEVELS)
+            },
             Scene("dungeon-splits-stats", ThemePreset.SIGNATURE) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-wide", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
@@ -775,6 +789,19 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
         for (field in listOf("Time:", "Runs:", "Chests:", "Profit:", "Cata Exp:")) check(rows.any { it.startsWith(field) })
         check(rows.none { it.contains("Historical") || it.contains("Inherited") || it.contains("Current profile") || it.contains("Editor preview") })
         check(widget.width in 1..width && widget.height in 1..height)
+    }
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        output.fill(0, 0, width, height, 0xFF101725.toInt())
+        check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
+}
+
+private class GuiVisualWidgetPreviewScreen(private val widget: me.mycellium.skymyce.hud.widget.Widget) :
+    Screen(Minecraft.getInstance(), Minecraft.getInstance().font, Component.literal("${widget.title} preview")) {
+    override fun init() {
+        super.init()
+        check(widget.prepareEditor()) { "${widget.title} editor preview did not mount" }
+        check(widget.width in 1..width && widget.height in 1..height) { "${widget.width}x${widget.height} in ${width}x$height" }
     }
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         output.fill(0, 0, width, height, 0xFF101725.toInt())

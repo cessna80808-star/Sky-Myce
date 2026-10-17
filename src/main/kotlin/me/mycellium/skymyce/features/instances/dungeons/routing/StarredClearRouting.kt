@@ -337,6 +337,11 @@ object StarredClearRouting : SkyMyceModule() {
             if (active || room != null) pauseRoom()
             return
         }
+        if (!bloodRoutingForClass(Settings.bloodRushClassesOnly, DungeonAPI.dungeonClass)) {
+            if (active || room != null) pauseRoom()
+            status = "Off for ${DungeonAPI.dungeonClass?.displayName ?: "this class"}: Blood routing is for Mage, Archer and Healer"
+            return
+        }
         active = true
         RuntimeProfiler.measure(RuntimeProfiler.Area.DUNGEON_ROUTE) {
             if (DungeonAPI.bloodOpened) {

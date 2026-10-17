@@ -140,10 +140,40 @@ object GoldorEngine {
             val stack = rolePlan.stackWith?.let { state.playerWith(it)?.name ?: it.title }
             return Recommendation("${next.label}${stack?.let { " · stack $it" } ?: ""}", rolePlan.note ?: "${role.title} ${section.title} assignment", Confidence.HIGH, next)
         }
-        // Own work done: the section's leap, timed when its target is an early-enter.
+        // Own work done. The early-enter runner is the leap target: they go to the spot instead of leaping to themselves.
         val leap = rule?.takeIf { it.afterObjective == null }
-        if (leap == null) return Recommendation(if (section == GoldorSection.CORE) "Core" else "Help finish ${section.title}", "No leap planned for ${section.title}", Confidence.MEDIUM)
+        if (leap?.route != null && leap.target == role) return routeRunner(state, leap.route)
+        // An objective nobody in this party is assigned comes before leaping, so a short party still finishes.
+        val help = help(state, self, now)
+        if (help?.second == true) return help.first
+        if (leap == null) return help?.first ?: Recommendation(if (section == GoldorSection.CORE) "Core" else "Wait for ${section.title} gate",
+            "Everything in ${section.title} is taken", Confidence.MEDIUM)
         return sectionLeap(state, self, leap, now, extraDelay = 0)
+    }
+
+    /** The runner of an early-enter: go to the spot, then hold it while the party leaps in. */
+    private fun routeRunner(state: GoldorRunState, route: EarlyEnter): Recommendation =
+        if (state.route(route).state == RouteState.IN) Recommendation("Hold ${route.title}", "The party leaps to you; stay on the spot", Confidence.HIGH)
+        else Recommendation("Go ${route.title}", "You run ${route.title}; the party leaps to you", Confidence.HIGH)
+
+    /**
+     * Something useful for a player whose own objectives are done: an open objective nobody alive in the party is
+     * assigned (nearest first, flagged true), else the open objective that will take its owner longest. Null when
+     * every objective is done or being worked on.
+     */
+    private fun help(state: GoldorRunState, self: SelfContext, now: Long): Pair<Recommendation, Boolean>? {
+        val open = GoldorLayout.stations(state.section).map { it.objective }.filter { state.state(it).status == ObjectiveStatus.OPEN }
+        if (open.isEmpty()) return null
+        fun owner(objective: ObjectiveId) = state.profile.assignee(objective)?.let { state.playerWith(it) }?.takeIf { it.alive }
+        val unclaimed = open.filter { owner(it) == null }
+        if (unclaimed.isNotEmpty()) {
+            val pick = unclaimed.minBy { o -> self.position?.let { here -> GoldorLayout.station(o)?.points?.firstOrNull()?.distance(here) } ?: 0.0 }
+            val assignee = state.profile.assignee(pick)
+            return Recommendation("Help: ${pick.label}", if (assignee == null) "${pick.label} has no assigned class" else "No ${assignee.title} to take ${pick.label}",
+                Confidence.MEDIUM, pick) to true
+        }
+        val pick = open.maxBy { objectiveEta(state, it, owner(it)?.name, now).millis }
+        return Recommendation("Help: ${pick.label}", "${owner(pick)?.name ?: "Its owner"} still has it queued", Confidence.LOW, pick) to false
     }
 
     /** The S2 decision table for Tank once its own terminal is done. */

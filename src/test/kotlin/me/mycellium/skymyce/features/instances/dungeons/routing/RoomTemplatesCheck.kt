@@ -418,6 +418,12 @@ private fun dungeonRoomContextChecks() {
         check(bloodExit.door == exit.door && bloodExit.doors.single().kind == "Blood door" && bloodExit.reachesBlood)
         check(dungeonRouteVisible(blood) && dungeonRouteVisible(blood, bloodOpened = false))
         check(!dungeonRouteVisible(blood, bloodOpened = true))
+        check(bloodRoutingForClass(true, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.MAGE) &&
+            bloodRoutingForClass(true, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.ARCHER) &&
+            bloodRoutingForClass(true, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.HEALER)) { "Blood-rush classes route" }
+        check(!bloodRoutingForClass(true, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.BERSERKER) &&
+            !bloodRoutingForClass(true, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.TANK)) { "Berserker and Tank do not route" }
+        check(bloodRoutingForClass(true, null) && bloodRoutingForClass(false, tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.TANK)) { "Unknown class or setting off keeps routing" }
         check(!dungeonRouteVisible(dungeonMapRoom(colours, layout, RoomSegment(-136 + dx * 32, -136 + dz * 32))))
         val opened = requireNotNull(dungeonMapExit(colours, layout, blood.segments) { 0 })
         check(opened.reachesBlood && !opened.doors.single().closed) // Opening changes walkability, not the confirmed connection.

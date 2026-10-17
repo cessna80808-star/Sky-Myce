@@ -58,6 +58,8 @@ object GoldorCoordinator : SkyMyceModule() {
     private var openTerminal: ObjectiveId? = null
     private var openPuzzle: PuzzleType? = null
     private var sentRole = false
+    /** The section whose finished state has not been learned from yet. */
+    private var learnFrom = GoldorSection.S1
 
     private fun now() = System.currentTimeMillis()
     private fun selfName() = MC.instance.user.name
@@ -138,7 +140,9 @@ object GoldorCoordinator : SkyMyceModule() {
     private fun selfRole() = state.player(selfName())?.role
 
     private fun begin(now: Long) {
-        state.profile = GoldorProfiles.byId(Settings.profile.id)
+        val base = GoldorProfiles.byId(Settings.profile.id)
+        state.profile = if (Settings.learnRoles) base.withLearned(GoldorLearning.load()) else base
+        learnFrom = GoldorSection.S1
         state.start(now)
         refreshRoster(now)
         selfRole()?.let { offer(GoldorEvent.Role(it)); sentRole = true }
@@ -177,7 +181,7 @@ object GoldorCoordinator : SkyMyceModule() {
     fun onLeave() {
         state.reset(); dedupe.clear(); outbox.clear(); repliedTo.clear()
         advice = null; adviceRevision = -1; leaptAt = null; lastSelf = null; alertedFor = null
-        openTerminal = null; openPuzzle = null; sentRole = false
+        openTerminal = null; openPuzzle = null; sentRole = false; learnFrom = GoldorSection.S1
     }
 
     @Subscription(TickEvent::class)
@@ -192,6 +196,7 @@ object GoldorCoordinator : SkyMyceModule() {
                     .any { it !== player && it.distanceToSqr(player.x, player.y, player.z) <= 9.0 }) leaptAt = now
         }
         lastSelf = here
+        learnFinished()
         if (++ticks % 5 == 0) {
             refreshRoster(now)
             inferRoutes(now)
@@ -205,6 +210,15 @@ object GoldorCoordinator : SkyMyceModule() {
             val next = GoldorEngine.advise(state, SelfContext(selfName(), leaptAt, here), now)
             advice = next
             alert(next.self)
+        }
+    }
+
+    /** Each section is learned from once, when the run has moved past it (S4 when the Core opens). */
+    private fun learnFinished() {
+        if (!state.active || !Settings.learnRoles) return
+        while (learnFrom.ordinal < state.section.ordinal && learnFrom != GoldorSection.CORE) {
+            GoldorLearning.record(observeSection(state, learnFrom))
+            learnFrom = learnFrom.next ?: return
         }
     }
 

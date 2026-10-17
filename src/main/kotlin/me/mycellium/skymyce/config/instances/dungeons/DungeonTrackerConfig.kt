@@ -43,6 +43,17 @@ object DungeonTrackerConfig : CategoryKt("Dungeons Tracker") {
         description = TranslatableValue.literal("Show progress toward the target level in the Dungeon Tracker widget and screen. Needs your profile's Catacombs experience from Skyblocker, SkyBlockPV or a Hypixel API key")
     }
 
+    var levelsTarget by int(50) {
+        name = TranslatableValue.literal("Levels Page Target")
+        description = TranslatableValue.literal("The level the tracker's Levels page counts toward for Catacombs and every class. 0 means each row's next level. Also changes from the page itself")
+        range = 0..200
+    }
+
+    var levelsMetric by enum(me.mycellium.skymyce.features.instances.dungeons.tracker.LevelMetric.RUNS) {
+        name = TranslatableValue.literal("Levels Page Shows")
+        description = TranslatableValue.literal("What the Levels page shows beside each bar: estimated runs needed, experience needed, or percent of the target")
+    }
+
     val bazaarPriceType by enum(BazaarType.INSTANT_BUY) {
         name = TranslatableValue.literal("Bazaar Price Type")
         description = TranslatableValue.literal("Choose which bazaar price metric should be used when tracking")

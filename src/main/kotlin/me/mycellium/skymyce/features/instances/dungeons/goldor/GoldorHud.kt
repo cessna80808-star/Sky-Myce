@@ -31,6 +31,36 @@ internal fun goldorHudLines(advice: GoldorAdvice, state: GoldorRunState, now: Lo
     return lines
 }
 
+/**
+ * The party strip: each player's class letter, name and what they are on right now. "On" is live: the objective
+ * they are working (shared or seen), else the station they stand at, else their next planned objective. Dead players
+ * and players with no class are marked.
+ */
+internal data class PartyEntry(val name: String, val role: GoldorRole?, val doing: String, val live: Boolean, val alive: Boolean)
+
+internal fun goldorPartyStrip(state: GoldorRunState, advice: GoldorAdvice, now: Long): List<PartyEntry> =
+    state.players.values.sortedBy { it.role?.ordinal ?: 99 }.map { player ->
+        val working = state.objectives.entries.firstOrNull { (_, o) -> o.status == ObjectiveStatus.ACTIVE && o.by.equals(player.name, true) }?.key
+        val position = state.position(player.name, now)
+        val standing = position?.let { p -> GoldorLayout.stations(state.section).firstOrNull { st -> st.points.any { it.distance(p) <= GoldorLayout.MATCH_RADIUS } } }
+        val planned = advice.players.firstOrNull { it.name.equals(player.name, true) }?.objective
+        val doing = when {
+            !player.alive -> "dead"
+            working != null -> working.label + (state.state(working).puzzle?.let { " ${it.code.uppercase()}" } ?: "")
+            standing != null -> "at ${standing.objective.label}"
+            planned != null -> "→ ${planned.label}"
+            else -> "free"
+        }
+        PartyEntry(player.name, player.role, doing, working != null || standing != null, player.alive)
+    }
+
+/** The class shown on an objective: whoever completed or is working it, else the class the strategy assigns. */
+internal fun objectiveClass(state: GoldorRunState, objective: ObjectiveId): Pair<GoldorRole?, Boolean> {
+    val info = state.state(objective)
+    val actual = info.by?.takeIf { info.status != ObjectiveStatus.OPEN && !info.ambiguous }?.let { state.player(it)?.role }
+    return if (actual != null) actual to true else state.profile.assignee(objective) to false
+}
+
 /** The pre-leap timing line. Low confidence shows no exact countdown. */
 internal fun timingLine(plan: LeapPlan, now: Long): String? {
     val approx = plan.confidence == Confidence.LOW
@@ -89,6 +119,20 @@ object GoldorHud : SkyMyceModule() {
                     }
                     if (lineY > y() + height() - 10) break
                 }
+                // The party, pinned to the bottom of the column: class letter, name, and what they are on.
+                val strip = goldorPartyStrip(state, advice, now)
+                var stripY = y() + height() - 4 - strip.size * 10
+                if (stripY > lineY + 4) for (entry in strip) {
+                    val colour = entry.role?.let { -0x1000000 or it.color } ?: 0xFF808080.toInt()
+                    graphics.fill(textX, stripY + 1, textX + 7, stripY + 8, if (entry.alive) colour else 0xFF505050.toInt())
+                    graphics.text(MC.font, entry.role?.short ?: "?", textX + 1, stripY, 0xFF101014.toInt(), false)
+                    val name = entry.name.take(10)
+                    graphics.text(MC.font, name, textX + 10, stripY, if (entry.alive) 0xFFE0E0E0.toInt() else 0xFF707070.toInt(), true)
+                    val doing = entry.doing
+                    graphics.text(MC.font, doing, x() + width() - 4 - MC.font.width(doing), stripY,
+                        if (!entry.alive) 0xFFFF5555.toInt() else if (entry.live) 0xFFFFFFFF.toInt() else 0xFF909090.toInt(), true)
+                    stripY += 10
+                }
             }
         }
 
@@ -97,12 +141,14 @@ object GoldorHud : SkyMyceModule() {
                            selfObjective: ObjectiveId?, selfRole: GoldorRole?, now: Long) {
             val objective = station.objective
             val info = state.state(objective)
-            val role = state.profile.assignee(objective)
+            val (role, actual) = objectiveClass(state, objective)
             val cx = left + station.mapX; val cy = top + station.mapY
             val r = 7
             val border = when {
+                role != null && actual -> -0x1000000 or role.color
                 info.status == ObjectiveStatus.COMPLETE -> 0xFF39D353.toInt()
-                role != null -> -0x1000000 or role.color
+                // Planned but not started: the class colour, dimmed.
+                role != null -> 0x90000000.toInt() or role.color
                 else -> 0xFF8A8F98.toInt()
             }
             val fill = when {
@@ -121,12 +167,23 @@ object GoldorHud : SkyMyceModule() {
             }
             val width = MC.font.width(label)
             graphics.text(MC.font, label, cx - width / 2 + 1, cy - 3, -1, true)
-            // Who is on it, by initial, under the marker; a stale worker shows grey.
+            // Who is on it: their class letter in its colour and their initials; a stale worker shows grey.
             val worker = info.by?.takeIf { info.status == ObjectiveStatus.ACTIVE }
             if (worker != null) {
                 val fresh = state.position(worker, now) != null || state.player(worker)?.sm == true
-                graphics.text(MC.font, worker.take(3), cx - MC.font.width(worker.take(3)) / 2, cy + r + 2, if (fresh) 0xFFFFFFFF.toInt() else 0xFF808080.toInt(), true)
+                val letter = state.player(worker)?.role?.short.orEmpty()
+                val tag = "$letter${worker.take(3)}"
+                val tx = cx - MC.font.width(tag) / 2
+                if (letter.isNotEmpty()) graphics.text(MC.font, letter, tx, cy + r + 2, -0x1000000 or (state.player(worker)?.role?.color ?: 0xFFFFFF), true)
+                graphics.text(MC.font, worker.take(3), tx + MC.font.width(letter), cy + r + 2, if (fresh) 0xFFFFFFFF.toInt() else 0xFF808080.toInt(), true)
             }
+            // Players standing at this station, as class pips along the marker's right edge.
+            state.players.values.filter { p -> p.alive && p.role != null && p.name != worker &&
+                state.position(p.name, now)?.let { pos -> station.points.any { it.distance(pos) <= GoldorLayout.MATCH_RADIUS } } == true }
+                .take(3).forEachIndexed { index, p ->
+                    val py = cy - r + index * 5
+                    graphics.fill(cx + r + 2, py, cx + r + 6, py + 4, -0x1000000 or p.role!!.color)
+                }
         }
     }
 
@@ -134,8 +191,11 @@ object GoldorHud : SkyMyceModule() {
     /** Fixed editor example in S2; never part of a run. */
     private val previewState = GoldorRunState(GoldorProfiles.SKY_MYCE).apply {
         start(PREVIEW_NOW - 20_000)
-        listOf("You" to GoldorRole.TANK, "Bers" to GoldorRole.BERSERKER, "Healz" to GoldorRole.HEALER, "Mago" to GoldorRole.MAGE, "Arch" to GoldorRole.ARCHER)
-            .forEach { (name, role) -> updatePlayer(name) { it.copy(role = role, sm = true, position = BossPoint(50.0, 110.0, 125.0), seenAt = PREVIEW_NOW) } }
+        // Each player where they would be: Berserker on T4, Archer on T5, Mage at the lights, Healer already in HEE3.
+        listOf(Triple("You", GoldorRole.TANK, BossPoint(68.0, 109.0, 122.0)), Triple("Bers", GoldorRole.BERSERKER, BossPoint(40.0, 124.0, 122.0)),
+            Triple("Healz", GoldorRole.HEALER, BossPoint(2.5, 109.0, 104.5)), Triple("Mago", GoldorRole.MAGE, BossPoint(60.5, 132.0, 140.5)),
+            Triple("Arch", GoldorRole.ARCHER, BossPoint(39.0, 108.0, 143.0)))
+            .forEach { (name, role, at) -> updatePlayer(name) { it.copy(role = role, sm = true, position = at, seenAt = PREVIEW_NOW) } }
         repeat(7) { chatCompletion("Arch", if (it < 4) ObjectiveKind.TERMINAL else if (it == 4) ObjectiveKind.DEVICE else ObjectiveKind.LEVER, it + 1, 7, PREVIEW_NOW - 15_000) }
         gateOpened(PREVIEW_NOW - 14_000)
         markComplete(ObjectiveId.terminal(GoldorSection.S2, 1), "You", StateSource.LOCAL, PREVIEW_NOW - 5_000)

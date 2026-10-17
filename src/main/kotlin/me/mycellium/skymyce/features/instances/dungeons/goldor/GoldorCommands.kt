@@ -41,6 +41,13 @@ fun goldorCommand(): LiteralArgumentBuilder<FabricClientCommandSource> = literal
         }
         1
     }))
+    .then(literal("learned").executes {
+        MC.instance.execute { learnedLines(GoldorLearning.load()).forEach(::displayModMessage) }
+        1
+    }.then(literal("reset").executes {
+        MC.instance.execute { GoldorLearning.reset(); displayModMessage("§7Goldor: learned roles cleared") }
+        1
+    }))
     .then(literal("test").then(argument("sender", StringArgumentType.word()).then(argument("message", StringArgumentType.greedyString()).executes { context ->
         val sender = StringArgumentType.getString(context, "sender")
         val message = StringArgumentType.getString(context, "message")
@@ -51,3 +58,16 @@ fun goldorCommand(): LiteralArgumentBuilder<FabricClientCommandSource> = literal
         }
         1
     })))
+
+/** What has been learned, per section and class, as chat lines. */
+internal fun learnedLines(learned: LearnedRoles): List<String> {
+    if (learned.runs == 0) return listOf("§7Goldor: nothing learned yet. Exact completions are recorded as you play F7/M7.")
+    val lines = mutableListOf("§bGoldor learned roles §7(${learned.runs} runs; used after ${LearnedRoles.MIN_SECTIONS})")
+    for (section in listOf(GoldorSection.S1, GoldorSection.S2, GoldorSection.S3, GoldorSection.S4)) {
+        val parts = GoldorRole.entries.mapNotNull { role ->
+            learned.objectives(section, role).takeIf { it.isNotEmpty() }?.let { "§f${role.short} §7${it.joinToString("+") { o -> o.label }}" }
+        }
+        lines += "§7${section.title}: ${parts.joinToString("§8, ").ifEmpty { "§8not enough yet" }}"
+    }
+    return lines
+}

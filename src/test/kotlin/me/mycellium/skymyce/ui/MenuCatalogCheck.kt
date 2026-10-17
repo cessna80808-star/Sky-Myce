@@ -147,7 +147,7 @@ fun main() {
     check(routing.title == "Dungeon Routing" && routing.enabledPath == "Dungeons/Starred Clear Routing/enabled")
     val routingGroups = settingGroups(rows, routing.id)
     val expectedRoutingGroups = linkedMapOf(
-        "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+        "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
         "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
         "Appearance" to listOf("thickness", "opacity", "lineHeight"),
         "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),

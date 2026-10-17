@@ -340,7 +340,72 @@ private fun checkHudLines() {
     check(advise(s, "Tanky", T0 + 11_600) == advice)
 }
 
+/** Every class has a concrete job: early-enter runners go to their spot, finished players help, short parties finish. */
+private fun checkEveryClass() {
+    val s = run()
+    s.markComplete(ObjectiveId.lever(S1, LeverSide.LEFT), "Mago", StateSource.SHARED, T0 + 1_000)
+    s.markComplete(ObjectiveId.lever(S1, LeverSide.RIGHT), "Mago", StateSource.SHARED, T0 + 1_500)
+    check(advise(s, "Mago", T0 + 2_000).self!!.headline == "Go MEE2") { "Mage runs MEE2 rather than leaping to itself" }
+    s.setRoute(EarlyEnter.MEE2, RouteState.IN, StateSource.SHARED, T0 + 2_500)
+    check(advise(s, "Mago", T0 + 3_000).self!!.headline == "Hold MEE2")
+    s.finishSection(T0 + 10_000)
+    s.markComplete(ObjectiveId.lever(S2, LeverSide.LEFT), "Healz", StateSource.SHARED, T0 + 11_000)
+    check(advise(s, "Healz", T0 + 11_100).self!!.headline == "Go HEE3") { advise(s, "Healz", T0 + 11_100).self!!.headline }
+    s.finishSection(T0 + 20_000)
+    val mageS3 = advise(s, "Mago", T0 + 20_100).self!!
+    check(s.section == S3 && mageS3.headline.startsWith("Help: ") && mageS3.objective != null) { "Mage has an S3 job: ${mageS3.headline}" }
+    s.finishSection(T0 + 30_000)
+    check(advise(s, "Mago", T0 + 30_100).self!!.headline == "Go MEE4 Core")
+    // Four players, no Archer: Tank finishes its terminals, then takes Archer's instead of leaping away.
+    val short = GoldorRunState(P).apply {
+        start(T0)
+        listOf("Tanky" to GoldorRole.TANK, "Bers" to GoldorRole.BERSERKER, "Healz" to GoldorRole.HEALER, "Mago" to GoldorRole.MAGE)
+            .forEach { (name, role) -> updatePlayer(name) { it.copy(role = role, position = BossPoint(110.0, 113.0, 73.0), seenAt = T0) } }
+    }
+    short.markComplete(t(S1, 1), "Tanky", StateSource.SHARED, T0 + 1_000); short.markComplete(t(S1, 2), "Tanky", StateSource.SHARED, T0 + 2_000)
+    val help = advise(short, "Tanky", T0 + 2_100, position = BossPoint(110.0, 113.0, 73.0)).self!!
+    check(help.headline == "Help: T3" && help.reason.contains("Archer")) { help }
+}
+
+private fun checkLearning() {
+    val all = GoldorRole.entries.toSet()
+    val obs = SectionObservation(S2, listOf(GoldorRole.BERSERKER to t(S2, 3), GoldorRole.ARCHER to t(S2, 4), GoldorRole.BERSERKER to t(S2, 5)), all)
+    var learned = LearnedRoles().record(obs).record(obs)
+    check(P.withLearned(learned) == P) { "Two runs are not enough to change anything" }
+    learned = learned.record(obs)
+    check(learned.objectives(S2, GoldorRole.BERSERKER) == listOf(t(S2, 3), t(S2, 5))) { "Learned in the order done" }
+    val profile = P.withLearned(learned)
+    check(profile.plan(S2, GoldorRole.BERSERKER).objectives == listOf(t(S2, 3), t(S2, 5)) && profile.berserkerS2Order == listOf(t(S2, 3), t(S2, 5)))
+    check(profile.title.contains("learned") && profile.plan(S1, GoldorRole.BERSERKER).objectives == listOf(ObjectiveId.device(S4))) { "Unlearned sections keep the strategy" }
+    check(profile.leaps == P.leaps && profile.routes == P.routes) { "Leaps and early-enters never change" }
+    check(LearnedRoles().record(SectionObservation(S2, emptyList(), all)) == LearnedRoles()) { "A section without exact completions teaches nothing" }
+    // Two classes doing the same terminal: the more frequent one keeps it.
+    val a = SectionObservation(S2, listOf(GoldorRole.BERSERKER to t(S2, 4), GoldorRole.ARCHER to t(S2, 4)), all)
+    val b = SectionObservation(S2, listOf(GoldorRole.BERSERKER to t(S2, 4), GoldorRole.ARCHER to t(S2, 5)), all)
+    val contested = P.withLearned(LearnedRoles().record(a).record(a).record(b))
+    check(t(S2, 4) in contested.plan(S2, GoldorRole.BERSERKER).objectives && t(S2, 4) !in contested.plan(S2, GoldorRole.ARCHER).objectives)
+    // Only exact completions are observed: guesses and counter-inferred completions are not.
+    val s = run()
+    s.markComplete(t(S1, 1), "Tanky", StateSource.SHARED, T0 + 1_000)
+    s.markComplete(t(S1, 2), "Tanky", StateSource.CHAT, T0 + 2_000, ambiguous = true)
+    check(observeSection(s, S1).completions == listOf(GoldorRole.TANK to t(S1, 1)))
+    check(learnedLines(LearnedRoles()).single().contains("nothing learned"))
+}
+
+/** The map shows who is actually on an objective, not only who it was planned for. */
+private fun checkMapClasses() {
+    val s = run()
+    check(objectiveClass(s, t(S1, 1)) == (GoldorRole.TANK to false))
+    s.markActive(t(S1, 1), "Arch", PuzzleType.PANES, 1, StateSource.SHARED, T0 + 1_000)
+    check(objectiveClass(s, t(S1, 1)) == (GoldorRole.ARCHER to true))
+    val strip = goldorPartyStrip(s, advise(s, "Tanky", T0 + 1_100), T0 + 1_100)
+    check(strip.first().role == GoldorRole.HEALER && strip.single { it.name == "Arch" }.let { it.doing == "T1 P" && it.live }) { strip }
+    s.updatePlayer("Bers") { it.copy(alive = false) }
+    check(goldorPartyStrip(s, advise(s, "Tanky", T0 + 1_200), T0 + 1_200).single { it.name == "Bers" }.doing == "dead")
+}
+
 fun main() {
     checkModel(); checkPuzzles(); checkS1(); checkS2Table(); checkPreLeapFallback(); checkS3S4(); checkRoutes(); checkTiming(); checkProtocol(); checkStateUpdates(); checkHudLines()
-    println("Goldor coordination checks passed: roles, S2 decision table, S3/S4, early-enter routes, pre-leap timing, chat protocol and state")
+    checkEveryClass(); checkLearning(); checkMapClasses()
+    println("Goldor coordination checks passed: roles, every-class advice, learned roles, map classes, S2 decision table, S3/S4, early-enter routes, pre-leap timing, chat protocol and state")
 }

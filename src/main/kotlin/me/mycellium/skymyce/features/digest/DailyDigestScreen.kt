@@ -277,7 +277,12 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     }
 
     private fun entryCard(entry: DigestEntry) = card("digest/entry/${entry.id}").apply {
-        child(label(digestText(entry.title, 300), tone(entry.tone)))
+        val title = label(digestText(entry.title, 300), tone(entry.tone))
+        if (entry.item.isBlank()) child(title)
+        else child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); verticalAlignment(VerticalAlignment.CENTER)
+            child(skyBlockItemIcon(entry.item)); child(title.apply { horizontalSizing(Sizing.expand()) })
+        })
         if (entry.meta.isNotBlank()) child(label(digestText(entry.meta, 500), MenuTheme.MUTED))
         if (entry.summary.isNotBlank()) child(label(digestText(entry.summary, 1200)))
         entry.timestamp?.let { stamp -> child(clock(MenuTheme.MUTED) { "${timestamp(stamp)}  •  ${digestRelativeTime(stamp, System.currentTimeMillis())}" }) }

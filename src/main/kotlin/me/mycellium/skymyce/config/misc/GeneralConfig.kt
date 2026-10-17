@@ -13,6 +13,7 @@ object GeneralConfig : CategoryKt("General") {
         category(WardrobeConfig)
         category(LoadoutConfig)
         category(PriceHistoryConfig)
+        category(StatusBarsConfig)
     }
 
     val clientInfo by boolean(false) {

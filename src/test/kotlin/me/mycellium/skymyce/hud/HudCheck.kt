@@ -59,8 +59,28 @@ fun main() {
     // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
     val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
     val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
-    check(plainPreview.size == 10 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
-    check(plainPreview[9].startsWith("Target: Cata 50 (") && plainPreview[9].contains("XP left") && plainPreview[9].contains("runs")) { plainPreview[9] }
+    // Status bars: a hit leaves a held trail that drains to the new value; without animation values are exact.
+    val bar = me.mycellium.skymyce.features.general.overlays.BarAnimator()
+    bar.update(1.0, 1_000, true); bar.update(0.5, 1_016, true)
+    check(bar.trail == 1.0 && bar.shown < 1.0 && bar.shown > 0.5) { "trail holds while the fill eases" }
+    for (step in 2..120) bar.update(0.5, 1_000 + step * 16L, true)
+    check(bar.shown == 0.5 && bar.trail == 0.5) { "trail drains to the value (${bar.shown}, ${bar.trail})" }
+    bar.update(0.8, 3_000, true); check(bar.trail >= 0.8 && bar.healAt == 3_000L) { "a gain has no trail and marks a glint" }
+    val exact = me.mycellium.skymyce.features.general.overlays.BarAnimator()
+    exact.update(1.0, 0, false); exact.update(0.25, 10, false); check(exact.shown == 0.25 && exact.trail == 0.25)
+    check(me.mycellium.skymyce.features.general.overlays.effectiveHealth(1000, 100) == 2000.0 &&
+        me.mycellium.skymyce.features.general.overlays.statusNumber(1_234_567) == "1,234,567")
+    check(plainPreview.size == 9 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
+    // The level card replaces the target line: Cata 52 at 86.2% toward 53, 27.6M (69 runs at 400k) to go.
+    val level = me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLevel
+    check(level.level == 52 && level.target == 53 && me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardPercent(level) == "86.2%")
+    val footer = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(level, 400_000.0)
+    check(footer.size == 1 && Regex("Next: ~(69|70) runs · .*XP").matches(footer[0])) { footer }
+    val far = me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1_000_000.0, 30, 100_000.0)
+    val farFooter = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(far, 100_000.0)
+    check(farFooter.size == 2 && farFooter[1].startsWith("Cata 30: ~") && farFooter[1].contains("runs")) { farFooter }
+    check(me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(
+        me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1e12, 50, null), null) == listOf("Cata 50 reached"))
     check(plainPreview[2].isEmpty() && plainPreview[6].isEmpty())
     check(plainPreview[3] == "Time: 1h (6m/run)" && plainPreview[4] == "Runs: 10 (10/h)")
     check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[7].contains("12M") && plainPreview[8].contains("400K"))

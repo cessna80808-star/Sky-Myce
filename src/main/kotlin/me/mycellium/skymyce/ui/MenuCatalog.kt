@@ -91,6 +91,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
             MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
+            MenuFeature("status-bars", "Status Bars", "Animated health, mana and defense bars that replace the hearts and action bar stats", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow"), enabledPath = "General/Status Bars/enabled"),
             MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
             MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
             MenuFeature("wardrobe", "Wardrobe Keybinds", "Saved armor-slot keys and safeguards; this module is currently inactive", MenuCategory.COMBAT, "Gear", listOf("armor", "equipment", "wardrobe", "keybind")),
@@ -118,7 +119,7 @@ class MenuCatalog(rows: List<SettingRow>) {
         )
 
         val routingSettingGroups = linkedMapOf(
-            "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+            "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
             "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
             "Appearance" to listOf("thickness", "opacity", "lineHeight"),
             "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
@@ -175,6 +176,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/Party Commands/") -> "party-commands"
                 path.startsWith("General/Stash Helper/") -> "stash-helper"
                 path.startsWith("General/Price History/") -> "price-history"
+                path.startsWith("General/Status Bars/") -> "status-bars"
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
                 path.startsWith("General/Wardrobe Keybinds/") -> "wardrobe"
                 path == "General/autoRefill" -> "auto-refill"

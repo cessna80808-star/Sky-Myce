@@ -20,6 +20,11 @@ object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
         description = TranslatableValue.literal("Sky-Myce ADG: Berserker S2 T4 then T3. ADG 2026: the DungeonTerminalMap preset, Berserker S2 3 and 5. Both use MEE2, HEE3 and MEE4 Core")
     }
 
+    val learnRoles by boolean(true) {
+        name = TranslatableValue.literal("Learn Roles")
+        description = TranslatableValue.literal("Learn which terminals, levers and devices each class actually does in your runs, and use that in place of the strategy's assignment once a class has done the same objective in most of 3 or more runs. Leaps and early-enters always follow the strategy. /sm goldor learned shows or resets it")
+    }
+
     val map by boolean(true) {
         name = TranslatableValue.literal("Terminal Map")
         description = TranslatableValue.literal("Show the section map with assignments, puzzle types and progress. Move and scale it in the HUD editor")

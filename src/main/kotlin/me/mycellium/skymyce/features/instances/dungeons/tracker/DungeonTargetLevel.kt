@@ -7,6 +7,7 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendSta
 import me.mycellium.skymyce.features.instances.dungeons.friends.dungeonLevel
 import me.mycellium.skymyce.features.instances.dungeons.friends.dungeonXpForLevel
 import me.mycellium.skymyce.utils.MC
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import kotlin.math.ceil
 
 /** Progress toward a target Catacombs level; [runs] is null without a known experience-per-run figure. */
@@ -42,17 +43,27 @@ object DungeonTargetLevel {
     /** Current Catacombs experience, or null when no profile reading exists yet; asks for one at most every 5 minutes. */
     fun experience(): Double? {
         val name = MC.instance.user.name
-        val read = DungeonFriendStatsCache.get(name)?.catacombsXp
+        val stats = DungeonFriendStatsCache.get(name)
+        val read = stats?.catacombsXp
         val now = System.currentTimeMillis()
         if (read != baseXp) { baseXp = read; baseAt = now }
         // Shared relay reports carry only the level, so only a profile provider or API key can supply the experience.
         if (now >= nextRequest && profileSource) {
             nextRequest = now + 300_000
             // Records saved before the experience was kept have none, so they are fetched again rather than waiting to expire.
-            DungeonFriendStatsCache.request(name, MC.instance.user.profileId, force = read == null, bypassShared = true, refreshExpired = true)
+            DungeonFriendStatsCache.request(name, MC.instance.user.profileId, force = read == null || stats.classXp == null,
+                bypassShared = true, refreshExpired = true)
         }
         val base = read ?: return null
         return base + experienceSince(AcquisitionRepository.state.runs, baseAt, AcquisitionRepository.currentContext())
+    }
+
+    /** Class experience from the same reading plus tracked runs since; null until a profile reading includes it. */
+    fun classExperience(): Map<DungeonClass, Double>? {
+        experience() ?: return null
+        val read = DungeonFriendStatsCache.get(MC.instance.user.name)?.classXp ?: return null
+        val since = classExperienceSince(AcquisitionRepository.state.runs, baseAt, AcquisitionRepository.currentContext())
+        return DungeonClass.entries.associateWith { (read[it] ?: 0.0) + (since[it] ?: 0.0) }
     }
 
     fun progress(xpPerRun: Double?): TargetProgress? = experience()?.let { targetProgress(it, DungeonTrackerConfig.targetLevel, xpPerRun) }

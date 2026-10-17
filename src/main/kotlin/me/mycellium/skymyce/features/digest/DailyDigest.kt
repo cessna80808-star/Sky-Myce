@@ -447,7 +447,7 @@ object DailyDigest : SkyMyceModule() {
         val community = history.entries.filter { it.community && DailyDigestConfig.receiveRng }.map { entry ->
             DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
                 "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name.",
-                DigestTone.SPECIAL, "Community · unverified", entry.occurredAt, community = true, activity = entry.activity)
+                DigestTone.SPECIAL, "Community · unverified", entry.occurredAt, community = true, activity = entry.activity, item = entry.item)
         }
         val entries = (local + community).sortedWith(compareByDescending<DigestEntry> { it.timestamp }.thenBy { it.id })
         return DigestCardState("rng", "RNG Activity", entries.firstOrNull()?.title ?: "Your next rare find starts here", rngStatus,

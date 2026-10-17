@@ -196,6 +196,7 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
                             expanded = event.id.takeUnless { expanded == it }; renderResults()
                         }.apply { id("journal-details-toggle-${event.id}"); verticalSizing(Sizing.fixed(18)) }
                         child(row().apply {
+                            child(skyBlockItemIcon(event.item))
                             child(label("${event.displayName ?: DigestRngCatalog.name(event.item)} ×${event.quantity}", MenuTheme.ACCENT)
                                 .apply { horizontalSizing(Sizing.expand()) })
                             if (wide) child(metadata)

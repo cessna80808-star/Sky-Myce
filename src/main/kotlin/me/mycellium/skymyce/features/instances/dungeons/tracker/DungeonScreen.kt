@@ -84,7 +84,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                 child(label("SKY-HAWK / DUNGEONS", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.expand()) })
                 closeButton = button("Close", 42) { onClose() }; child(closeButton)
             })
-            val perRow = if (panelWidth < 420) 2 else 4
+            val perRow = if (panelWidth < 420) 3 else 5
             tabRows = TrackerPage.entries.chunked(perRow).map { pages -> row().apply { pages.forEach { tab ->
                 child(button(tab.title, (bodyWidth - (perRow - 1) * 4) / perRow) {
                     if (filter.page == tab) return@button
@@ -92,7 +92,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
                     itemHistoryReturn = null; change(previous.copy(page = tab)); rebuild(resetScroll = true)
                 }
                     .apply { navigation = true; selected = { filter.page == tab } }
-                    .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Runs, profit and time"; TrackerPage.LOOT -> "Your saved loot"; TrackerPage.TIMELINE -> "Drops by date"; TrackerPage.MUSEUM -> "Your rare-drop collection" })))
+                    .wrappedTooltip(Component.literal(when (tab) { TrackerPage.OVERVIEW -> "Runs, profit and time"; TrackerPage.LOOT -> "Your saved loot"; TrackerPage.TIMELINE -> "Drops by date"; TrackerPage.MUSEUM -> "Your rare-drop collection"; TrackerPage.LEVELS -> "Runs and experience to a target level for Catacombs and each class" })))
             } } }
             tabs = column(); child(tabs)
             child(row().apply {
@@ -160,7 +160,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             if (oldestButton.parent() !== sortHost) sortHost.child(oldestButton)
         } else oldestButton.parent()?.removeChild(oldestButton)
         if (search.value != filter.query) search.text(filter.query)
-        if (filter.page != TrackerPage.OVERVIEW && (!more || height >= 340)) {
+        if (filter.page != TrackerPage.OVERVIEW && filter.page != TrackerPage.LEVELS && (!more || height >= 340)) {
             if (search.parent() !== searchHost) searchHost.child(search)
         } else searchHost.clearChildren()
         filterHost.clearChildren()
@@ -290,6 +290,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             TrackerPage.LOOT -> loot(content)
             TrackerPage.TIMELINE -> timeline(content)
             TrackerPage.MUSEUM -> museum(content)
+            TrackerPage.LEVELS -> levels(content)
         }
         results.child(content)
     }
@@ -338,6 +339,57 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         if (AcquisitionRepository.status.contains("paused") || AcquisitionRepository.status.contains("failed") || AcquisitionRepository.status.contains("capacity"))
             content.child(label(AcquisitionRepository.status, MenuTheme.YELLOW))
         if (DungeonTracker.storageStatus.contains("unreadable")) content.child(label(DungeonTracker.storageStatus, MenuTheme.YELLOW))
+    }
+    /** Catacombs and class levels toward one target, with runs, experience or percent beside each bar. */
+    private fun levels(content: FlowLayout) {
+        val choice = DungeonTrackerConfig.levelsTarget
+        val metric = DungeonTrackerConfig.levelsMetric
+        content.child(row().apply {
+            child(button(if (choice <= 0) "Target: next level" else "Target: $choice", 118) { b -> menu(b) { d ->
+                LEVEL_TARGETS.forEach { level -> d.button(Component.literal(if (level <= 0) "Next level" else "Level $level")) {
+                    DungeonTrackerConfig.levelsTarget = level; me.mycellium.skymyce.SkyMyce.config.save(); rebuild()
+                } }
+            } }.wrappedTooltip(Component.literal("The level every bar counts toward. Any level up to 200 can be set in Dungeons Tracker settings.")))
+            LevelMetric.entries.forEach { option ->
+                child(button(option.title, ((bodyWidth - 126) / 3 - 4).coerceIn(48, 84)) {
+                    DungeonTrackerConfig.levelsMetric = option; me.mycellium.skymyce.SkyMyce.config.save(); rebuild()
+                }.apply { navigation = true; selected = { DungeonTrackerConfig.levelsMetric == option } })
+            }
+        })
+        val cata = DungeonTargetLevel.experience()
+        val classes = DungeonTargetLevel.classExperience()
+        if (cata == null) {
+            content.child(label("Your levels are ${DungeonTargetLevel.unavailableReason}.", MenuTheme.MUTED))
+            return
+        }
+        // Rates follow this view's floor and mode filters, so "Runs to 50" means runs of the floor you are looking at.
+        val runs = AcquisitionRepository.state.runs.filter { run -> run.trackingVersion == 2 &&
+            (filter.floor == null || run.floor == filter.floor) && (filter.mode == null || run.floor.startsWith(filter.mode!!)) }
+        val context = AcquisitionRepository.currentContext()
+        val cataRate = runs.filter { context == null || context.matches(it.context) }.mapNotNull { it.cataXp?.takeIf { xp -> xp.isFinite() && xp > 0 } }
+            .takeIf { it.isNotEmpty() }?.average() ?: trackedXpPerRun(view.summary)
+        val cataRow = levelRow("Catacombs", null, cata, levelTarget(choice, cata), cataRate)
+        content.child(column().apply {
+            surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
+            child(LevelBars("CATACOMBS", listOf(cataRow), metric))
+        })
+        if (classes == null) {
+            content.child(label("Class levels load with your next profile reading.", MenuTheme.MUTED))
+        } else {
+            val rows = classLevelRows(classes, choice, classXpPerRun(runs, context), cataRate)
+            val selected = me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache.get(MC.instance.user.name)?.selectedClass
+            content.child(column().apply {
+                surface(MenuTheme.panel(true)); padding(Insets.of(MenuTheme.PADDING))
+                child(LevelBars("CLASSES", rows, metric, selected))
+            })
+            if (metric == LevelMetric.RUNS && rows.any { it.runs == null && it.remaining > 0 })
+                content.child(label("— needs a tracked run that granted experience; switch to XP needed meanwhile.", MenuTheme.MUTED))
+            else if (metric == LevelMetric.RUNS && rows.any { it.estimatedRate && it.remaining > 0 })
+                content.child(label("~ uses your Catacombs average for classes with no tracked runs.", MenuTheme.MUTED))
+        }
+        content.child(label(if (metric == LevelMetric.RUNS)
+            "Estimated from your tracked average per run${filter.floor?.let { " on $it" } ?: ""}. Profile experience plus runs since it was read."
+            else "Profile experience plus tracked runs since it was read.", MenuTheme.MUTED))
     }
     private fun loot(content: FlowLayout) {
         val visible = slice(view.loot)
@@ -459,17 +511,7 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
         return values.drop(page * 20).take(20)
     }
     private fun itemName(item: String) = DigestRngParser.catalog[item]?.name ?: item.substringAfter(':').replace('_', ' ').take(100)
-    private fun itemId(item: String) = runCatching {
-        if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(java.util.Locale.ROOT))).result().orElse(null)
-        else SkyBlockId.item(item)
-    }.getOrNull()
-    private fun icon(item: String): UIComponent {
-        val stack = runCatching { itemId(item)?.let(me.mycellium.skymyce.utils.ItemUtils::displayItem) }.getOrNull()
-        val display = stack?.takeUnless { it.isEmpty } ?: runCatching { Items.PAPER.defaultInstance }.getOrDefault(net.minecraft.world.item.ItemStack.EMPTY)
-        return MenuItem(me.mycellium.skymyce.utils.ItemUtils.displayStack(display)).apply {
-            if (stack != null && !stack.isEmpty) setTooltipFromStack(true) else wrappedTooltip(Component.literal("$item • item definition unavailable"))
-        }
-    }
+    private fun icon(item: String): UIComponent = skyBlockItemIcon(item)
     private fun money(value: Double?) = value?.takeIf(Double::isFinite)?.let(NumberUtils::condense) ?: "Unknown"
     private fun duration(value: Long) = buildList {
         if (value >= 3600000) add("${value / 3600000}h")

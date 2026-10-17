@@ -71,14 +71,24 @@ internal fun dungeonTrackerWidgetLines(floor: DungeonFloor?, stats: TrackerSumma
 
 /** Fixed example data belongs only to the editor, never the recorded dungeon totals. */
 private val dungeonTrackerPreview = dungeonTrackerWidgetLines(DungeonFloor.M7,
-    TrackerSummary(runs = 10, time = 3_600_000, timedRuns = 10, gross = 12_000_000.0, cataXp = 400_000.0, chests = 10, rerolls = 2),
-    target = dungeonTargetLine(50, targetProgress(450_000_000.0, 50, 40_000.0), ""))
+    TrackerSummary(runs = 10, time = 3_600_000, timedRuns = 10, gross = 12_000_000.0, cataXp = 400_000.0, chests = 10, rerolls = 2))
+
+/** The editor's level card: Cata 52, 86.2% of the way to 53, at the preview's 400k per run. */
+internal val dungeonTrackerPreviewLevel = levelRow("Catacombs", null,
+    me.mycellium.skymyce.features.instances.dungeons.friends.dungeonXpForLevel(52) + 0.862 * 200_000_000, 53, 400_000.0)
+internal const val DUNGEON_TRACKER_PREVIEW_RATE = 400_000.0
 
 internal fun dungeonTrackerPreviewLines(enabled: Boolean): List<String>? = dungeonTrackerPreview.takeIf { enabled }
 
 object DungeonTrackerWidget : SkyMyceModule() {
-    private val content by lazy { hudPanel(padding = 6) }
-    private val previewContent by lazy { hudPanel(padding = 6) }
+    private val lines by lazy { me.mycellium.skymyce.hud.hudColumn() }
+    private val card by lazy { DungeonLevelCard() }
+    private val content by lazy { hudPanel(padding = 6).apply { gap(6); child(lines) } }
+    private val previewLines by lazy { me.mycellium.skymyce.hud.hudColumn() }
+    private val previewCard by lazy { DungeonLevelCard().update(dungeonTrackerPreviewLevel, DUNGEON_TRACKER_PREVIEW_RATE) }
+    private val previewContent by lazy { hudPanel(padding = 6).apply { gap(6); child(previewLines); child(previewCard) } }
+    private var cachedLevel: LevelRow? = null
+    private var cachedRate: Double? = null
     private var seenRevision = -1L
     private var seenHistoricalRevision = -1L
     private var seenFloor: DungeonFloor? = null
@@ -89,7 +99,7 @@ object DungeonTrackerWidget : SkyMyceModule() {
     private var cachedLines = emptyList<String>()
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
-        dungeonTrackerPreviewLines(DungeonTrackerConfig.dungeonTrackerWidget)?.let { previewContent.updateTextLines(it) }
+        dungeonTrackerPreviewLines(DungeonTrackerConfig.dungeonTrackerWidget)?.let { previewLines.updateTextLines(it); previewContent }
     }) {
         if (!dungeonTrackerWidgetVisible(DungeonTrackerConfig.dungeonTrackerWidget,
                 SkyBlockIsland.inAnyIsland(SkyBlockIsland.DUNGEON_HUB, SkyBlockIsland.THE_CATACOMBS),
@@ -112,11 +122,22 @@ object DungeonTrackerWidget : SkyMyceModule() {
             val pricedLoot = marketValuedLoot(selected.loot, prices::get)
             val sampleLoot = marketValuedLoot(sample.loot, prices::get)
             val summary = marketValuedTrackerSummary(selected.summary, pricedLoot)
+            val rate = trackedXpPerRun(summary)
+            val xp = if (DungeonTrackerConfig.showTarget) DungeonTargetLevel.experience() else null
+            cachedRate = rate
+            cachedLevel = xp?.let { levelRow("Catacombs", null, it, DungeonTrackerConfig.targetLevel, rate) }
+            // Without a profile reading the card cannot draw; one line says why instead.
             cachedLines = dungeonTrackerWidgetLines(floor, summary, marketValuedTrackerSummary(sample.summary, sampleLoot),
-                if (DungeonTrackerConfig.showTarget) dungeonTargetLine(DungeonTrackerConfig.targetLevel,
-                    DungeonTargetLevel.progress(trackedXpPerRun(summary)), DungeonTargetLevel.unavailableReason) else null)
+                if (DungeonTrackerConfig.showTarget && xp == null) dungeonTargetLine(DungeonTrackerConfig.targetLevel, null,
+                    DungeonTargetLevel.unavailableReason) else null)
         }
-        content.updateTextLines(cachedLines)
+        lines.updateTextLines(cachedLines)
+        val level = cachedLevel
+        if (level != null) {
+            card.update(level, cachedRate)
+            if (card.parent() == null) content.child(card)
+        } else if (card.parent() != null) content.removeChild(card)
+        content
     }
 
 }

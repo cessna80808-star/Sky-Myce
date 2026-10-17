@@ -132,15 +132,28 @@ Hypixel's `<player> activated a terminal! (n/N)` names the player but not the te
 
 A later exact report moves a guess. Device lines during S1 are attributed by role: Berserker's to i4, Mage's to the S2 device once S1's device is done. A missed gate line is recovered from the next section's counter. Puzzle types of players without Sky-Myce stay unknown.
 
+## Every class, every section
+
+Once a player's own objectives are done, the recommendation always names something:
+- **Early-enter runners** (Mage after the S1 levers, Healer after the S2 lever, Mage in S4) are told to *Go MEE2/HEE3/MEE4 Core*, then *Hold* once in, instead of being told to leap to themselves.
+- **Unclaimed objectives** come first: if no living player of the assigned class is in the party, the nearest such objective is recommended before any leap, so a four-player party still completes the section.
+- **Otherwise**, with no leap planned (S3), the open objective whose owner will take longest is suggested as help (low confidence).
+
+## Learned roles
+
+With **Learn Roles** on, every finished section records which class completed which objective, but only exact attributions. Assignment guesses and completions inferred from the counter are excluded. A class that has done the same objective in at least 60% of three or more sections takes its learned sequence instead of the strategy's for that section. When two classes claim one objective outside a stack, the class that does it more often keeps it. Leap rules and early-enters never change: they are strategy, not habit. Berserker's S2 order and the S4 lever priorities follow the learned plan, so the Tank table reads the right terminals. The data is a small local file (`goldor-learned.json`); `/sm goldor learned` shows it and `/sm goldor learned reset` clears it.
+
 ## Map
 
 The widget shows the current section's map (Core uses S4) with a marker per objective:
-- **Border:** the assignee's class colour, or green when done.
+- **Border:** the class of whoever completed or is working the objective; before anyone starts, the assigned class colour, dimmed. Green when done by an unknown player.
 - **Fill:** amber while active, showing the puzzle letter; green when done; `~` when the completion was guessed.
 - **Rings:** a white ring on your recommended objective, a faint ring on your role's others.
-- **Worker name:** under active markers; grey when stale.
+- **Worker:** their class letter in its colour and their initials, under active markers; grey when stale.
+- **Class pips:** a small square per player standing at a station, in their class colour.
+- **Party strip:** pinned under the text column, one row per player: class, name, and what they are on (the objective they work, the station they stand at, `→` their next planned objective, or `dead`).
 
-Beside it are the section with its counter and next tick, your recommendation, its reason and timing line, the S3 device arrival order, and route status. Live player dots are not drawn, because the map images are schematic rather than to scale. The custom leap menu marks the recommended target.
+Beside it are the section with its counter and next tick, your recommendation, its reason and timing line, the S3 device arrival order, and route status. Free-floating player dots are not drawn, because the map images are schematic rather than to scale; positions are shown by station instead. The custom leap menu marks the recommended target.
 
 ## Commands
 
@@ -148,6 +161,7 @@ Beside it are the section with its counter and next tick, your recommendation, i
 - `/sm goldor role <player> <class>` and `/sm goldor unrole <player>`: manual class overrides.
 - `/sm goldor section <s1|s2|s3|s4|core>`: recovery.
 - `/sm goldor test <sender> <smt1 message>`: applies a protocol message locally; never sends.
+- `/sm goldor learned` and `/sm goldor learned reset`: show or clear the learned roles.
 
 ## Tested vs. needs a real run
 

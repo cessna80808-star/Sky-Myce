@@ -32,6 +32,7 @@ private fun validateDungeonFriendStats(stats: DungeonFriendStats) {
     require(stats.state in StatsState.entries)
     require(stats.catacombs == null || stats.catacombs in 0..10000)
     requireNotNull(stats.classes).forEach { (key, level) -> require(key in DungeonClass.entries && level in 0..10000) }
+    stats.classXp?.forEach { (key, xp) -> require(key in DungeonClass.entries && xp.isFinite() && xp in 0.0..1e13) }
     listOf(requireNotNull(stats.completionTimes), requireNotNull(stats.sPlusTimes)).forEach { times ->
         times.forEach { (floor, time) -> require(floor in FRIEND_FLOORS && time in 1..86400000L) }
     }

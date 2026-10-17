@@ -50,11 +50,11 @@ internal fun digestLocalRngHistory(acquisitions: List<AcquisitionEvent>, recent:
             if (event.origin == "confirmed") "Saved from your local game confirmation."
             else "Saved journal record; imported and older entries retain their recorded dates.",
             DigestTone.SPECIAL, if (event.origin == "confirmed") "Your drop" else "Saved local record", event.occurredAt,
-            activity = event.activity)
+            activity = event.activity, item = event.item)
     }
     val cached = recent.filter { !it.community && validDigestRng(it, now) }.map { entry ->
         DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
-            "Saved from your local game confirmation.", DigestTone.SPECIAL, "Your drop", entry.occurredAt, activity = entry.activity)
+            "Saved from your local game confirmation.", DigestTone.SPECIAL, "Your drop", entry.occurredAt, activity = entry.activity, item = entry.item)
     }
     return (journal + cached).distinctBy { it.id }.sortedWith(compareByDescending<DigestEntry> { it.timestamp }.thenBy { it.id })
 }

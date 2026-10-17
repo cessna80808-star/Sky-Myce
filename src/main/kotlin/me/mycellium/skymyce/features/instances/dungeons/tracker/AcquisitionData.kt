@@ -171,7 +171,7 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     return state.copy(events = state.events.distinctBy { it.id }, runs = state.runs.distinctBy { it.id }.map { if (state.version == 1) it.copy(trackingVersion = 1) else it }, legacyProfit = inherited)
 }
 
-enum class TrackerPage(val title: String) { OVERVIEW("Overview"), LOOT("Loot"), TIMELINE("RNG Timeline"), MUSEUM("RNG Museum") }
+enum class TrackerPage(val title: String) { OVERVIEW("Overview"), LOOT("Loot"), TIMELINE("RNG Timeline"), MUSEUM("RNG Museum"), LEVELS("Levels") }
 enum class TrackerScope { CURRENT_PROFILE, ALL_LOCAL_PROFILES, UNSCOPED_LEGACY }
 enum class LootOrder { NAME, COUNT, VALUE, OBSERVED_RATE }
 data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor: String? = null, val mode: String? = null,

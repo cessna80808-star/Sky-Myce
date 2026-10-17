@@ -74,6 +74,7 @@ Settings are under **General** (some have their own named subsection).
 | --- | --- | --- |
 | **Client Info widget** | Enable **Display Client Info**. It shows FPS, current/average ping, TPS and your coordinates. | Move it with `/sm hud`. |
 | **Skill XP widget** | Leave **Display Skill XP** enabled. On XP gain, the mod shows the skill XP text in a widget instead of the usual action-bar XP display. | The notification is brief; it appears when XP is gained. |
+| **Status bars** | Leave **Status Bars** enabled. Health, mana and defense appear as bars above the hotbar: hits leave a pale trail that drains away, absorption shows as a gold layer, overflow mana in cyan, plus effective health. | Hides the vanilla hearts/armor/hunger and the action-bar stats while shown; each can be kept under **General → Status Bars**. Move it with `/sm hud`. |
 | **Ability cooldown widget** | Leave **Display Ability Cooldown** enabled and use an item with a recognized ability. | Tracks cooldowns the mod can read from item data; it cannot know every custom ability. |
 | **Ability-ready notification** | Enable **Display Ability Notification** if you want a brief notice when a tracked cooldown finishes. | Separate from the cooldown widget. |
 | **Auto Refill** | Choose the item types in the **Auto Refill** setting. When one gets low, the mod requests more from your sack with `/gfs`. | Supported items: Ender Pearls, Superboom TNT and Spirit Leaps. You need the item in your sack and the server must accept the command. |
@@ -127,26 +128,28 @@ Open **`/sm pf`**. Set your availability (floor, classes and optional PB require
 
 ### Dungeon tracker
 
-Open **`/sm dungeon`**. The four views are:
+Open **`/sm dungeon`**. The five views are:
 
 - **Overview:** run counts, known duration, XP, chest costs, profit and other totals.
 - **Loot:** search/sort recorded items and filter by chest or recorded value.
 - **RNG Timeline:** inspect recorded rare drops by date and run.
 - **RNG Museum:** view the supported rare-item catalog, your recorded drops, history and pins. This is a personal tracker, not Hypixel's Museum.
+- **Levels:** Catacombs and every class as bars toward one target level. Pick the target (or *next level*) and switch between estimated runs needed, experience needed and percent. Runs use your tracked average for the selected floor; a class you have not tracked borrows your Catacombs average and is marked `~`. Needs your profile's experience from Skyblocker, SkyBlockPV or a Hypixel API key.
 
 Use the filter panel to select floor/mode, profile scope, dates and sessions. **All-time** legacy totals may be unscoped because older records did not store profile ownership. For verified acquisition tracking, the mod needs to observe a matching inventory receipt; seeing a chat announcement or clicking a chest alone is not enough. Prices are estimates, not guaranteed sale proceeds. Unknown historical values/times remain unknown rather than being guessed.
 
-The optional dungeon tracker HUD summary appears in the dungeon hub or after a run when enabled. See [the tracker guide](docs/auction-tracker-themes.md#dungeon-dashboard) for filters, migrations, archive behavior and precise metric definitions.
+The optional dungeon tracker HUD summary appears in the dungeon hub or after a run when enabled. Its level card shows your Catacombs level, the target, a next-level bar, and the runs and experience to the next level and to the target. See [the tracker guide](docs/auction-tracker-themes.md#dungeon-dashboard) for filters, migrations, archive behavior and precise metric definitions.
 
 ### Dungeon run helpers
 
 - **Notify Missing Players:** warns when an instance is missing players.
 - **Auto Requeue:** attempts to requeue after a dungeon or Kuudra run. It requires you to be the instance creator/leader. To let party members request a pause, enable the `downtime` party command; a downtime request cancels the next automatic requeue.
 - **Dungeon Win Screen:** shows a run summary at the end.
+- **Dungeon Routing:** by default only routes Mage, Archer and Healer, the classes that rush Blood. Turn off **Only for Blood-rush classes** to route on every class.
 - **Dungeon Message Filter:** choose which noisy dungeon messages to suppress.
 - **Safe Kismet Reroll:** blocks rerolling a chest containing an item above the configured threshold. Hold **Ctrl** to override the block.
 - **Dungeon Chest Profit:** shows estimated chest item values/profit while opening a dungeon chest.
-- **Goldor Coordination (F7/M7):** a terminal map of the current phase-3 section with each class's assignment, puzzle types and progress. Beside it is your next action, such as "Stack T3 with Bers" or "LEAP to Healz", with the reason and a pre-leap timing timed around Goldor's tick. Sky-Myce users share short `smt1:` updates in party chat; nothing goes through the Sky-Myce backend. It never leaps or clicks for you. Use `/sm goldor` for status and class overrides.
+- **Goldor Coordination (F7/M7):** a terminal map of the current phase-3 section with each class's assignment, puzzle types and progress. Beside it is your next action, such as "Stack T3 with Bers" or "LEAP to Healz", with the reason and a pre-leap timing timed around Goldor's tick. Sky-Myce users share short `smt1:` updates in party chat; nothing goes through the Sky-Myce backend. It never leaps or clicks for you. Every class gets a job: early-enter runners are told to go to their spot, players who finish early are pointed at the slowest or unclaimed objective, and a short party still finishes before leaping. With **Learn Roles** on, it learns which objectives each class actually does in your runs and uses that after three runs (`/sm goldor learned`). The map colours each objective by the class actually on it and lists the party with what each player is doing. Use `/sm goldor` for status and class overrides.
 
 Thresholds and toggles are in **Dungeons & Combat**. These safeguards are local UI checks: read the chest and confirm the action yourself.
 
