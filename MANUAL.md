@@ -146,6 +146,7 @@ The optional dungeon tracker HUD summary appears in the dungeon hub or after a r
 - **Dungeon Message Filter:** choose which noisy dungeon messages to suppress.
 - **Safe Kismet Reroll:** blocks rerolling a chest containing an item above the configured threshold. Hold **Ctrl** to override the block.
 - **Dungeon Chest Profit:** shows estimated chest item values/profit while opening a dungeon chest.
+- **Goldor Coordination (F7/M7):** a terminal map of the current phase-3 section with each class's assignment, puzzle types and progress. Beside it is your next action, such as "Stack T3 with Bers" or "LEAP to Healz", with the reason and a pre-leap timing timed around Goldor's tick. Sky-Myce users share short `smt1:` updates in party chat; nothing goes through the Sky-Myce backend. It never leaps or clicks for you. Use `/sm goldor` for status and class overrides.
 
 Thresholds and toggles are in **Dungeons & Combat**. These safeguards are local UI checks: read the chest and confirm the action yourself.
 
@@ -301,5 +302,6 @@ This manual is the friendly starting point. These pages contain the complete tec
 - [Daily Digest](docs/daily-digest.md)
 - [Cosmetics and relay messages](docs/cosmetics-messaging.md)
 - [Discord cosmetics linking and operator setup](docs/cosmetics-discord.md)
+- [Goldor coordination: roles, pre-leap timing and the party-chat protocol](GOLDOR-COORDINATION.md)
 
 If the manual and the in-game setting tooltip differ, use the tooltip from your installed version and report the mismatch with your Minecraft/mod version.

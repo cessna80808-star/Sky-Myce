@@ -82,6 +82,8 @@ object SkyMyce : ClientModInitializer {
             me.mycellium.skymyce.features.general.pricehistory.PriceHistoryFeature,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud,
+            me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCoordinator,
+            me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorHud,
             me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera,
             me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud,
             me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenu,

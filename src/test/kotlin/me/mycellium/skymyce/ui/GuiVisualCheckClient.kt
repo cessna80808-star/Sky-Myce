@@ -120,6 +120,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
+            Scene("goldor-map-widget", ThemePreset.SIGNATURE) { GuiVisualGoldorMapPreviewScreen() },
             Scene("dungeon-splits-stats", ThemePreset.SIGNATURE) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-wide", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
             Scene("dungeon-splits-stats-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualSplitsFixture().also { splitsFixture = it }.screen() },
@@ -774,6 +775,19 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
         for (field in listOf("Time:", "Runs:", "Chests:", "Profit:", "Cata Exp:")) check(rows.any { it.startsWith(field) })
         check(rows.none { it.contains("Historical") || it.contains("Inherited") || it.contains("Current profile") || it.contains("Editor preview") })
         check(widget.width in 1..width && widget.height in 1..height)
+    }
+    override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        output.fill(0, 0, width, height, 0xFF101725.toInt())
+        check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
+    }
+}
+
+private class GuiVisualGoldorMapPreviewScreen : Screen(Minecraft.getInstance(), Minecraft.getInstance().font, Component.literal("Goldor map preview")) {
+    private val widget = me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorHud.widget
+    override fun init() {
+        super.init()
+        check(widget.prepareEditor()) { "Goldor map editor preview did not mount" }
+        check(widget.width in 1..width && widget.height in 1..height) { "${widget.width}x${widget.height} in ${width}x$height" }
     }
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         output.fill(0, 0, width, height, 0xFF101725.toInt())

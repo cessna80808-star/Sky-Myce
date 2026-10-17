@@ -1,0 +1,253 @@
+package me.mycellium.skymyce.features.instances.dungeons.goldor
+
+/** What one player is expected to do now, and how far along they are. */
+data class PlayerPlan(
+    val name: String,
+    val role: GoldorRole,
+    /** The next open objective in their plan, or null when they have none left in this section. */
+    val objective: ObjectiveId?,
+    val stackWith: String?,
+    val eta: Estimate?,
+    val positionKnown: Boolean,
+    val note: String?,
+)
+
+/** The leap the local player should make, with the reason and (for timed leaps) the plan. */
+data class LeapAdvice(val targetName: String?, val targetRole: GoldorRole?, val reason: String, val plan: LeapPlan?, val mandatory: Boolean)
+
+/**
+ * The local player's recommendation: a headline action, its reason, an optional leap and confidence. [urgent] is set
+ * only while a leap window is open.
+ */
+data class Recommendation(
+    val headline: String,
+    val reason: String,
+    val confidence: Confidence,
+    val objective: ObjectiveId? = null,
+    val leap: LeapAdvice? = null,
+    val urgent: Boolean = false,
+)
+
+/** S3 device arrival: who should get there first and by how much. */
+data class DeviceArrival(val first: String, val firstEta: Estimate, val second: String?, val secondEta: Estimate?)
+
+data class GoldorAdvice(
+    val section: GoldorSection,
+    val players: List<PlayerPlan>,
+    val self: Recommendation?,
+    val deviceArrival: DeviceArrival?,
+    /** Route state per early-enter the profile expects; position-unknown routes keep their assignment. */
+    val routes: Map<EarlyEnter, String>,
+)
+
+/** Local-player inputs the engine cannot read from the shared state. */
+data class SelfContext(val name: String, val leaptAt: Long? = null, val position: BossPoint? = null)
+
+/**
+ * Turns the run state and a profile into plans and a recommendation. Deterministic: the same state, profile, self
+ * context and time give the same advice. It never acts; the player decides.
+ */
+object GoldorEngine {
+    fun advise(state: GoldorRunState, self: SelfContext, now: Long): GoldorAdvice {
+        val profile = state.profile
+        val section = state.section
+        val plans = state.players.values.mapNotNull { player -> player.role?.let { plan(state, player, it, now) } }
+        val selfRole = state.player(self.name)?.role
+        val recommendation = selfRole?.let { recommend(state, self, it, now) }
+        val routes = profile.routes.mapValues { (route, role) -> routeText(state, route, role, now) }
+        return GoldorAdvice(section, plans, recommendation, if (section == GoldorSection.S3) deviceArrival(state, now) else null, routes)
+    }
+
+    private fun plan(state: GoldorRunState, player: GoldorPlayer, role: GoldorRole, now: Long): PlayerPlan {
+        val rolePlan = state.profile.plan(state.section, role)
+        val next = rolePlan.objectives.firstOrNull { state.state(it).status != ObjectiveStatus.COMPLETE }
+        val partner = rolePlan.stackWith?.let { state.playerWith(it)?.name }
+        val eta = next?.let { objectiveEta(state, it, player.name, now) }
+        return PlayerPlan(player.name, role, next, partner, eta, state.position(player.name, now) != null, rolePlan.note)
+    }
+
+    /** Time until [objective] is done by [by]: remaining work plus walking there if they are not on it yet. */
+    fun objectiveEta(state: GoldorRunState, objective: ObjectiveId, by: String?, now: Long): Estimate {
+        val current = state.state(objective)
+        if (current.status == ObjectiveStatus.COMPLETE) return Estimate.ZERO
+        val work = when (objective.kind) {
+            ObjectiveKind.TERMINAL -> remainingWork(current.work, state.profile.puzzles, now)
+            ObjectiveKind.DEVICE -> Estimate(state.profile.objectives.deviceMillis[objective.section] ?: 5_000, Confidence.LOW)
+            ObjectiveKind.LEVER -> Estimate(state.profile.objectives.leverMillis, Confidence.MEDIUM)
+        }
+        if (current.status == ObjectiveStatus.ACTIVE) return work
+        val station = GoldorLayout.station(objective)?.points?.firstOrNull() ?: return work.copy(confidence = Confidence.LOW)
+        val position = by?.let { state.position(it, now) } ?: return Estimate(work.millis, weaker(work.confidence, Confidence.LOW))
+        return work + Estimate(travelMillis(position.distance(station), state.profile.leap), Confidence.MEDIUM)
+    }
+
+    /**
+     * Remaining work before the current section is complete: the slowest open objective, since they run in parallel.
+     * Objectives nobody is on are estimated at low confidence.
+     */
+    fun sectionRemaining(state: GoldorRunState, now: Long): Estimate {
+        val open = GoldorLayout.stations(state.section).map { it.objective }.filter { state.state(it).status != ObjectiveStatus.COMPLETE }
+        if (open.isEmpty()) return Estimate.ZERO
+        return open.map { objectiveEta(state, it, state.state(it).by ?: state.profile.assignee(it)?.let { role -> state.playerWith(role)?.name }, now) }
+            .reduce { a, b -> Estimate(maxOf(a.millis, b.millis), weaker(a.confidence, b.confidence)) }
+    }
+
+    /**
+     * Berserker's S2 chain: the first terminal (T4 in the Sky-Myce profile), the walk to the second, then the second
+     * (T3). Done terminals contribute nothing.
+     */
+    fun berserkerChain(state: GoldorRunState, now: Long): Estimate {
+        val (first, second) = state.profile.berserkerS2Order
+        val bers = state.playerWith(GoldorRole.BERSERKER)?.name
+        val firstLeft = objectiveEta(state, first, bers, now)
+        val walk = if (state.state(first).status == ObjectiveStatus.COMPLETE) Estimate.ZERO else {
+            val a = GoldorLayout.station(first)?.points?.first(); val b = GoldorLayout.station(second)?.points?.first()
+            if (a != null && b != null) Estimate(travelMillis(a.distance(b), state.profile.leap), Confidence.MEDIUM) else Estimate.ZERO
+        }
+        val secondWork = state.state(second).let { if (it.status == ObjectiveStatus.COMPLETE) Estimate.ZERO else remainingWork(it.work, state.profile.puzzles, now) }
+        return firstLeft + walk + secondWork
+    }
+
+    private fun recommend(state: GoldorRunState, self: SelfContext, role: GoldorRole, now: Long): Recommendation {
+        val profile = state.profile
+        val section = state.section
+        val rolePlan = profile.plan(section, role)
+        val next = rolePlan.objectives.firstOrNull { state.state(it).status != ObjectiveStatus.COMPLETE }
+
+        // A leap tied to finishing one objective (Berserker's pre-dev → Tank) comes first.
+        val rule = profile.leapRule(section, role)
+        if (rule?.afterObjective != null && state.state(rule.afterObjective).status == ObjectiveStatus.COMPLETE) {
+            val target = rule.target?.let { state.playerWith(it) }
+            val partner = rolePlan.stackWith?.let { state.playerWith(it)?.name }
+            return if (self.leaptAt != null && state.state(rule.afterObjective).completedAt?.let { self.leaptAt >= it } == true)
+                Recommendation("Stack with ${partner ?: rolePlan.stackWith?.title}", "${role.title} stacks ${rolePlan.stackWith?.title} regardless of terminal type", Confidence.HIGH)
+            else Recommendation("Leap to ${target?.name ?: rule.target?.title}", rule.reason, if (target == null) Confidence.MEDIUM else Confidence.HIGH,
+                leap = LeapAdvice(target?.name, rule.target, rule.reason, null, rule.mandatory))
+        }
+        if (section == GoldorSection.S2 && role == GoldorRole.TANK && next == null) return tankS2(state, self, now)
+        if (section == GoldorSection.S4 && role in profile.s4LeverPriority && next?.kind == ObjectiveKind.LEVER) {
+            val lever = profile.s4LeverPriority.getValue(role)
+            return Recommendation("Take the ${lever.side!!.title(section)} lever", "${role.title} has ${lever.side.title(section)} lever priority", Confidence.HIGH, lever)
+        }
+        if (section == GoldorSection.S3 && next?.kind == ObjectiveKind.DEVICE && (role == profile.s3DeviceStack.first || role == profile.s3DeviceStack.second)) {
+            val partnerRole = if (role == profile.s3DeviceStack.first) profile.s3DeviceStack.second else profile.s3DeviceStack.first
+            val arrival = deviceArrival(state, now)
+            val order = arrival?.let { if (it.first.equals(self.name, true)) "you first" else "${it.first} first" }
+            return Recommendation("Stack device with ${state.playerWith(partnerRole)?.name ?: partnerRole.title}",
+                listOfNotNull("S3 device stack", order).joinToString(" · "), arrival?.firstEta?.confidence ?: Confidence.LOW, next)
+        }
+        if (next != null) {
+            val stack = rolePlan.stackWith?.let { state.playerWith(it)?.name ?: it.title }
+            return Recommendation("${next.label}${stack?.let { " · stack $it" } ?: ""}", rolePlan.note ?: "${role.title} ${section.title} assignment", Confidence.HIGH, next)
+        }
+        // Own work done: the section's leap, timed when its target is an early-enter.
+        val leap = rule?.takeIf { it.afterObjective == null }
+        if (leap == null) return Recommendation(if (section == GoldorSection.CORE) "Core" else "Help finish ${section.title}", "No leap planned for ${section.title}", Confidence.MEDIUM)
+        return sectionLeap(state, self, leap, now, extraDelay = 0)
+    }
+
+    /** The S2 decision table for Tank once its own terminal is done. */
+    private fun tankS2(state: GoldorRunState, self: SelfContext, now: Long): Recommendation {
+        val profile = state.profile
+        val (first, second) = profile.berserkerS2Order
+        val firstSpeed = profile.puzzles.speed(state.state(first).puzzle)
+        val secondSpeed = profile.puzzles.speed(state.state(second).puzzle)
+        // A finished terminal no longer slows anything: treat it as fast.
+        val row = profile.tankS2(if (state.state(first).status == ObjectiveStatus.COMPLETE) PuzzleSpeed.FAST else firstSpeed,
+            if (state.state(second).status == ObjectiveStatus.COMPLETE) PuzzleSpeed.FAST else secondSpeed)
+        val reason = profile.tankS2Reason(row)
+        val bers = state.playerWith(GoldorRole.BERSERKER)?.name ?: "Berserker"
+        return when (row.action) {
+            TankS2Action.STACK_T3 -> Recommendation("Stack ${second.label} with $bers", reason, row.confidence, second)
+            TankS2Action.HOLD -> Recommendation("Hold — help ${first.label}", reason, row.confidence, first)
+            TankS2Action.PRE_LEAP -> {
+                val rule = profile.leapRule(GoldorSection.S2, GoldorRole.TANK) ?: return Recommendation("Pre-leap", reason, Confidence.LOW)
+                val advice = sectionLeap(state, self, rule, now, extraDelay = row.extraDelayMillis, remainingOverride = berserkerChain(state, now))
+                advice.copy(reason = "$reason · ${advice.reason}", confidence = weaker(advice.confidence, row.confidence))
+            }
+        }
+    }
+
+    /**
+     * A section-end leap. The target is the rule's role; an early-enter target is mandatory and stays the target even
+     * when its position is unknown. Only when that player is missing or dead do the fallback roles compete, by
+     * distance from their observed position to the fallback goal.
+     */
+    private fun sectionLeap(state: GoldorRunState, self: SelfContext, rule: LeapRule, now: Long, extraDelay: Long,
+                            remainingOverride: Estimate? = null): Recommendation {
+        val profile = state.profile
+        val routeState = rule.route?.let { state.route(it) }
+        val primary = rule.target?.let { state.playerWith(it) }?.takeIf { it.alive && routeState?.state != RouteState.ABANDONED }
+        val target = primary ?: rule.fallback.mapNotNull { state.playerWith(it)?.takeIf { p -> p.alive } }
+            .mapNotNull { p -> state.position(p.name, now)?.let { pos -> p to (rule.fallbackGoal?.let { g -> GoldorLayout.station(g)?.points?.first()?.distance(pos) } ?: 0.0) } }
+            .minByOrNull { it.second }?.first
+        val why = when {
+            primary != null -> rule.reason
+            target != null -> "${rule.target?.title ?: "Target"} unavailable — closest to ${rule.fallbackGoal?.label ?: "next"}: ${target.role?.title}"
+            else -> rule.reason
+        }
+        val targetPosition = target?.let { state.position(it.name, now) }
+        val goal = targetGoal(state, state.player(self.name)?.role, target)
+        val travel = if (targetPosition != null && goal != null) travelMillis(targetPosition.distance(goal), profile.leap) else null
+        val remaining = (remainingOverride ?: sectionRemaining(state, now)).let { base ->
+            // After the work, the gate takes its delay to open unless it has already been seen open.
+            Estimate(base.millis + profile.objectives.gateDelayMillis, base.confidence)
+        }
+        val timing = profile.leap.copy(safetyMarginMillis = profile.leap.safetyMarginMillis + extraDelay)
+        val arrived = self.position != null && goal != null && self.position.distance(goal) <= 3.0
+        val leapt = self.leaptAt != null && state.sectionDoneAt == null && self.leaptAt >= (state.gateOpenedAt ?: state.startedAt ?: 0L)
+        val plan = planPreLeap(now, remaining, state.tick(), timing, travel, leapt = leapt, arrived = arrived)
+        val name = target?.name ?: rule.target?.title ?: "?"
+        val routeNote = routeState?.let { if (it.state == RouteState.IN) "${rule.route!!.title} in" else if (target != null && targetPosition == null) "position unknown" else null }
+        val headline = when (plan.phase) {
+            LeapPhase.LEAP, LeapPhase.MISSED -> "LEAP to $name"
+            LeapPhase.ARRIVED -> "Ready at ${goal?.let { "next terminal" } ?: "target"}"
+            LeapPhase.TRAVELLING -> "Go to next terminal"
+            else -> "Leap to $name"
+        }
+        return Recommendation(headline, listOfNotNull(why, routeNote, plan.reason).joinToString(" · "), weaker(plan.confidence, if (target == null) Confidence.LOW else Confidence.HIGH),
+            leap = LeapAdvice(target?.name, target?.role ?: rule.target, why, plan, rule.mandatory), urgent = plan.phase == LeapPhase.LEAP)
+    }
+
+    /** Where a leaping player heads next: their first objective in the next section, else the target's position. */
+    private fun targetGoal(state: GoldorRunState, role: GoldorRole?, target: GoldorPlayer?): BossPoint? {
+        val next = state.section.next ?: return null
+        val objective = role?.let { state.profile.plan(next, it).objectives.firstOrNull() }
+        return objective?.let { GoldorLayout.station(it)?.points?.first() } ?: target?.position
+    }
+
+    /** S3: who of the device pair reaches the device first, from their remaining terminal and walking distance. */
+    fun deviceArrival(state: GoldorRunState, now: Long): DeviceArrival? {
+        val (a, b) = state.profile.s3DeviceStack
+        val device = ObjectiveId.device(GoldorSection.S3)
+        val station = GoldorLayout.station(device)?.points?.firstOrNull() ?: return null
+        fun eta(role: GoldorRole): Pair<String, Estimate>? {
+            val player = state.playerWith(role) ?: return null
+            val terminal = state.profile.plan(GoldorSection.S3, role).objectives.firstOrNull { it.kind == ObjectiveKind.TERMINAL }
+            val work = terminal?.let { objectiveEta(state, it, player.name, now) } ?: Estimate.ZERO
+            val from = terminal?.let { GoldorLayout.station(it)?.points?.first() } ?: state.position(player.name, now) ?: return player.name to Estimate(work.millis, Confidence.LOW)
+            return player.name to (work + Estimate(travelMillis(from.distance(station), state.profile.leap), Confidence.MEDIUM))
+        }
+        val etas = listOfNotNull(eta(a), eta(b)).sortedBy { it.second.millis }
+        val first = etas.firstOrNull() ?: return null
+        return DeviceArrival(first.first, first.second, etas.getOrNull(1)?.first, etas.getOrNull(1)?.second)
+    }
+
+    /**
+     * A route's status line. The route exists because the profile says so; position only says how far along it is.
+     */
+    private fun routeText(state: GoldorRunState, route: EarlyEnter, role: GoldorRole, now: Long): String {
+        val runner = state.playerWith(role)
+        val observed = state.route(route)
+        val position = runner?.let { state.position(it.name, now) }
+        return when {
+            observed.state == RouteState.IN -> "in"
+            observed.state == RouteState.ABANDONED -> "abandoned"
+            runner == null -> "no ${role.title}"
+            !runner.alive -> "${role.title} dead"
+            position == null -> "position unknown"
+            observed.state == RouteState.GOING -> "going"
+            else -> "${GoldorLayout.routePoints[route]?.distance(position)?.toInt() ?: "?"} blocks away"
+        }
+    }
+}

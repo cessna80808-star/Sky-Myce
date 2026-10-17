@@ -147,6 +147,7 @@ object SkyMyceCommands : SkyMyceModule() {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.social.CosmeticsScreen(true)) }; 1
             }))
             .then(auction())
+            .then(me.mycellium.skymyce.features.instances.dungeons.goldor.goldorCommand())
             .then(hud())
             .then(modules())
             .then(profilingCommand())

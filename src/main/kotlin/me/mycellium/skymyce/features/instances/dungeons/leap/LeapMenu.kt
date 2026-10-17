@@ -348,6 +348,12 @@ object LeapMenu : SkyMyceModule() {
             ?: profile?.let { client.playerSkinRenderCache().getOrDefault(it).playerSkin() }
             ?: DefaultPlayerSkin.get(candidate.identity.uuid ?: UUID(0, 0))
         drawLeapCard(graphics, bounds, candidate, skin, hovered, quadrant, caption)
+        // Goldor coordination's recommended target gets a marker; choosing stays with the player.
+        val advice = me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCoordinator.advice?.self?.leap
+        if (advice?.targetName?.equals(candidate.identity.key, ignoreCase = true) == true) {
+            graphics.outline(bounds.x, bounds.y, bounds.width, bounds.height, if (advice.plan?.phase == me.mycellium.skymyce.features.instances.dungeons.goldor.LeapPhase.LEAP) 0xFFFF5555.toInt() else 0xFFFFD25A.toInt())
+            graphics.text(MC.font, "★ ${advice.reason}", bounds.x + 4, bounds.y + bounds.height - 11, 0xFFFFD25A.toInt(), true)
+        }
     }
 
     private fun dispose(clearPending: Boolean = true) {

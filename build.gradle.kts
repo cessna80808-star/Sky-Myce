@@ -438,6 +438,14 @@ val dungeonWinSummaryCheck by tasks.registering(JavaExec::class) {
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonWinSummaryCheckKt"
 }
 
+val goldorCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks Goldor coordination: role routes, the S2 decision table, pre-leap timing, chat protocol and run state"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCheckKt"
+}
+
 val priceHistoryCheck by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Checks price history parsing, endpoints, downsampling and stats"
@@ -643,7 +651,7 @@ val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
         mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt"
     }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, dungeonSplitsCheck, dungeonWinSummaryCheck, priceHistoryCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, dungeonSplitsCheck, dungeonWinSummaryCheck, priceHistoryCheck, goldorCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
 val cameraRenderCheck by tasks.registering(JavaExec::class) {
     group = "verification"

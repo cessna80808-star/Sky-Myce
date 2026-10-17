@@ -8,6 +8,7 @@ object DungeonsConfig : CategoryKt("Dungeons") {
     init {
         category(DungeonTrackerConfig)
         category(DungeonSplitsConfig)
+        category(GoldorCoordinationConfig)
         category(DungeonFriendsConfig)
         category(StarredClearRoutingConfig)
         category(HealerCrushCameraConfig)
