@@ -3,8 +3,8 @@ package me.mycellium.skymyce.features.instances.dungeons.splits
 import kotlin.math.floor
 
 /**
- * The inputs Hypixel shows during a run. Null means not yet read; the estimate is unavailable until every required
- * input is known, so a missing line can never produce a 300 score.
+ * The inputs Hypixel shows during a run. Null means not yet read; the estimate then counts it as NoammAddons does
+ * (nothing found, 36 rooms, no time spent), and [complete] says whether the estimate rests on what the run shows.
  */
 data class ScoreInputs(
     val floor: String,
@@ -20,9 +20,10 @@ data class ScoreInputs(
     val inBoss: Boolean = false,
     val mimic: Boolean = false,
     val prince: Boolean = false,
-    val bat: Boolean = false,
     val paul: Boolean = false,
-)
+) {
+    val complete get() = secretPercent != null && clearedPercent != null && completedRooms != null && elapsedSeconds != null
+}
 
 private val requiredSecrets = mapOf("F1" to 0.3, "F2" to 0.4, "F3" to 0.5, "F4" to 0.6, "F5" to 0.7, "F6" to 0.85, "F7" to 1.0)
 private val timeLimits = mapOf("F1" to 600, "F2" to 600, "F3" to 600, "F4" to 720, "F5" to 600, "F6" to 720, "F7" to 840,
@@ -40,18 +41,18 @@ internal fun speedDeduction(percentOver: Double): Double {
 }
 
 /**
- * The run's score if the team finishes it now, using the community formula published in NoammAddons
- * `ScoreCalculation.kt` (CC0): rooms still to be completed by blood and boss are counted, as Hypixel does at the end.
+ * The run's score if the team finishes it now: NoammAddons `ScoreCalculation.kt` (CC0), the calculator its map shows.
+ * Rooms still to be completed by blood and boss are counted, as Hypixel does at the end. Null only for unknown floors.
  */
 fun estimateDungeonScore(input: ScoreInputs): Int? {
-    val secrets = input.secretPercent ?: return null
-    val cleared = input.clearedPercent?.takeIf { it > 0 } ?: return null
-    val completed = input.completedRooms ?: return null
-    val elapsed = input.elapsedSeconds ?: return null
+    val secrets = input.secretPercent ?: 0.0
+    val cleared = input.clearedPercent ?: 0
+    val completed = input.completedRooms ?: 0
+    val elapsed = input.elapsedSeconds ?: 0
     val number = input.floor.drop(1).toIntOrNull() ?: return null
     val required = if (input.floor.startsWith("M")) 1.0 else requiredSecrets[input.floor] ?: return null
     val limit = timeLimits[input.floor] ?: return null
-    val totalRooms = floor(completed / (cleared / 100.0) + 0.4).takeIf { it >= 1 } ?: return null
+    val totalRooms = if (completed > 0 && cleared > 0) floor(completed / (cleared / 100.0) + 0.4) else 36.0
     val effective = completed + (if (input.bloodDone) 0 else 1) + (if (input.inBoss) 0 else 1)
     val secretScore = floor(secrets / required / 100.0 * 40.0).coerceIn(0.0, 40.0).toInt()
     val roomScore = (effective / totalRooms * 60.0).coerceIn(0.0, 60.0).toInt()
@@ -59,7 +60,7 @@ fun estimateDungeonScore(input: ScoreInputs): Int? {
     val deathPenalty = (input.deaths * 2 - 1).coerceAtLeast(0)
     val skill = (20 + skillRooms - input.openPuzzles * 10 - deathPenalty).coerceIn(20, 100)
     val bonus = input.crypts.coerceIn(0, 5) + (if (input.mimic && number > 5) 2 else 0) + (if (input.prince) 1 else 0) +
-        (if (input.bat) 1 else 0) + (if (input.paul) 10 else 0)
+        (if (input.paul) 10 else 0)
     val speed = if (elapsed <= limit) 100 else (100 - speedDeduction((elapsed - limit) * 100.0 / limit)).toInt().coerceAtLeast(0)
     return secretScore + roomScore + skill + bonus + speed
 }
@@ -115,6 +116,15 @@ fun readScoreSidebar(input: ScoreInputs, lines: List<String>, watcherCleared: Bo
     return result
 }
 
-internal const val PRINCE_LINE = "A Prince falls. +1 Bonus Score"
-internal const val BAT_LINE = "A Bat has been slain. +1 Bonus Score"
+/**
+ * Mimic and Prince kills: Hypixel's own Prince line, and what teammates' mods announce in party chat, so a kill out of
+ * sight still counts (NoammAddons `ScoreCalculation`). Matched case-insensitively anywhere in a chat line, as there.
+ */
+private val mimicMessages = setOf("mimic dead!", "mimic dead", "mimic killed!", "mimic killed", "\$skytils-dungeon-score-mimic\$",
+    "child destroyed!", "mimic obliterated!", "mimic exorcised!", "mimic destroyed!", "mimic annhilated!", "breefing killed", "breefing dead")
+private val princeMessages = setOf("prince dead", "prince dead!", "\$skytils-dungeon-score-prince\$", "prince killed", "prince slain",
+    "prince killed!", "a prince falls. +1 bonus score")
+
+internal fun announcesMimic(text: String) = text.lowercase().let { line -> mimicMessages.any { it in line } }
+internal fun announcesPrince(text: String) = text.lowercase().let { line -> princeMessages.any { it in line } }
 internal val mimicCharm = Regex("^CHARM You charmed a Mimic and captured (?:\\d+ shards from it|its shard)\\.$", RegexOption.IGNORE_CASE)

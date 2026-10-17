@@ -96,9 +96,9 @@ object DungeonSplits : SkyMyceModule() {
             SplitSignal.Defeated -> { run.defeated = true; finish(run, at) }
             SplitSignal.Start, null -> {
                 if (signal != null) return
-                if (text.equals(PRINCE_LINE, ignoreCase = true)) updateScore(run, at) { it.copy(prince = true) }
-                else if (text.equals(BAT_LINE, ignoreCase = true)) updateScore(run, at) { it.copy(bat = true) }
-                else if (run.floorNumber >= 6 && !DungeonAPI.inBoss && mimicCharm.matches(text)) updateScore(run, at) { it.copy(mimic = true) }
+                if (!run.score.prince && announcesPrince(text)) updateScore(run, at) { it.copy(prince = true) }
+                if (!run.score.mimic && run.floorNumber >= 6 && !DungeonAPI.inBoss && (announcesMimic(text) || mimicCharm.matches(text)))
+                    updateScore(run, at) { it.copy(mimic = true) }
             }
         }
     }
@@ -248,7 +248,8 @@ object DungeonSplits : SkyMyceModule() {
         val estimate = estimateDungeonScore(run.score)
         if (estimate != run.estimate) { run.estimate = estimate; revision++ }
         if (estimate == null || run.outcome != null) return
-        if (estimate < 300) { run.sawBelow300 = true; return }
+        // Below 300 only counts once every input was read, so a late join's first, partial estimate is not a crossing.
+        if (estimate < 300) { if (run.score.complete) run.sawBelow300 = true; return }
         // Only a crossing seen in this session is a time; joining or returning above 300 is not.
         if (run.sawBelow300) mark(run, SplitMilestone.SCORE_300, at)
     }

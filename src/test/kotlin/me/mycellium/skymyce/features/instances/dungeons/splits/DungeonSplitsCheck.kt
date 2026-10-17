@@ -151,8 +151,16 @@ private fun checkScore() {
     check(estimateDungeonScore(perfect.copy(secretPercent = 90.0, crypts = 1, mimic = false, prince = false)) == 297)
     check(estimateDungeonScore(perfect.copy(openPuzzles = 1))!! < estimateDungeonScore(perfect)!!)
     check(estimateDungeonScore(perfect.copy(deaths = 2)) == estimateDungeonScore(perfect)!! - 3)
-    check(estimateDungeonScore(perfect.copy(secretPercent = null)) == null) { "Unknown inputs never estimate" }
-    check(estimateDungeonScore(perfect.copy(clearedPercent = 0)) == null)
+    // Unread inputs count as NoammAddons counts them: nothing found, 36 rooms, no time spent; never more than a full read.
+    check(estimateDungeonScore(perfect.copy(secretPercent = null)) == estimateDungeonScore(perfect)!! - 40 && !perfect.copy(secretPercent = null).complete)
+    check(estimateDungeonScore(perfect.copy(clearedPercent = 0)) == 40 + 50 + 20 + 66 + 8 + 100) { "${estimateDungeonScore(perfect.copy(clearedPercent = 0))}" }
+    check(estimateDungeonScore(ScoreInputs("M7"))!! < 300 && estimateDungeonScore(ScoreInputs("X9")) == null && perfect.complete)
+    // A teammate's mimic kill out of sight is what usually decides 300 on M7.
+    check(estimateDungeonScore(perfect.copy(secretPercent = 80.0, mimic = false, prince = false)) == 297)
+    check(estimateDungeonScore(perfect.copy(secretPercent = 80.0, prince = false)) == 299 && estimateDungeonScore(perfect.copy(secretPercent = 80.0)) == 300)
+    check(announcesMimic("Party > [MVP+] lfCrit: Mimic Killed!") && announcesMimic("Party > Boraannn: \$SKYTILS-DUNGEON-SCORE-MIMIC\$"))
+    check(announcesPrince("A Prince falls. +1 Bonus Score") && announcesPrince("Party > imM6: Prince Killed!"))
+    check(!announcesMimic("[BOSS] Necron: All this, for nothing...") && !announcesPrince("Party > imM6: Mimic Killed!"))
     check(estimateDungeonScore(perfect.copy(elapsedSeconds = 1000))!! < estimateDungeonScore(perfect)!!)
     check(estimateDungeonScore(ScoreInputs("F5", secretPercent = 70.0, clearedPercent = 93, completedRooms = 28, crypts = 5, elapsedSeconds = 100)) ==
         40 + 60 + 100 + 5 + 100)
