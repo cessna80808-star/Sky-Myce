@@ -10,7 +10,17 @@ import java.util.Locale
  * Which clock a time is measured on. [REAL] is the stopwatch and includes lag; [SERVER] counts server ticks × 50 ms,
  * so lag does not add to it. The difference between them is the time lost to lag.
  */
-enum class SplitClock(val title: String) { REAL("Real time"), SERVER("Server time") }
+enum class SplitClock(val title: String) {
+    REAL("Real time"), SERVER("Server time");
+    val other get() = if (this == REAL) SERVER else REAL
+    override fun toString() = title
+}
+
+/** What live splits are compared with: the best, the average over the chosen runs, or the worst completed time. */
+enum class SplitComparison(val title: String) {
+    BEST("Best"), AVERAGE("Average"), WORST("Worst");
+    override fun toString() = title
+}
 
 enum class SplitOutcome(val title: String) { COMPLETED("Completed"), FAILED("Failed"), ABANDONED("Left early") }
 
@@ -60,23 +70,40 @@ fun splitRunEligible(record: SplitRunRecord, definition: SplitDefinition, clock:
         sectionDurations(record, definition, clock).size == definition.sections.size
 
 enum class SplitWindow(val title: String, val runs: Int?) {
-    ALL("All time", null), LAST_10("Last 10", 10), LAST_25("Last 25", 25), LAST_50("Last 50", 50)
+    ALL("All time", null), LAST_10("Last 10", 10), LAST_25("Last 25", 25), LAST_50("Last 50", 50);
+    override fun toString() = title
 }
 
 data class SectionBest(val duration: Long, val run: String, val recordedAt: Long)
 
+/** Best, average and worst of one timed span; [worst] comes from the same runs as [best]. */
+interface SpanStats {
+    val best: SectionBest?
+    val average: Double?
+    val worst: SectionBest?
+    /** The time [comparison] measures against, or null when there is none yet. */
+    fun reference(comparison: SplitComparison): Long? = when (comparison) {
+        SplitComparison.BEST -> best?.duration
+        SplitComparison.AVERAGE -> average?.toLong()
+        SplitComparison.WORST -> worst?.duration
+    }
+}
+
 data class SectionStats(
     val section: SplitSection,
-    val best: SectionBest?,
-    val average: Double?,
+    override val best: SectionBest?,
+    override val average: Double?,
     val samples: Int,
-)
+    override val worst: SectionBest? = null,
+) : SpanStats
 
 /** A marker such as 300 score, or a checkpoint such as boss entry, timed from the run start and kept out of the theoretical total. */
-data class MarkerStats(val milestone: SplitMilestone, val best: SectionBest?, val average: Double?, val samples: Int)
+data class MarkerStats(val milestone: SplitMilestone, override val best: SectionBest?, override val average: Double?, val samples: Int,
+                       override val worst: SectionBest? = null) : SpanStats
 
 /** A block of sections (Terms) timed within single runs; its best is a real run's time, not a sum of section bests. */
-data class GroupStats(val group: SplitGroup, val best: SectionBest?, val average: Double?, val samples: Int)
+data class GroupStats(val group: SplitGroup, override val best: SectionBest?, override val average: Double?, val samples: Int,
+                      override val worst: SectionBest? = null) : SpanStats
 
 data class FloorSplitStats(
     val definition: SplitDefinition,
@@ -98,7 +125,16 @@ data class FloorSplitStats(
     val averageLag: Double?,
     /** Checkpoints such as boss entry, timed from the start. */
     val checkpoints: List<MarkerStats> = emptyList(),
-)
+    /** The slowest completed run, from the same runs as [actualPb]. */
+    val worstTotal: SectionBest? = null,
+) {
+    /** The whole run's time [comparison] measures against. */
+    fun totalReference(comparison: SplitComparison): Long? = when (comparison) {
+        SplitComparison.BEST -> actualPb?.duration
+        SplitComparison.AVERAGE -> averageTotal?.toLong()
+        SplitComparison.WORST -> worstTotal?.duration
+    }
+}
 
 /** Time from [from] to [to] in one run on [clock], when both were observed. */
 internal fun spanDuration(record: SplitRunRecord, from: SplitMilestone, to: SplitMilestone, clock: SplitClock): Long? {
@@ -119,19 +155,23 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
     val eligible = floorRuns.filter { splitRunEligible(it, definition, clock) }
     val actual = completed.minWithOrNull(compareBy<SplitRunRecord> { it.total(clock)!! }.thenBy { it.recordedAt })
         ?.let { SectionBest(it.total(clock)!!, it.id, it.recordedAt) }
+    val worstRun = completed.maxWithOrNull(compareBy<SplitRunRecord> { it.total(clock)!! }.thenBy { -it.recordedAt })
+        ?.let { SectionBest(it.total(clock)!!, it.id, it.recordedAt) }
     val durations = floorRuns.associate { it.id to sectionDurations(it, definition, clock) }
     fun windowed(values: List<Long>) = window.runs?.let { values.take(it) } ?: values
     fun fastest(values: List<SectionBest>) = values.minWithOrNull(compareBy<SectionBest> { it.duration }.thenBy { it.recordedAt })
+    // The earliest of equally slow times, as for the fastest.
+    fun slowest(values: List<SectionBest>) = values.maxWithOrNull(compareBy<SectionBest> { it.duration }.thenBy { -it.recordedAt })
     val sections = definition.sections.map { section ->
-        val best = fastest(eligible.mapNotNull { run -> durations.getValue(run.id)[section.milestone]?.let { SectionBest(it, run.id, run.recordedAt) } })
+        val timed = eligible.mapNotNull { run -> durations.getValue(run.id)[section.milestone]?.let { SectionBest(it, run.id, run.recordedAt) } }
         // Conflicting runs never contribute; partial runs only contribute sections they observed directly.
         val observed = windowed(floorRuns.filter { it.conflicts == 0 }.mapNotNull { durations.getValue(it.id)[section.milestone] })
-        SectionStats(section, best, observed.takeIf { it.isNotEmpty() }?.average(), observed.size)
+        SectionStats(section, fastest(timed), observed.takeIf { it.isNotEmpty() }?.average(), observed.size, slowest(timed))
     }
     val groups = definition.groups.map { group ->
-        val best = fastest(eligible.mapNotNull { run -> spanDuration(run, group.from, group.to, clock)?.let { SectionBest(it, run.id, run.recordedAt) } })
+        val timed = eligible.mapNotNull { run -> spanDuration(run, group.from, group.to, clock)?.let { SectionBest(it, run.id, run.recordedAt) } }
         val observed = windowed(floorRuns.filter { it.conflicts == 0 }.mapNotNull { spanDuration(it, group.from, group.to, clock) })
-        GroupStats(group, best, observed.takeIf { it.isNotEmpty() }?.average(), observed.size)
+        GroupStats(group, fastest(timed), observed.takeIf { it.isNotEmpty() }?.average(), observed.size, slowest(timed))
     }
     val totals = windowed(completed.map { it.total(clock)!! })
     // Time from the observed start; the run need not finish for the moment it reached 300 to be real.
@@ -139,7 +179,7 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         val observed = floorRuns.filter { it.startObserved && it.conflicts == 0 }
             .mapNotNull { run -> spanDuration(run, SplitMilestone.START, milestone, clock)?.let { SectionBest(it, run.id, run.recordedAt) } }
         val window = windowed(observed.map { it.duration })
-        return MarkerStats(milestone, fastest(observed), window.takeIf { it.isNotEmpty() }?.average(), window.size)
+        return MarkerStats(milestone, fastest(observed), window.takeIf { it.isNotEmpty() }?.average(), window.size, slowest(observed))
     }
     val markers = definition.markers.map(::fromStart)
     val checkpoints = definition.checkpoints.map(::fromStart)
@@ -151,7 +191,7 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         ?.sumOf { it.best!!.duration }?.plus(cut?.best?.duration ?: 0L)
     val lag = windowed(floorRuns.mapNotNull { it.lagLost })
     return FloorSplitStats(definition, clock, markers, actual, theoretical, sections, groups, totals.takeIf { it.isNotEmpty() }?.average(),
-        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), checkpoints)
+        totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), checkpoints, worstRun)
 }
 
 /** Live comparison against the saved section PB; null when no comparable best exists yet. */

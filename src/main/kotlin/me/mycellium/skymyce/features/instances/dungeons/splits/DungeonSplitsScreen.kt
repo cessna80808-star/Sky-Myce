@@ -101,31 +101,31 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
         body.child(label(listOfNotNull("${stats.completedRuns} completed · ${stats.savedRuns} saved on ${definition.floor}",
             stats.averageLag?.let { "lag lost ${formatSplitDelta(it.toLong())} per run on average" }).joinToString(" · "), MenuTheme.MUTED))
 
-        body.child(tableRow("SECTION", "BEST", "AVERAGE", "BEST FROM", MenuTheme.SECONDARY))
+        body.child(tableRow("SECTION", "BEST", "AVERAGE", "WORST", "BEST FROM", MenuTheme.SECONDARY))
         for (section in stats.sections) {
             val position = definition.chain.indexOf(section.section.milestone)
             val group = definition.groups.firstOrNull { definition.chain.indexOf(it.from) < position && position <= definition.chain.indexOf(it.to) }
             // A group's total heads its sections, which are indented beneath it; it is a real run's time, not a sum of bests.
             if (group != null && section.section.from == group.from) stats.groups.firstOrNull { it.group == group }?.let { total ->
-                body.child(tableRow(group.title, time(total.best?.duration), average(total.average),
+                body.child(tableRow(group.title, time(total.best?.duration), average(total.average), time(total.worst?.duration),
                     source(total.best), MenuTheme.ACCENT)
                     .wrappedTooltip(Component.literal("All terminal sections, from ${definition.title(group.from)} to ${definition.title(group.to)}, timed within one run. Not added to Best possible, which already counts each section.")))
             }
             body.child(tableRow((if (group != null) "    " else "") + definition.sectionTitle(section.section.milestone), time(section.best?.duration),
-                average(section.average), source(section.best), MenuTheme.TEXT)
+                average(section.average), time(section.worst?.duration), source(section.best), MenuTheme.TEXT)
                 .wrappedTooltip(Component.literal("From ${definition.title(section.section.from)} to ${definition.title(section.section.milestone)}")))
             stats.checkpoints.firstOrNull { it.milestone == section.section.milestone }?.let { checkpoint ->
                 body.child(tableRow("${definition.title(checkpoint.milestone)} ✱", time(checkpoint.best?.duration), average(checkpoint.average),
-                    source(checkpoint.best), MenuTheme.ACCENT)
+                    time(checkpoint.worst?.duration), source(checkpoint.best), MenuTheme.ACCENT)
                     .wrappedTooltip(Component.literal("Time from the run start to ${definition.title(checkpoint.milestone).lowercase()}: the whole clear in one number. Its best is a single run's time and starts Best possible.")))
             }
         }
         for (marker in stats.markers) {
             body.child(tableRow("${definition.title(marker.milestone)} ✱", time(marker.best?.duration),
-                average(marker.average), source(marker.best), MenuTheme.MUTED)
+                average(marker.average), time(marker.worst?.duration), source(marker.best), MenuTheme.MUTED)
                 .wrappedTooltip(Component.literal("Time from the run start until the score reached 300. Hypixel's own score in the boss settles it: if it shows 300 the estimate missed, the time is boss entry. It can happen before or after boss entry, so it is not a section.")))
         }
-        body.child(label("✱ Timed from the start. Best possible uses Boss Entry in place of the clear sections. Bests use completed runs with every split seen; averages also use sections seen in other runs.", MenuTheme.MUTED))
+        body.child(label("✱ Timed from the start. Best possible uses Boss Entry in place of the clear sections. Bests and worsts use completed runs with every split seen; averages also use sections seen in other runs.", MenuTheme.MUTED))
 
         body.child(label("RECENT RUNS", MenuTheme.SECONDARY).apply { margins(Insets.top(6)) })
         val recent = runs.filter { it.floor == definition.floor }.sortedByDescending { it.recordedAt }.take(15)
@@ -139,7 +139,7 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
                 "Older split layout".takeIf { run.definition != definition.version },
             )
             body.child(tableRow(runDate.format(Instant.ofEpochMilli(run.recordedAt).atZone(ZoneId.systemDefault())), time(run.total),
-                run.total(SplitClock.SERVER)?.let { "(${time(it)})" } ?: "", (listOfNotNull(run.lagLost?.let { "lag ${formatSplitDelta(it)}" }) + notes).joinToString(" · "),
+                run.total(SplitClock.SERVER)?.let { "(${time(it)})" } ?: "", "", (listOfNotNull(run.lagLost?.let { "lag ${formatSplitDelta(it)}" }) + notes).joinToString(" · "),
                 if (run.total != null) MenuTheme.TEXT else MenuTheme.MUTED))
         }
     }
@@ -151,12 +151,13 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
         child(label(caption, MenuTheme.MUTED).apply { fontSize = 8f })
     }
 
-    private fun tableRow(name: String, best: String, average: String, from: String, color: Int) = row().apply {
+    private fun tableRow(name: String, best: String, average: String, worst: String, from: String, color: Int) = row().apply {
         padding(Insets.of(2, 2, 4, 4))
-        child(label(name, color).apply { horizontalSizing(Sizing.fill(28)) })
-        child(label(best, color).apply { horizontalSizing(Sizing.fill(18)) })
-        child(label(average, color).apply { horizontalSizing(Sizing.fill(22)) })
-        child(label(from, MenuTheme.MUTED).apply { horizontalSizing(Sizing.fill(28)) })
+        child(label(name, color).apply { horizontalSizing(Sizing.fill(27)) })
+        child(label(best, color).apply { horizontalSizing(Sizing.fill(15)) })
+        child(label(average, color).apply { horizontalSizing(Sizing.fill(16)) })
+        child(label(worst, color).apply { horizontalSizing(Sizing.fill(14)) })
+        child(label(from, MenuTheme.MUTED).apply { horizontalSizing(Sizing.fill(24)) })
     }
 
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { gap(4); verticalAlignment(VerticalAlignment.CENTER) }

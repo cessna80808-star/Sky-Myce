@@ -28,6 +28,11 @@ object DungeonsConfig : CategoryKt("Dungeons") {
         description = TranslatableValue.literal("Displays an overlay when a dungeon is ended")
     }
 
+    val dungeonWinScreenDetails by boolean(true) {
+        name = TranslatableValue.literal("Win Screen Details")
+        description = TranslatableValue.literal("Add your splits time against your PB, average or worst (Dungeon Splits settings), secrets, crypts, deaths, damage, kills, healing and experience gained to the win screen")
+    }
+
     val dungeonMessageFilter by select(DungeonCleanChat.DungeonFilter.MISCELLANEOUS) {
         name = TranslatableValue.literal("Dungeon Message Filter")
         description = TranslatableValue.literal("Filters dungeon chat messages by category")

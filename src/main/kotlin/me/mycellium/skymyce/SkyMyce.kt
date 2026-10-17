@@ -79,6 +79,7 @@ object SkyMyce : ClientModInitializer {
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,
+            me.mycellium.skymyce.features.general.pricehistory.PriceHistoryFeature,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud,
             me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera,

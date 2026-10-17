@@ -316,7 +316,22 @@ class DungeonScreen : MenuScreen(Component.literal("Sky-Hawk Dungeon Tracker"), 
             stat("Tracked time", if (s.timedRuns == 0L && s.runs > 0) "—" else duration(s.time)),
             stat("Chests / rerolls", "${s.chests} / ${s.rerolls}"),
             stat("Catacombs XP", money(s.cataXp), hint = s.classXp.entries.joinToString("\n") { (name, xp) -> "$name: ${money(xp)}" })
-        )
+        ) + listOfNotNull(DungeonTrackerConfig.showTarget.takeIf { it }?.let {
+            val target = DungeonTrackerConfig.targetLevel
+            val xpPerRun = trackedXpPerRun(s)
+            val progress = DungeonTargetLevel.progress(xpPerRun)
+            when {
+                progress == null -> stat("Target: Cata $target", "—", color = MenuTheme.MUTED,
+                    hint = "Your Catacombs experience is ${DungeonTargetLevel.unavailableReason}. Change the target in Dungeons Tracker settings.")
+                progress.remaining <= 0 -> stat("Target: Cata $target", "Reached", color = MenuTheme.GREEN, hint = "You are Catacombs ${progress.level}.")
+                else -> stat("Target: Cata $target", "${money(progress.remaining)} XP left", hint = listOfNotNull(
+                    "Catacombs ${progress.level} (%.1f%% to ${progress.level + 1}) · ${money(progress.xp)} XP".format(progress.nextLevelProgress * 100),
+                    "%.1f%% of the way to $target".format(progress.progress * 100),
+                    progress.runs?.let { "About $it more runs at this view's average of ${money(xpPerRun!!)} XP per run (estimated)" },
+                    "Profile experience plus tracked runs since it was read. Change the target in Dungeons Tracker settings.",
+                ).joinToString("\n"))
+            }
+        })
         cards.chunked(columns).forEach { group -> content.child(row().apply {
             gap(6); verticalAlignment(VerticalAlignment.TOP); group.forEach { child(it) }
         }) }

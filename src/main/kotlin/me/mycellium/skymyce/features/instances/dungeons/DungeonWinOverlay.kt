@@ -4,7 +4,12 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.DungeonRank
 import me.mycellium.skymyce.api.DungeonRank.Companion.formatted
+import me.mycellium.skymyce.config.instances.dungeons.DungeonSplitsConfig
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
+import me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitStore
+import me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits
+import me.mycellium.skymyce.features.instances.dungeons.splits.SplitOutcome
+import me.mycellium.skymyce.features.instances.dungeons.splits.floorSplitStats
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.ui.GuiMotion
 import me.mycellium.skymyce.ui.MotionEasing
@@ -33,6 +38,11 @@ object DungeonWinOverlay : SkyMyceModule() {
     var showOverlay = false
     var currentRank = DungeonRank.UNKNOWN
     var currentStats = mutableListOf<Component>()
+    /** The summary lines that follow the score arrive over the next few seconds. */
+    private var summary = WinSummary()
+    private var collectUntil = 0L
+    private var details = emptyList<Component>()
+    private var detailsKey: List<Any?>? = null
     private val rankTravel = MotionValue(0.0)
     private val rankScale = MotionValue(0.05)
     private var statReveals = emptyList<MotionValue>()
@@ -44,17 +54,20 @@ object DungeonWinOverlay : SkyMyceModule() {
         ) { context, _ -> if (isEnabled()) render(context) }
     }
 
-    @Subscription
+    // Chat filters may hide the summary lines; they are still read.
+    @Subscription(receiveCancelled = true)
     @OnlyIn(SkyBlockIsland.THE_CATACOMBS)
     fun onChatEvent(event: ChatReceivedEvent.Pre) {
+        if (showOverlay && System.currentTimeMillis() < collectUntil) readWinSummaryLine(summary, event.text)?.let { summary = it; return }
         SCORE_REGEX.find(event.text)?.let {
             showOverlay = true
             currentRank = DungeonRank.fromLabel(it.groupValues[2])
             currentStats = mutableListOf<Component>().apply {
                 add(Component.literal("§c${DungeonAPI.dungeonFloor?.longName}"))
-                add(Component.literal("§fTeam Score: §a${it.groupValues[1]}§f (${currentRank.formatted()}§f)"))
+                add(Component.literal("§fTeam Score: §a${it.groupValues[1]}§f (${currentRank.formatted()}§f)${if (it.groupValues[3].isNotEmpty()) " §6NEW RECORD!" else ""}"))
                 add(Component.literal("§7Time Elapsed: §e${DungeonAPI.time}"))
             }
+            summary = WinSummary(); collectUntil = System.currentTimeMillis() + 8_000; details = emptyList(); detailsKey = null
             rankTravel.snap(0.0)
             rankScale.snap(0.05)
             statReveals = currentStats.map { MotionValue(0.0) }
@@ -82,10 +95,29 @@ object DungeonWinOverlay : SkyMyceModule() {
         }
     }
 
+    /** Details are rebuilt only when the summary, the splits or the saved runs change. */
+    private fun refreshDetails() {
+        if (!DungeonsConfig.dungeonWinScreenDetails) { if (details.isNotEmpty()) details = emptyList(); return }
+        val key = listOf(summary, DungeonSplits.revision, DungeonSplitStore.revision, DungeonSplitsConfig.bestsClock, DungeonSplitsConfig.comparison)
+        if (key == detailsKey) return
+        detailsKey = key
+        val run = DungeonSplits.live?.takeIf { it.timeline.finished }
+        val clock = DungeonSplitsConfig.bestsClock
+        val record = run?.let { it.timeline.record(it.id, it.recordedAt, it.outcome ?: SplitOutcome.FAILED) }
+        val splitLine = record?.let { r ->
+            // Compared with the runs before this one, which the store already holds.
+            val stats = floorSplitStats(DungeonSplitStore.runs.filter { it.id != r.id }, run.definition, DungeonSplitsConfig.averageWindow, clock)
+            winSplitLine(r, stats, clock, DungeonSplitsConfig.comparison.target)
+        }
+        details = winDetailLines(summary, run?.score, splitLine, record?.lagLost).map(Component::literal)
+        while (statReveals.size < currentStats.size + details.size) statReveals = statReveals + MotionValue(0.0)
+    }
+
     fun render(graphics: GuiGraphicsExtractor) {
         if (!DungeonsConfig.dungeonWinScreen) return
         if (!showOverlay) return
         if (MC.instance.options.hideGui) return
+        refreshDetails()
 
         animateReveal()
         val widgetX = graphics.guiWidth() / 2F
@@ -108,7 +140,7 @@ object DungeonWinOverlay : SkyMyceModule() {
             rankHeight
         )
 
-        for ((index, line) in currentStats.withIndex()) {
+        for ((index, line) in (currentStats + details).withIndex()) {
             val textAlpha = ((statReveals.getOrNull(index)?.sample() ?: 1.0).coerceIn(0.0, 1.0) * 255).roundToInt()
             if (textAlpha == 0) continue
             val lineColor = (textAlpha shl 24) or 0xFFFFFF

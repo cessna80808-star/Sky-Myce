@@ -12,6 +12,7 @@ object GeneralConfig : CategoryKt("General") {
         category(StashHelperConfig)
         category(WardrobeConfig)
         category(LoadoutConfig)
+        category(PriceHistoryConfig)
     }
 
     val clientInfo by boolean(false) {

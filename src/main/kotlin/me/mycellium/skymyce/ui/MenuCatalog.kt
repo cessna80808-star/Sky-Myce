@@ -99,6 +99,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("bazaar-flipping", "Bazaar Trading", "Manual order flips, private realized-profit history, forecasts and session replays", MenuCategory.ECONOMY, "Bazaar", listOf("bazaar", "flip", "trading", "orders", "portfolio", "profit", "replay", "dashboard"), tool = "bazaar-flipping"),
             MenuFeature("loans", "Loans & Lending", "Local trade history and the items lent to friends", MenuCategory.ECONOMY, "Loans", listOf("friends", "gear", "trade", "lending", "borrow"), tool = "loans"),
             MenuFeature("player-economy", "Player Wealth", "Compare cached friend networth, purse, bank and wardrobe estimates", MenuCategory.ECONOMY, "Players", listOf("friends", "player", "wealth", "networth", "compare"), tool = "player-economy"),
+            MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
             MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
             MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.UTILS, "Progress", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
@@ -160,7 +161,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("Dungeons/Leap Menu/") -> "leap-menu"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"
                 path.startsWith("Dungeons/Dungeon Splits/") -> "dungeon-splits"
-                path.startsWith("Dungeons/") && key == "dungeonWinScreen" -> "dungeon-summary"
+                path.startsWith("Dungeons/") && key.startsWith("dungeonWinScreen") -> "dungeon-summary"
                 path.startsWith("Dungeons/") && key == "dungeonMessageFilter" -> "dungeon-chat"
                 path.startsWith("Dungeons/") -> "dungeon-chests"
                 path.startsWith("Instances/") -> "instance-helpers"
@@ -171,6 +172,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/Global SkyMyce Chat/") -> "global-chat"
                 path.startsWith("General/Party Commands/") -> "party-commands"
                 path.startsWith("General/Stash Helper/") -> "stash-helper"
+                path.startsWith("General/Price History/") -> "price-history"
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
                 path.startsWith("General/Wardrobe Keybinds/") -> "wardrobe"
                 path == "General/autoRefill" -> "auto-refill"

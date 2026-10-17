@@ -22,7 +22,7 @@ public abstract class AvatarCosmeticsMixin {
         CosmeticProfile profile = avatar instanceof Player player ? CosmeticsClient.rendering(player.getUUID()) : null;
         ((CosmeticAvatarState)state).skymyce$setCosmetics(profile);
         if (profile != null) {
-            state.skin = me.mycellium.skymyce.features.social.CapeTextures.apply(state.skin, profile);
+            me.mycellium.skymyce.features.social.CapeTextures.applyTo(state, profile);
             if (CosmeticsConfig.INSTANCE.getNames() && profile.getNameStyle() != null && state.nameTag != null)
                 state.nameTag = me.mycellium.skymyce.features.social.CosmeticNames.decorated(profile.getNameStyle());
         }

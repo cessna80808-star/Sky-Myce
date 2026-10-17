@@ -23,8 +23,20 @@ internal fun dungeonTrackerDisplayFloor(current: DungeonFloor?, api: DungeonFloo
         .maxByOrNull { it.completedAt!! }?.floor?.let { DungeonFloor.getByName(it) }
 }
 
+/** Average Catacombs experience per tracked run, or null without runs that granted experience. */
+internal fun trackedXpPerRun(stats: TrackerSummary): Double? = stats.cataXp.takeIf { it > 0 && it.isFinite() && stats.runs > 0 }?.div(stats.runs)
+
+/** The target line: level, experience left and estimated runs; [unavailable] explains a missing profile reading. */
+internal fun dungeonTargetLine(target: Int, progress: TargetProgress?, unavailable: String): String {
+    if (progress == null) return "§7Target: §bCata $target §8($unavailable)"
+    if (progress.remaining <= 0) return "§7Target: §aCata $target reached §7(Cata ${progress.level})"
+    val runs = progress.runs?.let { " §7· ~§e${NumberUtils.condense(it)}§7 runs" } ?: ""
+    return "§7Target: §bCata $target §7(§b${NumberUtils.condense(progress.remaining)}§7 XP left$runs§7)"
+}
+
 internal fun dungeonTrackerWidgetLines(floor: DungeonFloor?, stats: TrackerSummary,
-    rateSample: TrackerSummary? = stats.takeIf { it.completeTiming && it.profitTimingComplete && it.xpTimingComplete }): List<String> {
+    rateSample: TrackerSummary? = stats.takeIf { it.completeTiming && it.profitTimingComplete && it.xpTimingComplete },
+    target: String? = null): List<String> {
     fun number(value: Double) = if (value.isFinite()) NumberUtils.condense(value) else "Unknown"
     fun duration(millis: Long?) = millis?.takeIf { it >= 0 }?.milliseconds?.takeIf { it.isFinite() }
         ?.inWholeSeconds?.seconds?.toString() ?: "Unknown"
@@ -54,12 +66,13 @@ internal fun dungeonTrackerWidgetLines(floor: DungeonFloor?, stats: TrackerSumma
         sampleCaption,
         "§7Profit: $profit${if (stats.profitIncomplete) " §8+ ?" else ""}§7 ($profitRate§7/h)",
         "§7Cata Exp: §b${number(stats.cataXp)} §7(§b$xpRate§7/h)",
-    )
+    ) + listOfNotNull(target)
 }
 
 /** Fixed example data belongs only to the editor, never the recorded dungeon totals. */
 private val dungeonTrackerPreview = dungeonTrackerWidgetLines(DungeonFloor.M7,
-    TrackerSummary(runs = 10, time = 3_600_000, timedRuns = 10, gross = 12_000_000.0, cataXp = 400_000.0, chests = 10, rerolls = 2))
+    TrackerSummary(runs = 10, time = 3_600_000, timedRuns = 10, gross = 12_000_000.0, cataXp = 400_000.0, chests = 10, rerolls = 2),
+    target = dungeonTargetLine(50, targetProgress(450_000_000.0, 50, 40_000.0), ""))
 
 internal fun dungeonTrackerPreviewLines(enabled: Boolean): List<String>? = dungeonTrackerPreview.takeIf { enabled }
 
@@ -98,8 +111,10 @@ object DungeonTrackerWidget : SkyMyceModule() {
             val prices = (selected.loot + sample.loot).map { it.item }.distinct().associateWith { cachedLootUnitPrice(it, bazaar, auction) }
             val pricedLoot = marketValuedLoot(selected.loot, prices::get)
             val sampleLoot = marketValuedLoot(sample.loot, prices::get)
-            cachedLines = dungeonTrackerWidgetLines(floor, marketValuedTrackerSummary(selected.summary, pricedLoot),
-                marketValuedTrackerSummary(sample.summary, sampleLoot))
+            val summary = marketValuedTrackerSummary(selected.summary, pricedLoot)
+            cachedLines = dungeonTrackerWidgetLines(floor, summary, marketValuedTrackerSummary(sample.summary, sampleLoot),
+                if (DungeonTrackerConfig.showTarget) dungeonTargetLine(DungeonTrackerConfig.targetLevel,
+                    DungeonTargetLevel.progress(trackedXpPerRun(summary)), DungeonTargetLevel.unavailableReason) else null)
         }
         content.updateTextLines(cachedLines)
     }

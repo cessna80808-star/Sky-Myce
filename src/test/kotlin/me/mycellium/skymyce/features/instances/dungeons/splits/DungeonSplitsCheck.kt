@@ -121,6 +121,12 @@ private fun checkStats() {
     check(stats.completedRuns == 2 && stats.savedRuns == 4) { "F7 is never mixed into M7" }
     check(stats.sections[0].samples == 3) { "Section averages include sections seen in partial runs, never conflicting ones" }
     check(stats.averageSamples == 2 && stats.averageTotal == (a.total!! + b.total!!) / 2.0)
+    // Worst times come from the same runs as bests: B is slower overall, A on the sections B ran faster.
+    check(stats.worstTotal == SectionBest(b.total!!, "B", 200) && b.total!! > a.total!!) { "${stats.worstTotal}" }
+    check(stats.sections[1].worst?.run == "A" && stats.sections[0].worst?.run == "B") { "Each section's worst keeps its source run" }
+    check(stats.sections[0].reference(SplitComparison.WORST) == 21_000L && stats.sections[1].reference(SplitComparison.BEST) == 15_000L)
+    check(stats.sections[0].reference(SplitComparison.AVERAGE) == stats.sections[0].average!!.toLong())
+    check(stats.totalReference(SplitComparison.WORST) == b.total && stats.totalReference(SplitComparison.BEST) == a.total)
     check(stats.markers.single().best?.duration == 100_000L)
 
     // A section with no eligible best leaves the theoretical PB unavailable instead of counting it as zero.
@@ -226,17 +232,41 @@ private fun checkHud() {
     val noServer = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), null, SplitHudOptions(server = false))
     check(noServer.rows.all { it.server.isEmpty() } && noServer.footer.size == 1)
     val late = splitHudView(f7, SplitHudRun(mapOf(MAXOR to 0L), emptyMap(), false, 5_000L, null, false, null), null,
-        SplitHudOptions(compare = false, upcoming = false, precise = false))
+        SplitHudOptions(comparison = null, upcoming = false, precise = false))
     check(late.footer.first().contains("not timed") && late.rows.map { it.name } == listOf("§7Maxor", "§eStorm")) { "${late.rows}" }
 
     // Terms while terminals are running, then complete.
     val inTerms = mapOf(START to 0L, BLOOD_OPEN to 1L, BLOOD_CLEAR to 2L, BOSS_ENTRY to 3L, MAXOR to 4L, STORM to 100_000L, S1 to 112_000L)
-    val running = splitHudView(f7, SplitHudRun(inTerms, emptyMap(), true, 120_000L, null, false, null), null, SplitHudOptions(compare = false))
+    val running = splitHudView(f7, SplitHudRun(inTerms, emptyMap(), true, 120_000L, null, false, null), null, SplitHudOptions(comparison = null))
     check(running.rows.first { it.name.endsWith("Terms") }.time == "§e20.00" && running.rows.first { it.name.endsWith("S2") }.time == "§e8.00")
     val done = inTerms + mapOf(S2 to 125_000L, S3 to 140_000L, S4 to 150_000L)
-    val finished = splitHudView(f7, SplitHudRun(done, emptyMap(), true, 151_000L, null, false, null), null, SplitHudOptions(compare = false))
+    val finished = splitHudView(f7, SplitHudRun(done, emptyMap(), true, 151_000L, null, false, null), null, SplitHudOptions(comparison = null))
     check(finished.rows.first { it.name.endsWith("Terms") }.time == "§f50.00")
     check(formatSplitTime(61_250L) == "1:01.2" && formatSplitTime(null) == "—" && formatSplitDelta(-1_230L) == "-1.23")
+
+    // Server time as the timer: it leads each row and real time moves into the brackets.
+    val serverView = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), null, SplitHudOptions(clock = SplitClock.SERVER))
+    val serverRows = serverView.rows.associateBy { it.name.drop(2).trim() }
+    check(serverRows.getValue("Blood Open").time == "§f18.80" && serverRows.getValue("Blood Open").server == "§7(§f20.00§7)") { "${serverView.rows}" }
+    check(serverView.footer[0] == "§7Run §f1:38.8 §7(§f1:40.0§7)" && serverView.footer[1] == "§7Lag lost §c+1.20") { "${serverView.footer}" }
+    // Without ticks (after a reconnect) rows fall back to real time, with nothing in brackets.
+    val noTicks = splitHudView(f7, SplitHudRun(inTerms, emptyMap(), true, 120_000L, null, false, null), null, SplitHudOptions(clock = SplitClock.SERVER))
+    check(noTicks.rows.first { it.name.endsWith("Terms") }.let { it.time == "§e20.00" && it.server.isEmpty() })
+
+    // Comparing with the best, the average or the worst: one run at 18 s per section and one at 22 s.
+    val history = listOf(run("fast", "F7", 100, chained(f7, List(f7.sections.size) { 18_000L })),
+        run("slow", "F7", 200, chained(f7, List(f7.sections.size) { 22_000L })))
+    val f7Stats = floorSplitStats(history, f7, SplitWindow.ALL)
+    fun bloodDelta(comparison: SplitComparison?) = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), f7Stats,
+        SplitHudOptions(comparison = comparison)).rows.first { it.name.endsWith("Blood Open") }.delta
+    check(bloodDelta(SplitComparison.BEST) == "§c+2.00" && bloodDelta(SplitComparison.AVERAGE) == "§a+0.00") { bloodDelta(SplitComparison.AVERAGE) }
+    check(bloodDelta(SplitComparison.WORST) == "§a-2.00" && bloodDelta(null) == "") { bloodDelta(SplitComparison.WORST) }
+    val averageFooter = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), f7Stats,
+        SplitHudOptions(comparison = SplitComparison.AVERAGE)).footer.last()
+    check(averageFooter.startsWith("§7Average §f") && "PB" in averageFooter) { averageFooter }
+    val upcoming = splitHudView(f7, SplitHudRun(marks, ticks, true, 100_000L, 1_976L, false, 287), f7Stats,
+        SplitHudOptions(comparison = SplitComparison.WORST)).rows.first { it.name.endsWith("Storm") }
+    check(upcoming.time == "§822.00") { "Upcoming splits show the compared time: $upcoming" }
 }
 
 private fun checkServerTime() {
@@ -329,5 +359,5 @@ private fun checkServerClock() {
 
 fun main() {
     checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock(); checkLagMeter()
-    println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, Terms and server time")
+    println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, comparisons, Terms and server time")
 }

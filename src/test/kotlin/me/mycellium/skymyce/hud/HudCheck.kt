@@ -59,7 +59,8 @@ fun main() {
     // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
     val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
     val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
-    check(plainPreview.size == 9 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
+    check(plainPreview.size == 10 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
+    check(plainPreview[9].startsWith("Target: Cata 50 (") && plainPreview[9].contains("XP left") && plainPreview[9].contains("runs")) { plainPreview[9] }
     check(plainPreview[2].isEmpty() && plainPreview[6].isEmpty())
     check(plainPreview[3] == "Time: 1h (6m/run)" && plainPreview[4] == "Runs: 10 (10/h)")
     check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[7].contains("12M") && plainPreview[8].contains("400K"))
