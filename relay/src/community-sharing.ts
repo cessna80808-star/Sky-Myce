@@ -11,6 +11,7 @@ export type SharingHooks = {
   owner(uuid: string): { accountId: string; uuids: string[] } | null;
   session(input: SharingSession): { ok: boolean; error?: string; accountId?: string; uuid?: string };
   blacklisted(uuid: string): boolean;
+  purgeBazaar?(owner: string | null, uuid?: string): void;
 };
 type PolicyRow = { owner: string; policy: string; revision: number; updated_at: number; cutoffs: string };
 const uuidPattern = /^[a-f0-9]{32}$/;
@@ -87,6 +88,7 @@ export class CommunitySharingStore {
     const affected = this.hooks.owner(uuid)?.uuids ?? [uuid];
     if (suppressed.length) this.sql.exec(`DELETE FROM community_contributions WHERE owner=? AND category IN (${suppressed.map(() => "?").join(",")})`, owner, ...suppressed);
     if (!policy.enabled || !policy.leaderboards || hidePreviousNames) this.sql.exec("DELETE FROM community_contributions WHERE owner=?", owner);
+    if (!policy.enabled || !policy.economy || !policy.leaderboards || hidePreviousNames) this.hooks.purgeBazaar?.(owner);
     return { ok: true, policy: state, affectedUuids: [...new Set([...affected, uuid])], suppressedCategories: suppressed };
   }
   check(uuid: string, category: SharingCategory, recordedAt?: number): SharingDecision {
@@ -106,9 +108,10 @@ export class CommunitySharingStore {
     this.merge(sourceId, targetId);
   }
   mergeUuid(uuid: string, targetAccountId: string): void {
-    if (uuidPattern.test(uuid)) {
+    if (uuidPattern.test(uuid) && this.hooks.owner(uuid)?.accountId !== targetAccountId) {
       this.merge(`uuid:${uuid}`, targetAccountId);
       this.sql.exec("DELETE FROM community_contributions WHERE uuid=?", uuid);
+      this.hooks.purgeBazaar?.(null, uuid);
     }
   }
   /** Snapshot consent before ownership is removed; an unlinked identity must not fall back to enabled defaults. */
@@ -124,6 +127,7 @@ export class CommunitySharingStore {
     const disabled = sharingCategories.filter(category => !policy.enabled || !policy[category]);
     if (disabled.length) this.sql.exec(`DELETE FROM community_contributions WHERE uuid=? AND category IN (${disabled.map(() => "?").join(",")})`, uuid, ...disabled);
     if (!policy.enabled || !policy.leaderboards || hidePreviousNames) this.sql.exec("DELETE FROM community_contributions WHERE uuid=?", uuid);
+    if (!policy.enabled || !policy.economy || !policy.leaderboards || hidePreviousNames) this.hooks.purgeBazaar?.(null, uuid);
   }
   private merge(source: string, target: string): void {
     const from = this.state(source), to = this.state(target), merged = defaultSharingPolicy(), notBefore = cutoffs();
@@ -135,6 +139,7 @@ export class CommunitySharingStore {
     const disabled = sharingCategories.filter(category => !merged.enabled || !merged[category]);
     if (disabled.length) this.sql.exec(`DELETE FROM community_contributions WHERE owner=? AND category IN (${disabled.map(() => "?").join(",")})`, target, ...disabled);
     if (!merged.enabled || !merged.leaderboards) this.sql.exec("DELETE FROM community_contributions WHERE owner=?", target);
+    if (!merged.enabled || !merged.economy || !merged.leaderboards) this.hooks.purgeBazaar?.(target);
   }
   recordContribution(uuid: string, raw: unknown, name: string): { ok: boolean; error?: string } {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "invalid_contribution" };
@@ -143,6 +148,7 @@ export class CommunitySharingStore {
       typeof value.id !== "string" || !/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value.id) || typeof value.value !== "number" || !Number.isFinite(value.value) ||
       Math.abs(value.value) > Number.MAX_SAFE_INTEGER || value.value < 0 && !metric.negative || value.complete !== true ||
       metric.integer && !Number.isSafeInteger(value.value) ||
+      value.metric === "dungeon_run_time" && (value.value <= 0 || value.value > 86_400_000) ||
       !Number.isSafeInteger(value.observedAt) || Number(value.observedAt) <= Date.now() - 300_000 || Number(value.observedAt) > Date.now() + 60_000 ||
       !["client-observation", "public-api-client"].includes(String(value.source)) || !["unverified", "estimated"].includes(String(value.verification)) ||
       !/^[A-Za-z0-9_]{1,16}$/.test(name)) return { ok: false, error: "invalid_contribution" };
@@ -160,6 +166,7 @@ export class CommunitySharingStore {
 /** New metrics declare their privacy category and units. Client observations never become verified leaderboard scores. */
 export const contributionMetrics: Record<string, { category: SharingCategory; unit: string; negative?: boolean; integer?: boolean }> = {
   dungeon_runs: { category: "dungeons", unit: "runs", integer: true }, dungeon_profit: { category: "dungeons", unit: "coins", negative: true },
+  dungeon_run_time: { category: "dungeons", unit: "milliseconds", integer: true },
   networth: { category: "economy", unit: "coins" }, purse: { category: "economy", unit: "coins" }, bank: { category: "economy", unit: "coins" },
   rng_drops: { category: "rng", unit: "drops", integer: true }, completed_tasks: { category: "activity", unit: "tasks", integer: true },
 };

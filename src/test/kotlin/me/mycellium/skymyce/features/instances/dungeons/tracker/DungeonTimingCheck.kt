@@ -68,7 +68,7 @@ fun checkDungeonTiming() {
         val once = Files.readString(file.path)
         readDungeonTotals(file)
         check(Files.readString(file.path) == once && Files.readString(backup) == original)
-        check(trackerView(AcquisitionArchive(), legacyTrackerView(totals), TrackerFilter(floor = "M7", legacyTotals = true), null).summary.let {
+        check(trackerView(AcquisitionArchive(), legacyTrackerView(totals), TrackerFilter(floor = "M7", legacyTotals = true, scope = TrackerScope.UNSCOPED_LEGACY), null).summary.let {
             it.runs == 31L && it.time == 0L && it.timedRuns == 0L && it.average == null
         })
         repaired.recordRun(300000)

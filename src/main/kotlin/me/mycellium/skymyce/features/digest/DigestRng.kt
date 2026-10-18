@@ -22,6 +22,8 @@ import java.security.MessageDigest
 import java.util.concurrent.ScheduledFuture
 import kotlin.time.Duration.Companion.milliseconds
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.canonicalItemId
 import me.mycellium.skymyce.features.instances.dungeons.tracker.acquisitionId
@@ -29,11 +31,32 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.acquisitionId
 data class DetectedRng(val id: String, val item: String, val activity: String, val occurredAt: Long, val confirmation: String? = null,
     val rarity: String? = null, val displayName: String? = null)
 internal fun confirmedRng(drop: DetectedRng) = drop.confirmation?.let { drop.copy(id = acquisitionId(it)) } ?: drop
-data class DigestRareItem(val name: String, val activity: String)
+/** [public] items may be shared to the community feed; the relay accepts only those. Others stay in local history. */
+data class DigestRareItem(val name: String, val activity: String, val public: Boolean = true)
 
 object DigestRngCatalog {
     fun valid(item: String, activity: String): Boolean = DigestRngParser.catalog[item]?.activity == activity
+    fun public(item: String, activity: String): Boolean = DigestRngParser.catalog[item]?.let { it.activity == activity && it.public } == true
     fun name(item: String): String = DigestRngParser.catalog[item]?.name ?: "Unknown drop"
+}
+
+/** Presentation only: saved journal records never re-enter detection, publication or recent-history storage. */
+internal fun digestLocalRngHistory(acquisitions: List<AcquisitionEvent>, recent: List<DigestRngEntry>,
+    context: AcquisitionContext?, now: Long): List<DigestEntry> {
+    val journal = acquisitions.filter { DigestRngCatalog.valid(it.item, it.activity) && it.occurredAt in 1..now + 60000 &&
+        it.quantity in 1..100000 && (context == null || context.matches(it.context)) }.map { event ->
+        DigestEntry(event.id, DigestRngCatalog.name(event.item) + if (event.quantity > 1) " ×${event.quantity}" else "",
+            listOfNotNull(event.player, event.activity.replaceFirstChar(Char::uppercase), event.floor).joinToString(" · "),
+            if (event.origin == "confirmed") "Saved from your local game confirmation."
+            else "Saved journal record; imported and older entries retain their recorded dates.",
+            DigestTone.SPECIAL, if (event.origin == "confirmed") "Your drop" else "Saved local record", event.occurredAt,
+            activity = event.activity, item = event.item)
+    }
+    val cached = recent.filter { !it.community && validDigestRng(it, now) }.map { entry ->
+        DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
+            "Saved from your local game confirmation.", DigestTone.SPECIAL, "Your drop", entry.occurredAt, activity = entry.activity, item = entry.item)
+    }
+    return (journal + cached).distinctBy { it.id }.sortedWith(compareByDescending<DigestEntry> { it.timestamp }.thenBy { it.id })
 }
 
 /** A deliberately narrow catalog: common loot and reward previews can never become feed events. */
@@ -46,6 +69,14 @@ object DigestRngParser {
         "IMPLOSION_SCROLL" to DigestRareItem("Implosion", "dungeon"),
         "WITHER_SHIELD_SCROLL" to DigestRareItem("Wither Shield", "dungeon"),
         "SHADOW_WARP_SCROLL" to DigestRareItem("Shadow Warp", "dungeon"),
+        // Local journal only until the relay's public allowlist includes them.
+        "FIRST_MASTER_STAR" to DigestRareItem("First Master Star", "dungeon", public = false),
+        "SECOND_MASTER_STAR" to DigestRareItem("Second Master Star", "dungeon", public = false),
+        "THIRD_MASTER_STAR" to DigestRareItem("Third Master Star", "dungeon", public = false),
+        "FOURTH_MASTER_STAR" to DigestRareItem("Fourth Master Star", "dungeon", public = false),
+        "FIFTH_MASTER_STAR" to DigestRareItem("Fifth Master Star", "dungeon", public = false),
+        "MASTER_SKULL_TIER_5" to DigestRareItem("Master Skull - Tier 5", "dungeon", public = false),
+        "AUTO_RECOMBOBULATOR" to DigestRareItem("Auto Recombobulator", "dungeon", public = false),
         "WARDEN_HEART" to DigestRareItem("Warden Heart", "slayer"),
         "JUDGEMENT_CORE" to DigestRareItem("Judgement Core", "slayer"),
         "OVERFLUX_CAPACITOR" to DigestRareItem("Overflux Capacitor", "slayer"),

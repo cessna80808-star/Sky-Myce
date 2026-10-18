@@ -30,6 +30,7 @@ export type IrcConfig = {
   DISCORD_INTERACTIONS_ROOM?: string;
 };
 export type IrcSession = {
+  bazaar?: import("./bazaar-notifications").BazaarSession;
   bridge?: boolean; room?: string; ircSubscribed?: boolean; globalChatSubscribed?: boolean; accountId?: string; discordId?: string;
   uuid?: string; name?: string; installationId?: string; communitySessionId?: string; generation?: number; leaseExpiresAt?: number; buildId?: string; loaderVersion?: string; connectionId?: string;
   richChatVersion?: number;

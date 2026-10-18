@@ -4,15 +4,18 @@ import me.mycellium.skymyce.features.instances.dungeons.camera.render.SecondaryL
 import me.mycellium.skymyce.features.instances.dungeons.camera.render.SecondaryWorldCamera;
 import me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraMath;
 import net.minecraft.client.Camera;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.PostChain;
+import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.util.ARGB;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -35,16 +38,14 @@ public abstract class SecondaryCameraLevelRendererMixin {
         return (Object) this instanceof SecondaryLevelRenderer secondary ? secondary.camera() : renderer.getMainCamera();
     }
 
-    @Redirect(method = "extractVisibleEntities", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;setViewScale(D)V"))
-    private void skyMyce$preserveEntityDistance(double scale) {
-        if (!((Object) this instanceof SecondaryLevelRenderer)) Entity.setViewScale(scale);
-    }
+    @Shadow private void extractVisibleEntities(Camera camera, Frustum frustum, DeltaTracker ticks, LevelRenderState output) { throw new AssertionError(); }
 
-    @Redirect(method = "extractVisibleEntities", at = @At(value = "FIELD",
-        target = "Lnet/minecraft/world/entity/Entity;tickCount:I", opcode = org.objectweb.asm.Opcodes.GETFIELD))
-    private int skyMyce$preserveSpawnInterpolation(Entity entity) {
-        // Vanilla initializes old-position fields here. A second view must only read the entity.
-        return (Object) this instanceof SecondaryLevelRenderer ? Math.max(1, entity.tickCount) : entity.tickCount;
+    @Redirect(method = "extractLevel", at = @At(value = "INVOKE", target =
+        "Lnet/minecraft/client/renderer/LevelRenderer;extractVisibleEntities(Lnet/minecraft/client/Camera;Lnet/minecraft/client/renderer/culling/Frustum;Lnet/minecraft/client/DeltaTracker;Lnet/minecraft/client/renderer/state/level/LevelRenderState;)V"))
+    private void skyMyce$independentEntityExtraction(LevelRenderer renderer, Camera camera, Frustum frustum, DeltaTracker ticks, LevelRenderState output) {
+        // EntityCulling replaces main-view-occluded entities with invisible states and publishes its frustum here.
+        if (renderer instanceof SecondaryLevelRenderer secondary) secondary.extractEntities(camera, frustum, ticks, output);
+        else extractVisibleEntities(camera, frustum, ticks, output);
     }
 
     @Inject(method = "getTransparencyChain", at = @At("HEAD"), cancellable = true)
@@ -83,6 +84,6 @@ public abstract class SecondaryCameraLevelRendererMixin {
 
     @Inject(method = "onResourceManagerReload", at = @At("HEAD"))
     private void skyMyce$cameraResourcesChanged(ResourceManager resources, CallbackInfo info) {
-        if ((Object) this == Minecraft.getInstance().levelRenderer) SecondaryWorldCamera.stop();
+        if ((Object) this == Minecraft.getInstance().levelRenderer) SecondaryWorldCamera.stopAll();
     }
 }

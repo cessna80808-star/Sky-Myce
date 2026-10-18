@@ -5,7 +5,11 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.CommunitySharingConfig
 import me.mycellium.skymyce.utils.MC
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+
 import kotlin.time.Duration.Companion.seconds
+
+/** Compiled once; checked every tick. */
+private val communityUuid = Regex("[a-f0-9]{32}")
 
 /** Synchronize consent before contribution traffic. An unavailable privacy service leaves local features and chat alone. */
 object CommunitySharing {
@@ -87,7 +91,7 @@ object CommunitySharing {
             owner = currentOwner
             uuid = currentUuid
         }
-        if (!CommunityClient.connected || owner.isBlank() || !uuid.matches(Regex("[a-f0-9]{32}"))) {
+        if (!CommunityClient.connected || owner.isBlank() || !communityUuid.matches(uuid)) {
             synchronized = false; status = "Connect Discord to synchronize community sharing"; return
         }
         val now = System.currentTimeMillis()

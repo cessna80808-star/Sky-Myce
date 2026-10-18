@@ -4,6 +4,8 @@ import me.mycellium.mixin.IrcChatAccessor
 import me.mycellium.mixin.IrcChatScreenAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
+import me.mycellium.skymyce.features.browser.InGameBrowser
 import me.mycellium.skymyce.ui.MenuTexture
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
@@ -18,6 +20,7 @@ import net.minecraft.client.gui.TextAlignment
 import net.minecraft.client.gui.components.ChatComponent
 import net.minecraft.client.gui.navigation.ScreenRectangle
 import net.minecraft.client.gui.screens.ChatScreen
+import net.minecraft.client.gui.screens.ConfirmLinkScreen
 import net.minecraft.client.multiplayer.chat.GuiMessage
 import net.minecraft.client.multiplayer.chat.GuiMessageSource
 import net.minecraft.client.multiplayer.chat.GuiMessageTag
@@ -29,6 +32,7 @@ import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.resources.Identifier
 import net.minecraft.util.FormattedCharSequence
+import java.util.IdentityHashMap
 import kotlin.math.roundToInt
 import org.lwjgl.glfw.GLFW
 import org.joml.Matrix3x2f
@@ -136,6 +140,26 @@ internal fun ircMessageActions(message: GlobalChatMessage, manageable: Boolean):
     }
 }
 
+/** Rendering may reenter chat hooks. Apply only to the same surviving history records after rendering finishes. */
+internal fun updateIrcHistory(messages: MutableList<GuiMessage>, transform: (GuiMessage) -> GuiMessage?): Boolean {
+    val updates = IdentityHashMap<GuiMessage, GuiMessage?>()
+    for (previous in ArrayList(messages)) {
+        val next = transform(previous)
+        if (next !== previous) updates[previous] = next
+    }
+    if (updates.isEmpty()) return false
+    var modified = false
+    val iterator = messages.listIterator()
+    while (iterator.hasNext()) {
+        val previous = iterator.next()
+        if (!updates.containsKey(previous)) continue
+        val next = updates[previous]
+        if (next == null) iterator.remove() else iterator.set(next)
+        modified = true
+    }
+    return modified
+}
+
 /** Chat owns wrapping, scrolling and hit testing. Our tagged placeholder rows own only their thumbnails. */
 object IrcChatRendering {
     private data class Texture(val texture: MenuTexture, var asset: IrcGif, var seen: Long,
@@ -148,12 +172,22 @@ object IrcChatRendering {
     private var mediaRevision = -1L
     private var initialized = false
     private val taggedMessage = ThreadLocal.withInitial { false }
+    private val refreshingMessages = ThreadLocal.withInitial { false }
 
     @JvmStatic fun addingMessage(): Boolean = taggedMessage.get()
     internal fun <T> withTaggedMessage(action: () -> T): T {
         val previous = taggedMessage.get()
         taggedMessage.set(true)
         return try { action() } finally { taggedMessage.set(previous) }
+    }
+
+    @JvmStatic fun snapshotForRefresh(messages: List<GuiMessage>): List<GuiMessage> =
+        if (refreshingMessages.get()) ArrayList(messages) else messages
+
+    internal fun <T> withRefreshMessages(action: () -> T): T {
+        val previous = refreshingMessages.get()
+        refreshingMessages.set(true)
+        return try { action() } finally { refreshingMessages.set(previous) }
     }
 
     fun init() {
@@ -167,6 +201,7 @@ object IrcChatRendering {
             if (screen !is ChatScreen) return@register
             ScreenMouseEvents.allowMouseClick(screen).register { _, click ->
                 if (click.button() == 0 && !suggestionsVisible() && IrcInlineControls.click(screen, click.x().toInt(), click.y().toInt())) return@register false
+                if (click.button() == 0 && !click.hasShiftDown() && openSupportedLink(screen, click.x().toInt(), click.y().toInt())) return@register false
                 val action = actionAt(click.x().toInt(), click.y().toInt())
                 if (click.button() != 0 || click.hasShiftDown() || action == null) true
                 else { RelayMessages.chatAction(action.command, click.x().toInt(), click.y().toInt()); false }
@@ -203,17 +238,20 @@ object IrcChatRendering {
     }
     internal fun update(message: GlobalChatMessage) {
         val chat = accessor()
-        val index = chat.`skymyce$getMessages`().indexOfFirst { it.tag()?.logTag() == message.key.tag }
-        if (index < 0) return // Vanilla has already evicted it. Never append an update as a new message.
-        val previous = chat.`skymyce$getMessages`()[index]
-        chat.`skymyce$getMessages`()[index] = GuiMessage(previous.addedTime(), component(message), previous.signature(), previous.source(), previous.tag())
-        refresh(chat)
+        var found = false
+        val modified = updateIrcHistory(chat.`skymyce$getMessages`()) { previous ->
+            if (found || previous.tag()?.logTag() != message.key.tag) previous else {
+                found = true
+                GuiMessage(previous.addedTime(), component(message), previous.signature(), previous.source(), previous.tag())
+            }
+        }
+        if (modified) refresh(chat) // Evicted/replaced records stay gone; never append an update as a new message.
         // Replacement/deletion cannot retain the old GPU image or clickable placeholder.
         textures.keys.filter { it.startsWith(message.key.tag + ":") }.forEach { textures.remove(it)?.texture?.close() }
     }
     private fun refresh(chat: IrcChatAccessor) {
         val scroll = chat.`skymyce$getScroll`()
-        chat.`skymyce$refreshMessages`()
+        withRefreshMessages { chat.`skymyce$refreshMessages`() }
         chat.`skymyce$setScroll`(scroll.coerceAtLeast(0))
         MC.instance.gui.chat.scrollChat(0) // Native clamp after an edit or preference removes wrapped lines.
     }
@@ -241,22 +279,19 @@ object IrcChatRendering {
         val historyPruned = now >= nextHistoryPrune
         if (historyPruned) {
             nextHistoryPrune = now + 1_000_000_000L
-            val tags = chat.`skymyce$getMessages`().mapNotNull { it.tag()?.logTag()?.takeIf { tag -> tag.startsWith("skymyce:irc:") } }.toSet()
+            val tags = ArrayList(chat.`skymyce$getMessages`()).mapNotNull { it.tag()?.logTag()?.takeIf { tag -> tag.startsWith("skymyce:irc:") } }.toSet()
             RelayMessages.chatStore.retain(tags, System.currentTimeMillis())
         }
         if (changed || historyPruned) {
             mediaRevision = currentMediaRevision
             val known = RelayMessages.chatStore.values().associateBy { it.key.tag }
-            var modified = false
-            for (index in chat.`skymyce$getMessages`().indices) {
-                val previous = chat.`skymyce$getMessages`()[index]
-                val tag = previous.tag()?.logTag()?.takeIf { it.startsWith("skymyce:irc:") } ?: continue
+            val modified = updateIrcHistory(chat.`skymyce$getMessages`()) { previous ->
+                val tag = previous.tag()?.logTag()?.takeIf { it.startsWith("skymyce:irc:") } ?: return@updateIrcHistory previous
                 val message = known[tag]
                 val mediaChanged = message != null && GlobalChatConfig.mediaPreviews && assetsChanged &&
                     compactMediaIndices(message) != compactMediaLayouts[tag].orEmpty()
                 if (message != null && (changed || mediaChanged)) {
-                    chat.`skymyce$getMessages`()[index] = GuiMessage(previous.addedTime(), component(message), previous.signature(), previous.source(), previous.tag())
-                    modified = true
+                    GuiMessage(previous.addedTime(), component(message), previous.signature(), previous.source(), previous.tag())
                 } else if (message == null && previous.content().style.clickEvent == null) {
                     // Evicted metadata removes interactions while retaining text and bitmap emoji styles.
                     var action = false
@@ -265,10 +300,9 @@ object IrcChatRendering {
                         !action
                     }
                     if (action) {
-                        chat.`skymyce$getMessages`()[index] = GuiMessage(previous.addedTime(), ircPassiveText(previous.content()), previous.signature(), previous.source(), previous.tag())
-                        modified = true
-                    }
-                }
+                        GuiMessage(previous.addedTime(), ircPassiveText(previous.content()), previous.signature(), previous.source(), previous.tag())
+                    } else previous
+                } else previous
             }
             if (modified) refresh(chat)
         }
@@ -354,19 +388,38 @@ object IrcChatRendering {
     }
 
     private fun actionAt(mouseX: Int, mouseY: Int): IrcChatAction? {
-        if (MC.screen !is ChatScreen || MC.instance.options.hideGui || MC.instance.player == null) return null
-        if (suggestionsVisible()) return null
-        val client = MC.instance
-        val finder = ActiveTextCollector.ClickableStyleFinder(client.font, mouseX, mouseY)
-        client.gui.chat.captureClickableText(finder, client.window.guiScaledHeight, client.gui.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
-        val action = (finder.result()?.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction) ?: return null
+        val action = (clickStyleAt(mouseX, mouseY)?.clickEvent as? ClickEvent.RunCommand)?.command()?.let(::parseIrcChatAction) ?: return null
         val key = RelayMessages.key(action.scope, action.id)
         val message = RelayMessages.chatStore.get(key) ?: return null
         if (message.deleted || !RelayMessages.currentIrcChannel(key)) return null
         return action.takeIf { it.kind != "media" || message.media.getOrNull(it.mediaIndex ?: -1) != null }
     }
+    private fun clickStyleAt(mouseX: Int, mouseY: Int): net.minecraft.network.chat.Style? {
+        if (MC.screen !is ChatScreen || MC.instance.options.hideGui || MC.instance.player == null) return null
+        if (suggestionsVisible()) return null
+        val client = MC.instance
+        val finder = ActiveTextCollector.ClickableStyleFinder(client.font, mouseX, mouseY)
+        client.gui.chat.captureClickableText(finder, client.window.guiScaledHeight, client.gui.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
+        return finder.result()
+    }
+    private fun supportedLinkAt(mouseX: Int, mouseY: Int) =
+        BrowserLinks.supported((clickStyleAt(mouseX, mouseY)?.clickEvent as? ClickEvent.OpenUrl)?.uri()?.toString())
+    private fun openSupportedLink(screen: ChatScreen, mouseX: Int, mouseY: Int): Boolean {
+        val uri = supportedLinkAt(mouseX, mouseY) ?: return false
+        val client = MC.instance
+        if (!client.options.chatLinks().get()) return true
+        val generation = IrcMediaAssets.generation
+        client.gui.chat.preserveCurrentChatScreen()
+        if (client.options.chatLinksPrompt().get()) client.setScreen(ConfirmLinkScreen({ confirmed ->
+            if (generation != IrcMediaAssets.generation) client.setScreen(null)
+            else if (confirmed && client.options.chatLinks().get()) InGameBrowser.open(screen, uri.toString())
+            else client.setScreen(screen)
+        }, uri.toString(), false))
+        else InGameBrowser.open(screen, uri.toString())
+        return true
+    }
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
-    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || !suggestionsVisible() &&
+    fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || supportedLinkAt(mouseX, mouseY) != null || !suggestionsVisible() &&
         (MC.screen as? ChatScreen)?.let { IrcInlineControls.hasInteractionAt(it, mouseX, mouseY) } == true
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
     private fun thumbnailLayout() = ircThumbnailLayout(GlobalChatConfig.previewSize,
@@ -377,6 +430,8 @@ object IrcChatRendering {
         frame++
         if (!GlobalChatConfig.mediaPreviews || MC.instance.options.hideGui || MC.instance.options.chatVisibility().get() == ChatVisiblity.HIDDEN ||
             MC.instance.player == null || suggestionsVisible()) return
+        // Walking every visible chat line for attachment anchors is wasted while no stored message has one.
+        if (!RelayMessages.chatStore.hasMedia()) return
         val lineSpacing = MC.instance.options.chatLineSpacing().get()
         val lineHeight = (MC.instance.font.lineHeight * (lineSpacing + 1)).toInt()
         val collector = IrcThumbnailCollector(lineHeight, lineSpacing)

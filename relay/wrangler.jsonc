@@ -140,6 +140,7 @@
         "DISCORD_OAUTH_CLIENT_ID": "1553617043914367068",
         "DISCORD_OAUTH_REDIRECT_URI": "https://sky-myce-backend.skyblock-relay.workers.dev/community/oauth/callback",
         "COMMUNITY_RELEASE_MANIFEST_KEY": "releases/community-current.json",
+        "DIGEST_GAME_CHANNEL": "1552585927086440459",
         "DRM_KEY_ID": "production-20260927",
         "DRM_PUBLIC_KEYS": "{\"production-20260927\":\"MCowBQYDK2VwAyEAbI6SZNtcVbtbzRKs0PfoU8MXp0nW+w1VeT71gDKM5NA=\"}",
         "DISCORD_AUDIT_CHANNEL_ID": "1553538991502925844",

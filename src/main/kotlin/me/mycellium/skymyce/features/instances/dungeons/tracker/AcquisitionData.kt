@@ -39,9 +39,13 @@ data class DungeonRunRecord(val id: String, val session: String, val context: Ac
     val cataXp: Double? = null, val classXp: Map<String, Double> = emptyMap(),
     val chests: List<ChestReceipt> = emptyList(), val rerolls: Int = 0, val rerollCost: Double? = null,
     val trackingVersion: Int = 2)
+data class PersonalRateSample(val floor: String, val from: Long, val until: Long,
+    val completedRuns: Long, val itemCounts: Map<String, Long>)
+
 data class AcquisitionArchive(val version: Int = 2, val events: List<AcquisitionEvent> = emptyList(),
     val runs: List<DungeonRunRecord> = emptyList(), val pins: Set<String> = emptySet(), val imports: Set<String> = emptySet(),
-    val cutoverAt: Long? = null, val legacyProfit: Map<String, Double> = emptyMap())
+    val cutoverAt: Long? = null, val legacyProfit: Map<String, Double> = emptyMap(),
+    val personalRateSamples: List<PersonalRateSample> = emptyList())
 
 /** Aggregate profit already contains pre-cutover receipts; those receipts must never be added again. */
 fun cutoverAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?, now: Long): AcquisitionArchive {
@@ -106,6 +110,22 @@ fun importLegacyAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?,
 
 fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     if (json == null) return AcquisitionArchive()
+    require(json.isJsonObject)
+    json.asJsonObject.get("personalRateSamples")?.let { samples ->
+        require(samples.isJsonArray && samples.asJsonArray.size() <= 15)
+        fun integer(value: JsonElement?) {
+            require(value != null && value.isJsonPrimitive && value.asJsonPrimitive.isNumber)
+            value.asBigDecimal.longValueExact()
+        }
+        samples.asJsonArray.forEach { sample ->
+            require(sample.isJsonObject)
+            val content = sample.asJsonObject
+            integer(content.get("from")); integer(content.get("until")); integer(content.get("completedRuns"))
+            val counts = content.get("itemCounts")
+            require(counts != null && counts.isJsonObject && counts.asJsonObject.size() <= 1000)
+            counts.asJsonObject.entrySet().forEach { integer(it.value) }
+        }
+    }
     val state = Gson().fromJson(json, AcquisitionArchive::class.java)
     require(state.version in 1..2 && requireNotNull(state.events).size <= 100000 && requireNotNull(state.runs).size <= 100000)
     require(requireNotNull(state.pins).size <= 2048 && requireNotNull(state.imports).size <= 16)
@@ -139,17 +159,29 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     val inherited = if (state.version == 1) emptyMap() else requireNotNull(state.legacyProfit)
     require(inherited.size <= 15 && (state.cutoverAt == null || state.cutoverAt > 0))
     inherited.forEach { (floor, profit) -> require(floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && profit.isFinite() && kotlin.math.abs(profit) <= 1e16) }
+    val samples = requireNotNull(state.personalRateSamples)
+    require(samples.size <= 15 && samples.map { it.floor }.distinct().size == samples.size)
+    samples.forEach { sample ->
+        require(sample.floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && sample.from > 0 && sample.until > sample.from)
+        require(sample.completedRuns in 1..1_000_000 && requireNotNull(sample.itemCounts).size <= 1000)
+        sample.itemCounts.forEach { (item, count) ->
+            require(item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && count in 0..1_000_000)
+        }
+    }
     return state.copy(events = state.events.distinctBy { it.id }, runs = state.runs.distinctBy { it.id }.map { if (state.version == 1) it.copy(trackingVersion = 1) else it }, legacyProfit = inherited)
 }
 
-enum class TrackerPage(val title: String) { OVERVIEW("Overview"), LOOT("Loot"), TIMELINE("RNG Timeline"), MUSEUM("RNG Museum") }
+enum class TrackerPage(val title: String) { OVERVIEW("Overview"), LOOT("Loot"), TIMELINE("RNG Timeline"), MUSEUM("RNG Museum"), LEVELS("Levels") }
 enum class TrackerScope { CURRENT_PROFILE, ALL_LOCAL_PROFILES, UNSCOPED_LEGACY }
 enum class LootOrder { NAME, COUNT, VALUE, OBSERVED_RATE }
 data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor: String? = null, val mode: String? = null,
     val chest: String? = null, val query: String = "", val rareOnly: Boolean = false, val valuableOnly: Boolean = false,
     val from: String = "", val until: String = "", val session: String? = null, val activity: String? = null,
     val scope: TrackerScope = TrackerScope.CURRENT_PROFILE, val legacyTotals: Boolean = false,
-    val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false) {
+    val sort: LootOrder = LootOrder.VALUE, val ascending: Boolean = false, val oldestFirst: Boolean = false,
+    val overviewVersion: Int = 2) {
+    fun clearConstraints() = copy(floor = null, mode = null, chest = null, query = "", rareOnly = false,
+        valuableOnly = false, from = "", until = "", session = null, activity = null)
     fun floorMatches(value: String?) = (floor == null || floor == value) && (mode == null || value?.startsWith(mode) == true)
     fun scopeMatches(value: AcquisitionContext?, current: AcquisitionContext?) = when (scope) {
         TrackerScope.CURRENT_PROFILE -> current?.matches(value) == true
@@ -164,21 +196,27 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     }
     val needsRecords get() = from.isNotEmpty() || until.isNotEmpty() || session != null
     fun runs(values: List<DungeonRunRecord>, current: AcquisitionContext?) = values.filter {
-        it.trackingVersion == 2 && floorMatches(it.floor) && scopeMatches(it.context, current) && dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
+        (it.trackingVersion == 2 || needsRecords && it.trackingVersion == 1) && floorMatches(it.floor) &&
+            (scopeMatches(it.context, current) || needsRecords && it.trackingVersion == 1 && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) &&
+            dateMatches(it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time) && (session == null || session == it.session)
     }
     fun events(values: List<AcquisitionEvent>, current: AcquisitionContext?, runs: List<DungeonRunRecord>): List<AcquisitionEvent> {
         val sessionRuns = if (session == null) emptySet() else runs.filter { it.session == session }.mapTo(hashSetOf()) { it.id }
+        val savedHistory = legacyTotals || scope != TrackerScope.CURRENT_PROFILE
         return values.filter {
-        (it.origin == "confirmed" || legacyTotals) && floorMatches(it.floor) &&
-            (scopeMatches(it.context, current) || legacyTotals && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
+        (page != TrackerPage.TIMELINE || it.item != "RECOMBOBULATOR_3000") &&
+        (it.origin == "confirmed" || savedHistory) && floorMatches(it.floor) &&
+            (scopeMatches(it.context, current) || savedHistory && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
             (activity == null || activity == it.activity) && (session == null || it.run in sessionRuns) &&
             (query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(query, true)) &&
             (!rareOnly || it.item in DigestRngParser.catalog) && (!valuableOnly || it.value?.let { value -> value >= 1_000_000 } == true)
     }.sortedWith((if (oldestFirst) compareBy<AcquisitionEvent> { it.occurredAt } else compareByDescending { it.occurredAt }).thenBy { it.id })
     }
 }
-data class TrackerLootRow(val item: String, val count: Long, val value: Double?, val acquiredChests: Int?, val sampledChests: Int) {
-    val observedRate get() = acquiredChests?.takeIf { sampledChests > 0 }?.toDouble()?.div(sampledChests)
+data class TrackerLootRow(val item: String, val count: Long, val value: Double?, val acquiredChests: Int?, val sampledChests: Int,
+    val rateSample: PersonalRateSample? = null) {
+    val observedRate get() = if (rateSample != null) rateSample.itemCounts[item]?.toDouble()?.div(rateSample.completedRuns)
+        else acquiredChests?.takeIf { sampledChests > 0 }?.toDouble()?.div(sampledChests)
 }
 fun sortedLoot(rows: List<TrackerLootRow>, filter: TrackerFilter): List<TrackerLootRow> {
     val comparator = when (filter.sort) {
@@ -187,7 +225,8 @@ fun sortedLoot(rows: List<TrackerLootRow>, filter: TrackerFilter): List<TrackerL
         LootOrder.VALUE -> compareBy { it.value ?: 0.0 }
         LootOrder.OBSERVED_RATE -> compareBy { it.observedRate ?: 0.0 }
     }.let { if (filter.ascending) it else it.reversed() }
-    return rows.filter { (filter.query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(filter.query, true)) &&
+    return rows.filter { (filter.page != TrackerPage.TIMELINE || it.item != "RECOMBOBULATOR_3000") &&
+        (filter.query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(filter.query, true)) &&
         (!filter.rareOnly || it.item in DigestRngParser.catalog) && (!filter.valuableOnly || it.value?.let { value -> value >= 1_000_000 } == true)
     }.sortedWith(compareBy<TrackerLootRow> { when (filter.sort) { LootOrder.VALUE -> it.value == null; LootOrder.OBSERVED_RATE -> it.observedRate == null; else -> false } }
         .then(comparator).thenBy { it.item })

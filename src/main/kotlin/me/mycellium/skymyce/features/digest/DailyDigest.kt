@@ -6,6 +6,7 @@ import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.network.chat.Component
@@ -35,6 +36,8 @@ object DailyDigest : SkyMyceModule() {
     private var savedGlobal: GlobalDigest? = null
     private var snapshot = DigestView()
     private var revision = 0L
+    private var acquisitionRevision = -1L
+    private var acquisitionContext: AcquisitionContext? = null
     private var nextStateChange = Long.MAX_VALUE
     private var wake: ScheduledFuture<*>? = null
     private var generation = 0L
@@ -46,7 +49,7 @@ object DailyDigest : SkyMyceModule() {
     private var rngRetryAt = 0L
     private lateinit var writer: DigestStateWriter
     private val news = DigestNewsRepository(
-        { DungeonFriendRelay.digestRequest("digest_news_get", mapOf("source" to it.wire)) },
+        ::requestDigestNews,
         { MC.instance.execute(it) }, { changed() },
     )
 
@@ -248,11 +251,7 @@ object DailyDigest : SkyMyceModule() {
         if (contextReady()) { DigestActivities.manual(id, complete); changed() }
     }
 
-    fun clearHistory() { if (contextReady()) { history.clear(); changed() } }
-
-    private fun enabledNews(): List<NewsSource> = if (!DailyDigestConfig.news) emptyList() else NewsSource.entries.filter {
-        if (it == NewsSource.GAME) DailyDigestConfig.gameUpdates else DailyDigestConfig.alphaUpdates
-    }
+    private fun enabledNews(): List<NewsSource> = if (DailyDigestConfig.news) NewsSource.entries else emptyList()
 
     private fun updateSubscription() {
         val wanted = DailyDigestConfig.receiveRng && contextReady()
@@ -363,12 +362,15 @@ object DailyDigest : SkyMyceModule() {
     }
 
     fun view(): DigestView {
-        if (System.currentTimeMillis() >= nextStateChange) rebuildView()
+        if (System.currentTimeMillis() >= nextStateChange || acquisitionRevision != AcquisitionRepository.revision ||
+            acquisitionContext != AcquisitionRepository.currentContext()) rebuildView()
         return snapshot
     }
 
     private fun rebuildView() {
         val now = System.currentTimeMillis()
+        acquisitionRevision = AcquisitionRepository.revision
+        acquisitionContext = AcquisitionRepository.currentContext()
         val cards = listOf(
             runCatching { newsCard(now) }.getOrElse { failedCard("news", "Daily News") },
             runCatching { globalCard(now) }.getOrElse { failedCard("global", "Global Status") },
@@ -385,14 +387,17 @@ object DailyDigest : SkyMyceModule() {
         val sources = enabledNews()
         val states = sources.map(news::state)
         val items = states.flatMap { it.items }.sortedByDescending { it.publishedAt }
-        val failure = states.firstNotNullOfOrNull { it.failure }
+        val failure = sources.zip(states).firstNotNullOfOrNull { (source, state) -> state.failure?.let { "${source.label}: ${it.label}" } }
         val entries = items.map { item -> DigestEntry("${item.source.wire}:${item.id}", item.title,
             item.content.replace('\n', ' ').take(160), item.content + if (item.truncated) "\n\nOpen the original update for the remaining text." else "",
-            if (item.source == NewsSource.ALPHA) DigestTone.SPECIAL else DigestTone.INFO, item.source.label, item.publishedAt, url = item.url) }
+            if (item.source == NewsSource.DERAILIOUS) DigestTone.SPECIAL else DigestTone.INFO,
+            item.source.label + if (item.source == NewsSource.DERAILIOUS) " · YouTube video" else "", item.publishedAt,
+            url = item.url, video = item.source == NewsSource.DERAILIOUS,
+            links = digestNewsLinks(item.content, item.links).filter { it != item.url }) }
         return DigestCardState("news", "Daily News", items.firstOrNull()?.title ?: if (sources.isEmpty()) "News is disabled" else "No cached updates yet",
-            when { sources.isEmpty() -> "Enable news in settings"; failure != null -> "${failure.label}${if (items.isNotEmpty()) " · showing saved updates" else ""}";
+            when { sources.isEmpty() -> "Enable news in settings"; failure != null -> "$failure${if (items.isNotEmpty()) " · available updates retained" else ""}";
                 states.any { it.loading } -> "Refreshing in the background"; states.any { it.fetchedAt > 0 && now - it.fetchedAt > 300000 } -> "Saved updates · refresh when connected";
-                items.isEmpty() -> "Latest Game and Alpha updates will appear here"; else -> "${items.size} recent Game / Alpha updates" },
+                items.isEmpty() -> "Game updates and Derailious videos will appear here"; else -> "${items.size} recent updates and videos" },
             if (failure != null || items.isEmpty()) DigestTone.MUTED else DigestTone.INFO, entries,
             states.maxOfOrNull { it.fetchedAt }?.takeIf { it > 0 }, states.any { it.loading })
     }
@@ -436,13 +441,15 @@ object DailyDigest : SkyMyceModule() {
     }
 
     private fun rngCard(): DigestCardState {
-        val entries = history.entries.filter { !it.community || DailyDigestConfig.receiveRng }.map { entry ->
+        val local = digestLocalRngHistory(AcquisitionRepository.state.events,
+            history.entries.takeIf { acquisitionContext == null || currentProfileKey() == profileKey }.orEmpty(),
+            acquisitionContext, System.currentTimeMillis())
+        val community = history.entries.filter { it.community && DailyDigestConfig.receiveRng }.map { entry ->
             DigestEntry(entry.id, DigestRngCatalog.name(entry.item), "${entry.player} · ${entry.activity.replaceFirstChar(Char::uppercase)}",
-                if (entry.community) "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name."
-                else "Detected locally from a supported game confirmation. Sharing is ${if (me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.RNG)) "enabled for new drops" else "off or waiting for preference synchronization"}.",
-                DigestTone.SPECIAL, if (entry.community) "Community · unverified" else "Your drop", entry.occurredAt,
-                community = entry.community, activity = entry.activity)
+                "Community-reported, unverified. Drop, activity and time may include observed rarity, item name, dungeon floor and an optional public name.",
+                DigestTone.SPECIAL, "Community · unverified", entry.occurredAt, community = true, activity = entry.activity, item = entry.item)
         }
+        val entries = (local + community).sortedWith(compareByDescending<DigestEntry> { it.timestamp }.thenBy { it.id })
         return DigestCardState("rng", "RNG Activity", entries.firstOrNull()?.title ?: "Your next rare find starts here", rngStatus,
             if (entries.isEmpty()) DigestTone.MUTED else DigestTone.SPECIAL, entries, entries.firstOrNull()?.timestamp)
     }

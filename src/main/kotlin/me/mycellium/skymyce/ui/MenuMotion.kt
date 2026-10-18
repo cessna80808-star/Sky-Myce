@@ -54,10 +54,12 @@ enum class GuiQuality(
     val ambient: Boolean,
     val ambientIntervalNanos: Long,
 ) {
-    EXTREMELY_LIGHT("Extremely Light", 1.0, 0, false, false, 0),
+    /** Adapts between the tiers below from measured frame times (see [AutoGraphics]); renderers read [AutoGraphics.quality]. */
+    AUTO("Auto (recommended)", 1.5, 2, true, true, 100_000_000),
+    EXTREMELY_LIGHT("Minimal", 1.0, 0, false, false, 0),
     LIGHT("Light", 1.25, 1, false, false, 0),
-    MEDIUM("Medium", 1.5, 2, true, true, 100_000_000),
-    HIGH("High", 2.0, 3, true, true, 50_000_000);
+    MEDIUM("Balanced", 1.5, 2, true, true, 100_000_000),
+    HIGH("Heavy", 2.0, 3, true, true, 50_000_000);
 
     override fun toString() = title
 }

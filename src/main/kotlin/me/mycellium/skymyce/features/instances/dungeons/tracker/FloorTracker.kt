@@ -19,6 +19,7 @@ data class FloorTracker(
     var chests: MutableMap<DungeonChest, ChestTracker> = mutableMapOf(),
     // -1 preserves the old format's assumption that all runs contributed to a valid total.
     var timedRuns: Int = -1,
+    var incompleteCosts: Boolean = false,
 ) {
     val invalidTime: Boolean get() = totalTimeMillis < 0 || totalTimeMillis > totalRuns.coerceAtLeast(0).toLong() * MAX_DUNGEON_RUN_MILLIS
     val timedRunCount: Int get() = if (invalidTime || totalTimeMillis == 0L) 0 else
@@ -75,6 +76,7 @@ data class FloorTracker(
                     ChestTracker.CODEC
                 ).xmap({ it.toMutableMap() }, { it }).fieldOf("chests").forGetter(FloorTracker::chests),
                 Codec.INT.optionalFieldOf("timedRuns", -1).forGetter(FloorTracker::timedRuns),
+                Codec.BOOL.optionalFieldOf("incompleteCosts", false).forGetter(FloorTracker::incompleteCosts),
             ).apply(instance, ::FloorTracker)
         }
     }

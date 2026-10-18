@@ -12,6 +12,10 @@ import net.minecraft.client.KeyMapping
 import me.mycellium.skymyce.ModuleManager
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
+import me.mycellium.skymyce.features.bazaar.BazaarDashboard
+import me.mycellium.skymyce.features.bazaar.BazaarHud
+import me.mycellium.skymyce.features.bazaar.BazaarScreen
+import me.mycellium.skymyce.features.bazaar.BazaarTrading
 import me.mycellium.skymyce.features.general.AuctionHouseScreen
 import me.mycellium.skymyce.features.general.PersonalBestCommand
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache
@@ -75,6 +79,7 @@ object SkyMyceCommands : SkyMyceModule() {
                 1
             }
             .then(dungeon())
+            .then(bazaar())
             .then(literal("crush-camera").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()) }
                 1
@@ -118,6 +123,9 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(literal("leaderboard").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.community.LeaderboardScreen()) }; 1
             })
+            .then(literal("splits").executes {
+                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsScreen()) }; 1
+            })
             .then(literal("journal").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
             })
@@ -139,7 +147,10 @@ object SkyMyceCommands : SkyMyceModule() {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.social.CosmeticsScreen(true)) }; 1
             }))
             .then(auction())
+            .then(me.mycellium.skymyce.features.instances.dungeons.goldor.goldorCommand())
             .then(hud())
+            .then(literal("graphics").executes { MC.instance.execute { me.mycellium.skymyce.ui.AutoGraphics.status().forEach(me.mycellium.skymyce.utils.Utils::displayModMessage) }; 1 })
+            .then(literal("bars").executes { me.mycellium.skymyce.features.general.overlays.StatusBars.openEditor(); 1 })
             .then(modules())
             .then(profilingCommand())
             .then(troll())
@@ -163,6 +174,22 @@ object SkyMyceCommands : SkyMyceModule() {
     private fun replyCommand(name: String) = literal(name).then(argument("message", StringArgumentType.greedyString()).executes {
         RelayMessages.reply(StringArgumentType.getString(it, "message")); 1
     })
+
+    /** /sm bazaar [on|off|toggle|dashboard|close-dashboard|cycle]; every subcommand shares the menu and keybind state. */
+    private fun bazaar(): LiteralArgumentBuilder<FabricClientCommandSource> = literal("bazaar")
+        .executes { MC.instance.execute { navigateMenu(BazaarScreen()) }; 1 }
+        .then(literal("toggle").executes { MC.instance.execute { BazaarTrading.toggle() }; 1 })
+        .then(literal("on").executes { MC.instance.execute { BazaarTrading.start() }; 1 })
+        .then(literal("off").executes { MC.instance.execute { BazaarTrading.end() }; 1 })
+        .then(literal("dashboard").executes {
+            MC.instance.execute { runCatching { BazaarDashboard.open(BazaarTrading) }.onFailure { displayMessage("§c[SM] Your browser could not be opened") } }; 1
+        })
+        .then(literal("close-dashboard").executes { BazaarDashboard.stop(); 1 })
+        .then(literal("cycle").executes { BazaarHud.cycle(); 1 })
+        .then(literal("assist")
+            .executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.start() }; 1 }
+            .then(literal("start").executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.start() }; 1 })
+            .then(literal("stop").executes { MC.instance.execute { me.mycellium.skymyce.features.bazaar.assist.BazaarAssist.stop() }; 1 }))
 
     fun dungeon(): LiteralArgumentBuilder<FabricClientCommandSource> {
         return literal("dungeon")

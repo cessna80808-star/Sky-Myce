@@ -30,6 +30,14 @@ internal fun dungeonFriendActions(width: Int, controls: List<UIComponent>): Flow
 internal fun dungeonFriendStatWidth(title: String, minimum: Int = 40) =
     maxOf(minimum, kotlin.math.ceil(MenuCanvas.textWidth(title)).toInt() + 12)
 
+internal val FriendActivity.menuColor get() = when (this) {
+    FriendActivity.OFFLINE, FriendActivity.UNKNOWN -> MenuTheme.MUTED
+    FriendActivity.IN_RUN, FriendActivity.LIMBO -> MenuTheme.RED
+    FriendActivity.IDLE -> MenuTheme.GREEN
+    FriendActivity.SKYBLOCK -> MenuTheme.YELLOW
+    FriendActivity.OTHER_GAME -> MenuTheme.ACCENT
+}
+
 internal fun dungeonFriendClassGrid(width: Int, cells: List<UIComponent>): FlowLayout =
     UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).gap(3).apply {
         val columns = (width / 60).coerceIn(1, 5)
@@ -111,7 +119,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             button.tooltip(Component.literal(reason ?: "Request to join ${friend.name} on ${floor.name}\nThe host verifies PB requirements before inviting"))
         }
         partyStatus.text(Component.literal(DungeonFriends.partyStatus + if (DungeonFriends.partyFull) "  Full" else ""))
-        partyStatus.color(Color.ofRgb(if (DungeonFriends.partyFull) 0xF18C8C else CYAN))
+        partyStatus.color(Color.ofRgb(if (DungeonFriends.partyFull) MenuTheme.RED else CYAN))
         partyStatus.tooltip(Component.literal(DungeonFriendsSettings.availability.let {
             if (it.enabled) "Available for ${it.floor.name}: ${it.classes.joinToString { clazz -> clazz.displayName }}"
             else "Choose join classes in Settings > Party Finder. Auto-joining requires a relay agreement."
@@ -241,7 +249,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             // Match the list's scrollbar gutter so headers align with row values.
             margins(Insets.right(4))
         })
-        actionStatus = label(DungeonFriends.actionUnavailable.orEmpty(), 0xE8BF71).apply { horizontalSizing(Sizing.fill()) }
+        actionStatus = label(DungeonFriends.actionUnavailable.orEmpty(), MenuTheme.YELLOW).apply { horizontalSizing(Sizing.fill()) }
         child(actionStatus)
         results = menuScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
             scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(CYAN)))
@@ -329,7 +337,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
                 else -> MenuTheme.CARD
             } }.and(Surface { graphics, component ->
                 graphics.fill(component.x(), component.y(), component.x() + 2, component.y() + component.height(),
-                    0xFF000000.toInt() or activity.color)
+                    MenuTheme.alpha(activity.menuColor))
             }))
             val accepted = reply?.status == LfgReplyStatus.ACCEPTED
             val availability = stats?.state?.takeIf { it != StatsState.AVAILABLE }?.label
@@ -339,7 +347,7 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
                 child(label(if (friend.bestFriend) "§l${friend.name}" else friend.name).apply {
                     horizontalSizing(Sizing.fill())
                 })
-                child(label(activity.label, activity.color).horizontalSizing(Sizing.fill()))
+                child(label(activity.label, activity.menuColor).horizontalSizing(Sizing.fill()))
                 child(label(stats?.selectedClass?.displayName ?: "Unknown", if (stats?.selectedClass != null) CYAN else MUTED)
                     .horizontalSizing(Sizing.fill()))
                 if (reply != null) child(label(reply.status.label).horizontalSizing(Sizing.fill()))
@@ -359,8 +367,9 @@ class DungeonFriendsScreen : MenuScreen(Component.literal("Party Finder"), MenuP
             }
             if (secondary.isNotEmpty()) child(label("Also: ${secondary.joinToString { it.displayName }}", MUTED)
                 .horizontalSizing(Sizing.fill()))
-            val invite = button("Invite", 46) { DungeonFriends.invite(friend) }.active(DungeonFriends.canAct)
-            if (accepted) invite.renderer { g, b, _ -> MenuTheme.rounded(g, b.x, b.y, b.width, b.height, MenuTheme.alpha(if (b.isHovered) 0x34865C else 0x246545)) }
+            val invite = button("Invite", 46) { DungeonFriends.invite(friend) }.apply {
+                active(DungeonFriends.canAct); selected = { accepted }
+            }
             val inviteTooltip = "Send ${friend.name} a party invite to accept manually"
             invite.tooltip(Component.literal(DungeonFriends.actionUnavailable ?: inviteTooltip))
             val message = button("Message", 60) { DungeonFriends.message(friend, floor, messageClass(friend)) }.active(DungeonFriends.canAct)

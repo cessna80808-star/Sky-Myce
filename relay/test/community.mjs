@@ -107,6 +107,56 @@ export async function checkCommunity(script, proof) {
     a1.ws.send('ping'); assert.equal(await a1.next(), 'pong'); a2.ws.send('ping'); assert.equal(await a2.next(), 'pong');
     const policy = await mf.dispatchFetch('https://community.test/community/sharing', { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
     const initialPolicy = await policy.json(); assert.equal(initialPolicy.policy.enabled, true); assert.equal(initialPolicy.policy.dungeons, true);
+    const completion = { expectedAccountId: alice.identity.accountId, expectedUuid: alice.identity.uuid,
+      contribution: { id: createHash('sha256').update('run-count/synthetic-run').digest('hex').slice(0, 32), metric: 'dungeon_runs',
+        value: 1, observedAt: Date.now(), complete: true, source: 'client-observation', verification: 'unverified' } };
+    assert.equal((await post('/community/contributions', completion, alice.credentials.accessToken)).body.ok, true);
+    assert.equal((await post('/community/contributions', completion, alice.credentials.accessToken)).body.ok, true, 'Retrying a completed run is idempotent');
+    const dungeonRanking = async (metric = 'dungeon_runs') => (await mf.dispatchFetch(`https://community.test/community/leaderboard?category=dungeons&metric=${metric}`,
+      { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } })).json();
+    const completedRanking = await dungeonRanking();
+    assert.equal(completedRanking.total, 1); assert.equal(completedRanking.entries[0].value, 1); assert.equal(completedRanking.entries[0].sampleSize, 1);
+    assert.equal(completedRanking.entries[0].player, 'Anonymous player', 'Recorded runs respect current public-name consent');
+    const timing = { ...completion, contribution: { ...completion.contribution,
+      id: createHash('sha256').update('run-time/synthetic-run').digest('hex').slice(0, 32), metric: 'dungeon_run_time', value: 300001 } };
+    assert.equal((await post('/community/contributions', timing, alice.credentials.accessToken)).body.ok, true);
+    assert.equal((await post('/community/contributions', timing, alice.credentials.accessToken)).body.ok, true);
+    for (const value of [0, -1, 1.5, 86400001, null])
+      assert.equal((await post('/community/contributions', { ...timing, contribution: { ...timing.contribution, value } }, alice.credentials.accessToken)).body.error, 'invalid_contribution');
+    const timedRanking = await dungeonRanking('dungeon_run_time');
+    assert.equal(timedRanking.entries[0].value, 300001); assert.equal(timedRanking.entries[0].sampleSize, 1);
+    const untimed = { ...completion, contribution: { ...completion.contribution,
+      id: createHash('sha256').update('run-count/synthetic-untimed-run').digest('hex').slice(0, 32) } };
+    assert.equal((await post('/community/contributions', untimed, alice.credentials.accessToken)).body.ok, true);
+    assert.equal((await dungeonRanking()).entries[0].value, 2, 'Unknown start times still count completed runs');
+    assert.equal((await dungeonRanking('dungeon_run_time')).entries[0].sampleSize, 1, 'Untimed completions do not enter the average denominator');
+    assert.equal((await post('/community/contributions', { ...completion, expectedUuid: bob.identity.uuid }, alice.credentials.accessToken)).body.error,
+      'session_identity_changed', 'A session cannot submit another linked Minecraft identity\'s run');
+    for (const [metric, value] of [['dungeon_profit', 12500], ['networth', 1200000]]) {
+      const measurement = { ...completion, contribution: { ...completion.contribution,
+        id: createHash('sha256').update(metric + '/synthetic-measurement').digest('hex').slice(0, 32), metric, value, verification: 'estimated' } };
+      assert.equal((await post('/community/contributions', measurement, alice.credentials.accessToken)).body.ok, true);
+    }
+    const sharedBeforeRenewal = await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid);
+    const renewalChallenge = await challenge('refresh');
+    const renewed = await post('/community/session/refresh', { challengeId: renewalChallenge.challengeId,
+      minecraftProof: proof('Alice', renewalChallenge.nonce), refreshToken: alice.credentials.refreshToken, modVersion: oldVersion });
+    assert.equal(renewed.body.ok, true);
+    assert.notEqual(renewed.body.credentials.accessToken, alice.credentials.accessToken);
+    alice.credentials = renewed.body.credentials;
+    assert.deepEqual(await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid), sharedBeforeRenewal,
+      'Automatic token renewal preserves every run-count, duration, profit and wealth observation and its dedup ID');
+    assert.equal((await dungeonRanking()).entries[0].value, 2);
+    assert.equal((await dungeonRanking('dungeon_run_time')).entries[0].value, 300001);
+    assert.equal((await dungeonRanking('dungeon_profit')).entries[0].value, 12500);
+    const renewedWealth = await mf.dispatchFetch('https://community.test/community/leaderboard?category=economy&metric=networth',
+      { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
+    assert.equal((await renewedWealth.json()).entries[0].value, 1200000);
+    await connect('Alice', first, physical);
+    assert.deepEqual(await sql.exec('SELECT * FROM community_contributions WHERE uuid=? ORDER BY id', alice.identity.uuid), sharedBeforeRenewal,
+      'Reconnecting the same Minecraft/Discord association preserves previously shared observations');
+    const renewedPolicy = await mf.dispatchFetch('https://community.test/community/sharing', { headers: { Authorization: `Bearer ${alice.credentials.accessToken}` } });
+    assert.deepEqual((await renewedPolicy.json()).policy, initialPolicy.policy, 'Same-owner refresh and reconnect preserve consent revision and historical cutoffs');
     const savedCosmetic = await post('/community/cosmetics', { expectedAccountId: alice.identity.accountId, expectedUuid: alice.identity.uuid,
       revision: 0, profile: { name: { text: 'Old client', color: 'gold' }, scaleX: 1.25, scaleY: 1.5, scaleZ: 0.75,
         nametagScale: 0.8, capePreset: 'forest', capeAsset: null } }, alice.credentials.accessToken);
@@ -136,6 +186,10 @@ export async function checkCommunity(script, proof) {
     const plain = { version: 1, enabled: true, dungeons: false, economy: false, rng: false, activity: true, leaderboards: false, publicName: false };
     const disabled = await post('/community/sharing', { revision: 0, policy: plain, expectedAccountId: alice.identity.accountId, expectedUuid: alice.identity.uuid }, alice.credentials.accessToken);
     assert.equal(disabled.body.ok, true); assert.equal(disabled.body.affectedUuids.length, 2);
+    assert.equal((await dungeonRanking()).total, 0, 'Opt-out removes completed-run contributions from the live ranking');
+    assert.equal((await dungeonRanking('dungeon_run_time')).total, 0, 'Dungeon opt-out also removes average-time samples');
+    assert.equal((await post('/community/contributions', completion, alice.credentials.accessToken)).body.error, 'sharing_disabled');
+    assert.equal((await post('/community/contributions', timing, alice.credentials.accessToken)).body.error, 'sharing_disabled');
     assert.equal((await store.checkSharing('b'.repeat(32), 'rng')).allowed, false, 'Preferences cover all linked UUIDs');
     a1.ws.send(JSON.stringify({ type: 'stats_get', id: randomBytes(16).toString('hex'), name: 'Bob', uuid: 'b'.repeat(32) }));
     assert.equal((await a1.next()).error, 'sharing_disabled');

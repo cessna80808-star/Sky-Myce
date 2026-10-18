@@ -12,6 +12,10 @@ object GeneralConfig : CategoryKt("General") {
         category(StashHelperConfig)
         category(WardrobeConfig)
         category(LoadoutConfig)
+        category(PriceHistoryConfig)
+        category(StatusBarsConfig)
+        category(NpcDialogueConfig)
+        category(SignsConfig)
     }
 
     val clientInfo by boolean(false) {
@@ -27,6 +31,11 @@ object GeneralConfig : CategoryKt("General") {
     val displayXp by boolean(true) {
         name = TranslatableValue.literal("Display Skill XP")
         description = TranslatableValue.literal("Display Skill XP on your screen")
+    }
+
+    val displayXpBar by boolean(true) {
+        name = TranslatableValue.literal("Skill XP Progress Bar")
+        description = TranslatableValue.literal("Show a bar under the skill XP display with your progress to the next level. Hypixel sends a percentage or current/needed XP; skills at max level show no bar")
     }
 
     val displayAbilityCooldown by boolean(true) {

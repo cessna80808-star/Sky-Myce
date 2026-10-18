@@ -8,6 +8,10 @@ object StarredClearRoutingConfig : CategoryKt("Starred Clear Routing") {
         name = TranslatableValue.literal("Enabled")
         description = TranslatableValue.literal("Show dungeon navigation until Blood opens. Mages keep the Blood doorway highlighted throughout the run, except while inside Blood.")
     }
+    val bloodRushClassesOnly by boolean(true) {
+        name = TranslatableValue.literal("Only for Blood-rush classes")
+        description = TranslatableValue.literal("Route only when you play Mage, Archer or Healer, the classes that rush Blood. Berserker and Tank see no route. Turn off to route on every class.")
+    }
     val routeThroughMobs by boolean(true) {
         name = TranslatableValue.literal("Route through starred mobs")
         description = TranslatableValue.literal("Visit regular starred mobs on the way to Blood. Starred minibosses have their own toggle. Turn both off to go straight toward Blood; Show Blood guidance under Advanced must be on. Mob markers are separate.")

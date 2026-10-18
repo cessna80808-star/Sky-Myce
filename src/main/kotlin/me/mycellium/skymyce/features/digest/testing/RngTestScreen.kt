@@ -51,7 +51,7 @@ class RngTestScreen : MenuScreen(Component.literal("RNG Tester")) {
         })
         rows = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(7); padding(Insets.of(8)) }
         root.child(menuScroll(Sizing.fill(), Sizing.expand(), rows))
-        root.child(button("Connect Discord") { navigateMenu(CommunityScreen()) })
+        root.child(button("Connect Discord") { navigateMenu(CommunityScreen(this@RngTestScreen)) })
         paint()
     }
     private fun discard() { epoch++; worker.cancel(this); busy = false; output = emptyList() }

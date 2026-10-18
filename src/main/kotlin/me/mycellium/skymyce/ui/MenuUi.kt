@@ -12,7 +12,6 @@ import io.wispforest.owo.ui.inject.GreedyInputUIComponent
 import io.wispforest.owo.ui.util.FocusHandler
 import io.wispforest.owo.ui.util.UISounds
 import me.mycellium.skymyce.config.misc.ThemeConfig
-import me.mycellium.skymyce.hud.ThemePreset
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.network.chat.Component
@@ -41,9 +40,10 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
     val contentWidth get() = width - sidebar
     companion object {
         fun fit(width: Int, height: Int): MenuLayout {
-            val w = minOf(width - 16, (width * .76).toInt()).coerceIn(1, 1100)
-            val h = minOf(height - 16, maxOf(260, (height * .78).toInt())).coerceIn(1, 650)
-            return MenuLayout(w, h, minOf(52, w / 3).coerceAtLeast(1))
+            val w = minOf(width - 16, (width * .86).toInt()).coerceIn(1, 1100)
+            val h = minOf(height - 16, maxOf(260, (height * .86).toInt())).coerceIn(1, 650)
+            val rail = when { w >= 700 -> 144; w >= 540 -> 132; else -> 52 }
+            return MenuLayout(w, h, minOf(rail, w / 3).coerceAtLeast(1))
         }
     }
 }
@@ -51,28 +51,30 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
 /** Existing caller labels remain compatible; their destinations use the shared feature identities. */
 enum class MenuPage(val title: String, val featureId: String) {
     DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
-    DUNGEONS("Dungeons", "dungeon-tracker"), CRUSH_CAMERA("Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
+    DUNGEONS("Dungeons", "dungeon-tracker"), SPLITS("Dungeon Splits", "dungeon-splits"), CRUSH_CAMERA("Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 
 object MenuTheme {
+    val style get() = ThemeConfig.preset.palette.style
     private fun color(value: Int, preset: Int) = value.takeIf { it in 0..0xFFFFFF } ?: preset
     val ACCENT get() = color(ThemeConfig.primary, ThemeConfig.preset.palette.primary)
     val SECONDARY get() = color(ThemeConfig.secondary, ThemeConfig.preset.palette.secondary)
     val PANEL get() = color(ThemeConfig.panel, ThemeConfig.preset.palette.panel)
-    val SIDEBAR get() = color(ThemeConfig.panel, if (ThemeConfig.preset == ThemePreset.DARK_GLASS) 0x110F19 else ThemeConfig.preset.palette.panel)
+    val SIDEBAR get() = color(ThemeConfig.panel, ThemeConfig.preset.palette.sidebar)
     val CARD get() = color(ThemeConfig.card, ThemeConfig.preset.palette.card)
     val BORDER get() = color(ThemeConfig.border, ThemeConfig.preset.palette.border)
     val TEXT get() = color(ThemeConfig.text, ThemeConfig.preset.palette.text)
     val MUTED get() = color(ThemeConfig.muted, ThemeConfig.preset.palette.muted)
-    const val GREEN = 0x90CEAA
-    const val YELLOW = 0xE8BF71
-    const val RED = 0xF18C8C
-    const val PURPLE = 0xC2A2F5
-    const val PADDING = 8
-    val SHADOW get() = ThemeConfig.graphicsQuality.shadowLayers > 0 && when (ThemeConfig.shadow) {
+    val GREEN get() = ThemeConfig.preset.palette.success
+    val YELLOW get() = ThemeConfig.preset.palette.warning
+    val RED get() = ThemeConfig.preset.palette.error
+    val PURPLE get() = SECONDARY
+    val PADDING get() = ThemeConfig.padding.takeIf { it in 2..12 } ?: style.menuPadding
+    val RADIUS get() = if (ROUNDED) style.radius.coerceAtLeast(2) else 0
+    val SHADOW get() = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers > 0 && when (ThemeConfig.shadow) {
         0 -> false
         1 -> true
-        else -> ThemeConfig.preset == ThemePreset.DARK_GLASS || ThemeConfig.preset.palette.shadow
+        else -> ThemeConfig.preset.palette.shadow
     }
     val OPACITY get() = ThemeConfig.opacity.takeIf { it in 20..100 } ?: ThemeConfig.preset.palette.opacity
     val ROUNDED get() = when (ThemeConfig.rounded) { 0 -> false; 1 -> true; else -> ThemeConfig.preset.palette.rounded }
@@ -82,7 +84,7 @@ object MenuTheme {
 
     fun text(value: Component): Component = value.copy().withStyle { it.withFont(font) }
     fun alpha(rgb: Int, percent: Int = 100) = (percent.coerceIn(0, 100) * 255 / 100 shl 24) or (rgb and 0xFFFFFF)
-    fun rounded(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, rgb: Int, radius: Int = 4) {
+    fun rounded(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, rgb: Int, radius: Int = RADIUS) {
         if (w <= 0 || h <= 0) return
         val r = if (ROUNDED) minOf(radius, w / 2, h / 2) else 0
         val color = if (rgb ushr 24 == 0) alpha(rgb) else rgb
@@ -103,9 +105,9 @@ object MenuTheme {
     }
     fun box(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, background: Int, border: Int = BORDER) {
         if (g is MenuGraphics) {
-            rounded(g, x, y, w, h, alpha(background, OPACITY), 6)
+            rounded(g, x, y, w, h, alpha(background, OPACITY))
             if (BORDERS && w >= 8 && h >= 8)
-                g.roundedBorder(x, y, w, h, if (ROUNDED) 6.0 else 0.0, 1.0, alpha(border))
+                g.roundedBorder(x, y, w, h, RADIUS.toDouble(), style.borderWidth, alpha(border))
             return
         }
         rounded(g, x + 1, y + 1, w - 2, h - 2, alpha(background, OPACITY), 3)
@@ -125,33 +127,33 @@ object MenuTheme {
     fun shadow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
         if (!SHADOW || strength <= 0.0 || w <= 0 || h <= 0) return
         val profile = ThemeConfig.animationMode.profile
-        val qualityLayers = ThemeConfig.graphicsQuality.shadowLayers.coerceIn(0, 3)
+        val qualityLayers = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers.coerceIn(0, 3)
         if (g is MenuGraphics && SkijaMenuFonts.active && qualityLayers >= 2 && profile.glowStrength > 0.0) {
-            g.shadow(x, y + 2, w, h, if (ROUNDED) 6.0 else 0.0, if (profile.ambient) 4.0 else 3.0,
-                alpha(0x06040C, (strength.coerceIn(0.0, 1.0) * profile.shadowStrength * 24).toInt()))
+            g.shadow(x, y + 2, w, h, RADIUS.toDouble(), if (profile.ambient) 4.0 else 3.0,
+                alpha(style.shadowTint, (strength.coerceIn(0.0, 1.0) * profile.shadowStrength * style.shadowOpacity).toInt()))
             return
         }
         val layers = if (profile.glowStrength > 0.0) qualityLayers else minOf(qualityLayers, 1)
         for (layer in layers downTo 1) {
-            val opacity = (strength.coerceIn(0.0, 1.0) * (11 - layer * 2)).toInt()
-            if (opacity > 0) rounded(g, x - layer, y + 1, w + layer * 2, h + layer * 2, alpha(0x06040C, opacity), 4 + layer)
+            val opacity = (strength.coerceIn(0.0, 1.0) * style.shadowOpacity * (11 - layer * 2) / 24).toInt()
+            if (opacity > 0) rounded(g, x - layer, y + 1, w + layer * 2, h + layer * 2, alpha(style.shadowTint, opacity), RADIUS + layer)
         }
     }
     fun glow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double) {
         val profile = ThemeConfig.animationMode.profile
-        if (!ThemeConfig.graphicsQuality.glow || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
+        if (!me.mycellium.skymyce.ui.AutoGraphics.quality.glow || style.glow <= 0.0 || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
         if (g is MenuGraphics && SkijaMenuFonts.active) {
-            g.shadow(x, y, w, h, if (ROUNDED) 6.0 else 0.0, if (profile.ambient) 5.0 else 4.0,
-                alpha(ACCENT, (strength.coerceIn(0.0, 1.0) * 18).toInt()))
+            g.shadow(x, y, w, h, RADIUS.toDouble(), if (profile.ambient) 5.0 else 4.0,
+                alpha(ACCENT, (strength.coerceIn(0.0, 1.0) * style.glow * 18).toInt()))
             return
         }
-        val opacity = (strength.coerceIn(0.0, 1.0) * 9).toInt()
+        val opacity = (strength.coerceIn(0.0, 1.0) * style.glow * 9).toInt()
         if (opacity > 0) rounded(g, x - 1, y - 1, w + 2, h + 2, alpha(ACCENT, opacity), 5)
     }
     /** Transparent lighting keeps the configured panel opacity intact. */
     fun sheen(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
-        if (ThemeConfig.graphicsQuality == GuiQuality.EXTREMELY_LIGHT || w < 10 || h < 10 || strength <= 0.0) return
-        val opacity = (strength.coerceIn(0.0, 1.0) * OPACITY * .12).toInt()
+        if (me.mycellium.skymyce.ui.AutoGraphics.quality == GuiQuality.EXTREMELY_LIGHT || style.sheen <= 0.0 || w < 10 || h < 10 || strength <= 0.0) return
+        val opacity = (strength.coerceIn(0.0, 1.0) * style.sheen * OPACITY * .12).toInt()
         if (opacity == 0) return
         val tint = blend(ACCENT, SECONDARY, 55)
         g.drawGradientRect(x + 4, y + 2, w - 8, minOf(h - 4, 44),
@@ -164,12 +166,17 @@ object MenuTheme {
         sheen(g, c.x(), c.y(), c.width(), c.height(), if (card) .65 else 1.0)
     }
     fun tintedPanel(color: () -> Int): Surface = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), color()) }
-    val backdrop = Surface { g, c -> g.fill(c.x(), c.y(), c.x() + c.width(), c.y() + c.height(), 0xA50B0811.toInt()) }
+    val backdrop = Surface { g, c -> g.fill(c.x(), c.y(), c.x() + c.width(), c.y() + c.height(), alpha(blend(PANEL, 0, 60), 64)) }
+
+    fun focus(g: MenuGraphics, x: Int, y: Int, w: Int, h: Int) {
+        if (w > 0 && h > 0) g.roundedBorder(x, y, w, h, minOf(RADIUS.toDouble(), w / 2.0, h / 2.0),
+            style.focusWidth.toDouble(), alpha(ACCENT))
+    }
 
     @JvmStatic fun drawField(g: GuiGraphicsExtractor, x: Int, y: Int, w: Int, h: Int, focused: Boolean) {
         val graphics = g as MenuGraphics
         box(graphics, x, y, w, h, CARD, if (focused) ACCENT else BORDER)
-        if (focused && !BORDERS) graphics.drawRectOutline(x, y, w, h, alpha(ACCENT))
+        if (focused) focus(graphics, x, y, w, h)
     }
 }
 
@@ -180,6 +187,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     var intent = MenuButtonIntent.SECONDARY
     var selected: () -> Boolean = { false }
     var navigation = false
+    var centeredNavigation = false
     var background = true
     var trailingChevron = false
     var toggled: (() -> Boolean)? = null
@@ -226,7 +234,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         pressed = false
         pressMotion.animateTo(0.0, 155, MotionEasing.SETTLE, ThemeConfig.animationMode)
     }
-    /** Carry retained navigation feedback across the Home-to-sidebar morph. */
+    /** Carry category feedback across page navigation. */
     internal fun inheritMotion(previous: MenuButton) {
         hoverMotion.snap(previous.hoverMotion.sample())
         selectionMotion.snap(previous.selectionMotion.sample())
@@ -242,7 +250,7 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         val selection = if (selected()) 1.0 else 0.0
         // Rebuilt navigation keeps its selected state; only subsequent selections animate.
         if (!selectionInitialized) { selectionMotion.snap(selection); selectionInitialized = true }
-        selectionMotion.animateTo(selection, 170, MotionEasing.QUICK, ThemeConfig.animationMode)
+        selectionMotion.animateTo(selection, MenuTheme.style.transitionMillis.toLong(), MotionEasing.QUICK, ThemeConfig.animationMode)
         if (!active && pressed) releasePress()
         if (ThemeConfig.animationMode == GuiMotion.OFF) pressMotion.snap(0.0)
         val hover = hoverMotion.sample().coerceIn(0.0, 1.04)
@@ -272,15 +280,14 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
             if (w < 6 || h < 6) return
             val left = if (width >= 54) x + 4 else x + (width - w) / 2
             val top = y + (height - h) / 2
-            MenuTheme.glow(graphics, left, top, w, h, hover * .7 + toggleProgress * .3)
             MenuTheme.rounded(graphics, left - 1, top - 1, w + 2, h + 2, MenuTheme.blend(MenuTheme.PANEL, MenuTheme.BORDER, 45), h / 2 + 1)
             MenuTheme.rounded(graphics, left, top, w, h, MenuTheme.blend(MenuTheme.BORDER, if (active) MenuTheme.ACCENT else MenuTheme.MUTED, (toggleProgress * 100).toInt()), h / 2)
             graphics.layer(x = toggleProgress * (w - h)) {
-                graphics.drawCircle(left + h / 2, top + h / 2 + 1, 24, h / 2 - 1.5, Color.ofArgb(MenuTheme.alpha(0x06040C, 24)))
                 graphics.drawCircle(left + h / 2, top + h / 2, 24,
-                    h / 2 - 2 + hover * .5, Color.ofRgb(MenuTheme.blend(MenuTheme.MUTED, MenuTheme.TEXT, (toggleProgress * 100).toInt())))
+                    h / 2 - 2 + hover * .5, Color.ofRgb(MenuTheme.blend(MenuTheme.TEXT,
+                        me.mycellium.skymyce.hud.themeForeground(MenuTheme.ACCENT), (toggleProgress * 100).toInt())))
             }
-            if (isFocused && background) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
+            if (isFocused && background) MenuTheme.focus(graphics, x, y, width, height)
             if (width >= 54) graphics.styledText(listOf(MenuCanvas.Run(if (on) "On" else "Off", MenuTheme.alpha(if (active) MenuTheme.TEXT else MenuTheme.MUTED))),
                 (left + w + 6).toDouble(), (y + (height - MenuCanvas.lineHeight()) / 2).toDouble())
             return
@@ -293,12 +300,12 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
                 MenuTheme.glow(graphics, x, y, width, height, hover * ThemeConfig.animationMode.profile.glowStrength)
                 val accent = if (!active) MenuTheme.MUTED else if (intent == MenuButtonIntent.DESTRUCTIVE) MenuTheme.RED else MenuTheme.ACCENT
                 MenuTheme.box(graphics, x, y, width, height,
-                    MenuTheme.blend(MenuTheme.CARD, accent, (hover * 12 + chosen * 16 + press * 9 + if (active && intent == MenuButtonIntent.PRIMARY) 18 else 0).toInt()),
+                    MenuTheme.blend(MenuTheme.CARD, accent, (hover * MenuTheme.style.hoverWeight + chosen * MenuTheme.style.selectionWeight + press * 9 + if (active && intent == MenuButtonIntent.PRIMARY) 12 else 0).toInt()),
                     MenuTheme.blend(MenuTheme.BORDER, accent, (maxOf(chosen, hover * .65).coerceAtLeast(if (active && intent != MenuButtonIntent.SECONDARY) .65 else 0.0) * 100).toInt()))
                 MenuTheme.sheen(graphics, x, y, width, height, .45 + hover * .55)
-                if (navigation && chosen > 0.0) {
+                if (navigation && !centeredNavigation && chosen > 0.0) {
                     val indicatorHeight = ((height - 10) * chosen).toInt()
-                    MenuTheme.rounded(graphics, x + 1, y + (height - indicatorHeight) / 2, 2, indicatorHeight, MenuTheme.ACCENT, 1)
+                    MenuTheme.rounded(graphics, x + 1, y + (height - indicatorHeight) / 2, MenuTheme.style.focusWidth, indicatorHeight, MenuTheme.ACCENT, 1)
                 }
                 if (!navigation && chosen >= .99 && width >= 38) {
                     // A geometric check remains readable even when the active menu font lacks a glyph.
@@ -306,8 +313,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
                     for (i in 0..4) graphics.fill(x + 6 + i, y + height / 2 + 2 - i, x + 7 + i, y + height / 2 + 4 - i, MenuTheme.alpha(MenuTheme.TEXT))
                 }
             }
-            if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
         }
+        if (isFocused && active) MenuTheme.focus(graphics, x, y, width, height)
         val contentWidth = width - if (trailingChevron) 12 else 0
         val available = (contentWidth - 12).coerceAtLeast(1)
         val language = net.minecraft.locale.Language.getInstance()
@@ -330,8 +337,8 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         val lineHeight = MenuCanvas.lineHeight()
         graphics.enableScissor(x + 3, y + 1, x + contentWidth - 3, y + height - 1)
         lines.forEachIndexed { index, _ ->
-            val left = if (navigation) x + 8 else x + (contentWidth - lineWidths[index]) / 2
-            val shift = if (navigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
+            val left = if (navigation && !centeredNavigation) x + 8 else x + (contentWidth - lineWidths[index]) / 2
+            val shift = if (navigation && !centeredNavigation) maxOf(chosen, hover) * ThemeConfig.animationMode.profile.cardLift * .3 else 0.0
             graphics.styledText(lineRuns[index], left + shift,
                 (y + (height - lines.size * lineHeight) / 2 + index * lineHeight).toDouble())
         }
@@ -355,7 +362,10 @@ open class MenuLabel(value: Component) : LabelComponent(MenuTheme.text(value)) {
     private var runColor = 0
     var fontSize = 10f
         set(value) { field = value; lineHeight(MenuCanvas.lineHeight(value.toDouble())) }
-    init { lineHeight(MenuCanvas.lineHeight()) }
+    init {
+        lineHeight(MenuCanvas.lineHeight())
+        color(Color.ofRgb(value.style.color?.value ?: MenuTheme.TEXT))
+    }
     override fun text(value: Component): LabelComponent = super.text(MenuTheme.text(value))
     private fun wrap() {
         wrappedText = menuTextLines(text(), if (horizontalSizing().get().isContent) maxWidth() else width(), fontSize.toDouble())
@@ -445,10 +455,9 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         clearChildren(); child(entryViewport)
         entryViewport.surface(Surface { g, c ->
             MenuTheme.shadow(g, c.x(), c.y(), c.width(), c.height())
-            MenuTheme.rounded(g, c.x(), c.y(), c.width(), c.height(),
-                MenuTheme.alpha(MenuTheme.blend(MenuTheme.PANEL, 0, 22)), 6)
+            MenuTheme.rounded(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.alpha(MenuTheme.CARD))
             if (MenuTheme.BORDERS) (g as MenuGraphics).roundedBorder(c.x(), c.y(), c.width(), c.height(),
-                if (MenuTheme.ROUNDED) 6.0 else 0.0, 1.0, MenuTheme.alpha(MenuTheme.BORDER))
+                MenuTheme.RADIUS.toDouble(), MenuTheme.style.borderWidth, MenuTheme.alpha(MenuTheme.BORDER))
         })
         entryViewport.scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT)))
         allowOverflow(true)
@@ -645,7 +654,7 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
         val press = pressMotion.sample().coerceIn(0.0, 1.0)
         (g as MenuGraphics).layer(alpha = appearance.sample().coerceIn(0.0, 1.0)) {
             if (emphasis > 0.0) g.layer(alpha = emphasis) {
-                MenuTheme.rounded(g, x() - 3, y(), width() + 6, height(), MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 16 + (press * 10).toInt()))
+                MenuTheme.rounded(g, x() - 3, y(), width() + 6, height(), MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, MenuTheme.style.hoverWeight + (press * 10).toInt()))
                 MenuTheme.sheen(g, x() - 3, y(), width() + 6, height(), .7)
                 MenuTheme.rounded(g, x() - 3, y() + 4, 2, height() - 8, MenuTheme.ACCENT, 1)
             }
@@ -655,7 +664,8 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
                 val progress = checkMotion.sample().coerceIn(0.0, 1.0)
                 val left = x() + width() - 18; val top = y() + (height() - 10) / 2
                 MenuTheme.rounded(g, left, top, 18, 10, MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (progress * 100).toInt()), 5)
-                g.layer(x = progress * 8) { g.drawCircle(left + 5, top + 5, 20, 3.0, Color.ofRgb(MenuTheme.TEXT)) }
+                g.layer(x = progress * 8) { g.drawCircle(left + 5, top + 5, 20, 3.0,
+                    Color.ofRgb(MenuTheme.blend(MenuTheme.TEXT, me.mycellium.skymyce.hud.themeForeground(MenuTheme.ACCENT), (progress * 100).toInt()))) }
             }
             if (nested) {
                 val left = x() + width() - 5; val top = y() + height() / 2
@@ -668,18 +678,38 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
 }
 
 /** Mount and hit-test in the custom viewport, never Fabric's native GUI coordinates. */
-internal fun mountMenuDropdown(root: FlowLayout, dropdown: ParentUIComponent, x: Int, y: Int) {
-    val space = Size.of((root.width() - 8).coerceAtLeast(1), (root.height() - 8).coerceAtLeast(1))
+internal fun mountMenuDropdown(root: FlowLayout, dropdown: ParentUIComponent, x: Int, y: Int, anchorHeight: Int = 0) {
+    var space = Size.of((root.width() - 8).coerceAtLeast(1), (root.height() - 8).coerceAtLeast(1))
     if (dropdown is MenuDropdown) dropdown.fitViewport(space)
     dropdown.inflate(space)
+    val placement = if (dropdown is MenuDropdown) menuDropdownPlacement(root.height(), y - root.y(), anchorHeight, dropdown.height()) else null
+    if (placement != null) {
+        space = Size.of(space.width(), placement.second)
+        (dropdown as MenuDropdown).fitViewport(space)
+        dropdown.inflate(space)
+    }
     dropdown.positioning(Positioning.absolute(0, 0))
     root.child(dropdown)
     val left = (x - root.x()).coerceIn(4, (root.width() - dropdown.width() - 4).coerceAtLeast(4))
-    val top = (y - root.y()).coerceIn(4, (root.height() - dropdown.height() - 4).coerceAtLeast(4))
+    val top = placement?.first ?: (y - root.y()).coerceIn(4, (root.height() - dropdown.height() - 4).coerceAtLeast(4))
     dropdown.positioning(Positioning.absolute(left, top))
     // Mouse dispatch batches the parent's layout events. Mount now so bounds/focus are valid
     // during this event too, before that deferred layout is flushed.
     dropdown.mount(root, root.x() + left, root.y() + top)
+}
+
+/** Keep short lists below the opener; long lists scroll on whichever side has more room. */
+internal fun menuDropdownPlacement(viewportHeight: Int, anchorBottom: Int, anchorHeight: Int, wantedHeight: Int): Pair<Int, Int> {
+    val height = viewportHeight.coerceAtLeast(1)
+    val margin = minOf(4, (height - 1) / 2)
+    val end = height - margin
+    val bottom = anchorBottom.coerceIn(margin, end)
+    val top = (anchorBottom - anchorHeight.coerceAtLeast(0)).coerceIn(margin, end)
+    val below = end - bottom
+    val above = top - margin
+    val opensAbove = wantedHeight > below && above > below
+    val size = wantedHeight.coerceAtLeast(1).coerceAtMost((if (opensAbove) above else below).coerceAtLeast(1))
+    return (if (opensAbove) top - size else bottom).coerceIn(margin, (end - size).coerceAtLeast(margin)) to size
 }
 
 internal fun dismissMenuDropdownOutside(dropdown: ParentUIComponent, event: MouseButtonEvent): Boolean {
@@ -756,16 +786,15 @@ class MenuSlider : SliderComponent(Sizing.fill()), GreedyInputUIComponent {
         val thumb = x + 4 + thumbMotion.sample().coerceIn(0.0, 1.0) * (width - 8).coerceAtLeast(0)
         MenuTheme.rounded(graphics, x, center - 2, (thumb - x).toInt(), 4,
             MenuTheme.blend(MenuTheme.ACCENT, MenuTheme.SECONDARY, ((hover + changed) * 25).toInt()), 2)
-        val halo = ((hover * .5 + changed * .5) * 12).toInt()
+        val halo = ((hover * .5 + changed * .5) * MenuTheme.style.glow * 12).toInt()
         val thumbPixel = thumb.toInt()
         graphics.layer(x = thumb - thumbPixel) {
-            if (ThemeConfig.graphicsQuality.glow && halo > 0)
+            if (me.mycellium.skymyce.ui.AutoGraphics.quality.glow && halo > 0)
                 graphics.drawCircle(thumbPixel, center, 24, 7.0, Color.ofArgb(MenuTheme.alpha(MenuTheme.ACCENT, halo)))
-            graphics.drawCircle(thumbPixel, center + 1, 24, 4.5 + hover * .7, Color.ofArgb(MenuTheme.alpha(0x06040C, 28)))
+            graphics.drawCircle(thumbPixel, center + 1, 24, 4.5 + hover * .7, Color.ofArgb(MenuTheme.alpha(MenuTheme.style.shadowTint, 20)))
             graphics.drawCircle(thumbPixel, center, 24, 3.5 + hover * .7 + press * .4,
                 Color.ofRgb(if (active) MenuTheme.TEXT else MenuTheme.MUTED))
-            graphics.drawCircle(thumbPixel, center, 20, 1.25 + press * .5, Color.ofRgb(MenuTheme.ACCENT))
         }
-        if (isFocused) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
+        if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
     }
 }

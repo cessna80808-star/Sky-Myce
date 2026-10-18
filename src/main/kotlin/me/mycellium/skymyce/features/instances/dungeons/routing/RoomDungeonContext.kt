@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.features.instances.dungeons.routing
 
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.multiplayer.ClientLevel
 import net.minecraft.core.BlockPos
@@ -52,6 +53,11 @@ data class LiveDungeonRoom(
         x >= it.x - 0.5 && x < it.x + 31.5 && z >= it.z - 0.5 && z < it.z + 31.5
     }
 }
+
+/** Classes that rush Blood. An unknown class (before the run reports one) keeps routing on. */
+internal val BLOOD_RUSH_CLASSES = setOf(DungeonClass.MAGE, DungeonClass.ARCHER, DungeonClass.HEALER)
+internal fun bloodRoutingForClass(rushClassesOnly: Boolean, dungeonClass: DungeonClass?) =
+    !rushClassesOnly || dungeonClass == null || dungeonClass in BLOOD_RUSH_CLASSES
 
 internal fun dungeonRouteVisible(room: LiveDungeonRoom?, bloodOpened: Boolean = false) = !bloodOpened && room?.exit != null
 

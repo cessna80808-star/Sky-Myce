@@ -163,7 +163,7 @@ object StarredClearRouting : SkyMyceModule() {
     override fun init() {
         reload()
         RoomTemplateRecorder.init()
-        ClientTickEvents.END_CLIENT_TICK.register { tickRouting() }
+        ClientTickEvents.END_CLIENT_TICK.register { guardedTick() }
         ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, false) }
         ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, true) }
     }
@@ -303,6 +303,23 @@ object StarredClearRouting : SkyMyceModule() {
         nextHandoff = 0L
     }
 
+    private var lastFailureLog = 0L
+
+    /**
+     * Routing is an optional overlay: an unexpected failure clears the route and is logged at most once a minute,
+     * instead of crashing the game (2.5.11 crashed here when a starred mob vanished mid-refresh).
+     */
+    private fun guardedTick() {
+        try { tickRouting() } catch (failure: RuntimeException) {
+            val now = System.currentTimeMillis()
+            if (now - lastFailureLog >= 60_000) {
+                lastFailureLog = now
+                SkyMyce.logger.error("Dungeon routing failed; clearing the route", failure)
+            }
+            runCatching { resetRun() }
+        }
+    }
+
     private fun tickRouting() {
         val client = MC.instance
         val player = client.player
@@ -318,6 +335,11 @@ object StarredClearRouting : SkyMyceModule() {
         bloodReminder.observe(observedRoom?.exit)
         if (!isEnabled() || !Settings.enabled || player.isDeadOrDying || DungeonAPI.ownPlayer?.dead == true) {
             if (active || room != null) pauseRoom()
+            return
+        }
+        if (!bloodRoutingForClass(Settings.bloodRushClassesOnly, DungeonAPI.dungeonClass)) {
+            if (active || room != null) pauseRoom()
+            status = "Off for ${DungeonAPI.dungeonClass?.displayName ?: "this class"}: Blood routing is for Mage, Archer and Healer"
             return
         }
         active = true
@@ -1489,13 +1511,18 @@ object StarredClearRouting : SkyMyceModule() {
                     Gizmos.line(from.add(0.0, heightOffset, 0.0), to.add(0.0, heightOffset, 0.0), color, thickness).setAlwaysOnTop()
                     count++
                 }
-                val local = if (handoffLines.isNotEmpty()) handoffLines
-                    else if (displayCursor >= 0) displayStartLines + displayChunkLines + displayLines.drop(displayLineStart)
-                    else displayLines.drop(displayLineStart)
-                val localCount = local.size
+                // Index across the segments instead of concatenating lists every frame.
+                val handoff = handoffLines.isNotEmpty()
+                val startCount = if (!handoff && displayCursor >= 0) displayStartLines.size else 0
+                val chunkCount = if (!handoff && displayCursor >= 0) displayChunkLines.size else 0
+                val tailStart = displayLineStart.coerceIn(0, displayLines.size)
+                val localCount = if (handoff) handoffLines.size else startCount + chunkCount + (displayLines.size - tailStart)
                 while (index < localCount + continuationLines.size) {
                     var line = when {
-                        index < localCount -> local[index]
+                        handoff && index < localCount -> handoffLines[index]
+                        index < startCount -> displayStartLines[index]
+                        index < startCount + chunkCount -> displayChunkLines[index - startCount]
+                        index < localCount -> displayLines[tailStart + index - startCount - chunkCount]
                         else -> continuationLines[index - localCount]
                     }
                     if (index == 0 && (handoffLines.isNotEmpty() || displayStartLines.isNotEmpty())) {

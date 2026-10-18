@@ -23,6 +23,7 @@ import java.util.concurrent.Executors
 object CapeTextures {
     val presets = linkedMapOf("sky-myce" to "Sky-Myce", "forest" to "Forest", "sunset" to "Sunset", "void" to "Void")
     private data class Cached(val texture: Identifier, val at: Long)
+    /** Downloaded capes by content (`id:sha256`), least recently rendered first; only the size limit frees them. */
     private val values = linkedMapOf<String, Cached>()
     private val pending = mutableSetOf<String>()
     private val failed = linkedMapOf<String, Long>()
@@ -55,11 +56,9 @@ object CapeTextures {
         if (profile.localCape) return local(profile)
         val asset = profile.capeAsset ?: return null
         val key = "${asset.id}:${asset.sha256}"
-        values[key]?.let {
-            values.remove(key)
-            if (System.currentTimeMillis() - it.at in 0..60000) { values[key] = it; return it.texture }
-            MC.instance.textureManager.release(it.texture)
-        }
+        // The key is the content hash, so a cached texture never goes stale; freeing it while in use made capes vanish
+        // and reappear every minute.
+        values.remove(key)?.let { values[key] = it; return it.texture }
         if (pending.size >= 16 || key in pending || (failed[key] ?: 0) > System.currentTimeMillis()) return null
         pending += key
         worker.submit {
@@ -85,6 +84,15 @@ object CapeTextures {
     }
     @JvmStatic fun apply(skin: PlayerSkin, profile: CosmeticProfile): PlayerSkin {
         return applyCosmeticCape(skin, profile, if (profile.capePreset == "none") null else selected(profile))
+    }
+    /**
+     * In-world render state. Vanilla only draws a cape when the player's own "Cape" skin part is on, which players
+     * without a Mojang cape often leave off; a Sky-Myce cape shows regardless. Invisibility and elytra still hide it.
+     */
+    @JvmStatic fun applyTo(state: AvatarRenderState, profile: CosmeticProfile) {
+        val skin = apply(state.skin, profile)
+        if (cosmeticCapeShown(state.skin, skin)) state.showCape = true
+        state.skin = skin
     }
     /** Studio-only reads can preview owned ready uploads without changing the saved public selection. */
     fun applyPreview(skin: PlayerSkin, profile: CosmeticProfile): PlayerSkin {
@@ -199,6 +207,9 @@ internal fun applyCosmeticCape(skin: PlayerSkin, profile: CosmeticProfile, selec
     selected == null -> skin
     else -> PlayerSkin(skin.body(), ClientAsset.ResourceTexture(selected, selected), skin.elytra(), skin.model(), skin.secure())
 }
+
+/** True when [applied] carries a Sky-Myce cape in place of [original]'s; a kept native cape keeps the player's setting. */
+internal fun cosmeticCapeShown(original: PlayerSkin, applied: PlayerSkin) = applied !== original && applied.cape() != null
 
 /** GUI render state only: invisibility and equipped wings must not conceal the cape being edited. */
 internal fun prepareCosmeticPreview(state: AvatarRenderState) {

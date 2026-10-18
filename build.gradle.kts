@@ -56,6 +56,34 @@ repositories {
 	// owo lib
 	maven("https://maven.wispforest.io")
 	maven("https://jitpack.io")
+    maven("https://keksuccino.github.io/maven/")
+}
+
+val browserRuntime = configurations.create("browserRuntime") { isTransitive = false }
+val prepareBrowserRuntime by tasks.registering {
+    val original = providers.provider { browserRuntime.singleFile }
+    val output = layout.buildDirectory.file("browser-runtime/rinku.jar")
+    inputs.file(original)
+    outputs.file(output)
+    doLast {
+        ZipFile(original.get()).use { source ->
+            val config = JsonSlurper().parseText(source.getInputStream(source.getEntry("rinku.mixins.json")).reader().use { it.readText() }) as MutableMap<String, Any>
+            val startup = setOf("MixinClientPackSource", "MixinMinecraft")
+            val mixins = config["client"] as List<*>
+            check(mixins.containsAll(startup)) { "Review Rinku startup hooks after upgrading the browser runtime" }
+            // Download and initialize Chromium only when a browser is opened, so local features stay usable offline.
+            config["client"] = mixins.filterNot { it in startup }
+            val destination = output.get().asFile.apply { parentFile.mkdirs() }
+            ZipOutputStream(destination.outputStream()).use { target ->
+                source.entries().asSequence().forEach { entry ->
+                    target.putNextEntry(ZipEntry(entry.name).apply { time = 0 })
+                    if (entry.name == "rinku.mixins.json") target.write(JsonOutput.toJson(config).toByteArray())
+                    else source.getInputStream(entry).use { it.copyTo(target) }
+                    target.closeEntry()
+                }
+            }
+        }
+    }
 }
 
 // Fabric already selects our newer SkyBlock API and identical config mods. Keep the
@@ -138,6 +166,9 @@ val sharedRuntimeCheck by tasks.registering {
 }
 
 dependencies {
+    add(browserRuntime.name, "de.keksuccino:rinku-fabric:${providers.gradleProperty("rinku_version").get()}")
+    implementation(files(prepareBrowserRuntime))
+    include("de.keksuccino:rinku-fabric:${providers.gradleProperty("rinku_version").get()}") { isTransitive = false }
     val skijaVersion = providers.gradleProperty("skija_version").get()
     implementation("io.github.humbleui:skija-shared:$skijaVersion")
     include("io.github.humbleui:skija-shared:$skijaVersion")
@@ -152,6 +183,7 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	implementation("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}")
+    include("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}") { isTransitive = false }
     implementation("net.fabricmc:fabric-language-kotlin:${providers.gradleProperty("fabric_kotlin_version").get()}")
 
 	// Dev Auth
@@ -189,11 +221,13 @@ dependencies {
 // Keep Loom's module coordinates/capabilities and normal nesting/metadata machinery.
 // Replace only this task's generated viewer copy with the verified shared-runtime copy.
 tasks.named<NestableJarGenerationTask>("processIncludeJars") {
-    dependsOn(compactProfileViewer)
-    inputs.files(compactProfileViewer)
+    dependsOn(compactProfileViewer, prepareBrowserRuntime)
+    inputs.files(compactProfileViewer, prepareBrowserRuntime)
     doLast {
         val name = "skyblock-profile-viewer-${providers.gradleProperty("skyblockpv_version").get()}.jar"
         compactProfileViewer.get().outputs.files.singleFile.copyTo(outputDirectory.file(name).get().asFile, overwrite = true)
+        val browserName = "rinku-fabric-${providers.gradleProperty("rinku_version").get()}.jar"
+        prepareBrowserRuntime.get().outputs.files.singleFile.copyTo(outputDirectory.file(browserName).get().asFile, overwrite = true)
     }
 }
 
@@ -204,6 +238,7 @@ tasks.processResources {
 
 	filesMatching("fabric.mod.json") {
 		expand("version" to version, "minecraft_version" to providers.gradleProperty("minecraft_version").get(),
+            "fabric_api_version" to providers.gradleProperty("fabric_api_version").get(),
             "loader_version" to providers.gradleProperty("loader_version").get(), "bootstrap_version" to providers.gradleProperty("minimum_bootstrap_version").get())
 	}
 }
@@ -275,6 +310,16 @@ val communityPackagingCheck by tasks.registering {
             checkLoaderConfiguration(config)
             check(config.stringPropertyNames().all { it in setOf("backend", "minecraft") || it.startsWith("key.") })
             check(jar.entries().asSequence().any { it.name.startsWith("META-INF/jars/owo-lib-") })
+            check(jar.entries().asSequence().any { it.name.startsWith("META-INF/jars/fabric-api-") })
+            val browser = jar.entries().asSequence().single { it.name.startsWith("META-INF/jars/rinku-fabric-") }
+            ZipInputStream(jar.getInputStream(browser)).use { nested ->
+                var entry = nested.nextEntry
+                while (entry != null && entry.name != "rinku.mixins.json") entry = nested.nextEntry
+                check(entry != null) { "Embedded browser mixin configuration is missing" }
+                val mixins = JsonSlurper().parseText(nested.readBytes().toString(Charsets.UTF_8)) as Map<*, *>
+                check(mixins["client"] == listOf("MixinGameRenderer")) { "The browser must not initialize or download at game startup" }
+            }
+            check(jar.getEntry("browser/ubol-2026.1012.1545.zip") != null)
             logger.lifecycle("Standalone Fabric packaging passed: full UI runtime, Minecraft proof mixin, public configuration, no custom loader")
         }
     }
@@ -375,6 +420,38 @@ val dungeonChestProfitCheck by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonChestProfitCheckKt"
+}
+
+val dungeonSplitsCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks dungeon split triggers, ordering, personal bests, theoretical best, averages, storage and 300 score"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsCheckKt"
+}
+
+val dungeonWinSummaryCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks the dungeon win screen summary, splits comparison and target level progress"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonWinSummaryCheckKt"
+}
+
+val goldorCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks Goldor coordination: role routes, the S2 decision table, pre-leap timing, chat protocol and run state"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCheckKt"
+}
+
+val priceHistoryCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks price history parsing, endpoints, downsampling and stats"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.general.pricehistory.PriceHistoryCheckKt"
 }
 
 val hudCheck by tasks.registering(JavaExec::class) {
@@ -501,6 +578,50 @@ val skijaGpuCheck by tasks.registering(JavaExec::class) {
     doFirst { workingDir.mkdirs() }
 }
 tasks.check { dependsOn(skijaRendererCheck) }
+
+// Test-only Fabric entrypoint captures real screens in an isolated, offline client.
+val guiVisualCheckMod by tasks.registering(Jar::class) {
+    dependsOn(tasks.testClasses)
+    archiveFileName = "gui-visual-check.jar"
+    destinationDirectory = layout.buildDirectory.dir("gui-visual-check")
+    from(sourceSets.test.get().output) {
+        include("me/mycellium/skymyce/ui/GuiVisual*.class",
+            "me/mycellium/skymyce/features/instances/dungeons/camera/render/CameraRenderCheck*.class")
+    }
+    from("src/test/resources/gui-visual-check")
+}
+loom.runs.register("guiVisualCheck") {
+    client()
+    runDirectory = layout.buildDirectory.dir("gui-visual-check/client")
+    generateRunConfig = false
+    systemProperties.put("fabric.addMods", layout.buildDirectory.file("gui-visual-check/gui-visual-check.jar").get().asFile.absolutePath)
+    systemProperties.put("devauth.enabled", "false")
+    systemProperties.put("skymyce.browserMuted", "true")
+    jvmArguments.add("--enable-native-access=ALL-UNNAMED")
+    programArguments.addAll("--width", "1280", "--height", "800", "--username", "GuiReview")
+}
+tasks.named("runGuiVisualCheck") { dependsOn(guiVisualCheckMod) }
+// The Bazaar Assistant inside a running client: a local flat world, real keybinds, chat, HUD and menus. Not part of `check`.
+val bazaarAssistGameTestMod by tasks.registering(Jar::class) {
+    dependsOn(tasks.testClasses)
+    archiveFileName = "bazaar-assist-game-test.jar"
+    destinationDirectory = layout.buildDirectory.dir("bazaar-assist-game-test")
+    from(sourceSets.test.get().output) { include("me/mycellium/skymyce/features/bazaar/assist/BazaarAssistGameTest*.class",
+        "me/mycellium/skymyce/features/bazaar/assist/FakeAssistSource*.class") }
+    from("src/test/resources/bazaar-assist-game-test")
+}
+loom.runs.register("bazaarAssistGameTest") {
+    client()
+    runDirectory = layout.buildDirectory.dir("bazaar-assist-game-test/client")
+    generateRunConfig = false
+    systemProperties.put("fabric.addMods", layout.buildDirectory.file("bazaar-assist-game-test/bazaar-assist-game-test.jar").get().asFile.absolutePath)
+    systemProperties.put("fabric.client.gametest", "")
+    systemProperties.put("devauth.enabled", "false")
+    systemProperties.put("skymyce.browserMuted", "true")
+    jvmArguments.add("--enable-native-access=ALL-UNNAMED")
+    programArguments.addAll("--width", "1280", "--height", "720", "--username", "AssistTest")
+}
+tasks.named("runBazaarAssistGameTest") { dependsOn(bazaarAssistGameTestMod) }
 val dungeonRoutingCheck by tasks.registering {
     group = "verification"
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"
@@ -530,7 +651,7 @@ val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
         mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt"
     }
 }
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
+tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, dungeonSplitsCheck, dungeonWinSummaryCheck, priceHistoryCheck, goldorCheck, hudCheck, loaderCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, sharedRuntimeCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
 val cameraRenderCheck by tasks.registering(JavaExec::class) {
     group = "verification"
@@ -554,6 +675,23 @@ val cameraViewpointCheck by tasks.registering(JavaExec::class) {
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.CameraViewpointCheckKt"
 }
 tasks.check { dependsOn(cameraRenderCheck, healerCrushCameraCheck, cameraViewpointCheck) }
+val leapMenuCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks Spirit Leap identities, stable quadrants, camera transforms and bounded preview scheduling"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenuCheckKt"
+}
+tasks.check { dependsOn(leapMenuCheck) }
+for (browserCheckName in listOf("BrowserLinks", "BrowserExtension")) {
+    val browserCheck = tasks.register<JavaExec>(browserCheckName.replaceFirstChar { it.lowercase() } + "Check") {
+        group = "verification"
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass = "me.mycellium.skymyce.features.browser.${browserCheckName}CheckKt"
+    }
+    tasks.check { dependsOn(browserCheck) }
+}
 val rngTesterCheck by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Checks isolated RNG parser, confirmation, journal and duplicate fixtures"
@@ -563,6 +701,16 @@ val rngTesterCheck by tasks.registering(JavaExec::class) {
 }
 tasks.check { dependsOn(rngTesterCheck) }
 tasks.test { failOnNoDiscoveredTests = false }
+
+for (bazaarCheckName in listOf("Bazaar", "BazaarAssist", "BazaarDashboard", "BazaarIntegration", "BazaarPreferenceSync")) {
+    val bazaarCheck = tasks.register<JavaExec>(bazaarCheckName.replaceFirstChar { it.lowercase() } + "Check") {
+        group = "verification"
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass = "me.mycellium.skymyce.features.bazaar.${bazaarCheckName}CheckKt"
+    }
+    tasks.check { dependsOn(bazaarCheck) }
+}
 
 // configure the maven publication
 publishing {

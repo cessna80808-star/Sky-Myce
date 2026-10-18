@@ -37,6 +37,10 @@ private val dungeonXp = listOf(
     15000000, 19000000, 24000000, 30000000, 38000000, 48000000, 60000000, 75000000, 93000000, 116250000,
 )
 
+/** Total Catacombs experience needed to reach [level]; each level past 50 takes another 200M, as Hypixel counts them. */
+fun dungeonXpForLevel(level: Int): Double =
+    dungeonXp.take(level.coerceAtLeast(0)).sumOf { it.toDouble() } + (level - 50).coerceAtLeast(0) * 200_000_000.0
+
 fun dungeonLevel(experience: Double): Int {
     var remaining = experience.takeIf { it.isFinite() && it >= 0 } ?: return 0
     for ((level, required) in dungeonXp.withIndex()) {
@@ -62,6 +66,10 @@ data class DungeonFriendStats(
     val sPlusTimes: Map<DungeonFloor, Long> = emptyMap(),
     val completedFloors: Set<DungeonFloor> = emptySet(),
     val selectedClass: DungeonClass? = null,
+    /** Exact Catacombs experience from a profile response; shared relay reports carry only the level. */
+    val catacombsXp: Double? = null,
+    /** Exact class experience from a profile response; null in shared reports and records saved before 2.7.25. */
+    val classXp: Map<DungeonClass, Double>? = null,
 ) {
     val highestFloor: DungeonFloor? get() = FRIEND_FLOORS.lastOrNull { it in completedFloors }
 
@@ -110,14 +118,17 @@ data class DungeonFriendStats(
                 if (times.isNotEmpty() || (data?.obj("tier_completions")?.number(key) ?: 0.0) > 0) completed += floor
             }
             val classes = dungeons.obj("player_classes")
+            val classXp = DungeonClass.entries.mapNotNull { clazz ->
+                val xp = (if (clazz == DungeonClass.BERSERKER) classes?.obj("berserk") ?: classes?.obj("berserker")
+                    else classes?.obj(clazz.name.lowercase()))?.number("experience")
+                xp?.let { clazz to it }
+            }.toMap()
             return DungeonFriendStats(
                 state = StatsState.AVAILABLE,
                 catacombs = dungeonLevel(cata?.number("experience") ?: 0.0),
-                classes = DungeonClass.entries.mapNotNull { clazz ->
-                    val xp = (if (clazz == DungeonClass.BERSERKER) classes?.obj("berserk") ?: classes?.obj("berserker")
-                        else classes?.obj(clazz.name.lowercase()))?.number("experience")
-                    xp?.let { clazz to dungeonLevel(it) }
-                }.toMap(),
+                catacombsXp = cata?.number("experience"),
+                classes = classXp.mapValues { dungeonLevel(it.value) },
+                classXp = classXp,
                 completionTimes = completionTimes,
                 sPlusTimes = sPlusTimes,
                 completedFloors = completed,

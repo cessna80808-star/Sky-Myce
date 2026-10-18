@@ -61,6 +61,7 @@ object SkyMyce : ClientModInitializer {
     override fun onInitializeClient() {
         config = me.mycellium.skymyce.config.loadSkyMyceConfig()
         ThemeConfig.migrateDigestTheme()
+        me.mycellium.skymyce.config.instances.dungeons.GoldorCoordinationConfig.migrateStrategy()
         config.save()
         me.mycellium.skymyce.ui.MenuShortcuts.initialize()
 
@@ -75,12 +76,24 @@ object SkyMyce : ClientModInitializer {
             CheesePizza,
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
-            LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
+            LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, me.mycellium.skymyce.features.general.overlays.StatusBars, me.mycellium.skymyce.features.general.overlays.NpcDialogue, me.mycellium.skymyce.features.general.SignConfirm, me.mycellium.skymyce.ui.AutoGraphics, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,
+            me.mycellium.skymyce.features.general.pricehistory.PriceHistoryFeature,
+            me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits,
+            me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud,
+            me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCoordinator,
+            me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorHud,
             me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera,
-            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud
+            me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud,
+            me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenu,
+            me.mycellium.skymyce.features.instances.dungeons.leap.LeapPovSharing,
+            me.mycellium.skymyce.features.bazaar.BazaarTrading,
+            me.mycellium.skymyce.features.bazaar.BazaarHud,
+            me.mycellium.skymyce.features.bazaar.BazaarMenuButton,
+            me.mycellium.skymyce.features.bazaar.assist.BazaarAssist,
+            me.mycellium.skymyce.features.bazaar.assist.BazaarAssistHud
         )
 
         ModuleManager.modules.forEach {

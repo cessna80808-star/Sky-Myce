@@ -4,6 +4,7 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.DungeonChest
 import me.mycellium.skymyce.api.dungeonRewardHeader
+import me.mycellium.skymyce.api.dungeonStoredReward
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
@@ -134,7 +135,8 @@ object DungeonTracker : SkyMyceModule() {
             }
         }
         if (LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
-        val active = run?.takeIf { it.context?.matches(AcquisitionRepository.currentContext()) == true } ?: return
+        val active = run?.takeIf { it.context?.matches(AcquisitionRepository.currentContext()) == true }?.let(::latestRun) ?: return
+        run = active
         val now = System.currentTimeMillis()
         if (dungeonCompletionFloor(event.text)?.name == active.floor && active.completedAt == null) {
             val duration = dungeonRunDuration(runStarted)
@@ -143,6 +145,10 @@ object DungeonTracker : SkyMyceModule() {
             AcquisitionRepository.run(run!!)
             me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-count/${active.id}"), "dungeon_runs", 1.0, now,
                 me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
+            duration?.let {
+                me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-time/${active.id}"), "dungeon_run_time", it.toDouble(), now,
+                    me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
+            }
         }
         xpRegex.matchEntire(event.text)?.let { match ->
             val amount = match.groupValues[1].replace(",", "").toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..1e12 } ?: return
@@ -177,8 +183,9 @@ object DungeonTracker : SkyMyceModule() {
         val record = receiptRun(event.floor, context)
         val contents = event.contents.mapKeys { canonicalItemId(it.key.id) }
         if (contents.keys.any { !it.matches(Regex("[A-Z0-9_:;-]{1,100}")) }) return
+        val stored = event.contents.keys.filter { dungeonStoredReward(it.id, event.metadata[it]?.displayName) }.mapTo(hashSetOf()) { canonicalItemId(it.id) }
         pendingChest = PendingChest(event, record, world, PendingChestObservation(event.observation, context,
-            record.id, contents, DigestRng.inventoryCounts(), elapsedMillis()))
+            record.id, contents, DigestRng.inventoryCounts(), elapsedMillis(), stored = stored))
         displayDevMessage { "Dungeon receipt awaiting server header/inventory: tier=${event.chest.name}, rewardKinds=${contents.size}, costKnown=${event.costKnown}" }
     }
     fun awaitsInventory(): Boolean {
@@ -252,8 +259,8 @@ object DungeonTracker : SkyMyceModule() {
         }
         displayDevMessage { "Dungeon chest receipt confirmed: tier=${event.chest.name}, rewardKinds=${loot.size}, costKnown=${cost != null}" }
     }
-    private fun latestRun(record: DungeonRunRecord): DungeonRunRecord = run?.takeIf { it.id == record.id }
-        ?: AcquisitionRepository.state.runs.firstOrNull { it.id == record.id } ?: record
+    private fun latestRun(record: DungeonRunRecord): DungeonRunRecord = AcquisitionRepository.state.runs.firstOrNull { it.id == record.id }
+        ?: run?.takeIf { it.id == record.id } ?: record
     internal fun observedRun(context: AcquisitionContext): DungeonRunRecord? = run?.takeIf { it.context?.matches(context) == true }
     private fun receiptRun(floor: DungeonFloor, context: AcquisitionContext): DungeonRunRecord = run?.takeIf {
         LocationAPI.island == SkyBlockIsland.THE_CATACOMBS && it.floor == floor.name && it.context?.matches(context) == true

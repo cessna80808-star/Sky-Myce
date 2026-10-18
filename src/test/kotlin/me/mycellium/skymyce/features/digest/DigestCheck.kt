@@ -10,9 +10,14 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.CompletionException
+import java.net.http.HttpTimeoutException
+import java.io.IOException
+import me.mycellium.skymyce.community.CommunityFailure
 
 /** Runs with the existing dungeonFriendsCheck task, entirely offline and without a Minecraft window. */
 fun checkDigestLifecycleAndNews() {
+    checkLocalRngHistory()
     val account = "00000000-0000-0000-0000-000000000001"
     val other = "00000000-0000-0000-0000-000000000002"
     val day = LocalDate.of(2026, 9, 24)
@@ -51,6 +56,18 @@ fun checkDigestLifecycleAndNews() {
     check(mainProfile != DigestDailyGate.profileKey(account, "Apple", true))
 
     var now = 1_000_000L
+    check(NewsSource.entries == listOf(NewsSource.GAME, NewsSource.DERAILIOUS))
+    checkDigestVideos()
+    checkDigestLinks()
+    val legacyNewsConfig = JsonParser.parseString("""{"General":{"Daily Digest":{"news":true,"gameUpdates":false,"alphaUpdates":true,"retainedRngEvents":100}},"unrelated":{"value":7}}""").asJsonObject
+    check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, true))
+    val migratedNewsConfig = legacyNewsConfig.getAsJsonObject("General").getAsJsonObject("Daily Digest")
+    check(!migratedNewsConfig.has("gameUpdates") && !migratedNewsConfig.has("alphaUpdates"))
+    check(migratedNewsConfig.get("retainedRngEvents").asInt == 100 && legacyNewsConfig.getAsJsonObject("unrelated").get("value").asInt == 7)
+    check(!me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(legacyNewsConfig, false)) // Master News=false stays off.
+    val laterNewsChoice = me.mycellium.skymyce.config.mergeConfigFields(legacyNewsConfig,
+        JsonParser.parseString("""{"General":{"Daily Digest":{"news":true}}}""").asJsonObject)
+    check(me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(laterNewsChoice, true)) // A later user toggle cannot be undone by retired keys.
     val requests = mutableListOf<Pair<NewsSource, CompletableFuture<JsonObject?>>>()
     var updates = 0
     val news = DigestNewsRepository({ source -> CompletableFuture<JsonObject?>().also { requests += source to it } },
@@ -61,31 +78,27 @@ fun checkDigestLifecycleAndNews() {
         {"id":"$id","title":"Repeated update","content":"Details","publishedAt":900000}]
     }""").asJsonObject
     check(news.state(NewsSource.GAME).items.isEmpty())
-    news.refresh(NewsSource.entries)
-    check(requests.size == 2 && news.state(NewsSource.GAME).loading)
-    news.refresh(NewsSource.entries, true)
-    check(requests.size == 2)
+    news.refresh(listOf(NewsSource.GAME))
+    check(requests.size == 1 && news.state(NewsSource.GAME).loading)
+    news.refresh(listOf(NewsSource.GAME), true)
+    check(requests.size == 1)
     requests[0].second.complete(response())
     check(news.state(NewsSource.GAME).items.size == 1 && !news.state(NewsSource.GAME).loading)
-    check(news.state(NewsSource.ALPHA).items.isEmpty() && news.state(NewsSource.ALPHA).loading)
-    requests[1].second.completeExceptionally(TimeoutException())
-    check(news.state(NewsSource.ALPHA).failure == DigestFailure.TIMEOUT)
-    check(news.state(NewsSource.GAME).failure == null) // One failing provider doesn't affect another.
+    check(news.state(NewsSource.GAME).failure == null)
     news.restore(NewsSource.GAME, DigestNewsState(fetchedAt = 1))
     check(news.state(NewsSource.GAME).items.size == 1) // A late disk read cannot overwrite a fresh response.
     now += 61_000
     news.refresh(listOf(NewsSource.GAME))
-    check(requests.size == 2) // A warm successful cache avoids another download.
+    check(requests.size == 1) // A warm successful cache avoids another download.
     now += 300_000
     news.refresh(listOf(NewsSource.GAME))
-    check(requests.size == 3 && news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).loading)
+    check(requests.size == 2 && news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).loading)
     requests.last().second.complete(null)
     check(news.state(NewsSource.GAME).items.size == 1 && news.state(NewsSource.GAME).failure == DigestFailure.TIMEOUT)
     now += 61_000
-    news.refresh(listOf(NewsSource.ALPHA))
-    requests.last().second.complete(response("alpha", "456"))
-    check(news.state(NewsSource.ALPHA).items.single().source == NewsSource.ALPHA)
-    check(news.state(NewsSource.GAME).items.single().source == NewsSource.GAME)
+    news.refresh(listOf(NewsSource.GAME), true)
+    requests.last().second.completeExceptionally(TimeoutException())
+    check(news.state(NewsSource.GAME).items.single().source == NewsSource.GAME && news.state(NewsSource.GAME).failure == DigestFailure.TIMEOUT)
     now += 61_000
     news.refresh(listOf(NewsSource.GAME), true)
     val cancelled = requests.last().second
@@ -119,12 +132,19 @@ fun checkDigestLifecycleAndNews() {
     connected = true
     connecting.refresh(listOf(NewsSource.GAME))
     check(connecting.state(NewsSource.GAME).loading) // No fake cooldown for requests never transmitted.
+    check(digestNewsFailure(HttpTimeoutException("timed out")) == DigestFailure.TIMEOUT)
+    check(digestNewsFailure(CompletionException(IOException("offline"))) == DigestFailure.OFFLINE)
+    check(digestNewsFailure(CommunityFailure("rate_limited")) == DigestFailure.RATE_LIMITED)
+    check(digestNewsFailure(CommunityFailure("news_unavailable")) == DigestFailure.OFFLINE)
+    check(digestNewsFailure(CommunityFailure("invalid_source")) == DigestFailure.INVALID)
+    check(digestNewsFailure(IllegalArgumentException("malformed JSON")) == DigestFailure.INVALID)
     val drop = DetectedRng("a".repeat(32), "NECRON_HANDLE", "dungeon", now)
     check(digestRngSubmission(drop, false, true, now) == null)
     val privateReport = digestRngSubmission(drop, true, false, now)!!
     check(privateReport.keys == setOf("event", "showName") && privateReport["showName"] == false)
     check((privateReport["event"] as Map<*, *>).keys == setOf("id", "item", "activity", "occurredAt"))
     check(digestRngSubmission(drop.copy(item = "DIRT"), true, true, now) == null)
+    check(digestRngSubmission(drop.copy(item = "FIFTH_MASTER_STAR"), true, true, now) == null) { "Local-only journal drops are never submitted to the public feed" }
     check(digestRngSubmission(drop.copy(occurredAt = now - 300001), true, true, now) == null)
     val observedContext = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
     val receipt = AcquisitionEvent(drop.id, drop.item, now - 5000, "dungeon", observedContext,
@@ -227,6 +247,14 @@ fun checkDigestLifecycleAndNews() {
             news = mapOf("game" to news.state(NewsSource.GAME)))
         store.save(state)
         check(store.load() == state)
+        val legacyNews = com.google.gson.Gson().toJsonTree(state).asJsonObject
+        val retiredNews = legacyNews.getAsJsonObject("news").get("game").deepCopy().asJsonObject
+        retiredNews.getAsJsonArray("items").forEach { it.asJsonObject.addProperty("source", "ALPHA") }
+        legacyNews.getAsJsonObject("news").add("alpha", retiredNews)
+        Files.writeString(file, legacyNews.toString())
+        check(store.load() == state && !store.recovered) { "Removing retired news invalidated normal news or local profile/RNG history" }
+        store.save(store.load())
+        check(!JsonParser.parseString(Files.readString(file)).asJsonObject.getAsJsonObject("news").has("alpha"))
         Files.writeString(file, "{ damaged")
         check(store.load() == DigestSavedState() && store.recovered)
         store.save(state)
@@ -252,4 +280,113 @@ fun checkDigestLifecycleAndNews() {
         Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
     println("Daily Digest checks passed: local day, delayed consent, profile isolation, asynchronous cache, corruption recovery and bounded history")
+}
+
+private fun checkDigestVideos() {
+    val now = 1_000_000L
+    val watch = "https://www.youtube.com/watch?v=ovmsEmAhoIQ"
+    val thumbnail = "https://i4.ytimg.com/vi/ovmsEmAhoIQ/hqdefault.jpg"
+    fun response() = JsonParser.parseString("""{"source":"derailious","status":"ready","fetchedAt":$now,"items":[
+        {"id":"derailious:ovmsEmAhoIQ","title":"A SkyBlock video","content":"Description","publishedAt":900000,
+        "url":"$watch","thumbnailUrl":"$thumbnail"}]}""").asJsonObject
+    val item = parseDigestNews(response(), NewsSource.DERAILIOUS, now).single()
+    check(item.url == watch && item.thumbnailUrl == thumbnail && item.publishedAt == 900000L)
+    check(safeDigestVideoUrl("https://www.youtube.com/shorts/ovmsEmAhoIQ") != null)
+    check(safeDigestUrl(watch) == null && safeDigestVideoUrl(thumbnail) == null && safeDigestVideoUrl(watch, true) == null)
+    for (unsafe in listOf("http://www.youtube.com/watch?v=ovmsEmAhoIQ", "https://www.youtube.com.evil.example/watch?v=ovmsEmAhoIQ",
+        "https://www.youtube.com@evil.example/watch?v=ovmsEmAhoIQ", "https://www.youtube.com/redirect?q=example",
+        "$watch&redirect=example", "https://www.youtube.com:444/watch?v=ovmsEmAhoIQ")) check(safeDigestVideoUrl(unsafe) == null)
+    for (unsafe in listOf("https://ytimg.com/vi/ovmsEmAhoIQ/hqdefault.jpg", "https://i4.ytimg.com.evil.example/vi/ovmsEmAhoIQ/hqdefault.jpg",
+        "$thumbnail?redirect=example", "https://i4.ytimg.com/other.png")) check(safeDigestVideoUrl(unsafe, true) == null)
+    val unsafeThumbnail = response().apply { getAsJsonArray("items")[0].asJsonObject.addProperty("thumbnailUrl", "https://evil.example/a.png") }
+    check(parseDigestNews(unsafeThumbnail, NewsSource.DERAILIOUS, now).single().thumbnailUrl == null)
+    val unsafeVideo = response().apply { getAsJsonArray("items")[0].asJsonObject.addProperty("url", "https://evil.example/watch") }
+    check(runCatching { parseDigestNews(unsafeVideo, NewsSource.DERAILIOUS, now) }.isFailure)
+    val requests = mutableMapOf<NewsSource, CompletableFuture<JsonObject?>>()
+    val repository = DigestNewsRepository({ source -> CompletableFuture<JsonObject?>().also { requests[source] = it } }, { it() }, {}, { now })
+    repository.restore(NewsSource.GAME, DigestNewsState(items = listOf(DigestNewsItem("old", NewsSource.GAME, "Saved update", "Details", 800000))))
+    repository.refresh(NewsSource.entries)
+    requests.getValue(NewsSource.DERAILIOUS).complete(response())
+    requests.getValue(NewsSource.GAME).completeExceptionally(IOException("offline"))
+    check(repository.state(NewsSource.DERAILIOUS).items.single() == item && repository.state(NewsSource.DERAILIOUS).failure == null)
+    check(repository.state(NewsSource.GAME).items.single().id == "old" && repository.state(NewsSource.GAME).failure == DigestFailure.OFFLINE)
+    val directory = Files.createTempDirectory("digest-video-check")
+    try {
+        val store = DigestStateStore(directory.resolve("state.json"))
+        val state = DigestSavedState(news = NewsSource.entries.associate { it.wire to repository.state(it) })
+        store.save(state)
+        check(store.load() == state && !store.recovered)
+    } finally { Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+}
+
+private fun checkDigestLinks() {
+    val now = 1_000_000L
+    val forum = "https://hypixel.net/threads/release.123/"
+    val watch = "https://www.youtube.com/watch?v=abcdefghijk"
+    val short = "https://youtu.be/abcdefghijk?t=30"
+    val content = "[Patch notes]($forum). <$short> $forum"
+    check(digestNewsLinks(content) == listOf(forum, short))
+    check(digestNewsLinks("$watch, ($forum).") == listOf(watch, forum))
+    val unsupported = listOf("https://hypixel.net.evil.example/", "https://hypixel.net@evil.example/", "http://hypixel.net/",
+        "file:///private", "https://www.youtube.com/redirect?q=unsafe", "$watch&redirect=unsafe", "https://hypixel.net:444/")
+    check(digestNewsLinks(unsupported.joinToString(" ")).isEmpty())
+    check(digestNewsLinks((1..20).joinToString(" ") { "https://hypixel.net/threads/$it/" }).size == 8)
+    val long = "https://hypixel.net/" + "a".repeat(900)
+    val bounded = digestNewsLinks("", listOf(long, "https://hypixel.net/" + "b".repeat(900), short))
+    check(bounded == listOf(long, short) && bounded.sumOf { it.length } <= 1024)
+    check(digestNewsLinks("", listOf("https://hypixel.net/" + "ä".repeat(400))).isEmpty())
+    fun response() = JsonParser.parseString("""{"source":"game","items":[{"id":"links","title":"Patch notes",
+        "content":"$content","publishedAt":900000,"url":"https://discord.com/channels/1/2/3",
+        "links":["$watch","$forum","$watch","https://evil.example/"]}]}""").asJsonObject
+    val parsed = parseDigestNews(response(), NewsSource.GAME, now).single()
+    check(parsed.url == "https://discord.com/channels/1/2/3" && parsed.links == listOf(watch, forum, short))
+    val oldResponse = response().apply { getAsJsonArray("items")[0].asJsonObject.remove("links") }
+    check(parseDigestNews(oldResponse, NewsSource.GAME, now).single().links == listOf(forum, short))
+    for (malformed in listOf("null", "{}", "[1]", "[null]", "[\"${"x".repeat(2049)}\"]",
+        "[" + List(9) { "\"$watch\"" }.joinToString(",") + "]")) {
+        val invalid = response().apply { getAsJsonArray("items")[0].asJsonObject.add("links", JsonParser.parseString(malformed)) }
+        check(runCatching { parseDigestNews(invalid, NewsSource.GAME, now) }.isFailure)
+    }
+    val directory = Files.createTempDirectory("digest-links-check")
+    try {
+        val file = directory.resolve("state.json")
+        val store = DigestStateStore(file)
+        val state = DigestSavedState(news = mapOf("game" to DigestNewsState(listOf(parsed), now)))
+        store.save(state)
+        check(store.load() == state && !store.recovered)
+        val legacy = com.google.gson.Gson().toJsonTree(state).asJsonObject
+        legacy.getAsJsonObject("news").getAsJsonObject("game").getAsJsonArray("items")[0].asJsonObject.remove("links")
+        Files.writeString(file, legacy.toString())
+        check(store.load() == state.copy(news = mapOf("game" to DigestNewsState(listOf(parsed.copy(links = emptyList())), now))) && !store.recovered)
+        store.save(state)
+        for (invalid in listOf(listOf(watch, watch), unsupported, List(9) { forum }, listOf(long, long + "b"))) {
+            check(runCatching { store.save(state.copy(news = mapOf("game" to DigestNewsState(listOf(parsed.copy(links = invalid)), now)))) }.isFailure)
+            check(store.load() == state) // Rejected links cannot overwrite the previously saved history.
+        }
+    } finally { Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+}
+
+private fun checkLocalRngHistory() {
+    val now = 1_000_000L
+    val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
+    val confirmed = AcquisitionEvent("1".repeat(32), "IMPLOSION_SCROLL", 900000, "dungeon", context, "M7", player = "Player")
+    val imported = confirmed.copy(id = "2".repeat(32), item = "NECRON_HANDLE", occurredAt = 1000,
+        context = null, player = null, origin = "legacy-tracker", quantity = 2)
+    val otherProfile = confirmed.copy(id = "3".repeat(32), context = context.copy(profileId = "c".repeat(32), profileName = "Pear"))
+    val events = listOf(confirmed, imported, otherProfile, confirmed.copy(id = "4".repeat(32), item = "DIRT"),
+        confirmed.copy(id = "5".repeat(32), occurredAt = now + 60001))
+    val cached = DigestRngEntry(confirmed.id, confirmed.item, confirmed.activity, 899000, "Player")
+    val recent = listOf(cached, cached, cached.copy(id = "6".repeat(32), item = "SHADOW_WARP_SCROLL"),
+        cached.copy(id = "7".repeat(32), community = true))
+    val offline = digestLocalRngHistory(events, recent, null, now)
+    check(offline.size == 4 && offline.map { it.id }.distinct().size == offline.size && offline.none { it.community })
+    check(offline.single { it.id == confirmed.id }.timestamp == confirmed.occurredAt) // The permanent journal wins the same cached receipt ID.
+    check(offline.single { it.id == imported.id }.let { it.title.endsWith("×2") && it.meta == "Saved local record" })
+    check(offline.zipWithNext().all { (first, second) -> first.timestamp!! >= second.timestamp!! })
+    val scoped = digestLocalRngHistory(events, recent, context, now)
+    check(scoped.map { it.id }.toSet() == setOf(confirmed.id, "6".repeat(32)))
+    check(digestLocalRngHistory(events, emptyList(), context.copy(account = "d".repeat(32)), now).isEmpty())
+    check(digestLocalRngHistory(events, emptyList(), context.copy(server = "alpha"), now).isEmpty())
+    check(digestLocalRngHistory(events, emptyList(), null, now).any { it.id == imported.id }) // Old local records need no game or community connection.
+    check(events.size == 5 && recent.size == 4 && recent.last().community) // Rendering cannot clear archives or turn a received report into a personal one.
 }

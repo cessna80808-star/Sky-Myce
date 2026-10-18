@@ -14,9 +14,12 @@ import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
+import me.mycellium.skymyce.features.browser.InGameBrowser
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
+import java.net.URI
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -29,7 +32,6 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private var previous = DigestView()
     private var lastSecond = -1L
     private var displayedDate = LocalDate.now()
-    private var newsFilter = ""
     private var community = false
     private var search = ""
     private var activity = ""
@@ -86,30 +88,27 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             if (!mergedHeader) child(row().apply {
                 child(refreshButton())
                 child(settingsButton())
-                if (page == "rng" && menuWidth >= 280) child(button("Clear local", 76) { confirmClear() })
             })
-            if (page == "rng" && menuWidth < 280) child(button("Clear local", 76) { confirmClear() })
-            if (page == "news") child(newsFilters())
             if (page == "rng") {
                 child(row().apply {
                     child(button("Local history", 96) { if (community) { community = false; historyPage = 0; updateContent(resetScroll = true) } }
-                        .apply { navigation = true; selected = { !community } })
+                        .apply { navigation = true; centeredNavigation = true; selected = { !community } })
                     child(button("Community", 96) { if (!community) { community = true; historyPage = 0; updateContent(resetScroll = true) } }
-                        .apply { navigation = true; selected = { community } }
-                        .tip("Opt-in community reports are unverified. Enable receiving in Daily Digest settings."))
+                        .apply { navigation = true; centeredNavigation = true; selected = { community } }
+                        .tip("Unverified reports from other players"))
                 })
                 child(row().apply {
                     child(MenuTextBox(Sizing.expand()).apply {
                         setMaxLength(80); text(search); setHint(Component.literal("Search drop or player..."))
                         onChanged().subscribe { search = it; resetList() }
                     })
-                    activityFilter = button(activity.ifEmpty { "All activities" }.take(17), 100) {
+                    activityFilter = button(activity.ifEmpty { "All activities" }.replaceFirstChar(Char::uppercase).take(17), 100) {
                         val options = listOf("") + previous.cards.firstOrNull { it.id == "rng" }?.entries.orEmpty()
                             .map { it.activity }.filter { it.isNotEmpty() }.distinct().sorted()
                         activity = options[(options.indexOf(activity) + 1) % options.size]
-                        activityFilter.message = Component.literal(activity.ifEmpty { "All activities" }.take(17))
+                        activityFilter.message = Component.literal(activity.ifEmpty { "All activities" }.replaceFirstChar(Char::uppercase).take(17))
                         historyPage = 0; updateContent()
-                    }.tip("Cycle activity filter: dungeons, slayer and other detected sources")
+                    }.tip("Filter by activity")
                     child(activityFilter)
                 })
             }
@@ -213,7 +212,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
             tip("Open ${state.title}\n${state.summary}\n${state.status}")
         })
         val summary = if (state.id == "news" && state.entries.isNotEmpty()) {
-            if (compactOverview) state.entries.first().title.let { if (it.length > 53) it.take(52).trimEnd() + "…" else it } else "Latest from Cowshed"
+            if (compactOverview) state.entries.first().title.let { if (it.length > 53) it.take(52).trimEnd() + "…" else it } else "Latest from Cowshed and Derailious"
         } else if (compactOverview && state.id == "global" && nextEvent == null) state.summary + "\n" + digestText(state.status, 52) else state.summary
         panel.child(label(digestText(summary.ifBlank { "No information available yet." }, 240)))
         if (!compactOverview && state.id == "news" && state.entries.isNotEmpty()) state.entries.take(2).forEach { entry ->
@@ -237,20 +236,21 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     private fun details(target: FlowLayout, state: DigestCardState?) {
         if (state == null) { target.child(empty("Waiting for information", "This source will appear when available.")); return }
         if (page != "rng") target.child(label(digestText(state.summary, 500)))
-        if (state.status.isNotBlank()) target.child(label(digestText(state.status, 300), tone(state.tone)))
-        state.updatedAt?.let { stamp -> target.child(clock(MenuTheme.MUTED) {
+        if (state.status.isNotBlank() && (page != "rng" || community && DailyDigestConfig.receiveRng))
+            target.child(label(digestText(state.status, 300), tone(state.tone)))
+        state.updatedAt?.takeIf { page != "rng" }?.let { stamp -> target.child(clock(MenuTheme.MUTED) {
             "Last successful update ${digestRelativeTime(stamp, System.currentTimeMillis())}  •  ${timestamp(stamp)}"
         }) }
         if (page == "rng") {
-            target.child(label(if (community) "Community-reported • unverified" else "Detected on this account and profile • stored locally", MenuTheme.PURPLE))
+            target.child(label(if (community) "Community reports • unverified" else "Saved local RNG history", MenuTheme.PURPLE))
             if (community && !DailyDigestConfig.receiveRng) {
-                target.child(empty("Community feed is off", "Enable receiving in Settings → Social & Sharing. Sharing your own drops is a separate option."))
+                target.child(label("Community feed is off", MenuTheme.MUTED))
+                target.child(button("View local history", 116) { community = false; historyPage = 0; updateContent(resetScroll = true) })
                 return
             }
         }
         val entries = when (page) {
             "rng" -> digestHistory(state.entries, community, activity, search)
-            "news" -> state.entries.filter { newsFilter.isEmpty() || it.activity.contains(newsFilter, true) || it.meta.contains(newsFilter, true) }
             else -> state.entries
         }
         if (entries.isEmpty()) {
@@ -277,7 +277,12 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
     }
 
     private fun entryCard(entry: DigestEntry) = card("digest/entry/${entry.id}").apply {
-        child(label(digestText(entry.title, 300), tone(entry.tone)))
+        val title = label(digestText(entry.title, 300), tone(entry.tone))
+        if (entry.item.isBlank()) child(title)
+        else child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+            gap(6); verticalAlignment(VerticalAlignment.CENTER)
+            child(skyBlockItemIcon(entry.item)); child(title.apply { horizontalSizing(Sizing.expand()) })
+        })
         if (entry.meta.isNotBlank()) child(label(digestText(entry.meta, 500), MenuTheme.MUTED))
         if (entry.summary.isNotBlank()) child(label(digestText(entry.summary, 1200)))
         entry.timestamp?.let { stamp -> child(clock(MenuTheme.MUTED) { "${timestamp(stamp)}  •  ${digestRelativeTime(stamp, System.currentTimeMillis())}" }) }
@@ -291,7 +296,7 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         if (entry.detail.isNotBlank()) {
             if (page == "news") {
                 val isExpanded = entry.id in expanded
-                child(button(if (isExpanded) "Show less" else "Read update", 88) {
+                child(button(if (isExpanded) "Show less" else if (entry.video) "Description" else "Read update", 88) {
                     if (!expanded.add(entry.id)) expanded.remove(entry.id)
                     updateContent()
                 })
@@ -304,11 +309,11 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         entry.manualId?.let { id -> child(button(if (entry.manualComplete) "Clear manual note" else "Mark done manually", 130) {
             DailyDigest.setManual(id, !entry.manualComplete)
         }.tip("A local note for this profile, clearly labelled as manual. It does not change the game or claim automatic verification.")) }
-        digestLink(entry.url)?.let { uri -> child(button("Open source", 90) {
-            navigateMenu(MenuConfirmScreen(this@DailyDigestScreen, "Open source in your browser?", uri.toString(), "Open browser") {
-                net.minecraft.util.Util.getPlatform().openUri(uri)
-            })
-        }.tip("Open ${uri.host} in your browser after confirmation")) }
+        digestLink(entry.url)?.let { uri -> child(linkButton(if (entry.video) "Watch Video" else "Open source", uri)) }
+        entry.links.mapNotNull(BrowserLinks::supported).distinct().forEachIndexed { index, uri ->
+            val label = if (uri.host.equals("hypixel.net", true) || uri.host.endsWith(".hypixel.net", true)) "Open Hypixel" else "Watch Video"
+            child(linkButton(label + if (entry.links.size > 1) " ${index + 1}" else "", uri))
+        }
         if (page == "rng") child(MenuButton(Component.literal("Share…")) { anchor ->
             val report = digestShareText(entry)
             openMenuDropdown(anchor) { menu ->
@@ -319,22 +324,21 @@ class DailyDigestScreen(private var page: String? = null) : MenuScreen(Component
         }.themed().apply { sizing(Sizing.fixed(66), Sizing.fixed(20)); tip("Choose Party, Guild or Copy. Chat opens a draft for you to review and send; nothing is sent automatically.") })
     }
 
-    private fun newsFilters() = column().apply {
-        listOf("" to "All", "game" to "Game updates", "alpha" to "Alpha updates").chunked(if (menuWidth < 280) 2 else 3).forEach { filters -> child(row().apply {
-        filters.forEach { (value, title) ->
-            child(button(title, if (value.isEmpty()) 34 else 96) {
-                if (newsFilter != value) { newsFilter = value; historyPage = 0; updateContent() }
-            }.apply { navigation = true; selected = { newsFilter == value } })
+    private fun linkButton(text: String, uri: URI) = button(text, 100) {
+        if (!MC.instance.options.chatLinks().get()) return@button
+        val inGame = BrowserLinks.supported(uri.toString()) != null
+        val open = {
+            if (MC.instance.options.chatLinks().get()) {
+                if (inGame) InGameBrowser.open(this, uri.toString())
+                else net.minecraft.util.Util.getPlatform().openUri(uri)
+            }
         }
-        }) }
-    }
-
-    private fun confirmClear() {
-        navigateMenu(MenuConfirmScreen(this, "Clear local RNG history?",
-            "Remove the history saved for this account and profile. Already shared community reports are unaffected.", "Clear history") {
-            DailyDigest.clearHistory()
-        })
-    }
+        if (MC.instance.options.chatLinksPrompt().get())
+            navigateMenu(MenuConfirmScreen(this, if (inGame) "Open in-game browser?" else "Open source in your browser?",
+                uri.toString(), "Open browser", open))
+        else open()
+    }.apply { active(MC.instance.options.chatLinks().get()) }
+        .tip("Open ${uri.host} ${if (BrowserLinks.supported(uri.toString()) != null) "in game" else "in your browser"}")
 
     private fun refreshButton() = button("Refresh", if (mergedHeader) 54 else 64) { DailyDigest.refresh(page) }
         .tip("Refresh available sources asynchronously. Cached data stays visible and cooldowns prevent repeated requests.").also { refresh = it }

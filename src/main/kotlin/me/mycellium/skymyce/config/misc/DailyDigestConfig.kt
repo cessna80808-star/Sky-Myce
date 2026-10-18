@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.config.misc
 
+import com.google.gson.JsonObject
 import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 
@@ -14,12 +15,10 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
         range = 3..30
         slider = true
     }
-    val news by boolean(true) {
+    var news by boolean(true) {
         name = TranslatableValue.literal("Daily news")
         description = TranslatableValue.literal("Fetch public Cowshed updates through the relay; cached updates remain available offline")
     }
-    val gameUpdates by boolean(true) { name = TranslatableValue.literal("Game updates"); description = TranslatableValue.literal("Include Cowshed updates for the live SkyBlock server.") }
-    val alphaUpdates by boolean(true) { name = TranslatableValue.literal("Alpha updates"); description = TranslatableValue.literal("Include Cowshed announcements for the Alpha test server.") }
     val receiveRng by boolean(true) {
         name = TranslatableValue.literal("Receive community RNG feed")
         description = TranslatableValue.literal("Show optional, unverified drop reports from other Sky-Hawk users")
@@ -36,7 +35,7 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
     }
     val retainedRngEvents by int(100) {
         name = TranslatableValue.literal("Local RNG history size")
-        description = TranslatableValue.literal("Maximum retained personal events; community reports are capped separately at 30. Clear personal history from the RNG submenu.")
+        description = TranslatableValue.literal("Maximum retained recent personal events; saved acquisition history remains available. Community reports are capped separately at 30.")
         range = 20..500
         slider = true
     }
@@ -53,4 +52,15 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
     }
 
     enum class Accent(val color: Int) { CYAN(0x67CCF2), PURPLE(0xC2A2F5), GOLD(0xE8BF71), GREEN(0x87D6A2) }
+}
+
+/** Fold the former normal-news switch into News once; stale fields cannot override later user choices. */
+internal fun migrateDailyNewsConfig(original: JsonObject, enabled: Boolean): Boolean {
+    val digest = original.get("General")?.takeIf { it.isJsonObject }?.asJsonObject
+        ?.get("Daily Digest")?.takeIf { it.isJsonObject }?.asJsonObject ?: return enabled
+    val game = digest.get("gameUpdates")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+    val migrated = enabled && game?.asBoolean != false
+    digest.remove("gameUpdates")
+    digest.remove("alphaUpdates")
+    return migrated
 }

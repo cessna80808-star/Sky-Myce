@@ -116,7 +116,7 @@ class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
                 MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (focus * 7 + hover * 4).toInt()),
                 MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (maxOf(focus, hover * .35) * 100).toInt()))
             MenuTheme.sheen(graphics, x, y, width, height, .35 + focus * .4 + hover * .25)
-            if (isFocused && !MenuTheme.BORDERS) graphics.drawRectOutline(x, y, width, height, MenuTheme.alpha(MenuTheme.ACCENT))
+            if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
         }
         val left = origin().roundToInt()
         val lineHeight = MenuCanvas.lineHeight()

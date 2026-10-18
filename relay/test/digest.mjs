@@ -4,17 +4,40 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 /** Exercise the production protocol and SQLite cache with signed accounts and bounded fake upstreams. */
 export async function checkDigest(script, proof) {
-  const channels = { game: "111111111111111111", alpha: "222222222222222222" };
-  let mode = "success", calls = 0;
+  const channel = "111111111111111111";
+  let mode = "success", calls = 0, videoMode = "success", videoCalls = 0;
+  const videoPublished = Date.now() - 86400000;
+  const videoChannel = "UCJNSLcZtWJmOHVq3YBEYbeA";
+  const videoIds = Array.from({ length: 12 }, (_, i) => `testvideo${String(i).padStart(2, "0")}`);
+  const videoEntry = (id, i = 0) => `<entry><yt:videoId>${id}</yt:videoId><yt:channelId>${videoChannel}</yt:channelId>
+    <title>SkyBlock &amp; videos &#x1F3AE;</title><published>${new Date(videoPublished - i * 1000).toISOString()}</published>
+    <updated>${new Date().toISOString()}</updated><link rel="alternate" href="https://www.youtube.com/${i === 1 ? `shorts/${id}` : `watch?v=${id}`}"/>
+    <media:group><media:thumbnail url="https://i4.ytimg.com/vi/${id}/hqdefault.jpg"/><media:description><![CDATA[An upload description.]]></media:description></media:group></entry>`;
+  const videoFeed = () => `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+    <yt:channelId>${videoChannel.slice(2)}</yt:channelId><title>Derailious</title>${videoIds.map(videoEntry).join("")}${videoEntry(videoIds[0])}</feed>`;
   const fetched = [];
   const options = convertV4MiniflareOptions({ name: "digest-check", modules: true, script, compatibilityDate: "2026-09-21",
-    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", DISCORD_NEWS_TOKEN: "test-only-bot-token",
-      DIGEST_GAME_CHANNEL: channels.game, DIGEST_ALPHA_CHANNEL: channels.alpha },
+    bindings: { ROOMS: "friends,testing", SKYMYCE_ENVIRONMENT: "development", ALLOW_LEGACY_RELAY: "true", BACKEND_BOT_TOKEN: "test-only-bot-token",
+      DIGEST_GAME_CHANNEL: channel },
     durableObjects: { RELAY_ROOMS: { className: "RelayRoom", useSQLite: true } },
     outboundService: async request => {
-      calls++;
       const url = new URL(request.url);
+      if (url.origin === "https://www.youtube.com") {
+        videoCalls++;
+        assert.equal(url.pathname, "/feeds/videos.xml"); assert.equal(url.searchParams.get("channel_id"), videoChannel);
+        assert.equal(request.headers.get("Authorization"), null, "Discord tokens must never reach YouTube");
+        if (videoMode === "offline") return new Response("unavailable", { status: 503 });
+        if (videoMode === "timeout") { await new Promise(resolve => setTimeout(resolve, 8500)); return new Response(videoFeed()); }
+        if (videoMode === "oversize") return new Response("x".repeat(262145));
+        if (videoMode === "malformed") return new Response("not-xml");
+        if (videoMode === "channel") return new Response(videoFeed().replaceAll(videoChannel, "UCwrongchannel"));
+        if (videoMode === "unsafe") return new Response(videoFeed().replaceAll("https://www.youtube.com/", "https://www.youtube.com.evil.example/"));
+        if (videoMode === "thumbnail") return new Response(videoFeed().replaceAll("https://i4.ytimg.com/", "https://images.example/"));
+        return new Response(videoFeed(), { headers: { "Content-Type": "application/atom+xml" } });
+      }
+      calls++;
       assert.equal(url.origin, "https://discord.com");
+      assert.equal(url.pathname, `/api/v10/channels/${channel}/messages`);
       assert.equal(request.headers.get("Authorization"), "Bot test-only-bot-token");
       assert.equal(request.method, "GET");
       fetched.push(url);
@@ -27,19 +50,34 @@ export async function checkDigest(script, proof) {
       if (mode === "oversize") return new Response("x".repeat(262145));
       if (mode === "timeout") { await new Promise(resolve => setTimeout(resolve, 8500)); return new Response("[]"); }
       if (mode === "empty") return Response.json([]);
-      const alpha = url.pathname.includes(channels.alpha);
-      const content = `${alpha ? "Alpha" : "Game"} news ${"long title ".repeat(30)}\n${"Detailed change. ".repeat(300)}`;
+      if (url.searchParams.has("after")) return Response.json([]);
+      const content = `Game news ${"long title ".repeat(30)}\n[Patch notes](https://hypixel.net/threads/release.123/). ` +
+        `<https://youtu.be/abcdefghijk?t=30> https://hypixel.net/threads/release.123/ ` +
+        `https://hypixel.net.evil.example/ https://hypixel.net@evil.example/ http://hypixel.net/ ` +
+        `https://www.youtube.com/redirect?q=unsafe https://www.youtube.com/watch?v=abcdefghijk&redirect=unsafe ` +
+        `https://hypixel.net/${"x".repeat(2100)} ` +
+        Array.from({ length: 12 }, (_, i) => `https://hypixel.net/threads/extra.${i}/`).join(" ") + `\n${"Detailed change. ".repeat(300)}`;
       const message = { id: "333333333333333333", timestamp: new Date().toISOString(), content,
         message_reference: { guild_id: "444444444444444444", channel_id: "555555555555555555", message_id: "666666666666666666" } };
       const snapshot = { id: "333333333333333334", timestamp: new Date().toISOString(), content: "",
         message_snapshots: [{ message: { content: "", embeds: [{ title: "Forwarded update", description: "Snapshot description",
-          fields: [{ name: "Change", value: "Fixed an issue" }] }] } }] };
+          url: "https://www.hypixel.net/threads/embed-only.456/", fields: [{ name: "Change", value:
+            `Fixed an issue [Video](https://www.youtube.com/watch?v=abcdefghijk) https://hypixel.net/${"a".repeat(900)} https://hypixel.net/${"b".repeat(900)}` }] }] } }] };
       return Response.json([message, message, snapshot, { id: "bad", content: "ignored" }]);
     },
   });
   options.unsafeInspectDurableObjects = true;
   options.workers[0].config.env.CONNECT_LIMIT = { type: "rate-limit", namespace: "7112026", simple: { limit: 20, period: 60 } };
   configureTrafficLimits(options);
+  // Catch RPC errors in a real Worker caller: Miniflare's Node proxy masks thrown RPC messages.
+  const rpcOptions = convertV4MiniflareOptions({ name: "digest-rpc-check", modules: true, compatibilityDate: "2026-09-21",
+    script: `export default { async fetch(request, env) {
+      try { return Response.json({ ok: true, result: await env.RELAY_ROOMS.getByName('public-news').publicNews(new URL(request.url).searchParams.get('source')) }); }
+      catch (error) { return Response.json({ ok: false, error: error.message }); }
+    } };`,
+    durableObjects: { RELAY_ROOMS: { className: "RelayRoom", scriptName: "digest-check", useSQLite: true } },
+  });
+  options.workers.push(rpcOptions.workers[0]);
   const mf = new Miniflare(options), sockets = [];
   let sequence = 1000;
   function inbox(ws) {
@@ -78,6 +116,61 @@ export async function checkDigest(script, proof) {
   const drop = (id, item = "NECRON_HANDLE", activity = "dungeon", showName = false) => ({ type: "rng_publish", showName,
     event: { id: id.toString(16).padStart(32, "0"), item, activity, occurredAt: Date.now() } });
   try {
+    // Public announcement reads require neither a Discord link nor a Minecraft proof.
+    const publicNews = async source => {
+      const response = await mf.dispatchFetch(`https://news.test/community/news?source=${source}`);
+      assert.equal(response.status, 200); assert.equal(response.headers.get("Cache-Control"), "no-store");
+      return response.json();
+    };
+    const publicGame = await publicNews("game");
+    assert.equal(publicGame.status, "ready"); assert.equal(publicGame.items.length, 2); assert.equal(calls, 1);
+    assert.ok(!JSON.stringify(publicGame).includes("test-only-bot-token"));
+    assert.deepEqual(await publicNews("game&channel=private&refresh=true"), publicGame); assert.equal(calls, 1);
+    for (const source of ["alpha", "", "global", "111111111111111111", "../../private"]) {
+      const rejected = await mf.dispatchFetch(`https://news.test/community/news?source=${source}`);
+      assert.equal(rejected.status, 400); assert.equal((await rejected.json()).error, "invalid_source");
+    }
+    const rpcWorker = await mf.getWorker("digest-rpc-check");
+    assert.deepEqual(await (await rpcWorker.fetch("https://rpc.test/?source=alpha")).json(), { ok: false, error: "invalid_source" });
+    assert.deepEqual(await (await rpcWorker.fetch("https://rpc.test/?source=game")).json(), { ok: true, result: publicGame });
+    assert.equal(calls, 1, "Removed or invalid sources cannot fetch or relabel the game feed");
+    const videos = await publicNews("derailious&channel_id=private");
+    assert.equal(videos.status, "ready"); assert.equal(videoCalls, 1); assert.equal(videos.items.length, 8);
+    assert.equal(videos.items[0].id, `derailious:${videoIds[0]}`); assert.equal(videos.items[0].publishedAt, videoPublished);
+    assert.equal(videos.items[0].title, "SkyBlock & videos 🎮"); assert.equal(videos.items[0].content, "An upload description.");
+    assert.equal(videos.items[0].url, `https://www.youtube.com/watch?v=${videoIds[0]}`);
+    assert.equal(videos.items[1].url, `https://www.youtube.com/shorts/${videoIds[1]}`);
+    assert.equal(videos.items[0].thumbnailUrl, `https://i4.ytimg.com/vi/${videoIds[0]}/hqdefault.jpg`);
+    assert.equal(new Set(videos.items.map(item => item.id)).size, 8); assert.equal(calls, 1);
+    assert.deepEqual(await publicNews("derailious"), videos); assert.equal(videoCalls, 1);
+    const videoRpc = async () => {
+      const response = await (await rpcWorker.fetch("https://rpc.test/?source=derailious")).json();
+      assert.equal(response.ok, true); return response.result;
+    };
+    const publicStorage = await mf.unsafeGetDurableObjectStorage("digest-check", "RelayRoom", { name: "public-news" });
+    const expireVideos = () => publicStorage.exec("UPDATE digest_news SET retry_at = 0, fetched_at = ? WHERE source = 'derailious'", Date.now() - 1000000);
+    for (const failure of ["offline", "malformed", "channel", "unsafe", "oversize", "timeout"]) {
+      await expireVideos(); videoMode = failure;
+      const stale = await videoRpc();
+      assert.equal(stale.status, "stale"); assert.deepEqual(stale.items, videos.items);
+      assert.equal(stale.error, failure === "offline" ? "offline" : failure === "timeout" ? "timeout" : "invalid_response");
+      const before = videoCalls; assert.deepEqual(await videoRpc(), stale); assert.equal(videoCalls, before);
+      assert.deepEqual((await (await rpcWorker.fetch("https://rpc.test/?source=game")).json()).result, publicGame);
+    }
+    await expireVideos(); videoMode = "thumbnail";
+    assert.ok((await videoRpc()).items.every(item => item.thumbnailUrl === undefined), "Unsafe thumbnails are discarded without losing videos");
+    await expireVideos(); videoMode = "success";
+    assert.deepEqual((await videoRpc()).items, videos.items);
+    const post = await mf.dispatchFetch("https://news.test/community/news?source=game", { method: "POST" });
+    assert.equal(post.status, 405); assert.equal(post.headers.get("Allow"), "GET");
+    await mf.unsafeEvictDurableObject("digest-check", "RelayRoom", { name: "public-news", webSockets: "hibernate" });
+    assert.deepEqual(await publicNews("game"), publicGame); assert.equal(calls, 1);
+    assert.deepEqual((await videoRpc()).items, videos.items); // SQLite retains both independent sources after hibernation.
+    let publicLimited;
+    for (let attempt = 0; attempt < 21; attempt++) publicLimited = await mf.dispatchFetch("https://news.test/community/news?source=game");
+    assert.equal(publicLimited.status, 429); assert.equal((await publicLimited.json()).error, "rate_limited");
+    assert.equal(publicLimited.headers.get("Retry-After"), "60"); assert.equal(calls, 1);
+    calls = 0; fetched.length = 0;
     let alice = await connect();
     const first = await news(alice);
     assert.equal(first.status, "ready", JSON.stringify({ ...first, calls, fetched: fetched.map(url => url.pathname) })); assert.equal(calls, 1); assert.equal(first.items.length, 2);
@@ -85,14 +178,21 @@ export async function checkDigest(script, proof) {
     assert.ok(first.items.every(item => item.title.length <= 160 && item.content.length <= 2500));
     assert.ok(first.items.some(item => item.truncated));
     assert.ok(first.items.some(item => item.content.includes("Snapshot description")));
+    const linkedNews = first.items.find(item => item.truncated);
+    assert.deepEqual(linkedNews.links.slice(0, 2), ["https://hypixel.net/threads/release.123/", "https://youtu.be/abcdefghijk?t=30"]);
+    assert.equal(linkedNews.links.length, 8); assert.equal(new Set(linkedNews.links).size, 8);
+    assert.ok(linkedNews.links.every(link => !link.includes("evil") && !link.includes("redirect")));
+    const snapshotLinks = first.items.find(item => item.content.includes("Snapshot description")).links;
+    assert.ok(snapshotLinks.includes("https://www.youtube.com/watch?v=abcdefghijk"));
+    assert.ok(snapshotLinks.includes("https://www.hypixel.net/threads/embed-only.456/"));
+    assert.ok(first.items.every(item => item.links.reduce((length, link) => length + link.length, 0) <= 1024));
     assert.ok(Buffer.byteLength(JSON.stringify(first)) < 32768);
     assert.equal(first.items.find(item => item.truncated).url,
       "https://discord.com/channels/444444444444444444/555555555555555555/666666666666666666");
     assert.deepEqual((await news(alice)).items, first.items); assert.equal(calls, 1);
-    assert.equal((await news(alice, "alpha")).source, "alpha"); assert.equal(calls, 2);
-    assert.ok((await news(alice, "alpha")).items.some(item => item.title.startsWith("Alpha")));
+    assert.equal((await news(alice, "alpha")).error, "invalid_source"); assert.equal(calls, 1);
     await mf.unsafeEvictDurableObject("digest-check", "RelayRoom", { name: "friends", webSockets: "hibernate" });
-    assert.deepEqual((await news(alice)).items, first.items); assert.equal(calls, 2);
+    assert.deepEqual((await news(alice)).items, first.items); assert.equal(calls, 1);
     const storage = await mf.unsafeGetDurableObjectStorage("digest-check", "RelayRoom", { name: "friends" });
     const expireNews = () => storage.exec("UPDATE digest_news SET retry_at = 0, fetched_at = ?", Date.now() - 600000);
     for (const [failure, code] of [["offline", "offline"], ["auth", "authentication"], ["malformed", "invalid_response"],
@@ -112,8 +212,27 @@ export async function checkDigest(script, proof) {
     }
     mode = "success"; await expireNews(); alice = await connect();
     assert.equal((await news(alice)).items.length, 2); // Duplicate upstream content does not grow local history.
-    assert.equal(fetched.at(-1).searchParams.get("after"), "333333333333333334");
+    assert.equal(fetched.at(-1).searchParams.get("after"), null);
+    const older = { id: "game:222222222222222222", title: "Older saved update", content: "Saved announcement outside the latest page",
+      publishedAt: Date.now() - 86400000 };
+    const legacyItems = first.items.map(({ links, ...item }) => item);
+    await storage.exec("UPDATE digest_news SET items = ?, fetched_at = ?, retry_at = 0 WHERE source = 'game'",
+      JSON.stringify([...legacyItems, older]), Date.now() - 600000);
+    const beforeRecovery = calls;
+    alice = await connect();
+    const recovered = await news(alice);
+    assert.equal(calls, beforeRecovery + 1, "Recovering links reuses the normal single announcement fetch");
+    assert.equal(recovered.items.length, 3);
+    for (const item of first.items) {
+      assert.equal(recovered.items.filter(entry => entry.id === item.id).length, 1);
+      assert.deepEqual(recovered.items.find(entry => entry.id === item.id).links, item.links,
+        "An unchanged Discord message ID must regain its text and embed links");
+    }
+    assert.deepEqual(recovered.items.find(item => item.id === older.id), older);
+    assert.deepEqual((await news(alice)).items, recovered.items); assert.equal(calls, beforeRecovery + 1);
     mode = "empty";
+    await expireNews(); alice = await connect();
+    assert.deepEqual((await news(alice)).items, recovered.items, "An empty latest page preserves saved announcements");
     const isolated = await connect("Carol", "testing");
     assert.equal((await news(isolated)).items.length, 0);
     assert.equal((await news(isolated)).status, "ready");
@@ -186,7 +305,7 @@ export async function checkDigest(script, proof) {
       JSON.stringify([{ id: firstDrop.event.id, time: Date.now() - 330000 }]), Date.now() - 330000, "a".repeat(32));
     assert.equal((await request(alice, { ...firstDrop, event: { ...firstDrop.event, occurredAt: Date.now() - 270000 } })).stored, false);
     // Six-minute dedup retention includes a report's allowed one-minute clock skew, even after history eviction.
-    console.log("Digest relay checks passed: news parsing/cache/backoff/bounds, signed opt-in RNG, privacy, validation, reconnect limits, hibernation.");
+    console.log("Digest relay checks passed: public announcement route without sessions, existing bot credential, source allowlist, persisted cache, parsing/backoff/bounds, signed opt-in RNG, privacy, validation, reconnect limits, hibernation.");
   } finally {
     for (const ws of sockets) { try { ws.close(); } catch {} }
     await mf.dispose();

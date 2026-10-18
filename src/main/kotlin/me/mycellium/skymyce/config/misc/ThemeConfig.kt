@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.config.misc
 
+import com.google.gson.JsonObject
 import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 import me.mycellium.skymyce.hud.ThemeOverrides
@@ -10,13 +11,27 @@ import me.mycellium.skymyce.ui.GuiQuality
 object ThemeConfig : CategoryKt("Theme & Appearance") {
     var migratedDigestTheme by boolean(false) { condition = { false } }
     var themeVersion by int(0) { condition = { false } }
-    var preset by enum(ThemePreset.DARK_GLASS) {
+    private var existingConfiguration = false
+    var preset by enum(ThemePreset.SIGNATURE) {
         name = TranslatableValue.literal("Theme preset")
-        description = TranslatableValue.literal("Base palette inherited by menus and widgets. Overrides remain separate.")
+        description = TranslatableValue.literal("Shared palette and component styling inherited by menus and widgets. Personal overrides stay in place.")
     }
-    var graphicsQuality by enum(GuiQuality.MEDIUM) {
-        name = TranslatableValue.literal("GUI Graphics Quality")
-        description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls rendering resolution, shadows and ambient effects while keeping essential interaction feedback.")
+    var graphicsQuality by enum(GuiQuality.AUTO) {
+        name = TranslatableValue.literal("Graphics Mode")
+        description = TranslatableValue.literal("Auto lowers Sky-Myce's menu sharpness, shadows, glow and ambient effects while your frame rate stays under its target, and restores them when it recovers; /sm graphics shows what it chose. Light, Balanced and Heavy are fixed; Minimal is the lightest. HUD information is never reduced, and Minecraft's own settings are untouched.")
+    }
+    var autoTargetFps by int(60) {
+        name = TranslatableValue.literal("Auto Target FPS")
+        description = TranslatableValue.literal("Auto keeps full quality while you stay above this frame rate. Never higher than your frame limit")
+        range = 30..240; slider = true
+    }
+    var autoResponse by enum(me.mycellium.skymyce.ui.AutoResponse.NORMAL) {
+        name = TranslatableValue.literal("Auto Response")
+        description = TranslatableValue.literal("Gentle waits longest before lowering quality; Quick protects the frame rate soonest. Raising quality always waits for steady frames")
+    }
+    var autoLowest by enum(GuiQuality.EXTREMELY_LIGHT) {
+        name = TranslatableValue.literal("Auto Lowest Quality")
+        description = TranslatableValue.literal("Auto never goes below this. Choose Balanced to always keep shadows and glow")
     }
     var animationMode by enum(GuiMotion.MEDIUM) {
         name = TranslatableValue.literal("GUI Animations")
@@ -24,22 +39,28 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     }
     var menuIntroPlayed by boolean(false) { condition = { false } }
 
+    /** An old file without a preset still used Dark glass; only a new installation starts with Signature. */
+    fun restoreLegacyTheme(original: JsonObject) {
+        existingConfiguration = original.size() > 0
+        preset = restoredThemePreset(original, preset)
+    }
+
     fun migrateDigestTheme() {
+        if (!existingConfiguration) {
+            migratedDigestTheme = true
+            themeVersion = 2
+            return
+        }
         if (!migratedDigestTheme) {
-            if (primary == -1 || primary == 0x67CCF2) primary = DailyDigestConfig.accent.color
-            if ((opacity == -1 || opacity == 90) && DailyDigestConfig.cardOpacity != 96) opacity = DailyDigestConfig.cardOpacity.coerceIn(20, 100)
+            if (primary == -1 && DailyDigestConfig.accent != DailyDigestConfig.Accent.CYAN) primary = DailyDigestConfig.accent.color
+            if (opacity == -1 && DailyDigestConfig.cardOpacity != 96) opacity = DailyDigestConfig.cardOpacity.coerceIn(20, 100)
             migratedDigestTheme = true
         }
-        if (themeVersion < 1) {
-            if (primary == 0x67CCF2) primary = -1
-            if (secondary == 0xC2A2F5) secondary = -1
-            if (opacity == 90) opacity = -1
-            themeVersion = 1
-        }
+        if (themeVersion < 2) themeVersion = 2
     }
     var primary by int(-1) {
         name = TranslatableValue.literal("Primary accent")
-        description = TranslatableValue.literal("Main highlight used throughout Sky-Hawk menus and HUD panels.")
+        description = TranslatableValue.literal("Main highlight used throughout Sky-Myce menus and HUD panels.")
         range = -1..0xFFFFFF
     }
     var secondary by int(-1) {
@@ -49,7 +70,7 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     }
     var opacity by int(-1) {
         name = TranslatableValue.literal("Panel opacity")
-        description = TranslatableValue.literal("Opacity of all Sky-Hawk panels and buttons, from transparent to solid. Text remains fully readable.")
+        description = TranslatableValue.literal("Opacity of all Sky-Myce panels and buttons, from transparent to solid. Text remains fully readable.")
         range = -1..100
         slider = true
     }
@@ -73,4 +94,9 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
     private fun Int.validColor() = takeIf { it in 0..0xFFFFFF }
     private fun Int.flag() = when (this) { 0 -> false; 1 -> true; else -> null }
     private fun Boolean?.encoded() = when (this) { true -> 1; false -> 0; null -> -1 }
+}
+
+internal fun restoredThemePreset(original: JsonObject, loaded: ThemePreset): ThemePreset {
+    val theme = original.get("Theme & Appearance")?.takeIf { it.isJsonObject }?.asJsonObject
+    return if (original.size() > 0 && theme?.has("preset") != true) ThemePreset.DARK_GLASS else loaded
 }

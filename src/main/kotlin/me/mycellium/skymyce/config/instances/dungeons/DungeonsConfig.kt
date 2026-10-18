@@ -7,9 +7,12 @@ import me.mycellium.skymyce.features.instances.dungeons.DungeonCleanChat
 object DungeonsConfig : CategoryKt("Dungeons") {
     init {
         category(DungeonTrackerConfig)
+        category(DungeonSplitsConfig)
+        category(GoldorCoordinationConfig)
         category(DungeonFriendsConfig)
         category(StarredClearRoutingConfig)
         category(HealerCrushCameraConfig)
+        category(LeapMenuConfig)
     }
 
     val valuableItemThreshold by int(15) {
@@ -24,6 +27,11 @@ object DungeonsConfig : CategoryKt("Dungeons") {
     val dungeonWinScreen by boolean(true) {
         name = TranslatableValue.literal("Dungeon Win Screen")
         description = TranslatableValue.literal("Displays an overlay when a dungeon is ended")
+    }
+
+    val dungeonWinScreenDetails by boolean(true) {
+        name = TranslatableValue.literal("Win Screen Details")
+        description = TranslatableValue.literal("Add your splits time against your PB, average or worst (Dungeon Splits settings), secrets, crypts, deaths, damage, kills, healing and experience gained to the win screen")
     }
 
     val dungeonMessageFilter by select(DungeonCleanChat.DungeonFilter.MISCELLANEOUS) {

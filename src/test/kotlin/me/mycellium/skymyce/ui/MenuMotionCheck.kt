@@ -28,6 +28,7 @@ private fun near(actual: Double, expected: Double, message: String, tolerance: D
 }
 
 fun main() {
+    autoGraphicsCheck(); textHookBenchmark()
     val checkpoints = listOf(0L, 20, 60, 100, 120, 170, 220, 280, 350).map { it * 1_000_000 }
     fun trajectory(fps: Int): List<Double> {
         val clock = MotionClock(); val value = clock.value()
@@ -132,13 +133,13 @@ fun main() {
     rapid.animateTo(.75); rapidClock.millis(4200)
     check(!rapid.sample().isNaN() && !rapid.running && rapid.sample() == .75)
 
-    val qualities = GuiQuality.entries
+    val qualities = GuiQuality.entries.filter { it != GuiQuality.AUTO } // Auto draws with one of these tiers.
     check(qualities.map { it.rasterScale } == listOf(1.0, 1.25, 1.5, 2.0))
     check(qualities.map { it.shadowLayers } == listOf(0, 1, 2, 3))
     check(qualities.take(2).all { !it.glow && !it.ambient && it.ambientIntervalNanos == 0L })
     check(GuiQuality.MEDIUM.ambientIntervalNanos == 100_000_000L && GuiQuality.HIGH.ambientIntervalNanos == 50_000_000L)
     check(qualities.drop(2).all { it.glow && it.ambient })
-    check(qualities.map { it.toString() } == listOf("Extremely Light", "Light", "Medium", "High"))
+    check(qualities.map { it.toString() } == listOf("Minimal", "Light", "Balanced", "Heavy"))
     check(GuiMotion.choices.map { it.toString() } == listOf("Light", "Medium", "Heavy", "Reduced", "Off"))
     for (mode in GuiMotion.entries) {
         for (life in listOf(1.0, 75.0, 500.0, 2000.0)) {
@@ -189,6 +190,7 @@ fun main() {
     checkMotionFocus()
     checkMotionToasts()
     checkMotionScroll()
+    checkKeyboardFocusScroll()
     checkRevealCardPointer()
     checkMotionClipping()
     checkRegionalMotion()
@@ -479,14 +481,29 @@ private fun checkRevealCardPointer() {
         }
         val x = first.x() + first.width() / 2.0; val y = first.y() + first.height() / 2.0
         val point = checkNotNull(menuCardPointer(root, x, y))
-        val painted = pose.get(first) as MotionPose
-        near(point.first, painted.inverseX(x), "Animated feature controls lost their visible click coordinates")
-        near(point.second, painted.inverseY(y), "Animated feature controls lost their visible click coordinates")
+        near(point.first, x, "Feature-card paint changed its logical click X")
+        near(point.second, y, "Feature-card paint changed its logical click Y")
         menuCardPointer(root, second.x() + second.width() / 2.0, second.y() + second.height() - .25)
         check(!hover.getBoolean(first) && hover.getBoolean(second)) { "Adjacent cards retained stale hover" }
         menuCardPointer(root, -1.0, -1.0)
         check(!hover.getBoolean(first) && !hover.getBoolean(second)) { "Leaving the card tree retained hover" }
+        val previous = me.mycellium.skymyce.config.misc.ThemeConfig.animationMode
+        val canvas = MenuCanvas()
+        try {
+            me.mycellium.skymyce.config.misc.ThemeConfig.animationMode = mode
+            canvas.begin()
+            root.draw(headlessMenuGraphics(canvas, 220, 280), first.x() + 5, first.y() + 5, 0f, 0f)
+            for (card in listOf(first, second)) {
+                val painted = pose.get(card) as MotionPose
+                check(painted.scale == 1.0 && painted.x == 0.0 && painted.y == 0.0) {
+                    "$mode card reveal/hover moved its controls instead of painting feedback in place"
+                }
+            }
+        } finally {
+            canvas.close(); me.mycellium.skymyce.config.misc.ThemeConfig.animationMode = previous
+        }
     }
+    pose.set(first, MotionPose())
     clip.set(first, MenuRect(first.x().toDouble(), first.y().toDouble(), first.width().toDouble(), 10.0))
     menuCardPointer(root, first.x() + 5.0, first.y() + 50.0)
     check(!hover.getBoolean(first)) { "A clipped card area became hoverable" }
@@ -618,6 +635,59 @@ private fun checkMotionScroll() {
     near(position.scrollTo(.5, GuiMotion.OFF), .5, "Off mode retained smoothed wheel input")
     position.scrollTo(10.0, GuiMotion.REDUCED)
     clock.millis(690); near(position.sample(), 10.0, "Reduced wheel motion exceeded its timing budget")
+}
+
+private fun checkKeyboardFocusScroll() {
+    me.mycellium.skymyce.hud.bootstrapHeadlessOwo()
+    val clock = MotionClock()
+    val first = UIComponents.box(Sizing.fixed(120), Sizing.fixed(24))
+    val last = UIComponents.box(Sizing.fixed(120), Sizing.fixed(24))
+    val list = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+        padding(Insets.of(6)); gap(8)
+        children(listOf(first, UIComponents.box(Sizing.fixed(120), Sizing.fixed(200)), last))
+    }
+    val inner = MenuScroll(Sizing.fixed(140), Sizing.fixed(120), list) { clock.nanos }.apply {
+        padding(Insets.of(4)); scrollbar(io.wispforest.owo.ui.container.ScrollContainer.Scrollbar.flat(io.wispforest.owo.ui.core.Color.ofRgb(0xFFFFFF)))
+    }
+    val outerList = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply {
+        gap(8); padding(Insets.of(6))
+        children(listOf(UIComponents.box(Sizing.fixed(140), Sizing.fixed(70)), inner,
+            UIComponents.box(Sizing.fixed(140), Sizing.fixed(40))))
+    }
+    val outer = MenuScroll(Sizing.fixed(160), Sizing.fixed(90), outerList) { clock.nanos }.apply {
+        padding(Insets.of(4)); scrollbar(io.wispforest.owo.ui.container.ScrollContainer.Scrollbar.flat(io.wispforest.owo.ui.core.Color.ofRgb(0xFFFFFF)))
+    }
+    val root = UIContainers.verticalFlow(Sizing.fixed(180), Sizing.fixed(120)).child(outer)
+    root.inflate(Size.of(180, 120)); root.mount(null, 20, 30)
+    val previousMode = me.mycellium.skymyce.config.misc.ThemeConfig.animationMode
+    val canvas = MenuCanvas()
+    fun paint() { canvas.begin(); root.draw(headlessMenuGraphics(canvas, 220, 180), -1, -1, 0f, 0f) }
+    fun visible(component: io.wispforest.owo.ui.core.UIComponent) {
+        for (scroll in listOf(inner, outer)) {
+            check(component.y() >= scroll.y() + scroll.padding().get().top() &&
+                component.y() + component.height() <= scroll.y() + scroll.height() - scroll.padding().get().bottom()) {
+                "Keyboard focus remained clipped by a nested scroll viewport"
+            }
+        }
+    }
+    try {
+        me.mycellium.skymyce.config.misc.ThemeConfig.animationMode = GuiMotion.MEDIUM
+        paint()
+        revealMenuKeyboardFocus(last); paint(); visible(last)
+        check(inner.scrollPosition > 0 && outer.scrollPosition > 0) { "Focus revealed only the nearest scroll viewport" }
+        revealMenuKeyboardFocus(first); paint(); visible(first)
+        val settled = inner.scrollPosition to outer.scrollPosition
+        revealMenuKeyboardFocus(first)
+        check(settled == (inner.scrollPosition to outer.scrollPosition)) { "Already visible focus jumped the page" }
+        inner.scrollBy(-999.0, true, false); paint()
+        inner.scrollBy(80.0, false, true)
+        check(inner.scrollTarget > inner.scrollPosition)
+        revealMenuKeyboardFocus(first)
+        check(inner.scrollTarget == inner.scrollPosition) { "A queued wheel target scrolled newly visible keyboard focus away" }
+        paint(); visible(first)
+    } finally {
+        canvas.close(); me.mycellium.skymyce.config.misc.ThemeConfig.animationMode = previousMode
+    }
 }
 
 private fun checkMotionFocus() {

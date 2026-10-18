@@ -16,6 +16,12 @@ import me.mycellium.skymyce.hud.widget.hudEditorHelp
 import me.mycellium.skymyce.hud.widget.hudEditorContent
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLines
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetVisible
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerDisplayFloor
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetLines
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerSummary
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
 import me.mycellium.skymyce.ui.MenuCanvas
 import me.mycellium.skymyce.ui.menuTextWidth
 
@@ -52,7 +58,46 @@ fun main() {
     me.mycellium.skymyce.features.digest.digestUiCheck()
     // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
     val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
-    check(trackerPreview.any { it.contains("Editor preview") } && trackerPreview.size > 3)
+    val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
+    // Status bars, the skill XP bar, NPC dialogue and sign Enter.
+    me.mycellium.skymyce.features.general.overlaysCheck()
+    check(plainPreview.size == 9 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
+    // The level card replaces the target line: Cata 52 at 86.2% toward 53, 27.6M (69 runs at 400k) to go.
+    val level = me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLevel
+    check(level.level == 52 && level.target == 53 && me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardPercent(level) == "86.2%")
+    val footer = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(level, 400_000.0)
+    check(footer.size == 1 && Regex("Next: ~(69|70) runs · .*XP").matches(footer[0])) { footer }
+    val far = me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1_000_000.0, 30, 100_000.0)
+    val farFooter = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(far, 100_000.0)
+    check(farFooter.size == 2 && farFooter[1].startsWith("Cata 30: ~") && farFooter[1].contains("runs")) { farFooter }
+    check(me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(
+        me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1e12, 50, null), null) == listOf("Cata 50 reached"))
+    check(plainPreview[2].isEmpty() && plainPreview[6].isEmpty())
+    check(plainPreview[3] == "Time: 1h (6m/run)" && plainPreview[4] == "Runs: 10 (10/h)")
+    check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[7].contains("12M") && plainPreview[8].contains("400K"))
+    check(plainPreview.none { it.contains("Editor preview") || it.contains("Historical") || it.contains("Inherited") || it.contains("profile") })
+    val partial = TrackerSummary(runs = 2, timedRuns = 1, time = 300_000, gross = 50_000.0, chestCost = 10_000.0, incompleteValues = true)
+    val partialRows = dungeonTrackerWidgetLines(DungeonFloor.M7, partial).map { it.replace(Regex("§."), "") }
+    check(partialRows.size == 9 && partialRows[3] == "Time: 5m recorded (5m/run)" && partialRows[6] == "Rates need matched run times")
+    check(partialRows[4].contains("—/h") && partialRows[7].contains("40K + ?") && partialRows[7].contains("—/h"))
+    check(dungeonTrackerWidgetLines(DungeonFloor.M7, TrackerSummary())[3].contains("0s") && plainPreview[7].contains("~"))
+    for (value in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+        val rows = dungeonTrackerWidgetLines(null, TrackerSummary(gross = value, cataXp = value, time = Long.MAX_VALUE, timedRuns = 1))
+        check(rows.none { it.contains("NaN") || it.contains("Infinity") || it.contains("∞") })
+    }
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val completed = DungeonRunRecord("latest", "session", context, "M7", completedAt = 100)
+    val runs = listOf(completed.copy(id = "older", floor = "F7", completedAt = 1), completed,
+        completed.copy(id = "legacy", floor = "M6", completedAt = 200, trackingVersion = 1),
+        completed.copy(id = "other", floor = "M5", completedAt = 300, context = context.copy(profileName = "Pear")),
+        completed.copy(id = "unfinished", floor = "M4", completedAt = null),
+        completed.copy(id = "invalid", floor = "invalid", completedAt = 400))
+    check(dungeonTrackerDisplayFloor(null, null, runs, context) == DungeonFloor.M7)
+    check(dungeonTrackerDisplayFloor(DungeonFloor.F6, DungeonFloor.F5, runs, context) == DungeonFloor.F6)
+    check(dungeonTrackerDisplayFloor(null, DungeonFloor.F5, runs, context) == DungeonFloor.F5)
+    check(dungeonTrackerDisplayFloor(null, null, runs, null) == null)
+    check(dungeonTrackerDisplayFloor(null, null, runs, context.copy(account = "b".repeat(32))) == null)
+    check(dungeonTrackerDisplayFloor(null, null, runs, context.copy(server = "alpha")) == null)
     check(dungeonTrackerPreviewLines(enabled = false) == null)
     val firstEditorContent = hudEditorContent({ dungeonTrackerPreviewLines(true) },
         { error("A deterministic preview must not depend on live dungeon state") }, null, sinceActive = 0, now = 100_000)
@@ -98,7 +143,7 @@ fun main() {
         val help = hudEditorHelp(width)
         check(toolbar.x() == (width - toolbar.width()) / 2 && toolbar.y() == height - help.size * MenuCanvas.lineHeight() - 40)
         check(help.all { menuTextWidth(it) <= width - 16 }) { "HUD editor help text extends beyond the viewport" }
-        check(toolbar.children().size == 2 && toolbar.width() == 208) { "HUD editor toolbar must contain only Reset positions and Done" }
+        check(toolbar.children().size == 2 && toolbar.width() == 253) { "HUD editor toolbar width must fit Reset positions, Bars and Done" }
         check(toolbar.children()[1].width() == 40 && toolbar.children()[1].x() + 40 == toolbar.x() + toolbar.width() - 4)
         check(toolbar.children().all { it.x() >= toolbar.x() && it.x() + it.width() <= toolbar.x() + toolbar.width() })
         check(!hudEditorControlAt(toolbarRoot, 20.0, 20.0)) { "HUD editor still covers top-left widgets by default" }

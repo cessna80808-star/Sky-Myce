@@ -53,6 +53,9 @@ fun main() {
     val camera = checkNotNull(catalog.findFeature("healer-crush-camera"))
     check(camera.title == "Crush Camera")
     check(camera.enabledPath == "Dungeons/Healer Crush Camera/enabled")
+    val leap = checkNotNull(catalog.findFeature("leap-menu"))
+    check(leap.settings.map { it.path.substringAfterLast('/') }.toSet() == setOf("enabled", "povEnabled", "partyPovSharing", "previewFramesPerSecond"))
+    check(!checkNotNull(catalog.setting("Dungeons/Leap Menu/partyPovSharing")).entry.boolean) { "Party POV sharing must require explicit opt-in" }
     val cameraGroups = settingGroups(rows, camera.id)
     check(cameraGroups.keys == setOf("Automatic activation", "Appearance"))
     for (key in listOf("enabled", "healer", "mage", "berserk", "archer", "tank"))
@@ -67,7 +70,7 @@ fun main() {
     check(previewRange.min == 50.0 && previewRange.max == 200.0)
     check(catalog.search("gif").any { it.featureId == irc.id })
     check(catalog.search("global skymyce chat").any { it.featureId == irc.id })
-    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "General Settings"))
+    check(MenuCategory.entries.map { it.title } == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     check(catalog.features.map { it.id }.distinct().size == catalog.features.size)
     MenuPage.entries.forEach { check(catalog.findFeature(it.featureId) != null) }
     check(catalog.features.map { it.category }.toSet() == MenuCategory.entries.toSet())
@@ -144,7 +147,7 @@ fun main() {
     check(routing.title == "Dungeon Routing" && routing.enabledPath == "Dungeons/Starred Clear Routing/enabled")
     val routingGroups = settingGroups(rows, routing.id)
     val expectedRoutingGroups = linkedMapOf(
-        "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+        "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
         "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
         "Appearance" to listOf("thickness", "opacity", "lineHeight"),
         "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),

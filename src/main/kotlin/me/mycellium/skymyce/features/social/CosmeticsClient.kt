@@ -95,15 +95,16 @@ internal class CosmeticIdentities(private val maximum: Int = 512) {
         if (!NAME.matches(name)) return
         val key = name.lowercase()
         val previous = entries[key]
-        if (!priority && uuid != null && entries.any { it.key != key && it.value.uuid == uuid && it.value.priorityUntil > now }) return
         // The normal roster refresh reports the same identity repeatedly. Preserve its
         // lookup/priority state without sweeping duplicate UUIDs or replacing the DTO.
+        // This fast path comes first: the duplicate-UUID sweep below is linear and runs ~1000 times a second otherwise.
         if (previous != null && (uuid == null || previous.uuid == uuid && !previous.byName) && previous.name == name) {
             previous.seen = now
             previous.priorityUntil = maxOf(previous.priorityUntil, if (priority) now + 600000 else 0)
             entries.putLast(key, previous)
             return
         }
+        if (!priority && uuid != null && entries.any { it.key != key && it.value.uuid == uuid && it.value.priorityUntil > now }) return
         if (previous == null && entries.size >= maximum) {
             if (!priority) return // Bulk cache scans cannot displace recent chat, tab or menu identities.
             entries.remove(entries.entries.firstOrNull { it.value.priorityUntil <= now }?.key ?: entries.keys.first())
@@ -169,6 +170,10 @@ object CosmeticsClient : SkyMyceModule() {
     private var identity: UUID? = null
     private var enabled = false
     private var forceOwn = false
+    /** A chat re-wrap is owed (names changed); done at most every 2 s, outside the tick, because it re-wraps all history. */
+    private var rescalePending = false
+    private var nextRescale = 0L
+    private var nextOffHypixelNames = 0L
     var revision = 0L
         private set
     var status = "Waiting for Hypixel"
@@ -179,17 +184,29 @@ object CosmeticsClient : SkyMyceModule() {
         private set
 
     override fun init() { CapeTextures.initialize(); LocalCosmetics.initialize(); ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
+    private fun requestRescale() { rescalePending = true }
+
+    private fun flushRescale(now: Long) {
+        if (!rescalePending || now < nextRescale) return
+        rescalePending = false; nextRescale = now + 2_000
+        // Never during the tick's own iteration of chat state (a ConcurrentModificationException was seen there).
+        MC.instance.execute { MC.instance.gui.chat.rescaleChat() }
+    }
+
     override fun tick() {
         LocalCosmetics.observeOwner()
-        if (!isEnabled()) { if (enabled || identity != null) clear(); return }
         val now = System.currentTimeMillis()
+        flushRescale(now)
+        if (!isEnabled()) { if (enabled || identity != null) clear(); return }
         if (!LocationAPI.onHypixel || MC.instance.player == null || identity != null && identity != MC.instance.user.profileId) {
             if (identity != null || enabled) clear()
-            updateNames(now); status = "Local cosmetics work here • join Hypixel to synchronize community cosmetics"; return
+            // Local cosmetics only change on their own events; once a second is plenty here.
+            if (now >= nextOffHypixelNames) { nextOffHypixelNames = now + 1_000; updateNames(now) }
+            status = "Local cosmetics work here • join Hypixel to synchronize community cosmetics"; return
         }
         identity = MC.instance.user.profileId
         val wanted = CosmeticsConfig.names || CosmeticsConfig.scaling
-        if (CosmeticNames.enabled != CosmeticsConfig.names) { CosmeticNames.enabled = CosmeticsConfig.names; MC.instance.gui.chat.rescaleChat() }
+        if (CosmeticNames.enabled != CosmeticsConfig.names) { CosmeticNames.enabled = CosmeticsConfig.names; requestRescale() }
         if (enabled && !wanted) {
             DungeonFriendRelay.disableCosmetics()
             clear(); identity = MC.instance.user.profileId; status = "Cosmetic rendering disabled"
@@ -260,10 +277,8 @@ object CosmeticsClient : SkyMyceModule() {
     fun closed() { generation++; lookup?.cancel(false); lookup = null; linkCode = null; revision++ }
     fun clear() {
         closed(); cache.clear(); checked.clear(); identities.clear()
-        val namesEnabled = CosmeticNames.enabled
-        CosmeticNames.enabled = false
-        val namesChanged = CosmeticNames.update(emptyMap())
-        if (namesEnabled || namesChanged) MC.instance.gui.chat.rescaleChat()
+        // An empty name map already turns the text hook off; flipping the enabled flag here caused a second re-wrap.
+        if (CosmeticNames.update(emptyMap())) requestRescale()
         identity = null; enabled = false; forceOwn = false; nextTick = 0
     }
     override fun onDisable() { DungeonFriendRelay.disableCosmetics(); clear() }
@@ -304,7 +319,7 @@ object CosmeticsClient : SkyMyceModule() {
         val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap().toMutableMap()
         LocalCosmetics.equipped()?.let { local -> known.keys.removeIf { it.equals(MC.instance.user.name, true) }; local.nameStyle?.let { known[MC.instance.user.name] = it } }
         CosmeticNames.enabled = isEnabled() && CosmeticsConfig.names
-        if (CosmeticNames.update(known)) MC.instance.gui.chat.rescaleChat()
+        if (CosmeticNames.update(known)) requestRescale()
     }
     fun localChanged() { revision++; if (isEnabled()) updateNames(System.currentTimeMillis()) }
     @JvmStatic fun rendering(uuid: UUID): CosmeticProfile? {

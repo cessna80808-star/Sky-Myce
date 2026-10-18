@@ -22,8 +22,11 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 
 ## Features to try
 
-- **Dungeons:** Party Finder Matcher, missing-player alerts, requeue, chest protection and profit estimates, routing, and Healer Crush Camera controls.
-- **Tracker:** review dungeon runs, loot, and personal RNG history; add the tracker widget to keep an overview visible.
+- **Dungeons:** Party Finder Matcher, missing-player alerts, requeue, chest protection and profit estimates, routing (Blood routing only for Mage, Archer and Healer by default), and Healer Crush Camera controls.
+- **Goldor (F7/M7 phase 3):** a terminal map with each class's job, step-by-step guidance from the gold-standard strategy, and timed pre-leaps. Sky-Myce users share short `smt1:` updates in party chat. See [Goldor coordination](GOLDOR-COORDINATION.md).
+- **Tracker:** review dungeon runs, loot, and personal RNG history; add the tracker widget to keep an overview visible. The widget can show your progress to the next Catacombs level. The **Levels** tab shows Catacombs and class progress toward a target, as runs, XP or a percentage.
+- **Status bars (off by default):** separate health, mana, defense, speed, vitality and respiration bars. Arrange them with `/sm bars`: anchors around the hotbar, snapping, sizes, colours and per-bar options.
+- **Overlays:** an NPC dialogue box with numbered options, a progress bar on the skill XP widget, and Enter to confirm Auction House, Bazaar and bank signs.
 - **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and wardrobe/loadout keybinds.
 - **Cosmetics:** save local name, size, and cape choices. Sharing an appearance with the community is a separate optional action.
 - **Community:** connect Discord only if you want community features such as Global Chat, shared rankings, cosmetics sharing, or signed updates.
@@ -43,6 +46,9 @@ The Healer Crush Camera has saved viewpoints and a preview for setup; configure 
 | `/sm leaderboard` | View community rankings and their coverage |
 | `/sm cosmetics` | Open Cosmetics Studio |
 | `/sm crush-camera` | Configure and preview camera viewpoints |
+| `/sm bars` | Arrange the status bars |
+| `/sm goldor` | Goldor status; `/sm goldor guide <class> <section>` for the full steps |
+| `/sm graphics` | Show what the Auto graphics mode chose and why |
 | `/sm community` | Manage optional Discord connection, sharing, and updates |
 | `/sm irc` | Open Global Chat |
 | `/sm irc <message>` | Send one Global Chat message |
@@ -61,6 +67,13 @@ Community features are optional. To use them, open **Community** from the menu o
 Global Chat opens with `/sm irc`. The chat screen supports replies and reactions; use its message controls for actions on your own messages. `/sm chat <ign>` temporarily routes normal chat to that friend. Run `/sm chat` or switch Hypixel chat channels to stop routing. Check the selected mode before sending a message.
 
 Automatic updates are **Off** by default. You can check for and stage a signed update with **Update Now** in Community; restart Minecraft to apply it. If community services are unavailable, your installed mod and local features continue to work.
+
+## Graphics and performance
+
+**Settings → Performance → Graphics mode:**
+- **Auto** (the default for new setups) lowers Sky-Myce's own menu effects while your frame rate stays under its target, and restores them once frames are steady again.
+- **Light**, **Balanced** and **Heavy** are fixed. **Minimal** is the lightest.
+- HUD information, dungeon tracking, routes and the Crush Camera are never reduced, and Minecraft's own settings are not changed.
 
 ## If something goes wrong
 

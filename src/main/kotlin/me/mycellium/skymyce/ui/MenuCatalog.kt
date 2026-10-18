@@ -11,7 +11,7 @@ enum class MenuCategory(val title: String, val description: String, val iconId: 
     ECONOMY("Economy", "Auctions, item values, loans and player wealth", 5),
     COSMETICS("Cosmetics", "Player names, visual scaling and cosmetic selection", 6),
     UTILS("Utils", "Daily progress, social tools and general helpers", 1),
-    SETTINGS("General Settings", "Configure controls, graphics, HUD and appearance", 8),
+    SETTINGS("Settings", "Configure controls, graphics, HUD and appearance", 8),
 }
 
 data class MenuFeature(
@@ -84,18 +84,24 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
+            MenuFeature("dungeon-splits", "Dungeon Splits", "Live run splits, personal bests, best possible time and averages per floor", MenuCategory.DUNGEONS, "Runs", listOf("splits", "timer", "pb", "personal best", "theoretical", "average", "300", "terminals", "necron", "relics"), tool = "dungeon-splits", enabledPath = "Dungeons/Dungeon Splits/enabled"),
+            MenuFeature("goldor-coordination", "Goldor Coordination", "F7/M7 terminal map, ADG role routes, stacks and timed pre-leaps, shared in party chat", MenuCategory.DUNGEONS, "Boss", listOf("terminals", "terminal map", "adg", "goldor", "p3", "pre-leap", "ee2", "ee3", "core", "mee2", "hee3", "leap", "stack", "levers", "devices"), enabledPath = "Dungeons/Goldor Coordination/enabled"),
             MenuFeature("healer-crush-camera", "Crush Camera", "Class-specific fixed views from 26 seconds into Storm until Storm dies", MenuCategory.DUNGEONS, "Boss", listOf("camera", "healer", "crush", "purple", "yellow", "storm", "f7", "m7", "preview"), tool = "healer-crush-camera", enabledPath = "Dungeons/Healer Crush Camera/enabled"),
+            MenuFeature("leap-menu", "Spirit Leap Menu", "Choose a teammate with four local gameplay previews", MenuCategory.DUNGEONS, "Parties", listOf("spirit", "leap", "teleport", "pov", "camera", "teammates"), enabledPath = "Dungeons/Leap Menu/enabled"),
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
             MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
+            MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality and respiration bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
             MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
             MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
             MenuFeature("wardrobe", "Wardrobe Keybinds", "Saved armor-slot keys and safeguards; this module is currently inactive", MenuCategory.COMBAT, "Gear", listOf("armor", "equipment", "wardrobe", "keybind")),
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
             MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
             MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
+            MenuFeature("bazaar-flipping", "Bazaar Trading", "Manual order flips, private realized-profit history, forecasts and session replays", MenuCategory.ECONOMY, "Bazaar", listOf("bazaar", "flip", "trading", "orders", "portfolio", "profit", "replay", "dashboard"), tool = "bazaar-flipping"),
             MenuFeature("loans", "Loans & Lending", "Local trade history and the items lent to friends", MenuCategory.ECONOMY, "Loans", listOf("friends", "gear", "trade", "lending", "borrow"), tool = "loans"),
             MenuFeature("player-economy", "Player Wealth", "Compare cached friend networth, purse, bank and wardrobe estimates", MenuCategory.ECONOMY, "Players", listOf("friends", "player", "wealth", "networth", "compare"), tool = "player-economy"),
+            MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
             MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
             MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.UTILS, "Progress", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
@@ -104,6 +110,8 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("player-utilities", "Player Utilities", "Cached friend activity, locations and profile information", MenuCategory.UTILS, "Social", listOf("friends", "player", "profiles", "online", "social"), tool = "player-utilities"),
             MenuFeature("mining", "Crystal Hollows Helpers", "Lobby information and configurable nucleus warp timing", MenuCategory.UTILS, "Mining", listOf("mining", "fortune", "crystal", "nucleus", "powder", "lobby", "hud")),
             MenuFeature("auto-refill", "Auto Refill", "Choose which consumable items are refilled when empty", MenuCategory.UTILS, "Inventory", listOf("refill", "items", "consumables", "inventory")),
+            MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.UTILS, "Information", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
+            MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.UTILS, "Inventory", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
             MenuFeature("settings-general", "General", "Client data collection and developer preferences", MenuCategory.SETTINGS, "General", listOf("client", "preferences", "developer", "data")),
             MenuFeature("settings-appearance", "Appearance", "Shared theme colors, opacity and animation personality", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "animation", "animations", "motion", "accessibility", "reduced motion"), tool = "theme-editor"),
@@ -113,7 +121,7 @@ class MenuCatalog(rows: List<SettingRow>) {
         )
 
         val routingSettingGroups = linkedMapOf(
-            "Route" to listOf("enabled", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
+            "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
             "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
             "Appearance" to listOf("thickness", "opacity", "lineHeight"),
             "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
@@ -149,12 +157,16 @@ class MenuCatalog(rows: List<SettingRow>) {
         fun settingLocation(path: String): MenuSettingLocation {
             val key = path.substringAfterLast('/')
             val feature = when {
+                path.startsWith("Bazaar Flipping/") || path.startsWith("Bazaar Assistant/") -> "bazaar-flipping"
                 path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"
                 path.startsWith("Dungeons/Healer Crush Camera/") -> "healer-crush-camera"
+                path.startsWith("Dungeons/Leap Menu/") -> "leap-menu"
                 path.startsWith("Dungeons/Dungeons Tracker/") -> "dungeon-tracker"
-                path.startsWith("Dungeons/") && key == "dungeonWinScreen" -> "dungeon-summary"
+                path.startsWith("Dungeons/Dungeon Splits/") -> "dungeon-splits"
+                path.startsWith("Dungeons/Goldor Coordination/") -> "goldor-coordination"
+                path.startsWith("Dungeons/") && key.startsWith("dungeonWinScreen") -> "dungeon-summary"
                 path.startsWith("Dungeons/") && key == "dungeonMessageFilter" -> "dungeon-chat"
                 path.startsWith("Dungeons/") -> "dungeon-chests"
                 path.startsWith("Instances/") -> "instance-helpers"
@@ -165,18 +177,22 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/Global SkyMyce Chat/") -> "global-chat"
                 path.startsWith("General/Party Commands/") -> "party-commands"
                 path.startsWith("General/Stash Helper/") -> "stash-helper"
+                path.startsWith("General/Price History/") -> "price-history"
+                path.startsWith("General/Status Bars/") -> "status-bars"
+                path.startsWith("General/NPC Dialogue/") -> "npc-dialogue"
+                path.startsWith("General/Signs/") -> "sign-confirm"
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
                 path.startsWith("General/Wardrobe Keybinds/") -> "wardrobe"
                 path == "General/autoRefill" -> "auto-refill"
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
-                path == "General/clientInfo" || path == "General/displayXp" -> "information"
+                path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
                 else -> null
             }
             if (feature != null) return definitions.first { it.id == feature }.let {
                 MenuSettingLocation(it.category, it.subcategory, it.id)
             }
             val section = when {
-                path == "Theme & Appearance/graphicsQuality" -> "Performance"
+                path == "Theme & Appearance/graphicsQuality" || path.startsWith("Theme & Appearance/auto") -> "Performance"
                 path.startsWith("Theme & Appearance/") -> "Appearance"
                 path == "openConfigKey" -> "Controls"
                 else -> "General"

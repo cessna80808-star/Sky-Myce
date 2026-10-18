@@ -19,7 +19,7 @@ import java.io.File
 import javax.imageio.ImageIO
 
 fun checkSettings() {
-    // Settings participates in the same card-to-rail navigation as tools. Inspect dispatch
+    // Settings participates in the same category navigation as tools. Inspect dispatch
     // without starting Minecraft; a separate settings sidebar breaks this integration.
     fun navigationOwner(name: String): Class<*> {
         var type: Class<*>? = SettingsScreen::class.java
@@ -46,6 +46,10 @@ fun checkSettings() {
     var saves = 0
     val wrapped = SavingConfig(delegate) { saves++ }
     val rows = settingRows(wrapped) // Use the same saving wrapper as the live settings screen.
+    check(rows.count { it.path == "General/Daily Digest/news" } == 1)
+    check(rows.none { it.path in setOf("General/Daily Digest/gameUpdates", "General/Daily Digest/alphaUpdates") }) {
+        "A single normal-news feed must expose only its master News switch"
+    }
     check(rows.map { it.path } == settingRows(delegate).map { it.path }) { "Saving wrapper lost settings" }
     check(wrapped.version() == 7 && wrapped.id() == delegate.id() && wrapped.info() === delegate.info())
     check(wrapped.categories() === delegate.categories())
@@ -55,7 +59,7 @@ fun checkSettings() {
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
     val catalog = me.mycellium.skymyce.ui.MenuCatalog(rows)
     val allScopedPaths = catalog.features.flatMap { feature -> settingGroups(rows, feature.id).values.flatten().map { it.path } }
-    check(allScopedPaths.sorted() == rows.map { it.path }.sorted()) { "Every persisted setting must have exactly one canonical feature/global owner" }
+    check(allScopedPaths.sorted() == rows.map { it.path }.sorted()) { "Every persisted setting must have exactly one canonical feature/global owner: missing ${rows.map { it.path } - allScopedPaths.toSet()}, duplicated ${allScopedPaths.groupBy { it }.filterValues { it.size > 1 }.keys}" }
     catalog.features.forEach { feature ->
         val groups = settingGroups(rows, feature.id)
         check(groups.values.flatten().map { it.path }.toSet() == feature.settings.map { it.path }.toSet())
@@ -118,7 +122,7 @@ fun checkSettings() {
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
     check(settingGroups(rows, SettingsTab.GENERAL).values.flatten().map { it.path }.toSet() == setOf("gatherData", "devMode"))
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
-    check(settingGroups(rows, "settings-performance").values.flatten().single().path == "Theme & Appearance/graphicsQuality")
+    check(settingGroups(rows, "settings-performance").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality", "Theme & Appearance/autoTargetFps", "Theme & Appearance/autoResponse", "Theme & Appearance/autoLowest")) { settingGroups(rows, "settings-performance").toString() }
     check(settingGroups(rows, "party-finder").values.flatten().all {
         it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
     })
@@ -140,7 +144,21 @@ fun checkSettings() {
     check(settingsFocusPath("Dungeons/Starred Clear Routing/routeThroughMobs", null) == "Dungeons/Starred Clear Routing/routeThroughMobs")
     check(settingsFocusPath(null, "MisterKrister") == "friend/MisterKrister")
     check(settingsFocusPath("devMode", "MisterKrister") == "devMode") { "A direct setting link lost priority over friend preferences" }
+    val routing = catalog.findFeature("starred-routes")!!
+    check(settingsBreadcrumbLinks(routing.category, routing) == listOf(
+        SettingsBreadcrumbLink("Dungeons"), SettingsBreadcrumbLink("Routes", section = "Routes"),
+        SettingsBreadcrumbLink("Dungeon Routing", featureId = "starred-routes"),
+    )) { "Settings breadcrumbs must target their category, filtered section and canonical feature" }
+    check(settingsBreadcrumbLinks(routing.category, null) == listOf(SettingsBreadcrumbLink("Dungeons")))
+    catalog.features.forEach { feature ->
+        val links = settingsBreadcrumbLinks(feature.category, feature)
+        check(links.map { it.title }.joinToString(" → ") == feature.breadcrumb)
+        check(links.first().section == null && links.first().featureId == null)
+        check(links.all { it.section == null || it.section == feature.subcategory })
+        check(links.all { it.featureId == null || it.featureId == feature.id })
+    }
     checkSettingsCardLayout()
+    checkSettingsSectionLayout()
     val devMode = rows.single { it.path == "devMode" }
     check(devMode.title == "Dev Mode" && settingsTab(devMode.path) == SettingsTab.GENERAL)
     val previousDevMode = Config.devMode
@@ -233,6 +251,25 @@ private fun checkSettingsCardLayout() {
         check(focus.focused() == null) { "Mounting a settings page auto-focused its first control" }
         focus.focus(settingsFocusTarget(firstCard), io.wispforest.owo.ui.core.UIComponent.FocusSource.KEYBOARD_CYCLE)
         check(focus.focused() === control) { "A direct setting link cannot focus its actual control" }
+    }
+}
+
+private fun checkSettingsSectionLayout() {
+    bootstrapHeadlessOwo()
+    for (width in listOf(150, 191, 240, 320, 680)) {
+        val title = UIContainers.verticalFlow(Sizing.fill(), Sizing.fixed(30))
+        val reset = UIContainers.verticalFlow(Sizing.fixed(88), Sizing.fixed(20))
+        val header = settingsSectionHeader(title, reset, width).apply { horizontalSizing(Sizing.fixed(width)) }
+        header.inflate(Size.of(width, 240)); header.mount(null, 20, 20)
+        check(title.width() > 0 && reset.x() >= header.x() && reset.x() + reset.width() <= header.x() + header.width()) {
+            "Settings section action escaped the header at width $width"
+        }
+        check(title.x() + title.width() <= reset.x() || title.y() + title.height() <= reset.y()) {
+            "Settings section title overlaps its action at width $width"
+        }
+        check(reset.y() + reset.height() <= header.y() + header.height()) {
+            "Settings section action was clipped at width $width"
+        }
     }
 }
 
@@ -449,6 +486,14 @@ private fun checkMenuSliderKeys() {
 }
 
 internal fun checkMenuDropdownInput() {
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 250, 24, 100) == 250 to 100)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 250, 24, 400) == 250 to 286)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 500, 24, 100) == 376 to 100)
+    check(me.mycellium.skymyce.ui.menuDropdownPlacement(540, 500, 24, 600) == 4 to 472)
+    for (height in listOf(1, 8, 140, 540)) for (anchor in listOf(0, height / 2, height, height + 20)) {
+        val (top, size) = me.mycellium.skymyce.ui.menuDropdownPlacement(height, anchor, 24, 800)
+        check(top >= 0 && size >= 1 && top + size <= height) { "Dropdown escaped its viewport" }
+    }
     val text = net.minecraft.network.chat.Component.literal("Clear (show all)").withStyle(net.minecraft.ChatFormatting.BOLD)
     val popupWidth = me.mycellium.skymyce.ui.menuDropdownWidth(text, false)
     val rowHeight = me.mycellium.skymyce.ui.menuDropdownRowHeight()

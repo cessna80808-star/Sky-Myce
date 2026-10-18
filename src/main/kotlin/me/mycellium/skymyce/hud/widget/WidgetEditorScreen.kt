@@ -41,7 +41,7 @@ internal fun hudEditorResizeAt(x: Double, y: Double, left: Int, top: Int, width:
     width > 0 && height > 0 && x >= left + width - 10 && x < left + width && y >= top + height - 10 && y < top + height
 
 internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
-    val toolbarWidth = (screenWidth - 16).coerceIn(1, 208)
+    val toolbarWidth = (screenWidth - 16).coerceIn(1, 253)
     val helpHeight = hudEditorHelp(screenWidth).size * MenuCanvas.lineHeight()
     return UIContainers.horizontalFlow(Sizing.fixed(toolbarWidth), Sizing.fixed(28)).apply {
         padding(Insets.of(4)); gap(5); surface(MenuTheme.panel(true))
@@ -104,6 +104,10 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         }
 
         toolbar.child(resetButton)
+        toolbar.child(MenuButton(Component.literal("Bars")) { navigateMenu(me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen(this)) }.apply {
+            themed(); sizing(Sizing.fixed(40), Sizing.fill())
+            tooltip(Component.literal("Arrange the status bars: anchors around the hotbar, snapping, sizes, colours and visibility"))
+        })
         toolbar.child(MenuButton(Component.literal("Done")) { onClose() }.sizing(Sizing.fixed(40), Sizing.fill()))
         adapter.rootComponent.child(toolbar)
         adapter.inflateAndMount()
@@ -166,7 +170,8 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
                     Anchor.entries.forEach { anchor ->
                         val x = widget.renderX + (anchor.x * widget.width).toInt()
                         val y = widget.renderY + (anchor.y * widget.height).toInt()
-                        graphics.fill(x - 2, y - 2, x + 2, y + 2, if (selectedAnchor == anchor) 0xFF55FF55.toInt() else if (widget.anchor == anchor) 0xFFFFFF55.toInt() else 0xFFFF5555.toInt())
+                        graphics.fill(x - 2, y - 2, x + 2, y + 2, MenuTheme.alpha(
+                            if (selectedAnchor == anchor) MenuTheme.ACCENT else if (widget.anchor == anchor) MenuTheme.YELLOW else MenuTheme.MUTED))
                     }
                 }
             }
@@ -185,7 +190,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             }
         }
         if (closing) tooltip.clear() else tooltip.endFrame(canvas)
-        val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val rasterScale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(output, canvas, width, height, rasterScale)
     }
 
