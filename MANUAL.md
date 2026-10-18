@@ -7,7 +7,7 @@ This guide covers the essentials: installation, the most useful features, and th
 ## 1) Install and open
 
 1. Install Fabric for Minecraft 26.1.2 and use Java 25.
-2. Close Minecraft, remove an old Sky-Myce Loader/mod if migrating, and put the standalone Sky-Myce 2.5.1 JAR in the selected instance's `mods` folder alongside its Fabric dependencies. Keep unrelated mods and settings.
+2. Close Minecraft, remove an old Sky-Myce Loader/mod if migrating, and put the standalone Sky-Myce 2.5.15 JAR in the selected instance's `mods` folder alongside its Fabric dependencies. Keep unrelated mods and settings.
 3. Launch the game with your Fabric profile.
 4. Open the config with `/sm` or `/skymyce`.
 
