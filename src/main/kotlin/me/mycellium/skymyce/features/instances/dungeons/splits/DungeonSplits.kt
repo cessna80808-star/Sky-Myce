@@ -183,17 +183,22 @@ object DungeonSplits : SkyMyceModule() {
         updateScore(run, at) { readScoreSidebar(it, event.new, SplitMilestone.BLOOD_CLEAR in run.timeline.marks) }
     }
 
+    private var relicTicks = 0
+
     @Subscription(TickEvent::class)
     fun onTick() {
         val run = live ?: return
         val marks = run.timeline.marks
         // Relics only exist once Necron is down; the scan does not wait for his split, so a missed line costs only that one.
         if (!active() || run.definition.floor != "M7" || SplitMilestone.GOLDOR !in marks && SplitMilestone.NECRON !in marks || SplitMilestone.RELICS in marks) return
+        // Four times a second is plenty for a relic placement; position before the item name, which builds a string.
+        if (++relicTicks % 5 != 0) return
         val level = MC.instance.level ?: return
         val placed = HashSet<Pair<Int, Int>>()
         for (entity in level.entitiesForRendering()) {
-            if (entity !is ArmorStand || !entity.getItemBySlot(EquipmentSlot.HEAD).hoverName.string.contains("Relic")) continue
-            relicCauldrons.firstOrNull { (x, z) -> (entity.x - x) * (entity.x - x) + (entity.z - z) * (entity.z - z) < 1.5 * 1.5 }?.let(placed::add)
+            if (entity !is ArmorStand) continue
+            val cauldron = relicCauldrons.firstOrNull { (x, z) -> (entity.x - x) * (entity.x - x) + (entity.z - z) * (entity.z - z) < 1.5 * 1.5 } ?: continue
+            if (entity.getItemBySlot(EquipmentSlot.HEAD).hoverName.string.contains("Relic")) placed += cauldron
         }
         if (placed.size == relicCauldrons.size) mark(run, SplitMilestone.RELICS, System.nanoTime())
     }

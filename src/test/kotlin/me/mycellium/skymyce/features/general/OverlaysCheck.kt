@@ -90,7 +90,7 @@ private fun checkReadings() {
     check(parsePair("§c1,200/1,500♨") == 1200 to 1500 && parsePair("nothing") == null)
     check(effectiveHealth(1000, 100) == 2000.0 && statusNumber(1_234_567) == "1,234,567")
     val health = StatusBarLayout.defaultBar(BarType.HEALTH)
-    check(barLabel(BarType.HEALTH, health, 1834, 2140, 220) == "1,834/2,140 +220")
+    check(barLabel(BarType.HEALTH, health, 1834, 2140, 220) == "1,834 +220" && barLabel(BarType.HEALTH, health.copy(showMax = true), 1834, 2140, 220) == "1,834/2,140 +220")
     check(barLabel(BarType.HEALTH, health.copy(showMax = false, showOverflow = false), 1834, 2140, 220) == "1,834")
     val defense = StatusBarLayout.defaultBar(BarType.DEFENSE)
     check(barLabel(BarType.DEFENSE, defense, 612, 0, 0, 1000) == "612" && barLabel(BarType.DEFENSE, defense.copy(extra = true), 100, 0, 0, 1000).endsWith("EHP"))

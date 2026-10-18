@@ -122,7 +122,7 @@ fun checkSettings() {
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
     check(settingGroups(rows, SettingsTab.GENERAL).values.flatten().map { it.path }.toSet() == setOf("gatherData", "devMode"))
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
-    check(settingGroups(rows, "settings-performance").values.flatten().single().path == "Theme & Appearance/graphicsQuality")
+    check(settingGroups(rows, "settings-performance").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality", "Theme & Appearance/autoTargetFps", "Theme & Appearance/autoResponse", "Theme & Appearance/autoLowest")) { settingGroups(rows, "settings-performance").toString() }
     check(settingGroups(rows, "party-finder").values.flatten().all {
         it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
     })

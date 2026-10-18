@@ -76,7 +76,7 @@ object SkyMyce : ClientModInitializer {
             CheesePizza,
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
-            LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, me.mycellium.skymyce.features.general.overlays.StatusBars, me.mycellium.skymyce.features.general.overlays.NpcDialogue, me.mycellium.skymyce.features.general.SignConfirm, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
+            LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, me.mycellium.skymyce.features.general.overlays.StatusBars, me.mycellium.skymyce.features.general.overlays.NpcDialogue, me.mycellium.skymyce.features.general.SignConfirm, me.mycellium.skymyce.ui.AutoGraphics, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
             StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,

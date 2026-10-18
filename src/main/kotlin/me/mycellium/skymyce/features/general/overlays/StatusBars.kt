@@ -88,6 +88,9 @@ object StatusBars : SkyMyceModule() {
             .onFailure { SkyMyce.logger.warn("Could not read status bar layout; using the default", it) }.getOrNull()
         @Suppress("SENSELESS_COMPARISON") // Gson can leave a missing list null.
         if (saved != null && saved.version == StatusBarLayout.VERSION && saved.bars != null) return saved.normalized()
+        // Version 1 had pale label colours that read badly over the bars; keep the arrangement, take the new colours.
+        if (saved != null && saved.version == 1 && saved.bars != null)
+            return StatusBarLayout(StatusBarLayout.VERSION, saved.bars.map { it.copy(fill = 0, overflow = 0, textColor = 0) }).normalized()
         // First run: carry over the old single-panel toggles.
         var fresh = StatusBarLayout.default()
         if (!Settings.showMana) fresh = fresh.update(BarType.MANA) { it.copy(enabled = false) }

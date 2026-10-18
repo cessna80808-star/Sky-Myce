@@ -195,15 +195,15 @@ public final class CameraRenderCheck {
             }
             return java.util.Arrays.copyOf(gaps, count);
         };
-        long[] smooth = intervals.apply(new long[] {30, 3_000_000L, 3}, 60);
+        long[] smooth = intervals.apply(new long[] {30, 2_000_000L, 3}, 60);
         long target = 1_000_000_000L / 30;
         require(smooth.length == 60 && java.util.Arrays.stream(smooth).allMatch(gap -> Math.abs(gap - target) <= frame),
             "previews keep an even 30 FPS cadence within one game frame");
         double mean = java.util.Arrays.stream(smooth).average().orElse(0);
         require(Math.abs(mean - target) < frame / 4.0, "the cadence does not drift with frame timing");
         long[] budgeted = intervals.apply(new long[] {60, 10_000_000L, 4}, 20);
-        require(java.util.Arrays.stream(budgeted).allMatch(gap -> gap >= 80_000_000L - frame && gap <= 80_000_000L + frame),
-            "four 10 ms previews share half the frame time: one frame every 80 ms each");
+        require(java.util.Arrays.stream(budgeted).allMatch(gap -> gap >= 160_000_000L - frame && gap <= 160_000_000L + frame),
+            "four 10 ms previews share a quarter of the frame time: one frame every 160 ms each");
         long stalled = CameraMath.nextPreviewFrame(1_000_000L, 5_000_000_000L, 30, 0, 1);
         require(stalled == 5_000_000_000L + target, "a stall restarts the cadence instead of rendering a burst");
         require(CameraMath.nextPreviewFrame(0, 7, 2, 2_000_000_000L, 4) == 7 + 1_000_000_000L, "a very slow preview waits at most one second");
@@ -275,7 +275,7 @@ public final class CameraRenderCheck {
     private static void checkDiagnostics() {
         var diagnostics = new CameraDiagnostics();
         diagnostics.begin();
-        diagnostics.candidate(true, true, "loaded wither");
+        diagnostics.candidate(true, true, () -> "loaded wither");
         require(diagnostics.completed(7, 320, 180) == SecondaryWorldCamera.Status.ENTITY_EXTRACTION_FAILED,
             "terrain alone cannot hide a missing visible boss extraction");
         var boss = new EntityRenderState();
@@ -292,7 +292,7 @@ public final class CameraRenderCheck {
         require(snapshot.targetWidth() == 320 && snapshot.targetHeight() == 180 && snapshot.terrainSections() == 7,
             "diagnostics retain the actual secondary output dimensions and terrain submission");
         diagnostics.begin();
-        diagnostics.candidate(false, true, "outside viewpoint");
+        diagnostics.candidate(false, true, () -> "outside viewpoint");
         require(diagnostics.completed(7, 320, 180) == SecondaryWorldCamera.Status.TERRAIN_ONLY,
             "a terrain frame without visible entities remains distinguishable");
         require(diagnostics.completed(0, 320, 180) == SecondaryWorldCamera.Status.PREPARING,

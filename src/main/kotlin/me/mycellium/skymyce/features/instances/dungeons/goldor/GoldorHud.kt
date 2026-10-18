@@ -100,6 +100,9 @@ object GoldorHud : SkyMyceModule() {
     }
 
     private class MapView(private val editor: Boolean) : BaseUIComponent() {
+        private var wrappedFor: List<String>? = null
+        private var wrapped: List<List<String>> = emptyList()
+
         fun prepare(): MapView {
             val mapWidth = if (Settings.map) GoldorLayout.MAP_WIDTH + 8 else 0
             val textWidth = if (Settings.recommendations) TEXT_WIDTH else 0
@@ -125,13 +128,18 @@ object GoldorHud : SkyMyceModule() {
             }
             if (Settings.recommendations) {
                 var lineY = y() + 6
-                for (line in goldorHudLines(advice, state, now, true)) {
-                    // Wrap long reasons to the column; continuation lines keep the line's colour.
-                    val colour = line.take(2).takeIf { it.startsWith("§") }.orEmpty()
-                    for ((index, part) in MC.font.splitter.splitLines(line, TEXT_WIDTH - 4, net.minecraft.network.chat.Style.EMPTY).withIndex()) {
-                        graphics.text(MC.font, if (index == 0) part.string else colour + part.string, textX, lineY, -1, true)
-                        lineY += 10
+                // Wrapping is the costly part; redo it only when the text changes (the countdown changes ~10×/s, the rest rarely).
+                val lines = goldorHudLines(advice, state, now, true)
+                if (lines != wrappedFor) {
+                    wrappedFor = lines
+                    wrapped = lines.map { line ->
+                        // Continuation lines keep the line's colour.
+                        val colour = line.take(2).takeIf { it.startsWith("§") }.orEmpty()
+                        MC.font.splitter.splitLines(line, TEXT_WIDTH - 4, net.minecraft.network.chat.Style.EMPTY).mapIndexed { index, part -> if (index == 0) part.string else colour + part.string }
                     }
+                }
+                for (parts in wrapped) {
+                    for (part in parts) { graphics.text(MC.font, part, textX, lineY, -1, true); lineY += 10 }
                     if (lineY > y() + height() - 10) break
                 }
                 // The party, pinned to the bottom of the column: class letter, name, and what they are on.

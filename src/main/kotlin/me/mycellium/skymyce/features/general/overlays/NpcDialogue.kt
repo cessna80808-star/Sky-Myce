@@ -39,6 +39,7 @@ internal data class NpcLine(val name: String, val message: String)
 internal data class DialogueOption(val label: String, val click: ClickEvent?)
 
 private val npcLine = Regex("^\\[NPC] ([^:\\[\\]]{1,40}): (.+)$")
+private val formatting = Regex("§.")
 private val optionsLine = Regex("(?s).*(?:Select|Click) an option: (.+)$")
 
 internal fun parseNpcLine(stripped: String): NpcLine? = npcLine.matchEntire(stripped.trim())?.let { NpcLine(it.groupValues[1].trim(), it.groupValues[2].trim()) }
@@ -105,7 +106,7 @@ object NpcDialogue : SkyMyceModule() {
     @Subscription
     fun onChat(event: ChatReceivedEvent.Pre) {
         if (!active()) return
-        val stripped = event.component.string.replace(Regex("§."), "")
+        val stripped = event.component.string.replace(formatting, "")
         parseNpcLine(stripped)?.let { line ->
             queue.addLast(line)
             while (queue.size > 20) queue.removeFirst()
@@ -173,7 +174,7 @@ object NpcDialogue : SkyMyceModule() {
         val player = MC.instance.player ?: return null
         val level = MC.instance.level ?: return null
         val box = player.boundingBox.inflate(10.0)
-        val tag = level.getEntitiesOfClass(ArmorStand::class.java, box) { it.customName?.string?.replace(Regex("§."), "")?.trim() == name }.minByOrNull { it.distanceToSqr(player) } ?: return null
+        val tag = level.getEntitiesOfClass(ArmorStand::class.java, box) { it.customName?.string?.replace(formatting, "")?.trim() == name }.minByOrNull { it.distanceToSqr(player) } ?: return null
         return level.getEntitiesOfClass(LivingEntity::class.java, tag.boundingBox.inflate(1.0, 3.0, 1.0)) { it !is ArmorStand && it !== player }
             .minByOrNull { it.distanceToSqr(tag) }
     }

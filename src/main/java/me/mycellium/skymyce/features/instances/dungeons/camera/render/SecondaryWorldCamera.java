@@ -103,16 +103,25 @@ public final class SecondaryWorldCamera {
         }
     }
 
+    /**
+     * How many secondary-render scopes are open on any thread. The hooks below run on very hot paths (every Fabric
+     * event dispatch, every render-distance read), so with no scope open they return at once without a ThreadLocal read.
+     */
+    private static volatile int openScopes;
+
     public static int effectiveRenderDistance(int vanilla) {
+        if (openScopes == 0) return vanilla;
         Integer distance = renderDistance.get();
         return distance == null ? vanilla : distance;
     }
 
     public static Object eventInvoker(Object vanilla) {
+        if (openScopes == 0) return vanilla;
         return renderDistance.get() == null ? vanilla : SecondaryRenderEvents.invoker(vanilla);
     }
 
     public static Matrix4fc projectionMatrix(Matrix4fc vanilla) {
+        if (openScopes == 0) return vanilla;
         Matrix4fc projection = projectionMatrix.get();
         return projection == null ? vanilla : projection;
     }
@@ -120,8 +129,10 @@ public final class SecondaryWorldCamera {
     static void withProjection(Matrix4fc projection, Runnable action) {
         Matrix4fc previous = projectionMatrix.get();
         projectionMatrix.set(projection);
+        openScopes++;
         try { action.run(); }
         finally {
+            openScopes--;
             if (previous == null) projectionMatrix.remove();
             else projectionMatrix.set(previous);
         }
@@ -130,8 +141,10 @@ public final class SecondaryWorldCamera {
     static void withRenderDistance(int distance, Runnable action) {
         Integer previous = renderDistance.get();
         renderDistance.set(distance);
+        openScopes++;
         try { action.run(); }
         finally {
+            openScopes--;
             if (previous == null) renderDistance.remove();
             else renderDistance.set(previous);
         }
@@ -158,6 +171,9 @@ public final class SecondaryWorldCamera {
         crush.extract(graphics, view, x, y, width, height, opacity, null);
     }
 
+    /** How long an unused pipeline is kept for reuse (leaps come every few seconds in a boss). */
+    static final long IDLE_RETIRE_NANOS = 20_000_000_000L;
+
     public static final class Feed {
         private final boolean auxiliary;
         private Pipeline pipeline;
@@ -169,8 +185,22 @@ public final class SecondaryWorldCamera {
         private long extractionCost;
         private long nextDiagnosticLog;
         private UUID hiddenEntity;
+        /** When the feed was last released while keeping its pipeline; 0 while in use. */
+        private long releasedAt;
 
         private Feed(boolean auxiliary) { this.auxiliary = auxiliary; }
+
+        /**
+         * Stops drawing but keeps the built pipeline for a while, so reopening (the next leap) reuses it instead of
+         * rebuilding every renderer and re-meshing chunks. An idle pipeline is closed after {@link #IDLE_RETIRE_NANOS},
+         * and immediately on a level change or {@link #stop()}.
+         */
+        public void release() {
+            RenderSystem.assertOnRenderThread();
+            requested = false;
+            nextFrame = 0;
+            if (pipeline != null && releasedAt == 0) releasedAt = System.nanoTime();
+        }
         public Status status() { return status; }
         public CameraDiagnostics.Snapshot diagnostics() { return pipeline == null ? null : pipeline.renderer.diagnostics().snapshot(); }
 
@@ -179,7 +209,9 @@ public final class SecondaryWorldCamera {
             Minecraft client = Minecraft.getInstance();
             if (client.level == null || client.player == null || width <= 0 || height <= 0 ||
                 !Float.isFinite(opacity) || opacity <= 0) { stop(); return; }
-            if (!Objects.equals(this.hiddenEntity, hiddenEntity)) { stop(); this.hiddenEntity = hiddenEntity; }
+            // Only which player is hidden changes; the pipeline stays.
+            this.hiddenEntity = hiddenEntity;
+            releasedAt = 0;
             requested = true;
             if (System.nanoTime() < retryAfter) return;
             if (!client.level.hasChunkAt(BlockPos.containing(view.x(), view.y(), view.z()))) {
@@ -224,6 +256,7 @@ public final class SecondaryWorldCamera {
             requested = false;
             status = Status.UNAVAILABLE;
             nextFrame = 0;
+            releasedAt = 0;
             retire();
         }
 
@@ -242,7 +275,15 @@ public final class SecondaryWorldCamera {
 
         private void render(DeltaTracker ticks) {
             if (pipeline == null) return;
-            if (!requested || Minecraft.getInstance().level != pipeline.level) { stop(); return; }
+            if (Minecraft.getInstance().level != pipeline.level) { stop(); return; }
+            if (!requested) {
+                // Not drawn this frame: keep the pipeline briefly for reuse, then close it.
+                long now = System.nanoTime();
+                if (releasedAt == 0) releasedAt = now;
+                else if (now - releasedAt > IDLE_RETIRE_NANOS) { status = Status.UNAVAILABLE; releasedAt = 0; retire(); }
+                return;
+            }
+            releasedAt = 0;
             if (!pipeline.prepared) return;
             long started = System.nanoTime();
             try {
@@ -276,7 +317,8 @@ public final class SecondaryWorldCamera {
 
     /** Only a graphics output override; never redirects main world extraction or a Camera reference. */
     public static RenderTarget outputTarget() {
-        return RenderSystem.isOnRenderThread() ? activeOutput : null;
+        RenderTarget output = activeOutput;
+        return output != null && RenderSystem.isOnRenderThread() ? output : null;
     }
 
     public static void sectionChanged(int x, int y, int z) {

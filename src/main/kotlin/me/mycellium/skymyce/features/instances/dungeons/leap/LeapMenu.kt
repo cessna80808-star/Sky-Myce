@@ -310,9 +310,10 @@ object LeapMenu : SkyMyceModule() {
             val livePlayer = player?.takeIf { it.isAlive && !it.isRemoved }
             val shared = if (Settings.povEnabled && livePlayer == null) candidate?.takeUnless { it.dead }?.let { LeapPovSharing.pose(it.identity) } else null
             val view = if (Settings.povEnabled) livePlayer?.let { viewpoint(it, partialTicks) } ?: shared?.let(::viewpoint) else null
-            val image = if (view != null && candidate != null) "${candidate.identity.key}|${candidate.identity.uuid}|${livePlayer?.uuid ?: candidate.identity.uuid}" else null
+            // The player, not whether we see them live or by shared pose: switching between the two keeps the feed.
+            val image = if (view != null && candidate != null) "${candidate.identity.key}|${candidate.identity.uuid}" else null
             if (image != active.images[quadrant] || image == null) {
-                if (active.images[quadrant] != null) feeds[quadrant].stop()
+                if (active.images[quadrant] != null) feeds[quadrant].release()
                 active.images[quadrant] = image
             }
             if (image != null && view != null) feeds[quadrant].extract(graphics, view, bounds.x, bounds.y, bounds.width, bounds.height, 1f, livePlayer?.uuid ?: candidate?.identity?.uuid)
@@ -335,7 +336,8 @@ object LeapMenu : SkyMyceModule() {
         return viewpoint(pose)
     }
 
-    private fun viewpoint(pose: LeapCameraPose) = SecondaryWorldCamera.View(pose.x, pose.y, pose.z, pose.yaw, pose.pitch, 70f, 4, Settings.previewFramesPerSecond)
+    private fun viewpoint(pose: LeapCameraPose) = SecondaryWorldCamera.View(pose.x, pose.y, pose.z, pose.yaw, pose.pitch, 70f, 4,
+        leapPreviewFps(Settings.previewFramesPerSecond, me.mycellium.skymyce.ui.AutoGraphics.quality))
 
     private fun drawCard(active: State, quadrant: Int, graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, caption: String?) {
         val candidate = active.candidates[quadrant] ?: return
@@ -360,9 +362,20 @@ object LeapMenu : SkyMyceModule() {
         if (clearPending) { clearIntent(); clearContents() }
         val previous = state ?: return
         state = null
-        previous.images.indices.forEach { if (previous.images[it] != null) feeds[it].stop() }
+        // Released, not stopped: the next leap reuses the built pipelines (closed after 20 s unused or on a world change).
+        previous.images.indices.forEach { if (previous.images[it] != null) feeds[it].release() }
         Screens.getWidgets(previous.screen).removeAll(previous.buttons.toSet())
     }
+}
+
+/**
+ * Leap previews are decoration beside the player's choice, so lighter graphics tiers cap their frame rate:
+ * Minimal at 10, Light at 15; Balanced and Heavy use the configured rate.
+ */
+internal fun leapPreviewFps(configured: Int, quality: me.mycellium.skymyce.ui.GuiQuality): Int = when (quality) {
+    me.mycellium.skymyce.ui.GuiQuality.EXTREMELY_LIGHT -> minOf(configured, 10)
+    me.mycellium.skymyce.ui.GuiQuality.LIGHT -> minOf(configured, 15)
+    else -> configured
 }
 
 internal fun leapPovCaption(enabled: Boolean, dead: Boolean, tracked: Boolean, status: SecondaryWorldCamera.Status, shared: Boolean = false): String? = when {

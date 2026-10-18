@@ -154,13 +154,24 @@ object DungeonFriendStatsCache {
         }
     }
 
+    /** Periodic saves serialize the (large) cache off the render thread; a forced save (disconnect) stays synchronous. */
+    private var writer: me.mycellium.skymyce.utils.StateWriter<Map<String, CachedDungeonFriend>>? = null
+
     fun save(force: Boolean = false) {
         val persistence = store ?: return
         val now = System.currentTimeMillis()
         if (!dirty || (!force && now < nextSave)) return
         nextSave = now + 30000
+        val snapshot = cache.toMap()
+        if (!force) {
+            val background = writer ?: me.mycellium.skymyce.utils.StateWriter<Map<String, CachedDungeonFriend>>({ persistence.save(it) },
+                { job -> Scheduling.schedule(0.seconds) { job() } },
+                { MC.instance.execute { dirty = true }; SkyMyce.logger.warn("Could not save dungeon friend stats; will retry") }).also { writer = it }
+            background.submit(snapshot); dirty = false
+            return
+        }
         try {
-            persistence.save(cache.toMap())
+            persistence.save(snapshot)
             dirty = false
         } catch (_: Exception) {
             SkyMyce.logger.warn("Could not save dungeon friend stats; will retry")

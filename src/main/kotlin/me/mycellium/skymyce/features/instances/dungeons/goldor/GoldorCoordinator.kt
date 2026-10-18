@@ -23,6 +23,15 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 /** Hypixel's Goldor phase lines (Odin `TickTimers`/`TerminalTimes`, current as of 2026-10-16). */
 internal const val GOLDOR_START = "[BOSS] Goldor: Who dares trespass into my domain?"
 internal const val GATE_DESTROYED = "The gate has been destroyed!"
+/**
+ * Goldor's line as each gate goes (seen in a 2026-10-18 M7 recording, in order S1, S2, S3). That recording never
+ * showed "The gate has been destroyed!", so these count as the gate opening too.
+ */
+internal val GOLDOR_GATE_LINES = setOf(
+    "[BOSS] Goldor: I will replace that gate with a stronger one!",
+    "[BOSS] Goldor: The little ants have a brain it seems.",
+    "[BOSS] Goldor: YOUR END IS NEAR!!",
+)
 internal const val CORE_OPENING = "The Core entrance is opening!"
 
 /** Progress through a Numbers or Panes terminal in quarters, from the lime (done) and red (open) panes. */
@@ -88,7 +97,7 @@ object GoldorCoordinator : SkyMyceModule() {
         val now = now()
         when (text) {
             GOLDOR_START -> { begin(now); return }
-            GATE_DESTROYED -> { state.gateOpened(now); return }
+            GATE_DESTROYED, in GOLDOR_GATE_LINES -> { state.gateOpened(now); return }
             CORE_OPENING -> { state.coreOpened(now); return }
         }
         val match = terminalProgress.matchEntire(text) ?: return
@@ -202,6 +211,7 @@ object GoldorCoordinator : SkyMyceModule() {
                     .any { it !== player && it.distanceToSqr(player.x, player.y, player.z) <= 9.0 }) leaptAt = now
         }
         lastSelf = here
+        if (state.active) state.gateTimeout(now)
         learnFinished()
         if (++ticks % 5 == 0) {
             refreshRoster(now)

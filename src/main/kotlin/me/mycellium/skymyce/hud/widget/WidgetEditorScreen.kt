@@ -190,7 +190,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
             }
         }
         if (closing) tooltip.clear() else tooltip.endFrame(canvas)
-        val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val rasterScale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(output, canvas, width, height, rasterScale)
     }
 

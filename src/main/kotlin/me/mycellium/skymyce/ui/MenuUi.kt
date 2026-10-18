@@ -71,7 +71,7 @@ object MenuTheme {
     val PURPLE get() = SECONDARY
     val PADDING get() = ThemeConfig.padding.takeIf { it in 2..12 } ?: style.menuPadding
     val RADIUS get() = if (ROUNDED) style.radius.coerceAtLeast(2) else 0
-    val SHADOW get() = ThemeConfig.graphicsQuality.shadowLayers > 0 && when (ThemeConfig.shadow) {
+    val SHADOW get() = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers > 0 && when (ThemeConfig.shadow) {
         0 -> false
         1 -> true
         else -> ThemeConfig.preset.palette.shadow
@@ -127,7 +127,7 @@ object MenuTheme {
     fun shadow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
         if (!SHADOW || strength <= 0.0 || w <= 0 || h <= 0) return
         val profile = ThemeConfig.animationMode.profile
-        val qualityLayers = ThemeConfig.graphicsQuality.shadowLayers.coerceIn(0, 3)
+        val qualityLayers = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers.coerceIn(0, 3)
         if (g is MenuGraphics && SkijaMenuFonts.active && qualityLayers >= 2 && profile.glowStrength > 0.0) {
             g.shadow(x, y + 2, w, h, RADIUS.toDouble(), if (profile.ambient) 4.0 else 3.0,
                 alpha(style.shadowTint, (strength.coerceIn(0.0, 1.0) * profile.shadowStrength * style.shadowOpacity).toInt()))
@@ -141,7 +141,7 @@ object MenuTheme {
     }
     fun glow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double) {
         val profile = ThemeConfig.animationMode.profile
-        if (!ThemeConfig.graphicsQuality.glow || style.glow <= 0.0 || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
+        if (!me.mycellium.skymyce.ui.AutoGraphics.quality.glow || style.glow <= 0.0 || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
         if (g is MenuGraphics && SkijaMenuFonts.active) {
             g.shadow(x, y, w, h, RADIUS.toDouble(), if (profile.ambient) 5.0 else 4.0,
                 alpha(ACCENT, (strength.coerceIn(0.0, 1.0) * style.glow * 18).toInt()))
@@ -152,7 +152,7 @@ object MenuTheme {
     }
     /** Transparent lighting keeps the configured panel opacity intact. */
     fun sheen(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
-        if (ThemeConfig.graphicsQuality == GuiQuality.EXTREMELY_LIGHT || style.sheen <= 0.0 || w < 10 || h < 10 || strength <= 0.0) return
+        if (me.mycellium.skymyce.ui.AutoGraphics.quality == GuiQuality.EXTREMELY_LIGHT || style.sheen <= 0.0 || w < 10 || h < 10 || strength <= 0.0) return
         val opacity = (strength.coerceIn(0.0, 1.0) * style.sheen * OPACITY * .12).toInt()
         if (opacity == 0) return
         val tint = blend(ACCENT, SECONDARY, 55)
@@ -789,7 +789,7 @@ class MenuSlider : SliderComponent(Sizing.fill()), GreedyInputUIComponent {
         val halo = ((hover * .5 + changed * .5) * MenuTheme.style.glow * 12).toInt()
         val thumbPixel = thumb.toInt()
         graphics.layer(x = thumb - thumbPixel) {
-            if (ThemeConfig.graphicsQuality.glow && halo > 0)
+            if (me.mycellium.skymyce.ui.AutoGraphics.quality.glow && halo > 0)
                 graphics.drawCircle(thumbPixel, center, 24, 7.0, Color.ofArgb(MenuTheme.alpha(MenuTheme.ACCENT, halo)))
             graphics.drawCircle(thumbPixel, center + 1, 24, 4.5 + hover * .7, Color.ofArgb(MenuTheme.alpha(MenuTheme.style.shadowTint, 20)))
             graphics.drawCircle(thumbPixel, center, 24, 3.5 + hover * .7 + press * .4,

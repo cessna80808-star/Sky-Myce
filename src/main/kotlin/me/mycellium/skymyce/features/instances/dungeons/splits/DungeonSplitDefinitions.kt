@@ -132,7 +132,8 @@ internal val watcherLine = Regex("^\\[BOSS] The Watcher: .+$")
 /** Hypixel prefixes the real Livid's name with a colour word, e.g. `[BOSS] Hockey Livid:`. */
 internal val lividKill = Regex("^\\[BOSS] \\w+ Livid: Impossible! How did you figure out which one I was\\?!$")
 /** System lines only: a player name is a plain identifier, so a relayed player chat line cannot match. */
-internal val terminalProgress = Regex("^(\\w{1,16}) (?:activated|completed) a (?:terminal|device|lever)! \\((\\d)/(\\d)\\)$")
+// Other mods may append timings, e.g. "(7/7) (24.116s | 24.116s)"; anything after the counter is ignored.
+internal val terminalProgress = Regex("^(\\w{1,16}) (?:activated|completed) a (?:terminal|device|lever)! \\((\\d)/(\\d)\\)(?: .*)?$")
 internal val bossDefeated = Regex("^\\s*☠ Defeated (.+) in 0?([\\dhms ]+?)\\s*(\\(NEW RECORD!\\))?$")
 
 /** Pure chat classification shared by the live splitter and the executable check. */

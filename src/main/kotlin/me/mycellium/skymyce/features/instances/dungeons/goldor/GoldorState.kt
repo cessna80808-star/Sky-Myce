@@ -45,6 +45,8 @@ class GoldorRunState(var profile: StrategyProfile) {
         const val POSITION_TTL = 3_000L
         /** Shared state from a client that has been silent this long no longer counts as fresh. */
         const val SHARED_TTL = 60_000L
+        /** How long a gate line seen before n/n still counts for that section. */
+        const val GATE_EARLY_MILLIS = 3_000L
     }
 
     var active = false
@@ -90,7 +92,7 @@ class GoldorRunState(var profile: StrategyProfile) {
     fun reset() {
         active = false; section = GoldorSection.S1; startedAt = null; sectionDoneAt = null; gateOpenedAt = null
         objectives.clear(); routes.clear(); counters.clear(); tickOrigin = null; tickObserved = false
-        confirmations.clear(); ssResetAt = null
+        confirmations.clear(); ssResetAt = null; pendingGateAt = null
         players.replaceAll { _, p -> p.copy(sm = false, reportedSection = null, lastMessageAt = null) }
         changed()
     }
@@ -220,16 +222,37 @@ class GoldorRunState(var profile: StrategyProfile) {
         sectionDoneAt = now
         GoldorLayout.stations(section).forEach { if (state(it.objective).status != ObjectiveStatus.COMPLETE) markComplete(it.objective, null, StateSource.INFERRED, now, ambiguous = true) }
         changed()
+        // The gate line can land just before the last completion line; it still opens this gate.
+        val early = pendingGateAt?.let { now - it <= GATE_EARLY_MILLIS } == true
+        pendingGateAt = null
+        if (early) gateOpened(now)
     }
 
-    private fun advance(next: GoldorSection) { section = next; sectionDoneAt = null; gateOpenedAt = null; changed() }
+    /** A gate line seen while the section was still short of n/n. */
+    private var pendingGateAt: Long? = null
 
-    /** `The gate has been destroyed!`: the finished section's gate is open and the next section begins. */
+    private fun advance(next: GoldorSection) { section = next; sectionDoneAt = null; gateOpenedAt = null; pendingGateAt = null; changed() }
+
+    /**
+     * The gate is blown (`The gate has been destroyed!` or Goldor's line for that gate): once the section is n/n the
+     * next section begins at once. A gate line before n/n is held briefly for the last completion.
+     */
     fun gateOpened(now: Long) {
         if (!active) return
         // S4 has no gate; the Core line ends it.
-        if (section == GoldorSection.S4 || section == GoldorSection.CORE || sectionDoneAt == null) return
+        if (section == GoldorSection.S4 || section == GoldorSection.CORE) return
+        if (sectionDoneAt == null) { pendingGateAt = now; return }
         advance(section.next!!); gateOpenedAt = now
+    }
+
+    /**
+     * A finished section whose gate line was never seen (hidden by another mod, or missed) still moves on once the gate
+     * must have opened by itself: the profile's gate delay after n/n, plus a second of slack.
+     */
+    fun gateTimeout(now: Long) {
+        val done = sectionDoneAt ?: return
+        if (!active || section == GoldorSection.S4 || section == GoldorSection.CORE) return
+        if (now - done >= profile.objectives.gateDelayMillis + 1_000) { advance(section.next!!); gateOpenedAt = now }
     }
 
     /** `The Core entrance is opening!`: S4 is done and the Core run begins. */

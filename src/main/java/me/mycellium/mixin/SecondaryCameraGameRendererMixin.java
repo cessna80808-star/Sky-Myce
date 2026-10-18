@@ -5,6 +5,7 @@ import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.GameRenderer;
 import org.joml.Matrix4fc;
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -13,10 +14,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(GameRenderer.class)
 public abstract class SecondaryCameraGameRendererMixin {
-    @Inject(method = "sodium$getProjectionMatrix", at = @At("RETURN"), cancellable = true, require = 0, remap = false)
-    private void skyMyce$secondaryTerrainProjection(CallbackInfoReturnable<Matrix4fc> result) {
+    @ModifyReturnValue(method = "sodium$getProjectionMatrix", at = @At("RETURN"), require = 0, remap = false)
+    private Matrix4fc skyMyce$secondaryTerrainProjection(Matrix4fc original) {
         // Sodium caches the main projection separately from RenderSystem's active GPU projection.
-        result.setReturnValue(SecondaryWorldCamera.projectionMatrix(result.getReturnValue()));
+        return SecondaryWorldCamera.projectionMatrix(original);
     }
 
     @Inject(method = "extract", at = @At("HEAD"))

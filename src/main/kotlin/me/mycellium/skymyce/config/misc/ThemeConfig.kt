@@ -16,9 +16,22 @@ object ThemeConfig : CategoryKt("Theme & Appearance") {
         name = TranslatableValue.literal("Theme preset")
         description = TranslatableValue.literal("Shared palette and component styling inherited by menus and widgets. Personal overrides stay in place.")
     }
-    var graphicsQuality by enum(GuiQuality.MEDIUM) {
-        name = TranslatableValue.literal("GUI Graphics Quality")
-        description = TranslatableValue.literal("Extremely Light, Light, Medium or High. Controls rendering resolution, shadows and ambient effects while keeping essential interaction feedback.")
+    var graphicsQuality by enum(GuiQuality.AUTO) {
+        name = TranslatableValue.literal("Graphics Mode")
+        description = TranslatableValue.literal("Auto lowers Sky-Myce's menu sharpness, shadows, glow and ambient effects while your frame rate stays under its target, and restores them when it recovers; /sm graphics shows what it chose. Light, Balanced and Heavy are fixed; Minimal is the lightest. HUD information is never reduced, and Minecraft's own settings are untouched.")
+    }
+    var autoTargetFps by int(60) {
+        name = TranslatableValue.literal("Auto Target FPS")
+        description = TranslatableValue.literal("Auto keeps full quality while you stay above this frame rate. Never higher than your frame limit")
+        range = 30..240; slider = true
+    }
+    var autoResponse by enum(me.mycellium.skymyce.ui.AutoResponse.NORMAL) {
+        name = TranslatableValue.literal("Auto Response")
+        description = TranslatableValue.literal("Gentle waits longest before lowering quality; Quick protects the frame rate soonest. Raising quality always waits for steady frames")
+    }
+    var autoLowest by enum(GuiQuality.EXTREMELY_LIGHT) {
+        name = TranslatableValue.literal("Auto Lowest Quality")
+        description = TranslatableValue.literal("Auto never goes below this. Choose Balanced to always keep shadows and glow")
     }
     var animationMode by enum(GuiMotion.MEDIUM) {
         name = TranslatableValue.literal("GUI Animations")

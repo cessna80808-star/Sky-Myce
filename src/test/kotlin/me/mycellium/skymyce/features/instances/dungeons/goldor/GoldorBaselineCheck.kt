@@ -229,6 +229,31 @@ private fun checkMigration() {
     } finally { config.profile = profile; config.migratedGoldStandard = migrated }
 }
 
+/** Sections switch at n/n once the gate goes, not when the next section's first objective is done. */
+private fun checkGateSwitch() {
+    val s = goldRun()
+    val stations = GoldorLayout.stations(S1)
+    stations.dropLast(1).forEach { s.markComplete(it.objective, "x", StateSource.CHAT, B0 + 1_000) }
+    s.chatCompletion("x", ObjectiveKind.LEVER, 7, 7, B0 + 2_000)
+    check(s.section == S1 && s.sectionDoneAt != null)
+    s.gateOpened(B0 + 2_100)
+    check(s.section == S2 && s.gateOpenedAt == B0 + 2_100) { "n/n plus the gate line: S2 at once" }
+    // A gate line just before the last completion still opens this gate.
+    GoldorLayout.stations(S2).dropLast(1).forEach { s.markComplete(it.objective, "x", StateSource.CHAT, B0 + 3_000) }
+    s.gateOpened(B0 + 3_500)
+    check(s.section == S2) { "No switch before n/n" }
+    s.chatCompletion("x", ObjectiveKind.LEVER, 8, 8, B0 + 4_000)
+    check(s.section == S3) { "The held gate line applies at n/n" }
+    // No gate line at all: the gate opens by itself after its delay.
+    GoldorLayout.stations(S3).forEach { s.markComplete(it.objective, "x", StateSource.CHAT, B0 + 5_000) }
+    s.chatCompletion("x", ObjectiveKind.LEVER, 7, 7, B0 + 5_000)
+    s.gateTimeout(B0 + 7_000); check(s.section == S3)
+    s.gateTimeout(B0 + 5_000 + G.objectives.gateDelayMillis + 1_000); check(s.section == S4)
+    check(GOLDOR_GATE_LINES.size == 3 && GOLDOR_GATE_LINES.all { it.startsWith("[BOSS] Goldor: ") })
+    check(me.mycellium.skymyce.features.instances.dungeons.splits.terminalProgress.matchEntire("casper_0302 activated a terminal! (7/7) (24.116s | 24.116s)")?.groupValues?.get(2) == "7") { "Timing suffixes from other mods are ignored" }
+}
+
 internal fun checkGoldStandard() {
+    checkGateSwitch()
     checkFidelity(); checkVersioned(); checkTank(); checkMageAndHealer(); checkBerserkerAndArcher(); checkUnknowns(); checkMigration()
 }

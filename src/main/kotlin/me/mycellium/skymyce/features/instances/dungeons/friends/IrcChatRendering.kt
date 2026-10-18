@@ -430,6 +430,8 @@ object IrcChatRendering {
         frame++
         if (!GlobalChatConfig.mediaPreviews || MC.instance.options.hideGui || MC.instance.options.chatVisibility().get() == ChatVisiblity.HIDDEN ||
             MC.instance.player == null || suggestionsVisible()) return
+        // Walking every visible chat line for attachment anchors is wasted while no stored message has one.
+        if (!RelayMessages.chatStore.hasMedia()) return
         val lineSpacing = MC.instance.options.chatLineSpacing().get()
         val lineHeight = (MC.instance.font.lineHeight * (lineSpacing + 1)).toInt()
         val collector = IrcThumbnailCollector(lineHeight, lineSpacing)

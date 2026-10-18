@@ -253,7 +253,7 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
             try { ui?.drawTooltip(graphics, mouseX, mouseY, a) } finally { canvas.group = null }
         }
         tooltip.endFrame(canvas)
-        val rasterScale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val rasterScale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(output, canvas, width, height, rasterScale)
     }
 

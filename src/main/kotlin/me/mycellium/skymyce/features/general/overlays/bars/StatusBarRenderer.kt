@@ -7,107 +7,131 @@ import net.minecraft.resources.Identifier
 import kotlin.math.roundToInt
 
 /**
- * Draws one bar into its rectangle: the icon, a framed track, the trail, the fill with a light top edge and a dark
- * bottom edge, a soft sub-pixel end, the overflow layer, the heal sweep and hit flash, the low-health heartbeat and
- * the label. Shared by the HUD and the editor so both look the same.
+ * Draws one bar into its rectangle, in the shape SkyBlock players know from Skyblocker's bars: a 9-pixel icon, a
+ * 7-pixel rounded dark track and a 5-pixel rounded fill with a light top edge, an overflow layer drawn over the fill
+ * from the left, and the value in the stat's own colour sitting across the top edge with a crisp black outline.
+ * Motion (trail, heal sweep, hit flash, low-health beat) is layered inside the same shape. Shared by HUD and editor.
  */
 object StatusBarRenderer {
     private val sprites = HashMap<String, Identifier>()
+    private const val ICON = 9
 
     fun draw(graphics: GuiGraphicsExtractor, type: BarType, config: BarConfig, rect: BarRect, reading: BarReading, motion: BarMotion,
              now: Long, animate: Boolean, opacity: Double = 1.0) {
         val alpha = (opacity * (motion.alpha.takeIf { !it.isNaN() } ?: 1.0)).coerceIn(0.0, 1.0)
         if (alpha <= 0.01) return
-        val iconSize = if (config.icon == IconPosition.OFF) 0 else BAR_HEIGHT + 1
-        val barLeft = rect.x + if (config.icon == IconPosition.LEFT) iconSize else 0
-        val barRight = rect.right - if (config.icon == IconPosition.RIGHT) iconSize else 0
-        val width = (barRight - barLeft - 2).coerceAtLeast(1)
-        val top = rect.y; val inner = top + 1; val height = BAR_HEIGHT - 2
-        val left = barLeft + 1
-        // A big hit shakes the bar by a pixel for a moment.
+        val iconSpace = if (config.icon == IconPosition.OFF) 0 else ICON + 1
+        val barLeft = rect.x + if (config.icon == IconPosition.LEFT) iconSpace else 0
+        val barRight = rect.right - if (config.icon == IconPosition.RIGHT) iconSpace else 0
+        val barWidth = barRight - barLeft
+        if (barWidth < 4) return
         val flash = if (animate) motion.flash(now) else 0.0
+        // A big hit nudges the bar a pixel for a moment.
         val shake = if (animate && flash > 0.4) (if ((now / 30) % 2 == 0L) 1 else -1) else 0
+        val top = rect.y + 1 // The 7-pixel body.
+        val x = barLeft + shake
 
-        if (iconSize > 0) icon(graphics, type, if (config.icon == IconPosition.LEFT) rect.x else barRight + 1, top, alpha)
+        if (iconSpace > 0) icon(graphics, type, config, if (config.icon == IconPosition.LEFT) rect.x else barRight + 1, rect.y, alpha)
 
         val fraction = reading.fill.coerceIn(0.0, 1.0)
-        val beat = if (type == BarType.HEALTH && animate) heartbeat(fraction, now) else if (type == BarType.HEALTH && fraction in 0.0001..LOW_HEALTH) 0.6 else 0.0
-        val frame = if (beat > 0) blend(0x000000, 0xFF3040, beat) else 0x000000
-        graphics.fill(barLeft + shake, top, barRight + shake, top + BAR_HEIGHT, argb(frame, alpha * (0.75 + beat * 0.25)))
-        val x0 = left + shake
-        graphics.fill(x0, inner, x0 + width, inner + height, argb(dark(config.fill, 0.22), alpha))
+        val beat = if (type == BarType.HEALTH) (if (animate) heartbeat(fraction, now) else if (fraction in 0.0001..LOW_HEALTH) 0.6 else 0.0) else 0.0
+
+        // Body: a near-black rounded frame (corner pixels left out) around a dark track tinted by the fill.
+        val frame = if (beat > 0) blend(0x0E0E10, 0xC81E28, beat) else 0x0E0E10
+        pill(graphics, x, top, barWidth, 7, argb(frame, alpha * 0.92))
+        val inner = x + 1; val innerWidth = barWidth - 2
+        graphics.fill(inner, top + 1, inner + innerWidth, top + 6, argb(dark(config.fill, 0.28), alpha * 0.95))
 
         val shown = (motion.shown.takeIf { !it.isNaN() } ?: fraction).coerceIn(0.0, 1.0)
         val trail = (motion.trail.takeIf { !it.isNaN() } ?: shown).coerceIn(0.0, 1.0)
-        val fillEnd = width * shown
-        val trailEnd = (width * trail).roundToInt()
-        if (trailEnd > fillEnd.toInt()) graphics.fill(x0 + fillEnd.toInt(), inner, x0 + trailEnd, inner + height, argb(light(config.fill, 0.72), alpha * 0.9))
+        val fillPx = innerWidth * shown
+        val trailPx = (innerWidth * trail).roundToInt()
+        if (trailPx > fillPx.toInt() + 1) fillPill(graphics, inner, top + 1, trailPx, light(config.fill, 0.62), alpha * 0.85, highlight = false)
 
-        val whole = fillEnd.toInt()
-        val fillColor = if (beat > 0) light(config.fill, beat * 0.25) else config.fill
-        if (whole > 0) {
-            graphics.fill(x0, inner, x0 + whole, inner + height, argb(fillColor, alpha))
-            graphics.fill(x0, inner, x0 + whole, inner + 1, argb(light(fillColor, 0.45), alpha))
-            graphics.fill(x0, inner + height - 1, x0 + whole, inner + height, argb(dark(fillColor, 0.7), alpha))
-        }
-        // The fractional last column, so the end glides instead of stepping a pixel at a time.
-        val part = fillEnd - whole
-        if (part > 0.05 && whole < width) graphics.fill(x0 + whole, inner, x0 + whole + 1, inner + height, argb(fillColor, alpha * part))
+        val color = if (beat > 0) light(config.fill, beat * 0.2) else config.fill
+        val whole = fillPx.toInt()
+        fillPill(graphics, inner, top + 1, whole, color, alpha, highlight = true)
+        // The fractional end column, so the edge glides instead of stepping.
+        val part = fillPx - whole
+        if (part > 0.05 && whole in 2 until innerWidth) graphics.fill(inner + whole, top + 2, inner + whole + 1, top + 5, argb(color, alpha * part))
 
-        // Overflow (absorption, overflow mana) rides on top, against the maximum, with a moving shimmer.
+        // Overflow (absorption, overflow mana) over the fill from the left, with a slow shimmer.
         if (config.showOverflow && type.hasOverflow && reading.overflow > 0 && reading.max > 0) {
-            val end = (width * (reading.overflow / reading.max).coerceIn(0.0, 1.0)).roundToInt()
-            graphics.fill(x0, inner, x0 + end, inner + 3, argb(config.overflow, alpha))
-            graphics.fill(x0, inner, x0 + end, inner + 1, argb(light(config.overflow, 0.5), alpha))
-            if (animate && end > 4) {
-                val shimmer = x0 + ((now / 12) % (end + 12)).toInt() - 6
-                for (i in 0 until 4) { val sx = shimmer + i; if (sx in x0 until x0 + end) graphics.fill(sx, inner, sx + 1, inner + 3, argb(0xFFFFFF, alpha * (0.35 - i * 0.07))) }
+            val end = (innerWidth * (reading.overflow / reading.max).coerceIn(0.0, 1.0)).roundToInt()
+            fillPill(graphics, inner, top + 1, end, config.overflow, alpha, highlight = true)
+            if (animate && end > 6) {
+                val head = inner + ((now / 14) % (end + 10)).toInt() - 5
+                for (i in 0 until 3) { val sx = head + i; if (sx in inner + 1 until inner + end - 1) graphics.fill(sx, top + 2, sx + 1, top + 5, argb(0xFFFFFF, alpha * (0.32 - i * 0.09))) }
             }
         }
-        // A heal sweeps a bright band from the old end to the new.
+        // A heal sweeps a bright band from the old end to the new one.
         motion.heal(now)?.takeIf { animate }?.let { progress ->
-            val from = width * motion.healFrom; val to = width * motion.healTo
+            val from = innerWidth * motion.healFrom; val to = innerWidth * motion.healTo
             val head = (from + (to - from) * easeOut(progress)).roundToInt()
-            val band = 6
-            for (i in 0 until band) {
-                val sx = x0 + head - i
-                if (sx >= x0 + from.toInt() && sx < x0 + width) graphics.fill(sx, inner, sx + 1, inner + height, argb(0xFFFFFF, alpha * (1 - progress) * (0.6 - i * 0.09)))
+            for (i in 0 until 5) {
+                val sx = inner + head - i
+                if (sx >= inner + from.toInt() && sx in inner + 1 until inner + innerWidth - 1) graphics.fill(sx, top + 1, sx + 1, top + 6, argb(0xFFFFFF, alpha * (1 - progress) * (0.55 - i * 0.1)))
             }
         }
-        if (flash > 0) graphics.fill(x0, inner, x0 + width, inner + height, argb(0xFFFFFF, alpha * flash * 0.55))
-        // Quarter marks, faint enough to read through.
-        if (width >= 60) for (q in 1..3) { val qx = x0 + width * q / 4; graphics.fill(qx, inner + 1, qx + 1, inner + height - 1, argb(0x000000, alpha * 0.3)) }
+        if (flash > 0 && whole > 2) fillPill(graphics, inner, top + 1, maxOf(whole, trailPx), 0xFFFFFF, alpha * flash * 0.5, highlight = false)
 
-        if (config.text != TextPosition.OFF && reading.label.isNotEmpty()) {
-            val font = MC.instance.font
-            // The full label if it fits, else the value alone, else nothing.
-            val label = listOf(reading.label, reading.short).firstOrNull { font.width(it) <= width - 3 } ?: return
-            val textWidth = font.width(label)
-            val tx = when (config.text) {
-                TextPosition.LEFT -> x0 + 2
-                TextPosition.RIGHT -> x0 + width - textWidth - 1
-                else -> x0 + (width - textWidth) / 2
-            }
-            outlined(graphics, label, tx, top + 1, config.textColor, alpha)
-        }
+        if (config.text != TextPosition.OFF && reading.label.isNotEmpty()) label(graphics, config, reading, rect, barLeft, barWidth, alpha)
     }
 
-    private fun icon(graphics: GuiGraphicsExtractor, type: BarType, x: Int, y: Int, alpha: Double) {
+    /** The value straddling the top edge, in the stat's colour; any "+overflow" part in the overflow colour. */
+    private fun label(graphics: GuiGraphicsExtractor, config: BarConfig, reading: BarReading, rect: BarRect, barLeft: Int, barWidth: Int, alpha: Double) {
+        val font = MC.instance.font
+        // The full label if it fits over the whole bar (icon included), else the value alone.
+        val label = listOf(reading.label, reading.short).firstOrNull { font.width(it) <= rect.width } ?: reading.short
+        val split = label.lastIndexOf(" +")
+        val main = if (split > 0) label.substring(0, split) else label
+        val extra = if (split > 0) label.substring(split) else ""
+        val width = font.width(label)
+        val x = when (config.text) {
+            TextPosition.LEFT -> barLeft + 1
+            TextPosition.RIGHT -> barLeft + barWidth - width - 1
+            else -> barLeft + (barWidth - width) / 2
+        }.coerceIn(rect.x - 2, rect.right - width + 2)
+        val y = rect.y - 3
+        outlined(graphics, main, x, y, config.textColor, alpha)
+        if (extra.isNotEmpty()) outlined(graphics, extra, x + font.width(main), y, config.overflow, alpha)
+    }
+
+    private fun icon(graphics: GuiGraphicsExtractor, type: BarType, config: BarConfig, x: Int, y: Int, alpha: Double) {
         val sprite = type.sprite
         if (sprite != null) {
             val id = sprites.getOrPut(sprite) { Identifier.withDefaultNamespace(sprite) }
-            graphics.blitSprite(RenderPipelines.GUI_TEXTURED, id, x, y, 9, 9, argb(0xFFFFFF, alpha))
+            graphics.blitSprite(RenderPipelines.GUI_TEXTURED, id, x, y, ICON, ICON, argb(0xFFFFFF, alpha))
         } else {
             val font = MC.instance.font
-            outlined(graphics, type.glyph, x + (9 - font.width(type.glyph)) / 2 + 1, y + 1, type.text, alpha)
+            outlined(graphics, type.glyph, x + (ICON - font.width(type.glyph)) / 2 + 1, y + 1, config.textColor, alpha)
         }
     }
 
+    /** A filled rectangle with its four corner pixels left out. */
+    private fun pill(graphics: GuiGraphicsExtractor, x: Int, y: Int, w: Int, h: Int, color: Int) {
+        if (w <= 0 || h <= 0) return
+        if (w < 3 || h < 3) { graphics.fill(x, y, x + w, y + h, color); return }
+        graphics.fill(x + 1, y, x + w - 1, y + 1, color)
+        graphics.fill(x, y + 1, x + w, y + h - 1, color)
+        graphics.fill(x + 1, y + h - 1, x + w - 1, y + h, color)
+    }
+
+    /** A 5-pixel rounded fill; with [highlight], a lighter top row and a darker bottom row. */
+    private fun fillPill(graphics: GuiGraphicsExtractor, x: Int, y: Int, w: Int, rgb: Int, alpha: Double, highlight: Boolean) {
+        if (w <= 0) return
+        pill(graphics, x, y, w, 5, argb(rgb, alpha))
+        if (highlight && w >= 3) {
+            graphics.fill(x + 1, y, x + w - 1, y + 1, argb(light(rgb, 0.38), alpha))
+            graphics.fill(x + 1, y + 4, x + w - 1, y + 5, argb(dark(rgb, 0.72), alpha))
+        }
+    }
+
+    /** Text with a one-pixel black outline on all eight sides, like a glowing sign's. */
     private fun outlined(graphics: GuiGraphicsExtractor, text: String, x: Int, y: Int, color: Int, alpha: Double) {
         val font = MC.instance.font
-        val shadow = argb(0x000000, alpha * 0.85)
-        graphics.text(font, text, x - 1, y, shadow, false); graphics.text(font, text, x + 1, y, shadow, false)
-        graphics.text(font, text, x, y - 1, shadow, false); graphics.text(font, text, x, y + 1, shadow, false)
+        val outline = argb(0x000000, alpha)
+        for (dx in -1..1) for (dy in -1..1) if (dx != 0 || dy != 0) graphics.text(font, text, x + dx, y + dy, outline, false)
         graphics.text(font, text, x, y, argb(color, alpha), false)
     }
 

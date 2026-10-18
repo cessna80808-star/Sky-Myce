@@ -199,20 +199,29 @@ internal class IrcChatStore {
     private data class Pending(var update: IrcUpdate, val received: Long)
     private val pending = linkedMapOf<IrcKey, Pending>()
     private var boundary = ""
+    /** Counts changes, so [hasMedia] (asked every frame by chat rendering) is recomputed only when messages change. */
+    private var mutations = 0
+    private var mediaCheckedAt = -1
+    private var anyMedia = false
+    /** Whether any stored message has an attachment; expired entries may leave it true until the next change. */
+    fun hasMedia(): Boolean {
+        if (mediaCheckedAt != mutations) { anyMedia = messages.values.any { !it.message.deleted && it.message.media.isNotEmpty() }; mediaCheckedAt = mutations }
+        return anyMedia
+    }
     fun boundary(value: String): Boolean {
         if (boundary == value) return false
-        boundary = value; messages.clear(); pending.clear(); return true
+        boundary = value; messages.clear(); pending.clear(); mutations++; return true
     }
-    fun clear() { messages.clear(); pending.clear() }
+    fun clear() { messages.clear(); pending.clear(); mutations++ }
     fun clearPending() = pending.clear()
-    fun clearScope(scope: String) { messages.keys.removeIf { it.scope == scope }; pending.keys.removeIf { it.scope == scope } }
+    fun clearScope(scope: String) { messages.keys.removeIf { it.scope == scope }; pending.keys.removeIf { it.scope == scope }; mutations++ }
     fun get(key: IrcKey): GlobalChatMessage? = messages[key]?.message
     fun values(): List<GlobalChatMessage> = messages.values.map(Entry::message)
     fun accept(message: GlobalChatMessage, now: Long): Boolean {
         expire(now)
         val key = message.key
         if (key in messages) return false
-        messages[key] = Entry(message, now)
+        messages[key] = Entry(message, now); mutations++
         pending.remove(key)?.update?.let { apply(it, now) }
         while (messages.size > 1024) messages.remove(messages.keys.first())
         expire(now)
@@ -252,6 +261,7 @@ internal class IrcChatStore {
             reactions = if (reactions) update.reactions!! else previous.reactions, revision = revision)
         messages[update.key] = entry.copy(message = next, textRevision = if (text) update.textRevision else entry.textRevision,
             mediaRevision = if (media) update.mediaRevision else entry.mediaRevision, reactionRevision = if (reactions) update.reactionRevision else entry.reactionRevision)
+        mutations++
         return next
     }
     fun manageable(key: IrcKey, uuid: String, now: Long): Boolean = messages[key]?.let {

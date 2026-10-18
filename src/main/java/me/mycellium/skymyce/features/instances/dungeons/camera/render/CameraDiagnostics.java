@@ -15,21 +15,26 @@ public final class CameraDiagnostics {
     private int terrainSections, width, height;
     private final IdentityHashMap<EntityRenderState, Boolean> states = new IdentityHashMap<>();
     private final List<String> bosses = new ArrayList<>();
+    /** Boss detail strings are diagnostics only: rebuilt once a second, not on every secondary frame. */
+    private long nextDetailAt;
+    private boolean detailFrame;
 
     void begin() {
         loaded = visible = extracted = submitted = loadedBosses = visibleBosses = extractedBosses = submittedBosses = 0;
         terrainSections = width = height = 0;
         states.clear();
-        bosses.clear();
+        long now = System.nanoTime();
+        detailFrame = now >= nextDetailAt;
+        if (detailFrame) { bosses.clear(); nextDetailAt = now + 1_000_000_000L; }
     }
 
-    void candidate(boolean visible, boolean boss, String detail) {
+    void candidate(boolean visible, boolean boss, java.util.function.Supplier<String> detail) {
         loaded++;
         if (visible) this.visible++;
         if (boss) {
             loadedBosses++;
             if (visible) visibleBosses++;
-            if (bosses.size() < 8) bosses.add(detail);
+            if (detailFrame && bosses.size() < 8) bosses.add(detail.get());
         }
     }
 

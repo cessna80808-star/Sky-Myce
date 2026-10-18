@@ -111,7 +111,7 @@ internal object IrcInlineControls {
             }
         }
         output.nextStratum()
-        val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / screen.width.coerceAtLeast(1), 1440.0 / screen.height.coerceAtLeast(1))
+        val scale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / screen.width.coerceAtLeast(1), 1440.0 / screen.height.coerceAtLeast(1))
         texture.render(output, canvas, screen.width, screen.height, scale)
         if (emojiLabels.isNotEmpty()) output.nextStratum()
         for ((text, cell) in emojiLabels) {

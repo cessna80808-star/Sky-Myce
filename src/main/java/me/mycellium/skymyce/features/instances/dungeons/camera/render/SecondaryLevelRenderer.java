@@ -72,12 +72,12 @@ public final class SecondaryLevelRenderer extends LevelRenderer {
                 (entity != view.entity() || view.isDetached() || entity instanceof LivingEntity living && living.isSleeping()) &&
                 (!(entity instanceof LocalPlayer) || view.entity() == entity);
             boolean boss = entity instanceof WitherBoss;
-            String detail = boss ? entity.getId() + " " + entity.getType() + " " + entity.getName().getString() +
+            // Built only on the once-a-second diagnostics frame.
+            diagnostics.candidate(visible, boss, () -> entity.getId() + " " + entity.getType() + " " + entity.getName().getString() +
                 " pos=" + entity.position() + " distance=" + Math.sqrt(position.distanceToSqr(entity.position())) +
                 " mainFrustum=" + client.gameRenderer.getMainCamera().getCullFrustum().isVisible(entity.getBoundingBox().inflate(.5)) +
                 " secondaryVisible=" + inView + " sectionReady=" + sectionReady +
-                " renderer=" + entities.getRenderer(entity).getClass().getName() : "";
-            diagnostics.candidate(visible, boss, detail);
+                " renderer=" + entities.getRenderer(entity).getClass().getName());
             if (!visible) continue;
             float partial = entity.tickCount == 0 ? 1f : ticks.getGameTimeDeltaPartialTick(!level.tickRateManager().isEntityFrozen(entity));
             var state = entities.extractEntity(entity, partial);

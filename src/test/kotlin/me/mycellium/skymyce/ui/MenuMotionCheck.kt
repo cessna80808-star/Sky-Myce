@@ -28,6 +28,7 @@ private fun near(actual: Double, expected: Double, message: String, tolerance: D
 }
 
 fun main() {
+    autoGraphicsCheck(); textHookBenchmark()
     val checkpoints = listOf(0L, 20, 60, 100, 120, 170, 220, 280, 350).map { it * 1_000_000 }
     fun trajectory(fps: Int): List<Double> {
         val clock = MotionClock(); val value = clock.value()
@@ -132,13 +133,13 @@ fun main() {
     rapid.animateTo(.75); rapidClock.millis(4200)
     check(!rapid.sample().isNaN() && !rapid.running && rapid.sample() == .75)
 
-    val qualities = GuiQuality.entries
+    val qualities = GuiQuality.entries.filter { it != GuiQuality.AUTO } // Auto draws with one of these tiers.
     check(qualities.map { it.rasterScale } == listOf(1.0, 1.25, 1.5, 2.0))
     check(qualities.map { it.shadowLayers } == listOf(0, 1, 2, 3))
     check(qualities.take(2).all { !it.glow && !it.ambient && it.ambientIntervalNanos == 0L })
     check(GuiQuality.MEDIUM.ambientIntervalNanos == 100_000_000L && GuiQuality.HIGH.ambientIntervalNanos == 50_000_000L)
     check(qualities.drop(2).all { it.glow && it.ambient })
-    check(qualities.map { it.toString() } == listOf("Extremely Light", "Light", "Medium", "High"))
+    check(qualities.map { it.toString() } == listOf("Minimal", "Light", "Balanced", "Heavy"))
     check(GuiMotion.choices.map { it.toString() } == listOf("Light", "Medium", "Heavy", "Reduced", "Off"))
     for (mode in GuiMotion.entries) {
         for (life in listOf(1.0, 75.0, 500.0, 2000.0)) {

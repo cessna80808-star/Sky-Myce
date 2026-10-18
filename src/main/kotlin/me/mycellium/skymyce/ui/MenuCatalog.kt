@@ -192,7 +192,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 MenuSettingLocation(it.category, it.subcategory, it.id)
             }
             val section = when {
-                path == "Theme & Appearance/graphicsQuality" -> "Performance"
+                path == "Theme & Appearance/graphicsQuality" || path.startsWith("Theme & Appearance/auto") -> "Performance"
                 path.startsWith("Theme & Appearance/") -> "Appearance"
                 path == "openConfigKey" -> "Controls"
                 else -> "General"

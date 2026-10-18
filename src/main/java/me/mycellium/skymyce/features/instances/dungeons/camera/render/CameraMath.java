@@ -34,7 +34,8 @@ public final class CameraMath {
     }
 
     /** Leap previews may together use at most half of the frame time; each gets an equal share. */
-    static final int PREVIEW_BUDGET_DIVISOR = 2;
+    /** Previews use at most a quarter of frame time between them. */
+    static final int PREVIEW_BUDGET_DIVISOR = 4;
 
     /**
      * When a preview may render next. Frames advance from the previous due time, so spacing stays even instead of

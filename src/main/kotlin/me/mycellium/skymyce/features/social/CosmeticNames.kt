@@ -48,26 +48,65 @@ fun parseCosmeticText(json: JsonElement): Component {
 
 fun cosmeticTextJson(component: Component): JsonElement = ComponentSerialization.CODEC.encodeStart(JsonOps.INSTANCE, component).result().orElseThrow()
 
-/** Display-only copies. Never mutate received components, click actions, command input or item data. */
+/** A bounded least-recently-used map; reads refresh an entry, the oldest entry leaves when full. */
+private class LruMap<K, V>(private val capacity: Int) : LinkedHashMap<K, V>(capacity * 4 / 3 + 1, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?) = size > capacity
+}
+
+private val nameWord = Regex("[A-Za-z0-9_]+")
+
+private fun isNameChar(code: Int) = code in 'a'.code..'z'.code || code in 'A'.code..'Z'.code || code in '0'.code..'9'.code || code == '_'.code
+
+/**
+ * Display-only copies. Never mutate received components, click actions, command input or item data.
+ *
+ * This runs for every string any mod draws, so the common case (no known name in the text) must be cheap: one pass
+ * over the characters hashing each word exactly as String.hashCode() would, checked against the sorted hashes of the
+ * known names, with no allocation. Only text with a hash hit is copied and matched properly.
+ */
 class CosmeticNameMap {
     private var names: Map<String, Component> = emptyMap()
-    private val cache = linkedMapOf<FormattedCharSequence, FormattedCharSequence>()
-    private val strings = linkedMapOf<String, FormattedCharSequence>()
+    private var nameHashes = IntArray(0)
+    private var shortest = Int.MAX_VALUE
+    private val cache = LruMap<FormattedCharSequence, FormattedCharSequence>(1024)
+    private val strings = LruMap<String, FormattedCharSequence>(1024)
     fun update(values: Map<String, Component>): Boolean {
         val normalized = values.mapKeys { it.key.lowercase() }
         if (normalized == names) return false
-        names = normalized; cache.clear(); strings.clear(); return true
+        names = normalized
+        nameHashes = normalized.keys.map { it.hashCode() }.distinct().sorted().toIntArray()
+        shortest = normalized.keys.minOfOrNull { it.length } ?: Int.MAX_VALUE
+        cache.clear(); strings.clear(); return true
     }
     val empty get() = names.isEmpty()
+
+    /** True when some word of [source] may be a known name (a hash hit; the full match decides). */
+    internal fun mayContainName(source: FormattedCharSequence): Boolean {
+        var hash = 0; var length = 0; var found = false; var seen = 0
+        source.accept { _, _, code ->
+            if (++seen > 8192) return@accept false
+            if (isNameChar(code)) {
+                val lower = if (code in 'A'.code..'Z'.code) code + 32 else code
+                hash = 31 * hash + lower; length++
+                true
+            } else {
+                if (length >= shortest && nameHashes.binarySearch(hash) >= 0) { found = true; false }
+                else { hash = 0; length = 0; true }
+            }
+        }
+        return found || (length >= shortest && nameHashes.binarySearch(hash) >= 0)
+    }
+
     fun sequence(source: FormattedCharSequence): FormattedCharSequence {
         if (source is DisplaySequence || source is OriginalSequence || names.isEmpty()) return source
         cache[source]?.let { return it }
+        if (!mayContainName(source)) return source
         val text = StringBuilder(); val styles = ArrayList<Style>()
         source.accept { _, style, code ->
             if (text.length >= 8192) false else { text.appendCodePoint(code); repeat(Character.charCount(code)) { styles += style }; true }
         }
         if (text.length >= 8192) return source
-        val matches = Regex("[A-Za-z0-9_]+").findAll(text).mapNotNull { match ->
+        val matches = nameWord.findAll(text).mapNotNull { match ->
             names[match.value.lowercase()]?.let { match.range to it }
         }.toList()
         val result = if (matches.isEmpty()) source else {
@@ -91,7 +130,6 @@ class CosmeticNameMap {
             original(offset, text.length)
             DisplaySequence(source, FormattedCharSequence.composite(parts))
         }
-        if (cache.size >= 256) cache.remove(cache.keys.first())
         cache[source] = result
         return result
     }
@@ -99,7 +137,6 @@ class CosmeticNameMap {
         strings[value]?.let { return it }
         val raw = FormattedCharSequence { sink -> StringDecomposer.iterateFormatted(value, Style.EMPTY, sink) }
         val result = sequence(raw)
-        if (strings.size >= 256) strings.remove(strings.keys.first())
         strings[value] = result
         return result
     }
@@ -132,11 +169,13 @@ object CosmeticNames {
     @JvmStatic fun display(value: String): FormattedCharSequence = mapping.string(value)
     @JvmStatic fun display(value: FormattedText): FormattedText {
         if (!active() || value is OriginalComponent) return value
-        val parts = mutableListOf<FormattedCharSequence>()
-        value.visit(FormattedText.StyledContentConsumer<Unit> { style, text ->
-            parts += FormattedCharSequence { sink -> StringDecomposer.iterateFormatted(text, style, sink) }; Optional.empty()
-        }, Style.EMPTY)
-        val raw = if (value is Component) value.visualOrderText else FormattedCharSequence.composite(parts)
+        val raw = if (value is Component) value.visualOrderText else {
+            val parts = mutableListOf<FormattedCharSequence>()
+            value.visit(FormattedText.StyledContentConsumer<Unit> { style, text ->
+                parts += FormattedCharSequence { sink -> StringDecomposer.iterateFormatted(text, style, sink) }; Optional.empty()
+            }, Style.EMPTY)
+            FormattedCharSequence.composite(parts)
+        }
         val displayed = display(raw)
         if (displayed === raw) return value
         val output = Component.empty()

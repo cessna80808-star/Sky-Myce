@@ -237,6 +237,14 @@ Messages can fail if the recipient is offline, unsupported or not permitted, or 
 5. Right-click a widget to change only that widget's theme. Resetting its theme returns it to inherited appearance; it does not reset the widget's position.
 6. Use theme **Export**/**Import** only with clipboard JSON you trust. Invalid data is rejected; it does not run scripts.
 
+**Graphics mode** (Settings → Performance) sets how much Sky-Myce spends on its own effects:
+- **Auto** is the default for new setups. It watches your frame rate and frame times. When you stay under **Auto Target FPS** for a while, it steps Sky-Myce's menu sharpness, shadows, glow, ambient effects, the menu blur and the leap preview frame rate down one tier at a time. It steps them back up after a longer stretch of steady frames.
+- **Auto Response** picks how quickly it reacts, and **Auto Lowest Quality** sets how far down it may go.
+- **Light**, **Balanced** and **Heavy** are fixed. **Minimal** is the lightest fixed setting.
+- An existing saved setting is kept as it was.
+- `/sm graphics` shows what Auto chose and why.
+- HUD information, dungeon tracking, routes and the Crush Camera are never reduced, and Minecraft's own settings are untouched.
+
 Settings and widget layouts save locally. See [the shared-theme guide](docs/auction-tracker-themes.md#shared-theme-and-hud) for inheritance and import/export rules.
 
 ## 12. What is automatic, and what is not

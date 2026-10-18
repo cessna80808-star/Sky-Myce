@@ -28,6 +28,9 @@ import net.minecraft.client.input.PreeditEvent
 import org.lwjgl.glfw.GLFW
 
 /** Menu density is independent of Minecraft's GUI scale. */
+/** Whether the vanilla world blur may run behind Sky-Myce menus at this quality. */
+internal fun menuBlurAllowed(quality: GuiQuality) = quality != GuiQuality.EXTREMELY_LIGHT && quality != GuiQuality.LIGHT
+
 abstract class MenuScreen(title: Component, private val page: MenuPage? = null) : BaseOwoScreen<FlowLayout>(title) {
     protected open val modal = false
     protected open val home = false
@@ -178,6 +181,11 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
+    /** The world blur behind menus is a full-screen pass every frame; Light and Minimal draw a plain dim instead. */
+    override fun extractBlurredBackground(graphics: net.minecraft.client.gui.GuiGraphicsExtractor) {
+        if (menuBlurAllowed(AutoGraphics.quality)) super.extractBlurredBackground(graphics)
+    }
+
     override fun init() {
         val rendererChanged = texture.prepareFrame()
         val window = MC.instance.window
@@ -304,7 +312,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             toasts.draw(custom, width, height)
             canvas.group = null
         }
-        val scale = minOf(ThemeConfig.graphicsQuality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
+        val scale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / width.coerceAtLeast(1), 1440.0 / height.coerceAtLeast(1))
         texture.render(g, canvas, viewport.screenWidth, viewport.screenHeight, scale, width, height)
         if (!closing && dropdown == null && closingDropdown == null && pageProgress >= 1.0 && paintedShell.alpha >= .999 && paintedShell.scale >= .999) {
             extractNativeContent(g, viewport.screenWidth.toFloat() / width, viewport.screenHeight.toFloat() / height, partialTicks)
@@ -331,7 +339,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
             pivotX = width / 2.0, pivotY = height / 2.0)
     }
     private fun drawAmbient(g: MenuGraphics, component: UIComponent) {
-        val quality = ThemeConfig.graphicsQuality
+        val quality = me.mycellium.skymyce.ui.AutoGraphics.quality
         if (!quality.ambient || !ThemeConfig.animationMode.profile.ambient || MenuTheme.style.sheen <= 0.0 || closing) return
         val changing = opening.running || pageOpening.running
         val step = menuAmbientStep(ambientStep, System.nanoTime(), quality.ambientIntervalNanos, changing)

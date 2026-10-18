@@ -1511,13 +1511,18 @@ object StarredClearRouting : SkyMyceModule() {
                     Gizmos.line(from.add(0.0, heightOffset, 0.0), to.add(0.0, heightOffset, 0.0), color, thickness).setAlwaysOnTop()
                     count++
                 }
-                val local = if (handoffLines.isNotEmpty()) handoffLines
-                    else if (displayCursor >= 0) displayStartLines + displayChunkLines + displayLines.drop(displayLineStart)
-                    else displayLines.drop(displayLineStart)
-                val localCount = local.size
+                // Index across the segments instead of concatenating lists every frame.
+                val handoff = handoffLines.isNotEmpty()
+                val startCount = if (!handoff && displayCursor >= 0) displayStartLines.size else 0
+                val chunkCount = if (!handoff && displayCursor >= 0) displayChunkLines.size else 0
+                val tailStart = displayLineStart.coerceIn(0, displayLines.size)
+                val localCount = if (handoff) handoffLines.size else startCount + chunkCount + (displayLines.size - tailStart)
                 while (index < localCount + continuationLines.size) {
                     var line = when {
-                        index < localCount -> local[index]
+                        handoff && index < localCount -> handoffLines[index]
+                        index < startCount -> displayStartLines[index]
+                        index < startCount + chunkCount -> displayChunkLines[index - startCount]
+                        index < localCount -> displayLines[tailStart + index - startCount - chunkCount]
                         else -> continuationLines[index - localCount]
                     }
                     if (index == 0 && (handoffLines.isNotEmpty() || displayStartLines.isNotEmpty())) {

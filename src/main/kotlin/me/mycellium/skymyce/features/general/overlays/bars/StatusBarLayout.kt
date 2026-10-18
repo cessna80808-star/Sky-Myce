@@ -20,12 +20,12 @@ enum class BarType(
     val fill: Int, val overflow: Int, val text: Int,
     val hasMax: Boolean, val hasOverflow: Boolean, val extra: String? = null,
 ) {
-    HEALTH("health", "Health", "❤", "hud/heart/full", BarAnchor.HOTBAR_TOP, 0, 0xD8323F, 0xF2B33D, 0xFFE1E4, true, true),
-    MANA("mana", "Mana", "✎", null, BarAnchor.HOTBAR_TOP, 0, 0x3B78F0, 0x3FE0E8, 0xDDE8FF, true, true),
-    DEFENSE("defense", "Defense", "❈", "hud/armor_full", BarAnchor.HOTBAR_RIGHT, 0, 0x4CC46C, 0, 0xDDF7E4, false, false, "Show effective health"),
-    SPEED("speed", "Speed", "✦", null, BarAnchor.HOTBAR_RIGHT, 1, 0xE8E8E8, 0, 0xFFFFFF, true, false),
-    VITALITY("vitality", "Vitality", "♨", null, BarAnchor.HOTBAR_LEFT, 0, 0xC23A30, 0, 0xFFE2DE, true, false),
-    RESPIRATION("respiration", "Respiration", "◌", "hud/air", BarAnchor.HOTBAR_LEFT, 1, 0x5FB8F0, 0, 0xE6F6FF, true, false);
+    HEALTH("health", "Health", "❤", "hud/heart/full", BarAnchor.HOTBAR_TOP, 0, 0xE5302C, 0xF5C42C, 0xFF5555, true, true),
+    MANA("mana", "Mana", "✎", null, BarAnchor.HOTBAR_TOP, 0, 0x2EC4EE, 0xA24BF2, 0x55FFFF, true, true),
+    DEFENSE("defense", "Defense", "❈", "hud/armor_full", BarAnchor.HOTBAR_RIGHT, 0, 0x45C25F, 0, 0x55FF55, false, false, "Show effective health"),
+    SPEED("speed", "Speed", "✦", null, BarAnchor.HOTBAR_RIGHT, 1, 0xE6E6E6, 0, 0xFFFFFF, true, false),
+    VITALITY("vitality", "Vitality", "♨", null, BarAnchor.HOTBAR_LEFT, 0, 0xB8322C, 0, 0xE0504A, true, false),
+    RESPIRATION("respiration", "Respiration", "◌", "hud/air", BarAnchor.HOTBAR_LEFT, 1, 0x4AB4E6, 0, 0x6FD8EC, true, false);
 
     companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } }
 }
@@ -138,14 +138,15 @@ data class StatusBarLayout(val version: Int = VERSION, val bars: List<BarConfig>
     }
 
     companion object {
-        const val VERSION = 1
+        /** 2: the Skyblocker-style look with SkyBlock stat colours (version 1 colours are reset to the new defaults). */
+        const val VERSION = 2
         const val MIN_FREE_WIDTH = 30
 
         fun defaultBar(type: BarType) = BarConfig(
             type = type.id, anchor = type.defaultAnchor.id, row = type.defaultRow, slot = 0,
             size = if (type.defaultAnchor.rule.isTarget) 6 else 3,
             icon = IconPosition.LEFT, text = TextPosition.CENTER,
-            showMax = type == BarType.HEALTH || type == BarType.MANA, showOverflow = type.hasOverflow,
+            showMax = false, showOverflow = type.hasOverflow,
             extra = false, fill = type.fill, overflow = type.overflow, textColor = type.text,
         )
 

@@ -18,7 +18,12 @@ import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
+
 import java.util.UUID
+
+// Compiled once: these are checked every tick in the Catacombs.
+private val leapServerId = Regex("[A-Za-z0-9_-]{1,64}")
+private val leapFloorId = Regex("E|ENTRANCE|[FM][1-7]")
 
 /** Explicit party consent shares a short-lived camera pose, never images or stored history. */
 object LeapPovSharing : SkyMyceModule() {
@@ -84,8 +89,8 @@ object LeapPovSharing : SkyMyceModule() {
         val connection = client.connection ?: return null
         val authorization = CommunityClient.sessionToken ?: return null
         val roster = RelayMessages.partyRoster ?: return null
-        val server = LocationAPI.serverId?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: return null
-        val floor = DungeonAPI.dungeonFloor?.name?.takeIf { it.matches(Regex("E|ENTRANCE|[FM][1-7]")) } ?: return null
+        val server = LocationAPI.serverId?.takeIf { leapServerId.matches(it) } ?: return null
+        val floor = DungeonAPI.dungeonFloor?.name?.takeIf { leapFloorId.matches(it) } ?: return null
         val names = DungeonAPI.teammates.map { it.name }
         val keys = names.map { normalizedLeapName(it) ?: return null }
         val members = leapPovMembers(names, connection.onlinePlayers
