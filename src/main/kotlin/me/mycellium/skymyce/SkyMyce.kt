@@ -61,6 +61,7 @@ object SkyMyce : ClientModInitializer {
     override fun onInitializeClient() {
         config = me.mycellium.skymyce.config.loadSkyMyceConfig()
         ThemeConfig.migrateDigestTheme()
+        me.mycellium.skymyce.config.instances.dungeons.GoldorCoordinationConfig.migrateStrategy()
         config.save()
         me.mycellium.skymyce.ui.MenuShortcuts.initialize()
 

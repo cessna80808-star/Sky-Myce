@@ -8,7 +8,7 @@ Sky-Myce tracks the Goldor phase's terminals, devices, levers and early-enter ro
 
 It never clicks, moves or leaps for you. Party chat is its only transport. The Sky-Myce backend and relay are not used.
 
-Settings: **Dungeons → Goldor Coordination**. The map is the *Goldor Map* widget in the HUD editor. Command: `/sm goldor` (see below).
+Settings: **Dungeons → Goldor Coordination** (the strategy is Gold standard by default). The map is the *Goldor Map* widget in the HUD editor. Command: `/sm goldor` (see below).
 
 ## Research note (accessed 2026-10-17)
 
@@ -33,13 +33,78 @@ Profiles are data (`GoldorStrategy.kt`); `GoldorEngine` interprets them. A profi
 - **Per-section role plans:** ordered objectives (`s2.t4`, `s3.dev`, `s4.lr` …) and a stack partner.
 - **Early-enter routes:** route to runner role.
 - **Leap rules:** per section and role. Each has a target role, a reason, whether it is mandatory (an early-enter priority), an "after objective" trigger, and fallback roles with a goal.
-- **Berserker's S2 order** and the **Tank S2 decision table.**
-- **S3 device stack pair** and **S4 lever priorities.**
+- **Plan branches and backups:** a conditional change to a plan (replace or add objectives while a condition holds), and objectives a role does only if nobody else has.
+- **Berserker's S2 order** and the **Tank S2 decision table** (empty in the gold standard).
+- **S3 device stack pair** (none in the gold standard) and **S4 lever priorities.**
+- **The step guide** (gold standard only), described below.
 - **Puzzle timing:** estimates and slow/fast class, plus device, lever, gate, leap and travel timing, and the Goldor tick rule.
 
 To change the meta, edit or add a profile. Event handling does not need to change. Profile ids and versions are stable; existing ids keep their meaning.
 
-### `skymyce-adg` v1 (default): Sky-Myce ADG, F7 and M7
+### `gold-standard` v1 (default): the supplied gold standard, F7 and M7
+
+The supplied class-by-class baseline (received 2026-10-18) lives in `GoldorBaseline.kt`. It is the only profile with a **step guide**:
+- every class has its own S1–S4 steps;
+- each step is marked as prep, required, conditional (with its condition), optional, recovery or reminder;
+- the supplied reference videos and images are attached to their class and section.
+
+The engine follows the profile's role plans and leap rules. Under the recommendation, the HUD adds the current step, the next decision and any recovery that has been triggered.
+
+| Section | Tank | Berserker | Healer | Mage | Archer |
+| --- | --- | --- | --- | --- | --- |
+| S1 | **T2, then T1**, Last Breath once → pre-leap Mage | Last Breath, i4 → **leap Tank** → stack Tank → pre-leap Mage | SS → leap the EE2 player | left lever, right lever, gate, lights (S2 device) → hold EE2 | **T4, then T3** → leap Mage |
+| S2 | T1 → leap Berserker → stack T3 (*if T3 is taken and not Melody: right lever instead*) → leap Healer | **T5, then T3** (*if Archer has Melody: right lever too*) → leap Healer | high (left) lever (*slow party: right lever too*) → gate → HEE3 spot | T2 → into core, back half of the gray carpet | T4, bottom (right) lever → leap Healer (*Mask left: pre-leap now; none: after S2*) |
+| S3 | T1 → leap Archer → stack the levers, gate → leap Mage | T3, device (*Archer and Tank slow: levers*) → leap Mage | T2, device **only if Berserker has not done it** (*Archer and Tank slow: levers*) → leap Mage | core: SOS flare, LCM, Ragnarock | T4, left lever + Explosive Shot gate, right lever → leap Mage |
+| S4 | T1 (*Berserker failed i4: T3 too*) → leap Mage | T3, bottom lever, top lever → leap Mage | T4, right (top) lever, left (bottom) lever **unless Berserker has it or it is done** → leap Mage | re-enter core at the door corner, dig, Ragnarock | T2 → leap Mage → Ragnarock |
+
+`gold-standard-aee2` is the same baseline for parties that choose Archer EE2. Only the EE2 runner and the S1 leap target change (to Archer). The baseline does not say how Mage and Archer split S1 in that case, and the guide says so.
+
+**Post-i4 (Berserker):** Tank is always the default.
+- The reason line shows the i4 time from Goldor's line and whether S1 is still open, and says that Mage is only an alternative.
+- A direct leap to Mage is recommended only after the player confirms it is safe (`/sm goldor if mage-direct yes`).
+- The 7-second threshold and S1 completion never switch the target on their own.
+
+**S4 lever sides** use the map's convention: right is the top lever (y 128), left is the bottom one (y 121). So Healer's "lever on the right" is the top lever, and Berserker's bottom-then-top order starts on the left lever.
+
+#### Conditions: what is detected and what you confirm
+
+| Condition (`/sm goldor if <id>`) | Used by | How it is known |
+| --- | --- | --- |
+| `t3-taken`: someone is at S2 T3 and it is not Melody | Tank S2 | Seen when a Sky-Myce user shares the T3 puzzle, or when T3 is known to be complete. Otherwise it is unknown, and Tank leaps to Berserker by default. |
+| `archer-melody`: Archer has Melody | Berserker S2 | Seen from Archer's shared S2 puzzle; otherwise unknown. |
+| `i4-failed`: Berserker failed i4 | Tank S4 | Never assumed. A known i4 completion rules it out; otherwise only your confirmation sets it. |
+| `ss-reset`: SS failed or is late, or Melody is very slow | Mage S1 safespot, Healer S1 retry | Seen when a party member writes "SS reset", "SSRS" or "SS failed" in party chat. Sky-Myce never sends it. |
+| `slow-party` | Healer S2 right lever | You confirm. |
+| `ee2-failed` | Healer S2 recovery | You confirm. |
+| `slow-levers`: Archer and Tank are both slow | Healer and Berserker S3 levers | You confirm; ruled out once both levers are done. No timer decides it. |
+| `mask`: you have a Mask left | Archer S2 pre-leap | You confirm. While it is unknown, both branches are shown without a countdown. |
+| `mage-direct`: a direct leap to Mage is safe | Berserker S1 | You confirm. |
+| `dying`: you are about to die | Healer S2, Archer S2 safespots | You confirm. |
+
+Confirmations last for the run. `/sm goldor if` lists every condition with its current value and how it is known. An unknown condition is never shown as true or false: the HUD writes "If …" until the condition is seen or confirmed.
+
+#### Versioning
+
+The guide carries three safeguards:
+- **a version;**
+- **a change log:** each `GuideChange` records the version, class, section, summary, source, and whether it is baseline, proposed, tested or accepted;
+- **a fingerprint of every step and reference.**
+
+`goldorCheck` fails if a step changes without the fingerprint being updated, so the baseline cannot be edited by accident. A deliberate change bumps the version and records the change. Proposed routes belong in a new change entry or a separate profile, never as a silent edit of v1.
+
+#### Discrepancies with the earlier profiles
+
+- **The Sky-Myce ADG profile differs from the baseline:**
+  - S1 is reversed: Sky-Myce ADG has Tank on T1 then T2 and Archer on T3 then T4; the baseline has T2 then T1, and T4 then T3.
+  - S2: Berserker goes T4 then T3 there; the baseline has T5 then T3.
+  - Mage does the S2 device in S2 there; the baseline has Mage do the lights during S1 and enter core in S2.
+  - S3: Healer and Berserker stack the device there; the baseline makes Healer the device backup, not a stack partner.
+- **No Tank S2 puzzle-speed table:** the baseline decides Tank's S2 by T3 occupancy and Melody, so the gold-standard profile has no table.
+- **Berserker's post-i4 leap:** the baseline's coordination table still lists "slow i4 or S1 complete: leap Mage", but its own Post-i4 section says Tank-first supersedes that. The implementation follows Tank-first.
+- **Missing link:** Archer S3 refers to "the reference video" for the hole jump but no link is supplied. The guide says so rather than inventing one.
+- **SS reset hotkey:** Healer's optional "SS reset" hotkey is left to the player. Sky-Myce has no permitted feature that sends that message.
+
+### `skymyce-adg` v1: Sky-Myce ADG, F7 and M7 (the default before 2.7.26)
 
 | Section | Tank | Berserker | Healer | Mage | Archer |
 | --- | --- | --- | --- | --- | --- |
@@ -141,7 +206,16 @@ Once a player's own objectives are done, the recommendation always names somethi
 
 ## Learned roles
 
-With **Learn Roles** on, every finished section records which class completed which objective, but only exact attributions. Assignment guesses and completions inferred from the counter are excluded. A class that has done the same objective in at least 60% of three or more sections takes its learned sequence instead of the strategy's for that section. When two classes claim one objective outside a stack, the class that does it more often keeps it. Leap rules and early-enters never change: they are strategy, not habit. Berserker's S2 order and the S4 lever priorities follow the learned plan, so the Tank table reads the right terminals. The data is a small local file (`goldor-learned.json`); `/sm goldor learned` shows it and `/sm goldor learned reset` clears it.
+With **Learn Roles** on, every finished section records which class completed which objective. Only exact attributions count: assignment guesses and completions inferred from the counter are excluded. These are **observations**. They never change the strategy unless **Apply Learned Roles** (experimental, off by default) is turned on.
+
+With it on:
+- A class that has done the same objective in at least 60% of three or more sections takes its learned sequence instead of the strategy's for that section.
+- When two classes claim one objective outside a stack, the class that does it more often keeps it.
+- Leap rules, early-enters and the step guide never change.
+
+The data is a small local file (`goldor-learned.json`). `/sm goldor learned` shows it and `/sm goldor learned reset` clears it.
+
+Until 2.7.25, learned roles were applied by default. The gold standard is the trusted baseline, so from 2.7.26 they are applied only on request.
 
 ## Map
 
@@ -162,6 +236,8 @@ Beside it are the section with its counter and next tick, your recommendation, i
 - `/sm goldor section <s1|s2|s3|s4|core>`: recovery.
 - `/sm goldor test <sender> <smt1 message>`: applies a protocol message locally; never sends.
 - `/sm goldor learned` and `/sm goldor learned reset`: show or clear the learned roles.
+- `/sm goldor guide [class] [s1-s4]`: the step guide. With no argument it lists the classes; with a class it shows that class's required steps per section; with a section it shows that section in full, with clickable references.
+- `/sm goldor if [<condition> yes|no|clear]`: lists the conditions, or confirms one for this run.
 
 ## Tested vs. needs a real run
 

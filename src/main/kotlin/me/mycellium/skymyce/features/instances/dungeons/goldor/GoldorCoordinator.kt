@@ -40,7 +40,7 @@ internal fun puzzleQuarters(puzzle: PuzzleType, itemIds: List<String>): Int? {
  * Party chat is the only transport; nothing here touches the Sky-Myce backend.
  */
 object GoldorCoordinator : SkyMyceModule() {
-    val state = GoldorRunState(GoldorProfiles.SKY_MYCE)
+    val state = GoldorRunState(GoldorBaseline.GOLD_STANDARD)
     private val dedupe = ProtocolDedupe()
     private val outbox = ProtocolOutbox()
     /** Manual class overrides by player name, for parties where the tab list is wrong or missing. */
@@ -68,13 +68,18 @@ object GoldorCoordinator : SkyMyceModule() {
 
     /** Party lines are read here rather than from the shared party event, which does not see lines hidden below. */
     private val partyLine = Regex("^Party > ${me.mycellium.skymyce.api.MiscApi.RANK_USERNAME}: (?<message>.{1,64})$")
+    /** A teammate calling a failed Simon Says: "SS reset", "SSRS", "ss failed". */
+    private val ssReset = Regex("(?i)\\b(ss ?reset|ssrs|ss fail(ed)?)\\b")
 
     @Subscription(receiveCancelled = true)
     fun onChat(event: ChatReceivedEvent.Pre) {
         val text = event.text
         partyLine.matchEntire(text)?.let { match ->
             val message = match.groups["message"]!!.value
-            if (!GoldorProtocol.looksLikeProtocol(message)) return@let
+            if (!GoldorProtocol.looksLikeProtocol(message)) {
+                if (inBoss() && ssReset.containsMatchIn(message)) state.ssReset(now())
+                return@let
+            }
             if (Settings.hideMessages) event.cancel()
             onProtocol(match.groups["player"]!!.value, message)
             return
@@ -141,7 +146,8 @@ object GoldorCoordinator : SkyMyceModule() {
 
     private fun begin(now: Long) {
         val base = GoldorProfiles.byId(Settings.profile.id)
-        state.profile = if (Settings.learnRoles) base.withLearned(GoldorLearning.load()) else base
+        // Learned roles are observations; they only replace assignments when the player opts in.
+        state.profile = if (Settings.applyLearned) base.withLearned(GoldorLearning.load()) else base
         learnFrom = GoldorSection.S1
         state.start(now)
         refreshRoster(now)

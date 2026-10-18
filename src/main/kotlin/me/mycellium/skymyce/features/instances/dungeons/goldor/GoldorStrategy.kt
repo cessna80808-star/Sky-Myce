@@ -38,8 +38,23 @@ data class TickRule(val periodMillis: Long, val firstAfterStartMillis: Long)
  */
 data class ObjectiveTiming(val deviceMillis: Map<GoldorSection, Long>, val leverMillis: Long, val gateDelayMillis: Long)
 
-/** What one role should do in a section: its objectives in order, and who it stacks with. */
-data class RolePlan(val objectives: List<ObjectiveId> = emptyList(), val stackWith: GoldorRole? = null, val note: String? = null)
+/**
+ * A conditional change to a role plan: while [condition] holds, [replace] is swapped for the first of [add] (or [add]
+ * is appended when nothing is replaced). Unknown conditions leave the plan as it is.
+ */
+data class PlanBranch(val condition: GuideCondition, val replace: ObjectiveId? = null, val add: List<ObjectiveId> = emptyList(), val reason: String)
+
+/**
+ * What one role should do in a section: its objectives in order, and who it stacks with. [backup] objectives are done
+ * only if nobody else has done them (Healer's S3 device after Berserker); [branches] are the conditional changes.
+ */
+data class RolePlan(
+    val objectives: List<ObjectiveId> = emptyList(),
+    val stackWith: GoldorRole? = null,
+    val note: String? = null,
+    val backup: Set<ObjectiveId> = emptySet(),
+    val branches: List<PlanBranch> = emptyList(),
+)
 
 /**
  * Who a role leaps to when a section is done (or, with [afterObjective], once that objective is done). [mandatory] is
@@ -54,6 +69,14 @@ data class LeapRule(
     val fallback: List<GoldorRole> = emptyList(),
     val fallbackGoal: ObjectiveId? = null,
     val route: EarlyEnter? = null,
+    /** The rule is skipped while this condition holds (Tank's S2 leap to Berserker when T3 is already taken). */
+    val unless: GuideCondition? = null,
+    /** A timed pre-leap only when this holds; when it is unknown both branches are shown and no countdown is given. */
+    val preLeapIf: GuideCondition? = null,
+    /** The no-pre-leap branch, e.g. "no Mask: wait for the gate, then leap". */
+    val otherwise: String? = null,
+    /** A permitted alternative the player decides on, shown with the reason. */
+    val alternative: String? = null,
 )
 
 /** What Tank does in S2, decided by Berserker's T4 (first) and T3 (second) puzzle speeds. */
@@ -85,19 +108,30 @@ data class StrategyProfile(
     val berserkerS2Order: List<ObjectiveId>,
     /** Keyed by (T4 speed, T3 speed); null means the puzzle is not known yet. */
     val tankS2Table: Map<Pair<PuzzleSpeed?, PuzzleSpeed?>, TankS2Row>,
-    /** In S3 these two finish one terminal each, then stack the device. */
-    val s3DeviceStack: Pair<GoldorRole, GoldorRole>,
+    /** In S3 these two finish one terminal each, then stack the device; null when the profile has no device stack. */
+    val s3DeviceStack: Pair<GoldorRole, GoldorRole>?,
     /** In S4 each role's lever priority. Priorities are fixed; position never swaps them. */
     val s4LeverPriority: Map<GoldorRole, ObjectiveId>,
     val puzzles: PuzzleTiming,
     val leap: LeapTiming,
     val tick: TickRule,
     val objectives: ObjectiveTiming,
+    /** The class-by-class route guide, when the profile has one. */
+    val guide: StrategyGuide? = null,
 ) {
     fun plan(section: GoldorSection, role: GoldorRole) = sections[section]?.get(role) ?: RolePlan()
-    fun assignee(objective: ObjectiveId): GoldorRole? =
-        sections[objective.section]?.entries?.firstOrNull { objective in it.value.objectives }?.key
+    /**
+     * Who owns [objective]: a role that does it outright before one that only backs it up, then a role that does it
+     * from another section (Berserker's i4 in S1, Mage's lights from the EE2 spot).
+     */
+    fun assignee(objective: ObjectiveId): GoldorRole? = sections[objective.section]?.entries?.let { plans ->
+        plans.firstOrNull { objective in it.value.objectives && objective !in it.value.backup } ?: plans.firstOrNull { objective in it.value.objectives }
+    }?.key ?: sections.values.firstNotNullOfOrNull { plans -> plans.entries.firstOrNull { objective in it.value.objectives }?.key }
     fun leapRule(section: GoldorSection, role: GoldorRole) = leaps[section]?.let { it[role] ?: it[null] }
+    /** The leap at the end of a section: the role's own rule unless that one is tied to an objective, else the general one. */
+    fun sectionLeapRule(section: GoldorSection, role: GoldorRole) = leaps[section]?.let { rules -> rules[role]?.takeIf { it.afterObjective == null } ?: rules[null] }
+    /** A route's name for this profile's runner: EE2 is MEE2 or AEE2 depending on who runs it. */
+    fun routeTitle(route: EarlyEnter) = if (route == EarlyEnter.MEE2) "${routes[route]?.short ?: "M"}EE2" else route.title
     fun tankS2(first: PuzzleSpeed?, second: PuzzleSpeed?) = tankS2Table.getValue(first to second)
     /** A table reason with Berserker's terminal labels filled in. */
     fun tankS2Reason(row: TankS2Row) = row.reason.replace("{1}", berserkerS2Order[0].label).replace("{2}", berserkerS2Order[1].label)
@@ -230,6 +264,6 @@ object GoldorProfiles {
         berserkerS2Order = listOf(t(S2, 3), t(S2, 5)),
     )
 
-    val all = listOf(SKY_MYCE, ADG_2026)
-    fun byId(id: String) = all.firstOrNull { it.id == id } ?: SKY_MYCE
+    val all by lazy { listOf(GoldorBaseline.GOLD_STANDARD, GoldorBaseline.GOLD_STANDARD_AEE2, SKY_MYCE, ADG_2026) }
+    fun byId(id: String) = all.firstOrNull { it.id == id } ?: GoldorBaseline.GOLD_STANDARD
 }

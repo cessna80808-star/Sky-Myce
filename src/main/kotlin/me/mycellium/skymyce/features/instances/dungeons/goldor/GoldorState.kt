@@ -70,12 +70,27 @@ class GoldorRunState(var profile: StrategyProfile) {
         private set
     var revision = 0L
         private set
+    /** Conditions the player confirmed (`/sm goldor if`), for this run only. */
+    val confirmations = HashMap<GuideCondition, Boolean>()
+    /** When a party member last called "SS reset" / "SSRS" in party chat this run. */
+    var ssResetAt: Long? = null
+        private set
 
     private fun changed() { revision++ }
+
+    /** The player says [condition] holds (true), does not (false), or clears it (null). */
+    fun confirm(condition: GuideCondition, value: Boolean?) {
+        if (value == null) confirmations.remove(condition) else confirmations[condition] = value
+        changed()
+    }
+
+    /** A party member called an SS reset; only counts while the phase is on. */
+    fun ssReset(now: Long) { if (active && ssResetAt == null) { ssResetAt = now; changed() } }
 
     fun reset() {
         active = false; section = GoldorSection.S1; startedAt = null; sectionDoneAt = null; gateOpenedAt = null
         objectives.clear(); routes.clear(); counters.clear(); tickOrigin = null; tickObserved = false
+        confirmations.clear(); ssResetAt = null
         players.replaceAll { _, p -> p.copy(sm = false, reportedSection = null, lastMessageAt = null) }
         changed()
     }

@@ -41,10 +41,11 @@ private fun checkModel() {
     for (profile in GoldorProfiles.all) for ((section, plans) in profile.sections) {
         val ids = plans.values.flatMap { it.objectives }.filter { it.section == section }
         check(ids.all { GoldorLayout.station(it) != null }) { "${profile.id} $section has unknown objectives" }
-        // Only stack partners share an objective (the S3 device).
+        // Only stack partners or a backup share an objective (the S3 device, the S4 levers).
         for (id in ids.distinct()) {
             val owners = plans.filter { id in it.value.objectives }
-            check(owners.size == 1 || owners.size == 2 && owners.values.all { plan -> plan.stackWith in owners.keys }) { "${profile.id} $section assigns $id twice" }
+            check(owners.size == 1 || owners.size == 2 && (owners.values.any { plan -> plan.stackWith in owners.keys } || owners.values.any { id in it.backup }))
+                { "${profile.id} $section assigns $id twice" }
         }
     }
 }
@@ -406,6 +407,6 @@ private fun checkMapClasses() {
 
 fun main() {
     checkModel(); checkPuzzles(); checkS1(); checkS2Table(); checkPreLeapFallback(); checkS3S4(); checkRoutes(); checkTiming(); checkProtocol(); checkStateUpdates(); checkHudLines()
-    checkEveryClass(); checkLearning(); checkMapClasses()
-    println("Goldor coordination checks passed: roles, every-class advice, learned roles, map classes, S2 decision table, S3/S4, early-enter routes, pre-leap timing, chat protocol and state")
+    checkEveryClass(); checkLearning(); checkMapClasses(); checkGoldStandard()
+    println("Goldor coordination checks passed: gold-standard baseline (fidelity, version pin, conditions, unknowns), roles, every-class advice, learned roles, map classes, S2 decision table, S3/S4, early-enter routes, pre-leap timing, chat protocol and state")
 }

@@ -21,13 +21,28 @@ internal fun goldorHudLines(advice: GoldorAdvice, state: GoldorRunState, now: Lo
         lines += "$color${rec.headline}"
         lines += "§7${rec.reason}"
         rec.leap?.plan?.let { plan -> timingLine(plan, now)?.let { lines += it } }
+        advice.guide?.let { lines += guideLines(it, rec) }
     }
     advice.deviceArrival?.let { a ->
         val gap = a.secondEta?.let { " §7by §f${seconds(it.millis - a.firstEta.millis)}" } ?: ""
         lines += "§7Device: §f${a.first}§7 first${if (a.firstEta.confidence == Confidence.LOW) " §8(est.)" else gap}"
     }
     // Only routes still ahead; an early enter into the current section is behind us.
-    advice.routes.forEach { (route, text) -> if (route.section.ordinal > advice.section.ordinal) lines += "§7${route.title}: §f$text" }
+    advice.routes.forEach { (route, text) -> if (route.section.ordinal > advice.section.ordinal) lines += "§7${state.profile.routeTitle(route)}: §f$text" }
+    return lines
+}
+
+/**
+ * The guide's lines under the recommendation: how to do the current step (when it adds to the headline), a triggered
+ * recovery, the next decision marked as conditional, and the section's safety reminder. At most four lines.
+ */
+internal fun guideLines(guide: GuideView, recommendation: Recommendation?): List<String> {
+    val lines = ArrayList<String>()
+    // A leap step adds nothing to a leap headline; the step's how-to does.
+    guide.step?.takeIf { step -> !(step.leapTo != null && recommendation?.leap != null) && !step.text.equals(recommendation?.headline, true) }?.let { lines += "§f${it.text}" }
+    guide.recovery?.let { lines += "§c! ${it.condition?.seen ?: "Recovery"}: ${it.text}" }
+    guide.decision?.let { (step, value) -> lines += (if (value.value == Tri.TRUE) "§6» " else "§6? ") + decisionText(step, value) }
+    guide.reminder?.let { lines += "§8${it.text}" }
     return lines
 }
 
@@ -189,17 +204,19 @@ object GoldorHud : SkyMyceModule() {
 
     private const val PREVIEW_NOW = 1_000_000L
     /** Fixed editor example in S2; never part of a run. */
-    private val previewState = GoldorRunState(GoldorProfiles.SKY_MYCE).apply {
+    private val previewState = GoldorRunState(GoldorBaseline.GOLD_STANDARD).apply {
         start(PREVIEW_NOW - 20_000)
-        // Each player where they would be: Berserker on T4, Archer on T5, Mage at the lights, Healer already in HEE3.
-        listOf(Triple("You", GoldorRole.TANK, BossPoint(68.0, 109.0, 122.0)), Triple("Bers", GoldorRole.BERSERKER, BossPoint(40.0, 124.0, 122.0)),
-            Triple("Healz", GoldorRole.HEALER, BossPoint(2.5, 109.0, 104.5)), Triple("Mago", GoldorRole.MAGE, BossPoint(60.5, 132.0, 140.5)),
-            Triple("Arch", GoldorRole.ARCHER, BossPoint(39.0, 108.0, 143.0)))
+        // Each player where the gold standard puts them: Berserker on T5, Archer on T4, Mage on T2, Healer already in HEE3.
+        listOf(Triple("You", GoldorRole.TANK, BossPoint(68.0, 109.0, 122.0)), Triple("Bers", GoldorRole.BERSERKER, BossPoint(39.0, 108.0, 143.0)),
+            Triple("Healz", GoldorRole.HEALER, BossPoint(2.5, 109.0, 104.5)), Triple("Mago", GoldorRole.MAGE, BossPoint(59.0, 120.0, 122.0)),
+            Triple("Arch", GoldorRole.ARCHER, BossPoint(40.0, 124.0, 122.0)))
             .forEach { (name, role, at) -> updatePlayer(name) { it.copy(role = role, sm = true, position = at, seenAt = PREVIEW_NOW) } }
         repeat(7) { chatCompletion("Arch", if (it < 4) ObjectiveKind.TERMINAL else if (it == 4) ObjectiveKind.DEVICE else ObjectiveKind.LEVER, it + 1, 7, PREVIEW_NOW - 15_000) }
         gateOpened(PREVIEW_NOW - 14_000)
         markComplete(ObjectiveId.terminal(GoldorSection.S2, 1), "You", StateSource.LOCAL, PREVIEW_NOW - 5_000)
-        markActive(ObjectiveId.terminal(GoldorSection.S2, 4), "Bers", PuzzleType.STARTS_WITH, 2, StateSource.SHARED, PREVIEW_NOW - 1_000)
+        markComplete(ObjectiveId.lever(GoldorSection.S2, LeverSide.LEFT), "Healz", StateSource.SHARED, PREVIEW_NOW - 8_000)
+        markActive(ObjectiveId.terminal(GoldorSection.S2, 5), "Bers", PuzzleType.STARTS_WITH, 2, StateSource.SHARED, PREVIEW_NOW - 1_000)
+        markActive(ObjectiveId.terminal(GoldorSection.S2, 4), "Arch", PuzzleType.MELODY, 1, StateSource.SHARED, PREVIEW_NOW - 2_000)
         setRoute(EarlyEnter.HEE3, RouteState.IN, StateSource.SHARED, PREVIEW_NOW)
     }
     private val previewAdvice by lazy { GoldorEngine.advise(previewState, SelfContext("You", position = BossPoint(68.0, 109.0, 122.0)), PREVIEW_NOW) }

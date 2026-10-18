@@ -6,6 +6,7 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
     /** Saved by name. Each maps to a profile id in `GoldorProfiles`. */
     enum class Profile(val title: String, val id: String) {
+        GOLD_STANDARD("Gold standard (MEE2)", "gold-standard"), GOLD_STANDARD_AEE2("Gold standard (AEE2)", "gold-standard-aee2"),
         SKY_MYCE("Sky-Myce ADG", "skymyce-adg"), ADG_2026("ADG 2026 (DTM preset)", "adg-2026");
         override fun toString() = title
     }
@@ -15,14 +16,22 @@ object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
         description = TranslatableValue.literal("Track F7/M7 phase 3 terminals, devices, levers and early-enter routes, and recommend stacks and pre-leaps. Never clicks, moves or leaps for you")
     }
 
-    val profile by enum(Profile.SKY_MYCE) {
+    var profile by enum(Profile.GOLD_STANDARD) {
         name = TranslatableValue.literal("Strategy")
-        description = TranslatableValue.literal("Sky-Myce ADG: Berserker S2 T4 then T3. ADG 2026: the DungeonTerminalMap preset, Berserker S2 3 and 5. Both use MEE2, HEE3 and MEE4 Core")
+        description = TranslatableValue.literal("Gold standard: the class-by-class baseline with step guides, Mage early-entering S2. Choose AEE2 if your party has Archer early-enter instead. Sky-Myce ADG and ADG 2026 are the older assignment-only profiles")
     }
+
+    /** Set once the old default (Sky-Myce ADG) has been moved to the gold standard. */
+    var migratedGoldStandard by boolean(false) { condition = { false } }
 
     val learnRoles by boolean(true) {
         name = TranslatableValue.literal("Learn Roles")
-        description = TranslatableValue.literal("Learn which terminals, levers and devices each class actually does in your runs, and use that in place of the strategy's assignment once a class has done the same objective in most of 3 or more runs. Leaps and early-enters always follow the strategy. /sm goldor learned shows or resets it")
+        description = TranslatableValue.literal("Record which terminals, levers and devices each class actually completes in your runs. Observations only: they never change the strategy unless Apply Learned Roles is on. /sm goldor learned shows them next to the strategy")
+    }
+
+    val applyLearned by boolean(false) {
+        name = TranslatableValue.literal("Apply Learned Roles")
+        description = TranslatableValue.literal("Experimental. Replace the strategy's assignments with what you have learned once a class has done the same objective in most of 3 or more runs. Leaps, early-enters and the step guide stay as the strategy says")
     }
 
     val map by boolean(true) {
@@ -53,6 +62,16 @@ object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
     val leapAlert by boolean(true) {
         name = TranslatableValue.literal("Leap Alert")
         description = TranslatableValue.literal("Show a title when your recommended leap window opens")
+    }
+
+    /**
+     * Moves players on the previous default strategy to the gold standard, once. A fresh config already defaults to it.
+     * Sky-Myce ADG stays available in the Strategy setting.
+     */
+    fun migrateStrategy() {
+        if (migratedGoldStandard) return
+        if (profile == Profile.SKY_MYCE) profile = Profile.GOLD_STANDARD
+        migratedGoldStandard = true
     }
 
     val backgroundOpacity by int(60) {
