@@ -122,7 +122,8 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
             Scene("goldor-map-widget", ThemePreset.SIGNATURE) { GuiVisualGoldorMapPreviewScreen() },
-            Scene("status-bars-widget", ThemePreset.SIGNATURE) { GuiVisualWidgetPreviewScreen(me.mycellium.skymyce.features.general.overlays.StatusBars.widget) },
+            Scene("status-bars-editor", ThemePreset.SIGNATURE) { me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen() },
+            Scene("status-bars-editor-options", ThemePreset.SIGNATURE) { me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen(null, me.mycellium.skymyce.features.general.overlays.bars.BarType.HEALTH) },
             Scene("dungeon-tracker-levels", ThemePreset.SIGNATURE) {
                 // A profile reading for the dev player, as Skyblocker or the API would provide it.
                 val xp = me.mycellium.skymyce.features.instances.dungeons.friends.dungeonXpForLevel(52) + 172_400_000.0

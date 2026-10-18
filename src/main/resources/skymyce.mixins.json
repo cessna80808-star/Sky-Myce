@@ -45,6 +45,7 @@
     "ResourcefulConfigScreenBuilderMixin",
     "SkijaMenuRenderMixin",
     "BazaarAssistSignAccessor",
+    "SignEnterConfirmMixin",
     "BazaarAssistContainerAccessor"
   ],
   "injectors": {

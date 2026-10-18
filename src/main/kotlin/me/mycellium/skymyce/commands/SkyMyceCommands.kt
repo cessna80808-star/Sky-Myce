@@ -149,6 +149,7 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(auction())
             .then(me.mycellium.skymyce.features.instances.dungeons.goldor.goldorCommand())
             .then(hud())
+            .then(literal("bars").executes { me.mycellium.skymyce.features.general.overlays.StatusBars.openEditor(); 1 })
             .then(modules())
             .then(profilingCommand())
             .then(troll())

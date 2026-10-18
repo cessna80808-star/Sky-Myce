@@ -534,6 +534,7 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
         "player-utilities" -> FriendsSocialScreen()
         "hud-editor" -> WidgetEditorScreen(parent)
+        "status-bars" -> me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen(parent)
         else -> SettingsScreen.forFeature(parent, id)
     })
 }

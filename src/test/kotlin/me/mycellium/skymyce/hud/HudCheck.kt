@@ -59,17 +59,8 @@ fun main() {
     // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
     val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
     val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
-    // Status bars: a hit leaves a held trail that drains to the new value; without animation values are exact.
-    val bar = me.mycellium.skymyce.features.general.overlays.BarAnimator()
-    bar.update(1.0, 1_000, true); bar.update(0.5, 1_016, true)
-    check(bar.trail == 1.0 && bar.shown < 1.0 && bar.shown > 0.5) { "trail holds while the fill eases" }
-    for (step in 2..120) bar.update(0.5, 1_000 + step * 16L, true)
-    check(bar.shown == 0.5 && bar.trail == 0.5) { "trail drains to the value (${bar.shown}, ${bar.trail})" }
-    bar.update(0.8, 3_000, true); check(bar.trail >= 0.8 && bar.healAt == 3_000L) { "a gain has no trail and marks a glint" }
-    val exact = me.mycellium.skymyce.features.general.overlays.BarAnimator()
-    exact.update(1.0, 0, false); exact.update(0.25, 10, false); check(exact.shown == 0.25 && exact.trail == 0.25)
-    check(me.mycellium.skymyce.features.general.overlays.effectiveHealth(1000, 100) == 2000.0 &&
-        me.mycellium.skymyce.features.general.overlays.statusNumber(1_234_567) == "1,234,567")
+    // Status bars, the skill XP bar, NPC dialogue and sign Enter.
+    me.mycellium.skymyce.features.general.overlaysCheck()
     check(plainPreview.size == 9 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
     // The level card replaces the target line: Cata 52 at 86.2% toward 53, 27.6M (69 runs at 400k) to go.
     val level = me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLevel
@@ -152,7 +143,7 @@ fun main() {
         val help = hudEditorHelp(width)
         check(toolbar.x() == (width - toolbar.width()) / 2 && toolbar.y() == height - help.size * MenuCanvas.lineHeight() - 40)
         check(help.all { menuTextWidth(it) <= width - 16 }) { "HUD editor help text extends beyond the viewport" }
-        check(toolbar.children().size == 2 && toolbar.width() == 208) { "HUD editor toolbar must contain only Reset positions and Done" }
+        check(toolbar.children().size == 2 && toolbar.width() == 253) { "HUD editor toolbar width must fit Reset positions, Bars and Done" }
         check(toolbar.children()[1].width() == 40 && toolbar.children()[1].x() + 40 == toolbar.x() + toolbar.width() - 4)
         check(toolbar.children().all { it.x() >= toolbar.x() && it.x() + it.width() <= toolbar.x() + toolbar.width() })
         check(!hudEditorControlAt(toolbarRoot, 20.0, 20.0)) { "HUD editor still covers top-left widgets by default" }
