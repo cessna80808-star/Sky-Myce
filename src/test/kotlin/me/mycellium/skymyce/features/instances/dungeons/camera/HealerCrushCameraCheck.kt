@@ -8,6 +8,12 @@ private fun readySequence(floor: String = "F7") = HealerCrushSequence().apply {
 }
 
 fun main() {
+    // The camera builds during the 10 s before the crush view, never before or once it is shown.
+    readySequence().let { seq ->
+        check(!seq.warming(16_999) && seq.warming(17_000) && seq.warming(26_999)) { "Warm from 16 s into Storm" }
+        seq.tick(27_000); check(seq.stage == CrushStage.PURPLE && !seq.warming(27_000))
+    }
+    check(!HealerCrushSequence().apply { context(validContext.copy(viewpointsReady = false), 0); stormStarted(1_000) }.warming(20_000)) { "No viewpoints, nothing to build" }
     val settings = me.mycellium.skymyce.config.instances.dungeons.HealerCrushCameraConfig
     val classes = tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.entries
     check(settings.classEnabled(null) == false)

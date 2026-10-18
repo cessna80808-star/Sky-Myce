@@ -24,6 +24,8 @@ object HealerCrushCamera : SkyMyceModule() {
     private val crushMessages = StormCrushMessages()
     val stage: CrushStage? get() = sequence.stage
     val status: String get() = sequence.status
+    /** True shortly before the crush view appears; see [HealerCrushSequence.warming]. */
+    fun warming() = sequence.warming(now())
 
     override fun init() { ClientTickEvents.END_CLIENT_TICK.register { refreshContext(now()) } }
     override fun onDisable() { reset("Disabled") }

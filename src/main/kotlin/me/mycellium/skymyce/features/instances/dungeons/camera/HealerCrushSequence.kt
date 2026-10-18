@@ -66,10 +66,16 @@ class HealerCrushSequence {
         status = "${if (yellow) "Yellow" else "Purple"} crush view; visible until Storm dies"
     }
 
+    /** The last seconds before the crush view appears: time to build the camera so it does not hitch on appearing. */
+    fun warming(now: Long) = stormActive && stage == null && context?.viewpointsReady == true && now - phaseStarted in WARM_FROM until 26_000L
+
     fun reset(reason: String = "Storm encounter ended") {
         stage = null; stormActive = false; phaseStarted = 0L; yellowAt = 0L; lastCrushSerial = 0L; status = reason
     }
 }
+
+/** Storm time at which the crush camera starts building, 10 s before it is shown. */
+internal const val WARM_FROM = 16_000L
 
 internal const val STORM_START = "[BOSS] Storm: Pathetic Maxor, just like expected."
 internal val STORM_END = setOf("[BOSS] Storm: I should have known that I stood no chance.",

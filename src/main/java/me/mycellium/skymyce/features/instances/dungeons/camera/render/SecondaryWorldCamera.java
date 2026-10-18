@@ -171,6 +171,18 @@ public final class SecondaryWorldCamera {
         crush.extract(graphics, view, x, y, width, height, opacity, null);
     }
 
+    /**
+     * Builds the crush pipeline ahead of time (renderers, buffers, target), so the costly setup happens a few seconds
+     * before the camera appears instead of at that moment. Kept like a released feed until used.
+     */
+    public static void prewarm(View view, int width, int height, double guiScale) {
+        int[] size = CameraMath.targetSize(width, height, guiScale);
+        crush.prewarm(view, size[0], size[1]);
+    }
+
+    /** Whether the crush pipeline is built (warm or in use). */
+    public static boolean warm() { return crush.pipeline != null; }
+
     /** How long an unused pipeline is kept for reuse (leaps come every few seconds in a boss). */
     static final long IDLE_RETIRE_NANOS = 20_000_000_000L;
 
@@ -195,6 +207,19 @@ public final class SecondaryWorldCamera {
          * rebuilding every renderer and re-meshing chunks. An idle pipeline is closed after {@link #IDLE_RETIRE_NANOS},
          * and immediately on a level change or {@link #stop()}.
          */
+        void prewarm(View view, int width, int height) {
+            RenderSystem.assertOnRenderThread();
+            Minecraft client = Minecraft.getInstance();
+            if (pipeline != null || client.level == null || width <= 0 || height <= 0 || System.nanoTime() < retryAfter) return;
+            try {
+                withRenderDistance(view.renderDistance(), () -> {
+                    pipeline = new Pipeline(client, view, width, height, this);
+                    status = Status.PREPARING;
+                });
+                releasedAt = System.nanoTime();
+            } catch (RuntimeException error) { fail(error); }
+        }
+
         public void release() {
             RenderSystem.assertOnRenderThread();
             requested = false;

@@ -771,13 +771,24 @@ object DungeonFriends : SkyMyceModule() {
         if (!scanner.hasScanned || scanner.version == savedScannerVersion ||
             (!force && (scanner.scanning || now() < nextScannerSave))) return
         nextScannerSave = now() + 5000
+        // Snapshot here (the scanner keeps changing); serialize and write off the render thread unless forced.
+        val online = scanner.savedFriends.toList(); val all = scanner.savedAllFriends?.toList()
+        if (!force) {
+            val version = scanner.version
+            val writer = friendWriter ?: me.mycellium.skymyce.utils.StateWriter<Pair<List<OnlineDungeonFriend>, List<OnlineDungeonFriend>?>>(
+                { (o, a) -> store.save(o, a) }, { job -> tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule(kotlin.time.Duration.ZERO) { job() } },
+                { MC.instance.execute { savedScannerVersion = -1 }; SkyMyce.logger.warn("Could not save friend list; will retry saving") }).also { friendWriter = it }
+            writer.submit(online to all); savedScannerVersion = version
+            return
+        }
         try {
-            store.save(scanner.savedFriends, scanner.savedAllFriends)
+            store.save(online, all)
             savedScannerVersion = scanner.version
         } catch (_: Exception) {
             SkyMyce.logger.warn("Could not save friend list; will retry saving")
         }
     }
+    private var friendWriter: me.mycellium.skymyce.utils.StateWriter<Pair<List<OnlineDungeonFriend>, List<OnlineDungeonFriend>?>>? = null
 
     fun now(): Long = System.nanoTime() / 1000000
     fun friendUuid(name: String): UUID? = friendUuids[name.lowercase()]

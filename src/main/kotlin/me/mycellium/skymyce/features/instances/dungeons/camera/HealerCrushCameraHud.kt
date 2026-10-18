@@ -37,7 +37,9 @@ object HealerCrushCameraHud : SkyMyceModule() {
         CameraViewpoints.initialize()
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             if (manualStage != null && (client.level !== manualLevel || client.player?.isAlive != true || System.nanoTime() >= previewExpires)) stopPreview()
-            if (activeStage() == null && client.screen !is WidgetEditorScreen || !widget.visible && client.screen !is WidgetEditorScreen) SecondaryWorldCamera.stop()
+            val warmView = if (manualStage == null && widget.visible && HealerCrushCamera.warming()) crushView("purple") else null
+            if (warmView != null) SecondaryWorldCamera.prewarm(warmView, Settings.width, Settings.height, client.window.guiScale.toDouble() * widget.scale)
+            else if (activeStage() == null && client.screen !is WidgetEditorScreen || !widget.visible && client.screen !is WidgetEditorScreen) SecondaryWorldCamera.stop()
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, client -> client.execute { stopPreview(); SecondaryWorldCamera.stop() } }
     }
@@ -52,6 +54,14 @@ object HealerCrushCameraHud : SkyMyceModule() {
     }
 
     fun stopPreview() { manualStage = null; manualLevel = null; previewExpires = 0L; SecondaryWorldCamera.stop() }
+
+    /** The camera for a stage's saved viewpoint with the configured offsets; null without a saved viewpoint. */
+    fun crushView(stage: String): SecondaryWorldCamera.View? {
+        val saved = CameraViewpoints.get(stage) ?: return null
+        return SecondaryWorldCamera.View(saved.x + Settings.offsetX, saved.y + Settings.offsetY, saved.z + Settings.offsetZ,
+            normalizedCameraYaw(saved.yaw + Settings.yawOffset), (saved.pitch + Settings.pitchOffset).coerceIn(-90.0, 90.0).toFloat(),
+            Settings.fieldOfView.toFloat(), Settings.renderDistance, Settings.framesPerSecond)
+    }
 
     fun activeStage(): String? = manualStage ?: HealerCrushCamera.stage?.name?.lowercase(java.util.Locale.ROOT)
 
@@ -90,9 +100,7 @@ object HealerCrushCameraHud : SkyMyceModule() {
                 graphics.text(MC.font, "Set a viewpoint: /sm crush-camera", x() + 4, y() + header + 8, -0x1000000 or tint, false)
                 return
             }
-            val view = SecondaryWorldCamera.View(saved.x + Settings.offsetX, saved.y + Settings.offsetY, saved.z + Settings.offsetZ,
-                normalizedCameraYaw(saved.yaw + Settings.yawOffset), (saved.pitch + Settings.pitchOffset).coerceIn(-90.0, 90.0).toFloat(),
-                Settings.fieldOfView.toFloat(), Settings.renderDistance, Settings.framesPerSecond)
+            val view = crushView(stage) ?: return
             SecondaryWorldCamera.extract(graphics, view, x() + 4, y() + header + 4, width() - 8, height() - header - 8, Settings.opacity / 100f)
             if (SecondaryWorldCamera.status() != SecondaryWorldCamera.Status.LIVE)
                 graphics.text(MC.font, SecondaryWorldCamera.status().name.replace('_', ' ').lowercase(), x() + 5, y() + header + 6, -1, false)

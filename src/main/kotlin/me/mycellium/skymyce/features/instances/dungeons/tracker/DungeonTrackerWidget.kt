@@ -97,6 +97,7 @@ object DungeonTrackerWidget : SkyMyceModule() {
     private var seenAuction: DungeonsConfig.AuctionType? = null
     private var nextMarketRefresh = 0L
     private var cachedLines = emptyList<String>()
+    private var cachedViews: Triple<DungeonFloor?, TrackerView, TrackerView>? = null
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
         dungeonTrackerPreviewLines(DungeonTrackerConfig.dungeonTrackerWidget)?.let { previewLines.updateTextLines(it); previewContent }
@@ -109,15 +110,18 @@ object DungeonTrackerWidget : SkyMyceModule() {
         val activeFloor = DungeonTracker.currentFloor ?: DungeonAPI.dungeonFloor
         val bazaar = DungeonTrackerConfig.bazaarPriceType; val auction = DungeonTrackerConfig.auctionPriceType
         val now = System.currentTimeMillis()
-        if (seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != activeFloor || seenContext != context ||
-            seenBazaar != bazaar || seenAuction != auction || now >= nextMarketRefresh) {
+        val dataChanged = seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != activeFloor || seenContext != context
+        if (dataChanged || seenBazaar != bazaar || seenAuction != auction || now >= nextMarketRefresh) {
             seenRevision = AcquisitionRepository.revision; seenHistoricalRevision = DungeonTracker.revision; seenFloor = activeFloor; seenContext = context
             seenBazaar = bazaar; seenAuction = auction; nextMarketRefresh = now + 10_000
-            val floor = dungeonTrackerDisplayFloor(activeFloor, null, AcquisitionRepository.state.runs, context)
-            val legacy = legacyTrackerView()
-            val selected = trackerView(AcquisitionRepository.state, legacy,
-                TrackerFilter(floor = floor?.name, scope = TrackerScope.ALL_LOCAL_PROFILES), context)
-            val sample = dungeonTrackerRateSample(AcquisitionRepository.state, legacy, floor?.name)
+            // The run history only changes with the data; the 10 s refresh is for prices and reuses it.
+            val views = cachedViews?.takeIf { !dataChanged } ?: run {
+                val floor = dungeonTrackerDisplayFloor(activeFloor, null, AcquisitionRepository.state.runs, context)
+                val legacy = legacyTrackerView()
+                Triple(floor, trackerView(AcquisitionRepository.state, legacy, TrackerFilter(floor = floor?.name, scope = TrackerScope.ALL_LOCAL_PROFILES), context),
+                    dungeonTrackerRateSample(AcquisitionRepository.state, legacy, floor?.name))
+            }.also { cachedViews = it }
+            val (floor, selected, sample) = views
             val prices = (selected.loot + sample.loot).map { it.item }.distinct().associateWith { cachedLootUnitPrice(it, bazaar, auction) }
             val pricedLoot = marketValuedLoot(selected.loot, prices::get)
             val sampleLoot = marketValuedLoot(sample.loot, prices::get)
