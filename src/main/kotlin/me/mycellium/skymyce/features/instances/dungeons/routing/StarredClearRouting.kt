@@ -163,9 +163,9 @@ object StarredClearRouting : SkyMyceModule() {
     override fun init() {
         reload()
         RoomTemplateRecorder.init()
-        ClientTickEvents.END_CLIENT_TICK.register { guardedTick() }
-        ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, false) }
-        ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> chunkChanged(world, chunk.pos.x, chunk.pos.z, true) }
+        ClientTickEvents.END_CLIENT_TICK.register { me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.ROUTING_TICK) { guardedTick() } }
+        ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, false) } }
+        ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, true) } }
     }
 
     override fun onDisable() { MC.instance.execute { RoomTemplateRecorder.cancel(); pauseRoom() } }

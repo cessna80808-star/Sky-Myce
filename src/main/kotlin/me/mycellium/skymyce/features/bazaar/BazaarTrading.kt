@@ -124,7 +124,7 @@ object BazaarTrading : SkyMyceModule(), BazaarUiBridge {
         community.initialize()
         market.load()
         openJournal(selectedOwner())
-        ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) update() }
+        ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.BAZAAR_TICK) { update() } }
         ClientLifecycleEvents.CLIENT_STOPPING.register { stop("Game closing"); BazaarDashboard.stop() }
         Runtime.getRuntime().addShutdownHook(Thread({
             runCatching { journal.flush(); market.flush(); configWriter.flush(); community.flush() }

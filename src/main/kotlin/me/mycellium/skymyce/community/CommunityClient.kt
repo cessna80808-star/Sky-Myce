@@ -58,7 +58,7 @@ object CommunityClient {
     val cancellationPending get() = cancellation.hasPending || cancelledConnectEpoch != null
 
     fun initialize() {
-        ClientTickEvents.END_CLIENT_TICK.register { tick() }
+        ClientTickEvents.END_CLIENT_TICK.register { me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.COMMUNITY_TICK) { tick() } }
         ScreenEvents.AFTER_INIT.register { minecraft, screen, width, _ ->
             if (screen is TitleScreen) Screens.getWidgets(screen).add(Button.builder(Component.literal("Sky-Myce Community")) {
                 minecraft.setScreen(CommunityScreen(screen))

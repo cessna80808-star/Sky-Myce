@@ -152,7 +152,9 @@ object AutoGraphics : SkyMyceModule() {
         get() = ThemeConfig.graphicsQuality.let { if (it == GuiQuality.AUTO) controller.quality else it }
 
     @Subscription(TickEvent::class)
-    fun onTick() {
+    fun onTick() = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.AUTO_GRAPHICS) { sampleQuality() }
+
+    private fun sampleQuality() {
         if (ThemeConfig.graphicsQuality != GuiQuality.AUTO) return
         val now = System.currentTimeMillis()
         val screen = MC.screen

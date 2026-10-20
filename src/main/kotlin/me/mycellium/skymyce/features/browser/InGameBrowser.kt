@@ -128,7 +128,7 @@ internal class InGameBrowserScreen(private val parent: Screen, private val initi
         super.extractRenderState(graphics, mouseX, mouseY, partialTick)
         texture.render(output, chrome, width, height, minOf(minecraft.window.guiScale.toDouble(), 2.0))
         if (session != null) {
-            RinkuRenderCoordinator.pumpOnRenderThread()
+            me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.BROWSER_PUMP) { RinkuRenderCoordinator.pumpOnRenderThread() }
             browser?.textureIdentifier?.let { id -> output.blit(RenderPipelines.GUI_TEXTURED, id, viewport.x, viewport.y, 0f, 0f,
                 viewport.width, viewport.height, viewport.width, viewport.height) }
         }

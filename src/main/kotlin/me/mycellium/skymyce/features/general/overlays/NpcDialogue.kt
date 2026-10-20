@@ -130,7 +130,9 @@ object NpcDialogue : SkyMyceModule() {
     private fun reset() { queue.clear(); current = null; options = emptyList(); portrait = null; until = 0 }
 
     @Subscription(TickEvent::class)
-    fun onTick() {
+    fun onTick() = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.NPC_DIALOGUE) { tickDialogue() }
+
+    private fun tickDialogue() {
         if (!active()) { if (current != null || options.isNotEmpty()) reset(); return }
         val now = System.currentTimeMillis()
         if (now >= until) {

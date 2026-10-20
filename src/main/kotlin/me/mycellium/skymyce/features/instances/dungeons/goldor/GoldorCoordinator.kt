@@ -200,7 +200,9 @@ object GoldorCoordinator : SkyMyceModule() {
     }
 
     @Subscription(TickEvent::class)
-    fun onTick() {
+    fun onTick() = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.GOLDOR_TICK) { tickGoldor() }
+
+    private fun tickGoldor() {
         if (!inBoss()) { if (state.active) onLeave(); return }
         val now = now()
         val player = MC.instance.player ?: return

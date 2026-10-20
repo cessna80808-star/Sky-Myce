@@ -63,7 +63,7 @@ object LoaderClient {
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             dispatcher.register(ClientCommands.literal("skymyce-auth").executes { Minecraft.getInstance().setScreen(AuthorizationScreen()); 1 })
         }
-        ClientTickEvents.END_CLIENT_TICK.register { tick() }
+        ClientTickEvents.END_CLIENT_TICK.register { me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.LOADER_TICK) { tick() } }
         val startup = StartupLoader.ready?.takeIf { it.uuid == uuid && it.version == loadedVersion }
         if (startup != null) {
             installation = startup.installation; targetVersion = startup.version; release = startup.release

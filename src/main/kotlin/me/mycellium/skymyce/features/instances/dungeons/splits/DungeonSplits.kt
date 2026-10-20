@@ -186,7 +186,9 @@ object DungeonSplits : SkyMyceModule() {
     private var relicTicks = 0
 
     @Subscription(TickEvent::class)
-    fun onTick() {
+    fun onTick() = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.SPLITS_TICK) { tickSplits() }
+
+    private fun tickSplits() {
         val run = live ?: return
         val marks = run.timeline.marks
         // Relics only exist once Necron is down; the scan does not wait for his split, so a missed line costs only that one.

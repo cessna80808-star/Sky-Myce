@@ -144,7 +144,9 @@ private fun copyGifImage(image: BufferedImage, width: Int, height: Int): Buffere
         } finally { graphics.dispose() }
     }
 
-internal fun decodeIrcGif(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean = false): IrcGif? {
+internal fun decodeIrcGif(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean = false): IrcGif? = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.IRC_MEDIA) { decodeIrcGifNow(bytes, deadlineNanos, thumbnail) }
+
+private fun decodeIrcGifNow(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean): IrcGif? {
     val deadline = minOf(deadlineNanos, System.nanoTime() + 2_000_000_000L)
     fun timely() = require(System.nanoTime() - deadline < 0)
     return try {

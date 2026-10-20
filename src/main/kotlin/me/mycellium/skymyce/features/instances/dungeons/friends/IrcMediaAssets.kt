@@ -131,7 +131,9 @@ private fun completePng(bytes: ByteArray, timely: () -> Unit): Boolean {
 }
 
 /** Decode one verified PNG/JPEG frame. Source bounds apply before any raster allocation. */
-internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean): IrcGif? {
+internal fun decodeIrcImage(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean): IrcGif? = me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.IRC_MEDIA) { decodeIrcImageNow(bytes, deadlineNanos, thumbnail) }
+
+private fun decodeIrcImageNow(bytes: ByteArray, deadlineNanos: Long, thumbnail: Boolean): IrcGif? {
     val deadline = minOf(deadlineNanos, System.nanoTime() + 2_000_000_000L)
     fun timely() = require(System.nanoTime() - deadline < 0)
     return try {

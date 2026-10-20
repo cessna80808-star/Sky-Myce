@@ -75,7 +75,7 @@ object StatusBars : SkyMyceModule() {
         HudElementRegistry.replaceElement(VanillaHudElements.FOOD_BAR) { original -> hide(original) { true } }
         HudElementRegistry.replaceElement(VanillaHudElements.AIR_BAR) { original -> hide(original) { barOn(BarType.RESPIRATION) } }
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.fromNamespaceAndPath(SkyMyce.MOD_ID, "status_bars")) { graphics, _ ->
-            if (showing && MC.screen !is StatusBarsEditorScreen) render(graphics)
+            if (showing && MC.screen !is StatusBarsEditorScreen) me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.STATUS_BARS) { render(graphics) }
         }
     }
 

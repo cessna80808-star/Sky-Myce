@@ -101,7 +101,7 @@ object HealerCrushCameraHud : SkyMyceModule() {
                 return
             }
             val view = crushView(stage) ?: return
-            SecondaryWorldCamera.extract(graphics, view, x() + 4, y() + header + 4, width() - 8, height() - header - 8, Settings.opacity / 100f)
+            me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CAMERA_EXTRACT) { SecondaryWorldCamera.extract(graphics, view, x() + 4, y() + header + 4, width() - 8, height() - header - 8, Settings.opacity / 100f) }
             if (SecondaryWorldCamera.status() != SecondaryWorldCamera.Status.LIVE)
                 graphics.text(MC.font, SecondaryWorldCamera.status().name.replace('_', ' ').lowercase(), x() + 5, y() + header + 6, -1, false)
         }

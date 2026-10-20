@@ -134,7 +134,7 @@ object BazaarAssist : SkyMyceModule() {
         startKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Start Bazaar Assistant", GLFW.GLFW_KEY_RIGHT_BRACKET, KeyMapping.Category.MISC))
         stopKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Stop Bazaar Assistant", GLFW.GLFW_KEY_LEFT_BRACKET, KeyMapping.Category.MISC))
         commandKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Send Bazaar Assistant command", GLFW.GLFW_KEY_UNKNOWN, KeyMapping.Category.MISC))
-        ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) onTick() }
+        ClientTickEvents.END_CLIENT_TICK.register { if (isEnabled()) me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.BAZAAR_TICK) { onTick() } }
         ScreenEvents.AFTER_INIT.register { _, opened, _, _ ->
             screenDirty = true
             when (opened) {
