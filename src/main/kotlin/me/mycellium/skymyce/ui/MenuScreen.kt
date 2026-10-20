@@ -181,7 +181,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     override fun createAdapter(): OwoUIAdapter<FlowLayout> = OwoUIAdapter.create(this, UIContainers::verticalFlow)
     override fun isPauseScreen() = false
-    /** The world blur behind menus is a full-screen pass every frame; Light and Minimal draw a plain dim instead. */
+    /** The world blur behind menus is a full-screen pass every frame; Light and Extremely Light draw a plain dim instead. */
     override fun extractBlurredBackground(graphics: net.minecraft.client.gui.GuiGraphicsExtractor) {
         if (menuBlurAllowed(AutoGraphics.quality)) super.extractBlurredBackground(graphics)
     }
@@ -537,9 +537,6 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "community" -> me.mycellium.skymyce.community.CommunityScreen()
         "leaderboards" -> me.mycellium.skymyce.community.LeaderboardScreen()
         "rng-journal" -> me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()
-        "rng-test" -> me.mycellium.skymyce.features.digest.testing.RngTestScreen()
-        "loans" -> FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)
-        "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
         "player-utilities" -> FriendsSocialScreen()
         "hud-editor" -> WidgetEditorScreen(parent)
         "status-bars" -> me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen(parent)
@@ -554,8 +551,6 @@ fun openMenuSetting(path: String) {
     val parent = menuCategoryScreen(owner?.category ?: MenuCategory.SETTINGS)
     navigateMenu(when {
         path.startsWith("Cosmetics/") -> CosmeticsScreen(focusPath = path)
-        path.startsWith("Theme & Appearance/") && path.substringAfterLast('/') !in listOf("animationMode", "graphicsQuality") ->
-            me.mycellium.skymyce.hud.ThemeEditorScreen(parent, focusKey = path.substringAfterLast('/'))
         else -> SettingsScreen.forSetting(parent, path)
     })
 }

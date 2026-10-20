@@ -124,7 +124,7 @@ test('connection and status work without a bot token, license, activation key, l
   }
   const help = await responseFor(command('help'));
   assert.match(help.text, /No whitelist, activation key, custom Loader or hardware reset is needed/);
-  assert.match(help.text, /sharing starts enabled.*opt out.*chat and cosmetics/s);
+  assert.match(help.text, /sharing starts as On \(anon\).*Off removes.*chat and cosmetics/s);
 });
 
 test('admin checks occur before private identity lookups or device disclosure and roles cannot bypass them', async () => {

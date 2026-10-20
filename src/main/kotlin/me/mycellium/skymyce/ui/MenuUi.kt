@@ -50,35 +50,31 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
 
 /** Existing caller labels remain compatible; their destinations use the shared feature identities. */
 enum class MenuPage(val title: String, val featureId: String) {
-    DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
+    DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends", "player-utilities"),
     DUNGEONS("Dungeons", "dungeon-tracker"), SPLITS("Dungeon Splits", "dungeon-splits"), CRUSH_CAMERA("Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 
 object MenuTheme {
     val style get() = ThemeConfig.preset.palette.style
-    private fun color(value: Int, preset: Int) = value.takeIf { it in 0..0xFFFFFF } ?: preset
-    val ACCENT get() = color(ThemeConfig.primary, ThemeConfig.preset.palette.primary)
-    val SECONDARY get() = color(ThemeConfig.secondary, ThemeConfig.preset.palette.secondary)
-    val PANEL get() = color(ThemeConfig.panel, ThemeConfig.preset.palette.panel)
-    val SIDEBAR get() = color(ThemeConfig.panel, ThemeConfig.preset.palette.sidebar)
-    val CARD get() = color(ThemeConfig.card, ThemeConfig.preset.palette.card)
-    val BORDER get() = color(ThemeConfig.border, ThemeConfig.preset.palette.border)
-    val TEXT get() = color(ThemeConfig.text, ThemeConfig.preset.palette.text)
-    val MUTED get() = color(ThemeConfig.muted, ThemeConfig.preset.palette.muted)
-    val GREEN get() = ThemeConfig.preset.palette.success
-    val YELLOW get() = ThemeConfig.preset.palette.warning
-    val RED get() = ThemeConfig.preset.palette.error
+    private val palette get() = ThemeConfig.preset.palette
+    val ACCENT get() = palette.primary
+    val SECONDARY get() = palette.secondary
+    val PANEL get() = palette.panel
+    val SIDEBAR get() = palette.sidebar
+    val CARD get() = palette.card
+    val BORDER get() = palette.border
+    val TEXT get() = palette.text
+    val MUTED get() = palette.muted
+    val GREEN get() = palette.success
+    val YELLOW get() = palette.warning
+    val RED get() = palette.error
     val PURPLE get() = SECONDARY
-    val PADDING get() = ThemeConfig.padding.takeIf { it in 2..12 } ?: style.menuPadding
+    val PADDING get() = style.menuPadding
     val RADIUS get() = if (ROUNDED) style.radius.coerceAtLeast(2) else 0
-    val SHADOW get() = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers > 0 && when (ThemeConfig.shadow) {
-        0 -> false
-        1 -> true
-        else -> ThemeConfig.preset.palette.shadow
-    }
-    val OPACITY get() = ThemeConfig.opacity.takeIf { it in 20..100 } ?: ThemeConfig.preset.palette.opacity
-    val ROUNDED get() = when (ThemeConfig.rounded) { 0 -> false; 1 -> true; else -> ThemeConfig.preset.palette.rounded }
-    val BORDERS get() = when (ThemeConfig.borders) { 0 -> false; 1 -> true; else -> ThemeConfig.preset.palette.borders }
+    val SHADOW get() = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers > 0 && palette.shadow
+    val OPACITY get() = palette.opacity
+    val ROUNDED get() = palette.rounded
+    val BORDERS get() = palette.borders
     fun blend(a: Int, b: Int, weight: Int) = me.mycellium.skymyce.hud.HudTheme.blend(a, b, weight)
     private val font = FontDescription.Resource(Identifier.fromNamespaceAndPath("skymyce", "menu"))
 

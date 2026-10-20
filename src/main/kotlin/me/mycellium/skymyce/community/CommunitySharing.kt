@@ -29,13 +29,11 @@ object CommunitySharing {
     private var synchronized = false
     private var contributionJobs = 0
 
-    private fun config() = SharingPolicy(CommunitySharingConfig.enabled, CommunitySharingConfig.dungeons, CommunitySharingConfig.economy,
-        CommunitySharingConfig.rng, CommunitySharingConfig.activity, CommunitySharingConfig.leaderboards, CommunitySharingConfig.publicName)
+    private fun config() = CommunitySharingConfig.mode.policy
 
     private fun initialize() {
         if (initialized) return
         initialized = true
-        CommunitySharingConfig.migrateLegacy()
         lastConfig = config()
         SharingPolicy.parse(CommunitySharingConfig.syncedPolicy)?.let { previous -> dirty.addAll(SharingPolicy.keys.filter { previous.value(it) != lastConfig.value(it) }) }
         SkyMyce.config.save()
@@ -44,7 +42,8 @@ object CommunitySharing {
     fun settingsChanged() {
         initialize()
         val current = config()
-        dirty.addAll(SharingPolicy.keys.filter { current.value(it) != lastConfig.value(it) })
+        // A new mode replaces the whole policy, so On also re-enables categories another device left off.
+        if (current != lastConfig) dirty.addAll(SharingPolicy.keys)
         lastConfig = current
         if (dirty.isNotEmpty()) { synchronized = false; nextRefresh = 0; status = "Saving account sharing preferences…" }
     }
@@ -150,15 +149,12 @@ object CommunitySharing {
 
     private fun accept(snapshot: SharingSnapshot) {
         val policy = snapshot.policy
-        CommunitySharingConfig.enabled = policy.enabled; CommunitySharingConfig.dungeons = policy.dungeons
-        CommunitySharingConfig.economy = policy.economy; CommunitySharingConfig.rng = policy.rng
-        CommunitySharingConfig.activity = policy.activity; CommunitySharingConfig.leaderboards = policy.leaderboards
-        CommunitySharingConfig.publicName = policy.publicName
+        CommunitySharingConfig.mode = SharingMode.of(policy)
         CommunitySharingConfig.syncedAccount = owner; CommunitySharingConfig.syncedPolicy = policy.json().toString()
-        lastConfig = policy; dirty.clear(); firstSync = false; synchronized = true
+        // Sharing requires both the local mode and the server policy, so a partial server policy shares only what both allow.
+        lastConfig = config(); dirty.clear(); firstSync = false; synchronized = true
         nextRefresh = System.currentTimeMillis() + 30000
         status = if (policy.enabled) "Account sharing preferences synchronized" else "Statistics sharing off · prior contributions removed or suppressed"
         SkyMyce.config.save()
-        me.mycellium.skymyce.features.instances.dungeons.friends.FriendWealthCache.publishOwnContribution()
     }
 }

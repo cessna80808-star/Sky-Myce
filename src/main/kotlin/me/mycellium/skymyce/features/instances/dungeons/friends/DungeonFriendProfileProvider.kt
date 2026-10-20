@@ -40,11 +40,6 @@ object DungeonFriendProfileProvider {
         return future.get(30, TimeUnit.SECONDS) as JsonObject
     }
 
-    internal fun profilePresence(uuid: UUID): Boolean? = runCatching {
-        if (!skyblockerAvailable) return null
-        publicProfilePresence(fetchSkyblockerProfiles(uuid))
-    }.getOrNull()
-
     internal fun fetchViewerProfile(uuid: UUID, fresh: Boolean = false): Any? =
         fetchViewerProfile(uuid, fresh, Class.forName("me.owdding.skyblockpv.api.ProfileAPI").getField("INSTANCE").get(null))
 
@@ -142,11 +137,3 @@ internal class ProfileLookupCooldown {
         retryDelay = if (success) 60000 else (retryDelay * 2).coerceAtMost(300000)
     }
 }
-
-internal fun publicProfilePresence(response: JsonObject): Boolean? = runCatching {
-    if (response.get("success")?.asBoolean != true || !response.has("profiles")) return null
-    val profiles = response.get("profiles")
-    if (profiles.isJsonNull) return false
-    if (!profiles.isJsonArray || profiles.asJsonArray.any { !it.isJsonObject }) return null
-    !profiles.asJsonArray.isEmpty
-}.getOrNull()

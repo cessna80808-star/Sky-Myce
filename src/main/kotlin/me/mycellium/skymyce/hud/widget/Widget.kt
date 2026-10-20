@@ -8,7 +8,6 @@ import io.wispforest.owo.ui.core.UIComponent
 import me.mycellium.skymyce.hud.replaceContent
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.HudWidgetGraphics
-import me.mycellium.skymyce.hud.ThemeOverrides
 import me.mycellium.skymyce.hud.widget.WidgetManager.register
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -38,9 +37,7 @@ class Widget(
     var resizeFinished: (() -> Unit)? = null
     val defaultLayout = WidgetConfig(x, y, scale, anchor)
     var sinceActive: Long = 0L
-    var theme: ThemeOverrides? = null
     private var styledRevision = -1L
-    private var styledOverrides: ThemeOverrides? = null
 
     var lastRenderable: UIComponent? = null
         private set
@@ -81,7 +78,7 @@ class Widget(
         anchor = newAnchor
     }
 
-    fun toConfig(): WidgetConfig = WidgetConfig(x, y, scale, anchor, theme, visible)
+    fun toConfig(): WidgetConfig = WidgetConfig(x, y, scale, anchor, visible)
 
     fun inBounds(selX: Int, selY: Int): Boolean = selX >= renderX && selX < renderX + width && selY >= renderY && selY < renderY + height
 
@@ -89,25 +86,22 @@ class Widget(
     internal fun localY(mouseY: Double) = (mouseY - renderY) / scale
     internal fun localClick(click: MouseButtonEvent) = MouseButtonEvent(localX(click.x), localY(click.y), click.buttonInfo())
 
-    internal fun prepareEditor(): Boolean = HudTheme.withWidget(theme) {
-        editorContent()?.let { prepare(it); true } ?: false
-    }
+    internal fun prepareEditor(): Boolean = editorContent()?.let { prepare(it); true } ?: false
 
     private fun editorContent() = hudEditorContent(previewBuilder?.let { preview -> { preview(this) } }, { builder() }, lastRenderable,
         sinceActive, System.currentTimeMillis())
 
-    fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float, editor: Boolean = false): Boolean =
-        HudTheme.withWidget(theme) {
-            val element = if (editor) editorContent() else if (visible) builder() else null
-            if (!editor) {
-                isRenderable = element != null
-                if (element != null) sinceActive = System.currentTimeMillis()
-            }
-            if (element == null) return@withWidget false
-            val ui = prepare(element)
-            ui.extractRenderState(HudWidgetGraphics(graphics, mouseX, mouseY), floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
-            true
+    fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTicks: Float, editor: Boolean = false): Boolean {
+        val element = if (editor) editorContent() else if (visible) builder() else null
+        if (!editor) {
+            isRenderable = element != null
+            if (element != null) sinceActive = System.currentTimeMillis()
         }
+        if (element == null) return false
+        val ui = prepare(element)
+        ui.extractRenderState(HudWidgetGraphics(graphics, mouseX, mouseY), floor(localX(mouseX.toDouble())).toInt(), floor(localY(mouseY.toDouble())).toInt(), partialTicks)
+        return true
+    }
 
     private fun prepare(element: UIComponent): OwoUIAdapter<FlowLayout> {
         val window = MC.instance.window
@@ -128,7 +122,7 @@ class Widget(
             ui.inflateAndMount()
             styledRevision = -1
         }
-        if (styledRevision != HudTheme.revision || styledOverrides != theme) {
+        if (styledRevision != HudTheme.revision) {
             fun style(component: UIComponent) {
                 if (component is io.wispforest.owo.ui.component.LabelComponent) {
                     (component as? me.mycellium.skymyce.hud.HudTextLabel)?.update(force = true)
@@ -139,7 +133,7 @@ class Widget(
             style(element)
             // Existing layout dimensions remain authoritative; padding only changes the widget's content box.
             (element as? FlowLayout)?.padding(io.wispforest.owo.ui.core.Insets.of(HudTheme.PADDING))
-            styledRevision = HudTheme.revision; styledOverrides = theme
+            styledRevision = HudTheme.revision
         }
         if (ui.width() != availableWidth || ui.height() != availableHeight) {
             ui.moveAndResize(0, 0, availableWidth, availableHeight)

@@ -62,7 +62,6 @@ object DungeonFriends : SkyMyceModule() {
     private var statsScannerVersion = -1L
     private var statsRosterVersion = -1L
     private var statsCacheVersion = -1L
-    private var statsWealthVersion = -1L
     private var statsSocialVersion = -1L
     private var nextStatsRefresh = 0L
     private var statsActive = false
@@ -142,8 +141,7 @@ object DungeonFriends : SkyMyceModule() {
         DungeonFriendsSettings.load()
         RelayMessages.init()
         DungeonFriendStatsCache.initialize(SkyMyce.configPath.resolve("dungeon_friend_stats.json"))
-        FriendWealthCache.initialize(SkyMyce.configPath.resolve("friend_wealth.json"))
-        ClientLifecycleEvents.CLIENT_STOPPING.register { saveFriends(true); DungeonFriendStatsCache.save(true); FriendWealthCache.save(true); DungeonFriendRelay.disconnect() }
+        ClientLifecycleEvents.CLIENT_STOPPING.register { saveFriends(true); DungeonFriendStatsCache.save(true); DungeonFriendRelay.disconnect() }
         ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.FRIEND_TICK) { tick() } }
         ClientSendMessageEvents.ALLOW_COMMAND.register { command ->
             if (!isEnabled()) return@register true
@@ -203,7 +201,6 @@ object DungeonFriends : SkyMyceModule() {
         } else if (scanner.scanning) scanner.manualCommand()
         queueVisibleStats(statusChecker || MC.screen is FriendsSocialScreen)
         saveFriends()
-        FriendWealthCache.tick(scanner.all.values, scanner.online.keys, socialVersion, MC.instance.user.profileId)
         joinedTitles.entries.removeIf { (name, title) ->
             !DungeonFriendsSettings.titleNotifications || name !in party.members || (title.shownUntil != 0L && title.shownUntil <= now())
         }
@@ -292,7 +289,7 @@ object DungeonFriends : SkyMyceModule() {
         if (!active || !DungeonFriendStatsCache.canFetch) { statsActive = false; return }
         val time = System.currentTimeMillis()
         if (statsActive && statsScanner === scanner && statsScannerVersion == scanner.version && statsRosterVersion == rosterVersion &&
-            statsCacheVersion == DungeonFriendStatsCache.version && statsWealthVersion == FriendWealthCache.version &&
+            statsCacheVersion == DungeonFriendStatsCache.version &&
             statsSocialVersion == socialVersion && time < nextStatsRefresh) return
         nextStatsRefresh = Long.MAX_VALUE
         fun request(name: String, uuid: UUID?) {
@@ -301,11 +298,11 @@ object DungeonFriends : SkyMyceModule() {
         }
         request(MC.player.name.string, MC.player.uuid)
         scanner.online.values.forEach { friend ->
-            if (FriendWealthCache.get(friend.name)?.hasProfile != false) request(friend.name, friendUuids[friend.name.lowercase()])
+            request(friend.name, friendUuids[friend.name.lowercase()])
         }
         PartyAPI.members.forEach { member -> member.name?.let { request(it, member.uuid) } }
         statsActive = true; statsScanner = scanner; statsScannerVersion = scanner.version
-        statsRosterVersion = rosterVersion; statsCacheVersion = DungeonFriendStatsCache.version; statsWealthVersion = FriendWealthCache.version
+        statsRosterVersion = rosterVersion; statsCacheVersion = DungeonFriendStatsCache.version
         statsSocialVersion = socialVersion
     }
 
@@ -416,7 +413,6 @@ object DungeonFriends : SkyMyceModule() {
         message.lines().mapNotNull(::bestFriendChange).forEach { (name, best) -> scanner.bestFriend(name, best) }
         message.lines().mapNotNull(::newlyAddedFriend).forEach { name ->
             scanner.notification(name, true, dungeonPlayerNameStyle(event.component, name))
-            FriendWealthCache.checkNewFriend(name)
             DungeonFriendStatsCache.request(name, FriendsAPI.getFriend(name)?.uuid, force = true, bypassShared = true)
         }
         if (message.startsWith("You removed ") && message.endsWith(" from your friends list!")) {
@@ -707,7 +703,6 @@ object DungeonFriends : SkyMyceModule() {
             MC.instance.player?.let { DungeonFriendStatsCache.get(it.name.string)?.selectedClass })
     }
     private fun resetConnection(disconnectRelay: Boolean = true) {
-        FriendWealthCache.save(true)
         scanner.cancel()
         saveFriends(true)
         party = DungeonFriendParty()

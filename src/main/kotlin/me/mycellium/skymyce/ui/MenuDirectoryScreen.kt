@@ -259,7 +259,7 @@ internal class MenuDirectoryScreen(private val category: MenuCategory? = null,
                 quickValues = MenuShortcuts.pins.map { catalog.setting(it)?.entry?.get() }
             }.apply { toggled = { entry.boolean } }
             EntryType.ENUM -> button(entry.enum.toString(), 126) { anchor ->
-                val options = if (setting.path == "Theme & Appearance/animationMode") GuiMotion.choices else entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
+                val options = entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
                 openMenuDropdown(anchor) { dropdown -> options.forEach { option -> dropdown.button(Component.literal(option.toString())) {
                     if (entry.setEnum(option)) quickChanged(setting.path)
                     anchor.message = Component.literal(entry.enum.toString())

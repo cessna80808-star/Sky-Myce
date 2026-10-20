@@ -49,7 +49,7 @@ fun parseLeaderboard(json: JsonObject): LeaderboardResult {
 }
 
 internal fun leaderboardCategoryMetrics(category: String) = when (category) {
-    "economy" -> listOf("networth", "purse", "bank", "bazaar_profit")
+    "economy" -> listOf("bazaar_profit")
     "dungeons" -> listOf("dungeon_runs", "dungeon_profit", "dungeon_run_time")
     "rng" -> listOf("rng_drops")
     else -> listOf("completed_tasks")
@@ -71,11 +71,11 @@ internal fun formatLeaderboardValue(value: Double, unit: String): String {
 }
 
 /** The in-game and Discord views query the same consent-filtered persisted ranking service. */
-class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "networth") : MenuScreen(Component.literal("Community Leaderboards")) {
+class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "bazaar_profit") : MenuScreen(Component.literal("Community Leaderboards")) {
     override val canonicalFeatureId get() = "leaderboards"
     override val menuCategory get() = MenuCategory.UTILS
-    private val metrics = linkedMapOf("networth" to "Net worth", "purse" to "Purse", "bank" to "Bank", "bazaar_profit" to "Realized Bazaar profit", "dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "dungeon_run_time" to "Average Run Time", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
-    private var metric = initialMetric.takeIf { it in metrics } ?: "networth"
+    private val metrics = linkedMapOf("bazaar_profit" to "Realized Bazaar profit", "dungeon_runs" to "Dungeon runs", "dungeon_profit" to "Chest profit", "dungeon_run_time" to "Average Run Time", "rng_drops" to "RNG drops", "completed_tasks" to "Completed tasks")
+    private var metric = initialMetric.takeIf { it in metrics } ?: "bazaar_profit"
     private var category = listOf("economy", "dungeons", "rng", "other").first { metric in leaderboardCategoryMetrics(it) }
     private var rankingIdentity = "uuid"
     private var period = "all-time"

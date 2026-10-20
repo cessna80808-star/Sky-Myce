@@ -55,8 +55,8 @@ fun autoGraphicsCheck() {
     val gentle = AutoGraphicsController(); gentle.run(0, 4, 30, 33.0, response = AutoResponse.GENTLE)
     check(quick.quality == GuiQuality.LIGHT && gentle.quality == GuiQuality.MEDIUM)
     // Fixed modes stay fixed; Auto is the default for new configurations.
-    check(GuiQuality.AUTO.toString().startsWith("Auto") && GuiQuality.MEDIUM.toString() == "Balanced" && GuiQuality.HIGH.toString() == "Heavy")
-    // Effects Auto controls: decorative leap previews slow down, the menu blur goes at Light and Minimal.
+    check(GuiQuality.AUTO.toString().startsWith("Auto") && GuiQuality.MEDIUM.toString() == "Medium" && GuiQuality.HIGH.toString() == "High" && GuiQuality.EXTREMELY_LIGHT.toString() == "Extremely Light")
+    // Effects Auto controls: decorative leap previews slow down, the menu blur goes at Light and Extremely Light.
     check(me.mycellium.skymyce.features.instances.dungeons.leap.leapPreviewFps(30, GuiQuality.EXTREMELY_LIGHT) == 10 &&
         me.mycellium.skymyce.features.instances.dungeons.leap.leapPreviewFps(30, GuiQuality.LIGHT) == 15 &&
         me.mycellium.skymyce.features.instances.dungeons.leap.leapPreviewFps(30, GuiQuality.MEDIUM) == 30 &&

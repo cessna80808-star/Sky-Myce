@@ -9,33 +9,26 @@ import net.minecraft.client.gui.GuiGraphicsExtractor
 
 /** Shared palette used by retained owo HUD components and menus. */
 object HudTheme {
-    private var widget: ThemeOverrides? = null
     var revision = 0L
         private set
     fun changed() { revision++ }
-    fun <T> withWidget(overrides: ThemeOverrides?, action: () -> T): T {
-        val previous = widget; widget = overrides
-        return try { action() } finally { widget = previous }
-    }
     private val base get() = ThemeConfig.preset.palette
-    private fun color(local: Int?, global: Int, fallback: Int) = (local ?: global).takeIf { it in 0..0xFFFFFF } ?: fallback
-    private fun flag(local: Boolean?, global: Int, fallback: Boolean) = local ?: when (global) { 0 -> false; 1 -> true; else -> fallback }
     val HUD_ACCENT get() = ACCENT
-    val ACCENT get() = color(widget?.primary, ThemeConfig.primary, base.primary)
-    val SECONDARY get() = color(widget?.secondary, ThemeConfig.secondary, base.secondary)
-    val PANEL get() = color(widget?.panel, ThemeConfig.panel, base.panel)
-    val CARD get() = color(widget?.card, ThemeConfig.card, base.card)
-    val BORDER get() = color(widget?.border, ThemeConfig.border, base.border)
-    val TEXT get() = color(widget?.text, ThemeConfig.text, base.text)
-    val MUTED get() = color(widget?.muted, ThemeConfig.muted, base.muted)
+    val ACCENT get() = base.primary
+    val SECONDARY get() = base.secondary
+    val PANEL get() = base.panel
+    val CARD get() = base.card
+    val BORDER get() = base.border
+    val TEXT get() = base.text
+    val MUTED get() = base.muted
     val GREEN get() = base.success
     val YELLOW get() = base.warning
     val RED get() = base.error
-    val OPACITY get() = (widget?.opacity ?: ThemeConfig.opacity).takeIf { it in 20..100 } ?: base.opacity
-    val PADDING get() = (widget?.padding ?: ThemeConfig.padding).takeIf { it in 2..12 } ?: base.padding
-    val ROUNDED get() = flag(widget?.rounded, ThemeConfig.rounded, base.rounded)
-    val SHADOW get() = flag(widget?.shadow, ThemeConfig.shadow, base.shadow)
-    val BORDERS get() = flag(widget?.borders, ThemeConfig.borders, base.borders)
+    val OPACITY get() = base.opacity
+    val PADDING get() = base.padding
+    val ROUNDED get() = base.rounded
+    val SHADOW get() = base.shadow
+    val BORDERS get() = base.borders
     val STYLE get() = base.style
     val PURPLE get() = SECONDARY
 

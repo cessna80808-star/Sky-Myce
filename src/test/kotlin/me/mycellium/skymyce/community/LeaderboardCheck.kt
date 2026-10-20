@@ -15,12 +15,12 @@ fun leaderboardChecks() {
     val parsed = parseLeaderboard(result)
     check(parsed.entries.map { it.rank } == listOf(1, 1, 3) && parsed.entries.last().value == -4.0)
     check(parsed.unit == "coins" && parsed.start == null && parsed.entries.first().player == "Anonymous")
-    check(leaderboardCategoryMetrics("economy") == listOf("networth", "purse", "bank", "bazaar_profit"))
+    check(leaderboardCategoryMetrics("economy") == listOf("bazaar_profit"))
     check(leaderboardCategoryMetrics("dungeons") == listOf("dungeon_runs", "dungeon_profit", "dungeon_run_time"))
-    check(leaderboardPeriods("networth")["weekly"] == "This week • UTC" && leaderboardPeriods("rng_drops")["monthly"] == "This month • UTC")
+    check(leaderboardPeriods("dungeon_runs")["weekly"] == "This week • UTC" && leaderboardPeriods("rng_drops")["monthly"] == "This month • UTC")
     check(leaderboardPeriods("bazaar_profit")["weekly"] == "This week • local Sunday" && leaderboardPeriods("bazaar_profit")["monthly"] == "This month • local")
-    val ordinary = leaderboardRequestPath("economy", "networth", "weekly", 2, "carrot & coins", "linked")
-    check(ordinary == "/community/leaderboard?category=economy&metric=networth&period=weekly&page=2&limit=10&search=carrot+%26+coins") {
+    val ordinary = leaderboardRequestPath("dungeons", "dungeon_runs", "weekly", 2, "carrot & coins", "linked")
+    check(ordinary == "/community/leaderboard?category=dungeons&metric=dungeon_runs&period=weekly&page=2&limit=10&search=carrot+%26+coins") {
         "Bazaar identity selection must not change ordinary leaderboard queries"
     }
     check(leaderboardRequestPath("economy", "bazaar_profit", "weekly", 2, "carrot & coins", "linked").endsWith("search=carrot+%26+coins&identity=linked"))

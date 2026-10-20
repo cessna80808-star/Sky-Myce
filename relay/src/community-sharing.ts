@@ -1,4 +1,6 @@
 /** Community statistics consent is independent of chat, cosmetics, device metadata and service access. */
+// Current clients express one of three modes (On, On (anon), Off) through this unchanged seven-key policy, so older
+// clients keep working: On is every key true, On (anon) the default, Off enabled=false.
 export const sharingCategories = ["dungeons", "economy", "rng", "activity", "leaderboards"] as const;
 export type SharingCategory = typeof sharingCategories[number];
 export type SharingPolicy = { version: 1; enabled: boolean; dungeons: boolean; economy: boolean; rng: boolean;

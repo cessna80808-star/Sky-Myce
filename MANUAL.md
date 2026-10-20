@@ -27,7 +27,7 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 - **Tracker:** review dungeon runs, loot, and personal RNG history; add the tracker widget to keep an overview visible. The widget can show your progress to the next Catacombs level. The **Levels** tab shows Catacombs and class progress toward a target, as runs, XP or a percentage.
 - **Status bars (off by default):** separate health, mana, defense, speed, vitality and respiration bars. Arrange them with `/sm bars`: anchors around the hotbar, snapping, sizes, colours and per-bar options.
 - **Overlays:** an NPC dialogue box with numbered options, a progress bar on the skill XP widget, and Enter to confirm Auction House, Bazaar and bank signs.
-- **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and wardrobe/loadout keybinds.
+- **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and loadout keybinds.
 - **Cosmetics:** save local name, size, and cape choices. Sharing an appearance with the community is a separate optional action.
 - **Community:** connect Discord only if you want community features such as Global Chat, shared rankings, cosmetics sharing, or signed updates.
 
@@ -62,7 +62,7 @@ The Healer Crush Camera has saved viewpoints and a preview for setup; configure 
 
 ## Chat, sharing, and updates
 
-Community features are optional. To use them, open **Community** from the menu or run `/sm community`, then follow the Discord connection flow. Sharing controls let you opt out of community data categories without turning off chat or cosmetics.
+Community features are optional. To use them, open **Community** from the menu or run `/sm community`, then follow the Discord connection flow. One setting, **Community data sharing**, controls what you share: **On** shares dungeon stats, RNG drops, activity and leaderboard statistics with your Minecraft name on public reports; **On (anon)**, the default, shares the same anonymously; **Off** shares nothing and removes or suppresses your earlier contributions. Chat and cosmetics work in every state.
 
 Global Chat opens with `/sm irc`. The chat screen supports replies and reactions; use its message controls for actions on your own messages. `/sm chat <ign>` temporarily routes normal chat to that friend. Run `/sm chat` or switch Hypixel chat channels to stop routing. Check the selected mode before sending a message.
 
@@ -70,9 +70,9 @@ Automatic updates are **Off** by default. You can check for and stage a signed u
 
 ## Graphics and performance
 
-**Settings → Performance → Graphics mode:**
-- **Auto** (the default for new setups) lowers Sky-Myce's own menu effects while your frame rate stays under its target, and restores them once frames are steady again.
-- **Light**, **Balanced** and **Heavy** are fixed. **Minimal** is the lightest.
+**Settings → Appearance** has two controls: **Theme** (a preset palette for menus and HUD widgets) and **Graphics mode**:
+- **Auto** (the default) lowers Sky-Myce's own menu effects while your frame rate stays under 60 FPS, and restores them once frames are steady again.
+- **Extremely Light**, **Light**, **Medium** and **High** are fixed. GUI animations are off in Extremely Light and Light; Auto keeps Medium animations.
 - HUD information, dungeon tracking, routes and the Crush Camera are never reduced, and Minecraft's own settings are not changed.
 
 ## If something goes wrong

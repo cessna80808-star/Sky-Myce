@@ -21,7 +21,7 @@ fun loadSkyMyceConfig(): ResourcefulConfig {
     for (suffix in listOf("jsonc", "json")) {
         val path = directory.resolve("SkyMyce Config.$suffix")
         if (Files.exists(path)) {
-            runCatching { AtomicJsonFile(path).preserveOriginal("before-theme-v1") }.onFailure {
+            runCatching { AtomicJsonFile(path).preserveOriginal("before-theme-v1"); AtomicJsonFile(path).preserveOriginal("before-debloat") }.onFailure {
                 recoverable = false; SkyMyce.logger.warn("Configuration backup unavailable; configuration writes paused")
             }
             if (Files.size(path) <= 1024 * 1024) runCatching { JsoncObject.parse(Files.readString(path)) }.onSuccess { original = it }
@@ -31,6 +31,7 @@ fun loadSkyMyceConfig(): ResourcefulConfig {
     me.mycellium.skymyce.config.misc.ThemeConfig.restoreLegacyTheme(original)
     me.mycellium.skymyce.config.misc.DailyDigestConfig.news = me.mycellium.skymyce.config.misc.migrateDailyNewsConfig(original,
         me.mycellium.skymyce.config.misc.DailyDigestConfig.news)
+    me.mycellium.skymyce.community.migratedSharingMode(original)?.let { me.mycellium.skymyce.config.misc.CommunitySharingConfig.mode = it }
     val file = AtomicJsonFile(directory.resolve("${delegate.id()}.jsonc"), 1024 * 1024)
     val writer = StateWriter<JsonObject>({ file.write(it) }, { work -> Scheduling.schedule(100.milliseconds) { work() } }, {
         SkyMyce.logger.warn("Could not save configuration; previous file retained")

@@ -8,7 +8,7 @@ import java.util.Locale
 enum class MenuCategory(val title: String, val description: String, val iconId: Int) {
     DUNGEONS("Dungeons", "Dungeon parties, routes, rewards and run history", 4),
     COMBAT("Combat", "Ability timers, equipment and instance helpers", 9),
-    ECONOMY("Economy", "Auctions, item values, loans and player wealth", 5),
+    ECONOMY("Economy", "Auctions, Bazaar trading and item values", 5),
     COSMETICS("Cosmetics", "Player names, visual scaling and cosmetic selection", 6),
     UTILS("Utils", "Daily progress, social tools and general helpers", 1),
     SETTINGS("Settings", "Configure controls, graphics, HUD and appearance", 8),
@@ -77,10 +77,9 @@ class MenuCatalog(rows: List<SettingRow>) {
 
     companion object {
         val definitions = listOf(
-            MenuFeature("community", "Discord & Community", "Connect Discord, control statistics sharing and choose updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
+            MenuFeature("community", "Discord & Community", "Connect Discord, choose community data sharing (On, On (anon) or Off) and updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
             MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.UTILS, "Progress", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
             MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.UTILS, "Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
-            MenuFeature("rng-test", "RNG Drop Tester", "Administrator-only parser checks and isolated mock feed delivery", MenuCategory.UTILS, "Administration", listOf("rng", "test", "admin", "mock", "dry-run", "fixtures"), tool = "rng-test"),
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
             MenuFeature("starred-routes", "Dungeon Routing", "Follow doors toward Blood, optionally visiting starred mobs", MenuCategory.DUNGEONS, "Routes", listOf("route", "path", "blood", "wither", "healer", "starred", "mobs", "fairy", "straight", "starred clear routing"), enabledPath = "Dungeons/Starred Clear Routing/enabled"),
             MenuFeature("dungeon-tracker", "Dungeon Tracker", "Run history, loot records and estimated dungeon rewards", MenuCategory.DUNGEONS, "Runs", listOf("loot", "profit", "bazaar", "history", "rng"), tool = "dungeon-tracker", enabledPath = "Dungeons/Dungeons Tracker/dungeonTracker"),
@@ -94,13 +93,10 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality and respiration bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
             MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
             MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
-            MenuFeature("wardrobe", "Wardrobe Keybinds", "Saved armor-slot keys and safeguards; this module is currently inactive", MenuCategory.COMBAT, "Gear", listOf("armor", "equipment", "wardrobe", "keybind")),
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
             MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
             MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
             MenuFeature("bazaar-flipping", "Bazaar Trading", "Manual order flips, private realized-profit history, forecasts and session replays", MenuCategory.ECONOMY, "Bazaar", listOf("bazaar", "flip", "trading", "orders", "portfolio", "profit", "replay", "dashboard"), tool = "bazaar-flipping"),
-            MenuFeature("loans", "Loans & Lending", "Local trade history and the items lent to friends", MenuCategory.ECONOMY, "Loans", listOf("friends", "gear", "trade", "lending", "borrow"), tool = "loans"),
-            MenuFeature("player-economy", "Player Wealth", "Compare cached friend networth, purse, bank and wardrobe estimates", MenuCategory.ECONOMY, "Players", listOf("friends", "player", "wealth", "networth", "compare"), tool = "player-economy"),
             MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
             MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
@@ -113,10 +109,8 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.UTILS, "Information", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
             MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.UTILS, "Inventory", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
-            MenuFeature("settings-general", "General", "Client data collection and developer preferences", MenuCategory.SETTINGS, "General", listOf("client", "preferences", "developer", "data")),
-            MenuFeature("settings-appearance", "Appearance", "Shared theme colors, opacity and animation personality", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "animation", "animations", "motion", "accessibility", "reduced motion"), tool = "theme-editor"),
-            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility, scale and per-widget themes", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
-            MenuFeature("settings-performance", "Performance", "GUI rendering quality, raster detail, shadows and effects", MenuCategory.SETTINGS, "Performance", listOf("fps", "graphics", "quality", "rendering", "performance")),
+            MenuFeature("settings-appearance", "Appearance", "Theme preset and graphics mode; the mode also sets GUI animations", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "preset", "animation", "animations", "motion", "accessibility", "reduced motion", "fps", "graphics", "quality", "rendering", "performance")),
+            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
             MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls", listOf("keybind", "keyboard", "input", "controls")),
         )
 
@@ -126,12 +120,6 @@ class MenuCatalog(rows: List<SettingRow>) {
             "Appearance" to listOf("thickness", "opacity", "lineHeight"),
             "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
         )
-        // These existing editors own controls outside the generic visible Resourceful rows.
-        val themeColorTitles = linkedMapOf("primary" to "Primary accent", "secondary" to "Secondary accent",
-            "panel" to "Panel background", "card" to "Card background", "text" to "Primary text",
-            "muted" to "Secondary text", "border" to "Borders")
-        val themeFlagTitles = linkedMapOf("rounded" to "Rounded corners", "shadow" to "Text shadow", "borders" to "Show borders")
-        val themeNumberTitles = linkedMapOf("opacity" to "Panel opacity", "padding" to "Padding / compactness")
         val extraSettings: List<MenuSearchEntry> = buildList {
             fun addSetting(featureId: String, path: String, title: String, description: String, aliases: List<String>) {
                 val feature = definitions.first { it.id == featureId }
@@ -144,14 +132,6 @@ class MenuCatalog(rows: List<SettingRow>) {
                 "Customize the friend Message action using name, class and floor placeholders", listOf("message", "template", "lfg"))
             addSetting("party-finder", "Dungeons/Dungeon Friends/titleNotifications", "Title Notifications",
                 "Show invitations and joining players as titles", listOf("notification", "titles", "invite"))
-            for ((key, title) in themeColorTitles.filterKeys { it !in setOf("primary", "secondary") }) {
-                addSetting("settings-appearance", "Theme & Appearance/$key", title,
-                    "Choose an inherited theme color or an RGB override", listOf("color", "palette", "rgb", "red", "green", "blue", key))
-            }
-            for ((key, title) in themeFlagTitles) addSetting("settings-appearance", "Theme & Appearance/$key", title,
-                "Choose inherited, enabled or disabled in the shared theme editor", listOf("visual", "theme", key))
-            addSetting("settings-appearance", "Theme & Appearance/padding", themeNumberTitles.getValue("padding"),
-                "Adjust inherited panel spacing or an explicit padding override", listOf("padding", "spacing", "compact", "density"))
         }
 
         fun settingLocation(path: String): MenuSettingLocation {
@@ -182,7 +162,6 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/NPC Dialogue/") -> "npc-dialogue"
                 path.startsWith("General/Signs/") -> "sign-confirm"
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
-                path.startsWith("General/Wardrobe Keybinds/") -> "wardrobe"
                 path == "General/autoRefill" -> "auto-refill"
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
                 path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
@@ -192,10 +171,8 @@ class MenuCatalog(rows: List<SettingRow>) {
                 MenuSettingLocation(it.category, it.subcategory, it.id)
             }
             val section = when {
-                path == "Theme & Appearance/graphicsQuality" || path.startsWith("Theme & Appearance/auto") -> "Performance"
                 path.startsWith("Theme & Appearance/") -> "Appearance"
-                path == "openConfigKey" -> "Controls"
-                else -> "General"
+                else -> "Controls"
             }
             return MenuSettingLocation(MenuCategory.SETTINGS, section)
         }

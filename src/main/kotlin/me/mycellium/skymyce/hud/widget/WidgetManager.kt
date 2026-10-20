@@ -7,8 +7,6 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import java.io.File
 import java.lang.ref.WeakReference
-import me.mycellium.skymyce.hud.ThemeOverrides
-import me.mycellium.skymyce.hud.parseThemeDocument
 import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.MC
@@ -43,8 +41,7 @@ object WidgetManager : SkyMyceModule() {
                             y = if (current.y != before.y) current.y else stored.y,
                             scale = if (current.scale != before.scale) current.scale else stored.scale,
                             anchor = if (current.anchor != before.anchor) current.anchor else stored.anchor,
-                            visible = if (current.visible != before.visible) current.visible else stored.visible,
-                            theme = if (current.theme != before.theme) current.theme else stored.theme).applyConfig(widget)
+                            visible = if (current.visible != before.visible) current.visible else stored.visible).applyConfig(widget)
                     }
                 }
                 initial.clear(); loaded = true
@@ -116,7 +113,6 @@ data class WidgetConfig(
     val y: Int = 0,
     val scale: Float = 1f,
     val anchor: Anchor = Anchor.TOP_LEFT,
-    val theme: ThemeOverrides? = null,
     val visible: Boolean = true,
 ) {
     fun applyConfig(widget: Widget) {
@@ -124,7 +120,6 @@ data class WidgetConfig(
         widget.y = y
         widget.scale = scale
         widget.anchor = anchor
-        widget.theme = theme
         widget.visible = visible
     }
 }
@@ -134,9 +129,6 @@ internal fun parseWidgetConfig(json: JsonElement?): WidgetConfig? = runCatching 
     fun position(key: String) = runCatching { row.get(key)?.asInt?.coerceIn(-100000, 100000) }.getOrNull() ?: 0
     val scale = runCatching { row.get("scale")?.asFloat?.takeIf { it.isFinite() }?.coerceIn(.1f, 3f) }.getOrNull() ?: 1f
     val anchor = runCatching { Anchor.valueOf(row.get("anchor")?.asString.orEmpty()) }.getOrNull() ?: Anchor.TOP_LEFT
-    val theme = runCatching { row.get("theme")?.takeUnless { it.isJsonNull }?.let {
-        parseThemeDocument("""{"version":1,"overrides":$it}""").overrides
-    } }.getOrNull()
     val visible = runCatching { row.get("visible")?.asBoolean }.getOrNull() ?: true
-    WidgetConfig(position("x"), position("y"), scale, anchor, theme, visible)
+    WidgetConfig(position("x"), position("y"), scale, anchor, visible)
 }.getOrNull()

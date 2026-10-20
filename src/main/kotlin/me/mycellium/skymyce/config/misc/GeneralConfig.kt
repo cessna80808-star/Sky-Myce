@@ -10,7 +10,6 @@ object GeneralConfig : CategoryKt("General") {
         category(GlobalChatConfig)
         category(PartyCommandsConfig)
         category(StashHelperConfig)
-        category(WardrobeConfig)
         category(LoadoutConfig)
         category(PriceHistoryConfig)
         category(StatusBarsConfig)

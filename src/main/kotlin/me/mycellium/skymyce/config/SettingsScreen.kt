@@ -14,7 +14,6 @@ import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.commands.SkyMyceCommands
 import me.mycellium.skymyce.config.instances.dungeons.PartyFinder
 import me.mycellium.skymyce.config.instances.dungeons.DungeonFriendsSettings
-import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.instances.dungeons.friends.*
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.hud.*
@@ -44,19 +43,18 @@ fun settingsTab(path: String): SettingsTab = MenuCatalog.settingLocation(path).l
 } }
 
 private fun legacySettingsFeature(tab: SettingsTab) = when (tab) {
-    SettingsTab.GENERAL -> "settings-general"
+    SettingsTab.GENERAL -> "settings-controls"
     SettingsTab.PARTY -> "party-finder"
     SettingsTab.COMBAT -> "dungeon-chests"
     SettingsTab.SOCIAL -> "daily-digest"
     SettingsTab.THEME -> "settings-appearance"
 }
 
+fun parseThemeHex(value: String): Int? = value.removePrefix("#").takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }?.toInt(16)
+
 data class SettingRow(val path: String, val element: ResourcefulConfigEntryElement) {
     val entry get() = element.entry() as ResourcefulConfigValueEntry
-    val title get() = if (path.startsWith("Theme & Appearance/"))
-        MenuCatalog.themeColorTitles[element.id()] ?: MenuCatalog.themeFlagTitles[element.id()] ?: MenuCatalog.themeNumberTitles[element.id()]
-            ?: entry.options().title().toLocalizedString().ifBlank { element.id() }
-        else entry.options().title().toLocalizedString().ifBlank { element.id() }
+    val title get() = entry.options().title().toLocalizedString().ifBlank { element.id() }
     val tip get() = entry.options().comment().toLocalizedString().ifBlank {
         when {
             entry.options().hasOption(Option.KEYBIND) -> "Choose the keyboard key for $title. Escape cancels; Backspace clears it."
@@ -125,7 +123,6 @@ internal fun settingNumber(entry: ResourcefulConfigValueEntry, value: String): N
     return if (entry.type() == EntryType.INTEGER) number.takeIf { it % 1.0 == 0.0 && it in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble() }?.toInt() else number
 }
 
-fun parseThemeHex(value: String): Int? = value.removePrefix("#").takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }?.toInt(16)
 /** Both original editors and canonical quick controls commit through the same feature hooks. */
 fun notifySettingsChanged() {
     PartyFinder.invalidateMatcher()
@@ -183,12 +180,7 @@ internal fun settingsBreadcrumb(category: MenuCategory, feature: MenuFeature?, a
         }
     }
 }
-/** Only the theme editor's public overrides are exposed from hidden config entries. */
-internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = settingRows(config) +
-    config.categories()["Theme & Appearance"]?.elements().orEmpty()
-        .filterIsInstance<ResourcefulConfigEntryElement>()
-        .filter { it.isHidden && it.id() in MenuCatalog.themeColorTitles.keys + MenuCatalog.themeFlagTitles.keys + MenuCatalog.themeNumberTitles.keys }
-        .map { SettingRow("Theme & Appearance/${it.id()}", it) }
+internal fun commandCenterRows(config: ResourcefulConfig): List<SettingRow> = settingRows(config)
 
 internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>, category: MenuCategory, query: String, featureId: String? = null): List<SettingRow> {
     if (query.isBlank()) return rows.filter {
@@ -314,9 +306,6 @@ class SettingsScreen @JvmOverloads constructor(
                 child(label(owner.title, MenuTheme.TEXT, 12f))
                 child(label(if (query.isBlank()) owner.description else owner.breadcrumb, MenuTheme.MUTED, 9f))
             }, reset, detailWidth))
-            if (owner.id == "settings-appearance") body.child(button("Browse themes & customize", minOf(210, controlWidth), "Choose a theme, preview its controls, or customize and transfer its palette") {
-                navigateMenu(ThemeEditorScreen(this))
-            }.apply { intent = MenuButtonIntent.PRIMARY })
             if (owner.id == "starred-routes") {
                 settingGroups(settings, owner.id).forEach { (group, entries) ->
                     if (group == "Advanced") {
@@ -445,56 +434,6 @@ class SettingsScreen @JvmOverloads constructor(
     private fun editor(setting: SettingRow): FlowLayout = MenuRevealCard("settings/${setting.path}", Sizing.fill(), Sizing.content()).apply {
         gap(7); padding(Insets.of(10)); surface(MenuTheme.panel(true)); tip(setting.tip)
         val entry = setting.entry
-        val themeKey = setting.element.id().takeIf { setting.path.startsWith("Theme & Appearance/") }
-        if (themeKey in MenuCatalog.themeColorTitles) {
-            child(label(setting.title, size = 11f))
-            child(label(setting.tip, MenuTheme.MUTED, 9f))
-            val feedback = label("", MenuTheme.RED, 8f)
-            child(settingsRow().apply {
-                val hex = MenuTextBox(Sizing.fixed(minOf(100, (controlWidth - 63).coerceAtLeast(1)))).apply {
-                    setMaxLength(7); text(if (entry.int < 0) "" else "#%06X".format(entry.int)); setHint(Component.literal("Inherited")); tip("Six RGB hex digits. Inherit restores the preset color.")
-                    onChanged().subscribe { value ->
-                        val color = parseThemeHex(value)
-                        if (color != null && entry.setInt(color)) { edited(); feedback.text(Component.empty()) }
-                        else feedback.text(Component.literal("Use six RGB hex digits"))
-                    }
-                }
-                child(hex)
-                child(button("Inherit", 58, "Use the preset color") { entry.setInt(-1); edited(); hex.text(""); feedback.text(Component.empty()) })
-            })
-            child(feedback)
-            if (canPinMenuSetting(setting)) child(pinControl(setting))
-            return@apply
-        }
-        if (themeKey in MenuCatalog.themeFlagTitles) {
-            child(settingsRow().apply {
-                child(label(setting.title).horizontalSizing(Sizing.expand()))
-                fun caption() = when (entry.int) { 0 -> "Off"; 1 -> "On"; else -> "Inherited" }
-                child(button(caption(), 80, "Cycle inherited, enabled and disabled") { anchor ->
-                    if (entry.setInt(when (entry.int) { -1 -> 1; 1 -> 0; else -> -1 })) { edited() }
-                    anchor.message = Component.literal(caption())
-                })
-            })
-            child(label(setting.tip, MenuTheme.MUTED, 9f))
-            return@apply
-        }
-        if (themeKey in MenuCatalog.themeNumberTitles) {
-            val min = if (themeKey == "opacity") 20 else 2
-            val max = if (themeKey == "opacity") 100 else 12
-            child(label(setting.title, size = 11f))
-            child(label(setting.tip, MenuTheme.MUTED, 9f))
-            val valueLabel = label(if (entry.int < 0) "Inherited" else entry.int.toString()); child(valueLabel)
-            val resolved = resolveTheme(ThemeConfig.preset, ThemeConfig.overrides())
-            child(MenuSlider().apply {
-                value(((if (themeKey == "opacity") resolved.opacity else resolved.padding) - min).toDouble() / (max - min)); scrollStep(1.0 / (max - min)); tip(setting.tip)
-                onChanged().subscribe { amount ->
-                    if (entry.setInt((min + amount * (max - min)).roundToInt())) { edited(); valueLabel.text(Component.literal(entry.int.toString())) }
-                }
-            })
-            child(button("Inherit", 58, "Restore preset ${setting.title.lowercase()}") { entry.setInt(-1); edited(); populate() })
-            if (canPinMenuSetting(setting)) child(pinControl(setting))
-            return@apply
-        }
         if (entry.type() == EntryType.BOOLEAN) {
             child(settingsRow().apply {
                 child(label(setting.title).horizontalSizing(Sizing.expand()))
@@ -526,8 +465,7 @@ class SettingsScreen @JvmOverloads constructor(
                 keyCapture = setting to b; b.message = Component.literal("Press a key…")
             })
             entry.type() == EntryType.ENUM -> child(button(entry.enum.toString(), minOf(150, controlWidth), setting.tip) { b ->
-                val values = if (setting.path == "Theme & Appearance/animationMode") GuiMotion.choices
-                    else entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
+                val values = entry.objectType().enumConstants.filterIsInstance<Enum<*>>()
                 menu(b) { dropdown -> values.forEach { option ->
                     dropdown.button(MenuTheme.text(Component.literal(option.toString()))) {
                         if (entry.setEnum(option)) edited()

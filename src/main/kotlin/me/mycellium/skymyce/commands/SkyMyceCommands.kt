@@ -102,10 +102,6 @@ object SkyMyceCommands : SkyMyceModule() {
                 MC.instance.execute { navigateMenu(FriendsSocialScreen()) }
                 1
             })
-            .then(literal("loans").executes {
-                MC.instance.execute { navigateMenu(FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)) }
-                1
-            })
             .then(messageCommand("msg", RelayMessages::send))
             .then(relayChannelCommand("irc", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
             .then(relayChannelCommand("global", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
@@ -128,9 +124,6 @@ object SkyMyceCommands : SkyMyceModule() {
             })
             .then(literal("journal").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
-            })
-            .then(literal("rng-test").executes {
-                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.digest.testing.RngTestScreen()) }; 1
             })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->

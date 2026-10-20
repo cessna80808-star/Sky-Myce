@@ -1,7 +1,5 @@
 package me.mycellium.skymyce.hud
 
-import com.google.gson.Gson
-import com.google.gson.JsonParser
 import kotlin.math.pow
 
 /** Geometry and effects share the layout; presets only tune the supported paint treatments. */
@@ -19,6 +17,7 @@ data class ThemePalette(val primary: Int = 0xBDA5EC, val secondary: Int = 0xDED0
     val error: Int = 0xF18C8C, val sidebar: Int = panel, val style: ThemeStyle = ThemeStyle())
 
 enum class ThemePreset(val title: String, val palette: ThemePalette, val description: String) {
+
     DARK_GLASS("Dark glass", ThemePalette(sidebar = 0x12101B, shadow = true,
         style = ThemeStyle(radius = 7, sheen = .5, glow = .12, shadowTint = 0x100A19)),
         "Soft violet glass, layered surfaces and gentle highlights."),
@@ -60,24 +59,10 @@ enum class ThemePreset(val title: String, val palette: ThemePalette, val descrip
         success = 0xA6D6A1, warning = 0xE8CD88, error = 0xEFA49A, sidebar = 0x111C16,
         style = ThemeStyle(radius = 6, menuPadding = 9, sheen = 0.0, glow = 0.0,
             shadowOpacity = 10, hoverWeight = 10, selectionWeight = 18, transitionMillis = 165)),
-        "Matte forest and jade, generous spacing and clear separation."),
-}
+        "Matte forest and jade, generous spacing and clear separation.");
 
-/** Null means inherit, even when the inherited value happens to equal an earlier override. */
-data class ThemeOverrides(val primary: Int? = null, val secondary: Int? = null,
-    val panel: Int? = null, val card: Int? = null, val text: Int? = null, val muted: Int? = null,
-    val border: Int? = null, val opacity: Int? = null, val rounded: Boolean? = null,
-    val padding: Int? = null, val shadow: Boolean? = null, val borders: Boolean? = null) {
-    fun apply(base: ThemePalette) = base.copy(primary = primary ?: base.primary, secondary = secondary ?: base.secondary,
-        panel = panel ?: base.panel, card = card ?: base.card, text = text ?: base.text, muted = muted ?: base.muted,
-        border = border ?: base.border, opacity = opacity ?: base.opacity, rounded = rounded ?: base.rounded,
-        padding = padding ?: base.padding, shadow = shadow ?: base.shadow, borders = borders ?: base.borders,
-        sidebar = panel ?: base.sidebar)
+    override fun toString() = title
 }
-
-data class ThemeDocument(val version: Int = 1, val preset: ThemePreset = ThemePreset.SIGNATURE, val overrides: ThemeOverrides = ThemeOverrides())
-fun resolveTheme(preset: ThemePreset, global: ThemeOverrides, widget: ThemeOverrides? = null): ThemePalette =
-    (widget ?: ThemeOverrides()).apply(global.apply(preset.palette))
 
 internal fun themeLuminance(rgb: Int): Double {
     fun channel(shift: Int): Double {
@@ -100,24 +85,3 @@ fun themeForeground(background: Int): Int {
     return if (1.05 / (luminance + .05) >= darkContrast) 0xFFFFFF else 0x101820
 }
 
-/** Data only. Strict fields, scalar types and limits; no resource paths or executable components. */
-fun parseThemeDocument(json: String): ThemeDocument {
-    require(json.length <= 16384 && json.toByteArray(Charsets.UTF_8).size <= 16384) { "Theme exceeds 16 KiB" }
-    val root = JsonParser.parseString(json).asJsonObject
-    require(root.keySet().all { it in setOf("version", "preset", "overrides") } && root.get("version")?.asJsonPrimitive?.isNumber == true && root.get("version").asString == "1") { "Unsupported theme format" }
-    val preset = ThemePreset.valueOf(root.get("preset")?.asString ?: "DARK_GLASS")
-    val fields = root.getAsJsonObject("overrides") ?: com.google.gson.JsonObject()
-    val colors = setOf("primary", "secondary", "panel", "card", "text", "muted", "border")
-    require(fields.keySet().all { it in colors || it in setOf("opacity", "padding", "rounded", "shadow", "borders") }) { "Unknown theme field" }
-    fun number(name: String, range: IntRange): Int? = fields.get(name)?.takeUnless { it.isJsonNull }?.let {
-        require(it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString.matches(Regex("[0-9]{1,8}"))) { "Invalid $name" }
-        it.asInt.also { value -> require(value in range) { "Invalid $name range" } }
-    }
-    fun flag(name: String): Boolean? = fields.get(name)?.takeUnless { it.isJsonNull }?.let {
-        require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "Invalid $name" }; it.asBoolean
-    }
-    return ThemeDocument(preset = preset, overrides = ThemeOverrides(number("primary", 0..0xFFFFFF), number("secondary", 0..0xFFFFFF),
-        number("panel", 0..0xFFFFFF), number("card", 0..0xFFFFFF), number("text", 0..0xFFFFFF), number("muted", 0..0xFFFFFF),
-        number("border", 0..0xFFFFFF), number("opacity", 20..100), flag("rounded"), number("padding", 2..12), flag("shadow"), flag("borders")))
-}
-fun exportThemeDocument(theme: ThemeDocument): String = Gson().toJson(theme)
