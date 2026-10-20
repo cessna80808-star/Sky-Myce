@@ -5,7 +5,6 @@ import { DigestNews, DigestRng, rngPayload, type DigestConfig, type NewsResult, 
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand, type CosmeticProfile } from "./cosmetics";
 import { handleCosmeticAssets } from "./cosmetic-assets";
 import { handleLeaderboardsRequest, handleCommunityFeed } from "./leaderboards";
-import { handleRngTestRequest, handleRngTestInteraction } from "./rng-tester";
 import { handleRngCarouselInteraction } from "./rng-carousel";
 import { RngForwardQueue } from "./rng-forwarding";
 import { verifiedInteraction, discordCommand } from "./discord";
@@ -103,7 +102,7 @@ export default {
           return Response.json(result, { headers: { "Cache-Control": "no-store" } });
         } catch { return Response.json({ ok: false, error: "news_unavailable" }, { status: 503 }); }
       }
-      try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleBazaarRequest(request, env, ctx) ?? await handleRngTestRequest(request, env) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
+      try { return await handleCommunityRelease(request, env, ctx) ?? await handleCosmeticAssets(request, env) ?? await handleLeaderboardsRequest(request, env) ?? await handleBazaarRequest(request, env, ctx) ?? await handleCommunityRequest(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { console.error({ event: "community_unavailable" }); return Response.json({ ok: false, error: "community_unavailable" }, { status: 503 }); }
     }
     if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/loader/") || url.pathname === "/discord/loader") {
@@ -128,8 +127,6 @@ export default {
       if (data.type === 4) return handleAccountAutocomplete(data, env, backend ? "backend" : "user");
       const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
       if (promptResponse) return promptResponse;
-      const rngTestResponse = handleRngTestInteraction(data, env, ctx, backend);
-      if (rngTestResponse) return rngTestResponse;
       const accountResponse = await handleAccountInteraction(data, env, ctx, backend ? "backend" : "user");
       if (accountResponse) return accountResponse;
       if (backend) return Response.json({ type: 4, data: { content: "Unsupported command.", flags: 64, allowed_mentions: { parse: [] } } });

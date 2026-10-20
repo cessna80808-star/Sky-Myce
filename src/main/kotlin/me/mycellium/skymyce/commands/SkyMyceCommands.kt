@@ -125,9 +125,6 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(literal("journal").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()) }; 1
             })
-            .then(literal("rng-test").executes {
-                MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.digest.testing.RngTestScreen()) }; 1
-            })
             .then(literal("chat").executes { RelayMessages.leaveChat(); 1 }
                 .then(argument("name", StringArgumentType.word()).suggests { _, builder ->
                     RelayMessages.recipients(builder.remaining).forEach(builder::suggest)

@@ -20,7 +20,7 @@ internal val defaultMenuPins = listOf("Theme & Appearance/animationMode", "Theme
     "General/displayAbilityCooldown")
 internal val defaultMenuHomeTools = listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest")
 
-internal fun canUseMenuHomeTool(feature: MenuFeature) = feature.tool != null && feature.favoriteEligible && feature.id != "rng-test"
+internal fun canUseMenuHomeTool(feature: MenuFeature) = feature.tool != null && feature.favoriteEligible
 private fun validMenuHomeTool(id: String) = MenuCatalog.definitions.any { it.id == id && canUseMenuHomeTool(it) }
 private fun normalizedMenuHomeTools(ids: List<String>) =
     (ids.asSequence() + defaultMenuHomeTools.asSequence() + MenuCatalog.definitions.asSequence().map { it.id })

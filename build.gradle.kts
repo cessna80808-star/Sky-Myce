@@ -692,14 +692,6 @@ for (browserCheckName in listOf("BrowserLinks", "BrowserExtension")) {
     }
     tasks.check { dependsOn(browserCheck) }
 }
-val rngTesterCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks isolated RNG parser, confirmation, journal and duplicate fixtures"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.digest.testing.RngTesterCheckKt"
-}
-tasks.check { dependsOn(rngTesterCheck) }
 tasks.test { failOnNoDiscoveredTests = false }
 
 for (bazaarCheckName in listOf("Bazaar", "BazaarAssist", "BazaarDashboard", "BazaarIntegration", "BazaarPreferenceSync")) {
