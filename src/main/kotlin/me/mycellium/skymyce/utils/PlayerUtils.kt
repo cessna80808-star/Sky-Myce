@@ -34,3 +34,12 @@ object PlayerUtils {
         MC.connection?.sendCommand(command)
     }
 }
+/** `id.toString().replace("-", "")`, rebuilt only when the account UUID changes; one instance per client-thread owner. */
+class CompactProfileId {
+    private var source: UUID? = null
+    private var text = ""
+    fun of(id: UUID): String {
+        if (id != source) { source = id; text = id.toString().replace("-", "") }
+        return text
+    }
+}

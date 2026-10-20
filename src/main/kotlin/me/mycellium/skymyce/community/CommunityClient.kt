@@ -66,8 +66,9 @@ object CommunityClient {
         }
         CommunityUpdates.initialize()
     }
+    private val compactProfile = me.mycellium.skymyce.utils.CompactProfileId()
     private fun tick() {
-        val current = Minecraft.getInstance().user.profileId.toString().replace("-", "")
+        val current = compactProfile.of(Minecraft.getInstance().user.profileId)
         if (current != uuid) {
             epoch++; uuid = current; sessionGeneration++; sessionToken = null; identity = null; refreshToken = null
             accessExpiresAt = 0; flow = null; cancellation.clear(); connectingEpoch = null; cancelledConnectEpoch = null

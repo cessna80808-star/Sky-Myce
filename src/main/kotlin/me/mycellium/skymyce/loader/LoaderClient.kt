@@ -78,9 +78,10 @@ object LoaderClient {
             }
         }
     }
+    private val compactProfile = me.mycellium.skymyce.utils.CompactProfileId()
     private fun tick() {
         val minecraft = Minecraft.getInstance()
-        val current = minecraft.user.profileId.toString().replace("-", "")
+        val current = compactProfile.of(minecraft.user.profileId)
         if (uuid != current) { busy = false; uuid = current; authorization.deny(); checkedPayload = false; nextAttempt = 0; showAuthorization = true }
         val allowed = localAllowed
         if (lastAllowed != allowed) { lastAllowed = allowed; observers.toList().forEach { it(allowed) } }

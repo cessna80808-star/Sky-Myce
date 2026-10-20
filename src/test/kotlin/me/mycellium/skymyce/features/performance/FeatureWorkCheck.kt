@@ -68,6 +68,14 @@ fun main() {
     check(oldAuto.quality == newAuto.quality && oldAuto.reason == newAuto.reason)
     report("Auto graphics steady-state samples (200 ticks)", oldSamples, newSamples)
     if (newSamples.bytes != null) check(newSamples.bytes < 200 * 64) { "Auto graphics allocates ${newSamples.bytes} B per 200 samples" }
+    // Community and Loader ticks compare the account id every client tick; the UUID only changes on an account switch.
+    val account = UUID.fromString("2c1f6a9e-4b7d-4e0a-9c55-7d3a1e0f8b21")
+    val compact = me.mycellium.skymyce.utils.CompactProfileId()
+    var oldMatches = 0; var newMatches = 0
+    val oldProfile = measure { repeat(1_000) { if (account.toString().replace("-", "") == "2c1f6a9e4b7d4e0a9c557d3a1e0f8b21") oldMatches++ } }
+    val newProfile = measure { repeat(1_000) { if (compact.of(account) == "2c1f6a9e4b7d4e0a9c557d3a1e0f8b21") newMatches++ } }
+    check(oldMatches == newMatches && compact.of(UUID(0, 1)) == UUID(0, 1).toString().replace("-", "") && compact.of(account) == "2c1f6a9e4b7d4e0a9c557d3a1e0f8b21")
+    report("Account id comparison per client tick (1000 ticks)", oldProfile, newProfile)
     println("Feature work checks passed; warmed median JVM wall/allocation only, no live-client performance claim.")
 }
 
