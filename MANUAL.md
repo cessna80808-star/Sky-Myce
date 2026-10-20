@@ -27,7 +27,7 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 - **Tracker:** review dungeon runs, loot, and personal RNG history; add the tracker widget to keep an overview visible. The widget can show your progress to the next Catacombs level. The **Levels** tab shows Catacombs and class progress toward a target, as runs, XP or a percentage.
 - **Status bars (off by default):** separate health, mana, defense, speed, vitality and respiration bars. Arrange them with `/sm bars`: anchors around the hotbar, snapping, sizes, colours and per-bar options.
 - **Overlays:** an NPC dialogue box with numbered options, a progress bar on the skill XP widget, and Enter to confirm Auction House, Bazaar and bank signs.
-- **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and wardrobe/loadout keybinds.
+- **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and loadout keybinds.
 - **Cosmetics:** save local name, size, and cape choices. Sharing an appearance with the community is a separate optional action.
 - **Community:** connect Discord only if you want community features such as Global Chat, shared rankings, cosmetics sharing, or signed updates.
 

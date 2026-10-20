@@ -68,7 +68,7 @@ The reference repository was surveyed for behaviour only; its licence forbids re
 | Tab fills without sending; vanilla untouched elsewhere | Same; vanilla's suggestion list stays open while the assistant owns the inline ghost | Matched |
 | Sign helper: expected value, wrong value, wrong line, done | Same; "click Done" | Matched |
 | Gray ghost of the rest of the value on the sign | Expected value shown above the sign | Adapted |
-| Autocommand on B, confirmation, "Close the menu first", 3 s dedupe | Same; key unbound by default because B is a Sky-Myce wardrobe/loadout key | Matched |
+| Autocommand on B, confirmation, "Close the menu first", 3 s dedupe | Same; key unbound by default because B is a Sky-Myce loadout key | Matched |
 | Autosign for amounts | Amounts, search terms and typed prices | Extended |
 | Keys `]` start, `[` stop, also inside menus, not while a text field has focus | Same | Matched |
 | `/flipperx` login, goal, finish, update, discord | Backend features | Not implemented |

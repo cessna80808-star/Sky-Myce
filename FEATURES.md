@@ -55,8 +55,8 @@ When your item stacks run low, Sky-Hawk can refill them automatically from your 
 ### Stash Helper
 Sorting stash tabs is much less painful when the mod highlights junk and blocks accidental clicks on worthless items. It is a simple feature, but it saves a lot of wasted time.
 
-### Wardrobe and Loadout Keybinds
-Changing gear becomes much faster when you can bind quick swaps for wardrobe or loadout screens. This is especially useful for players who frequently swap builds.
+### Loadout Keybinds
+Changing gear becomes much faster when you can bind quick swaps for loadout screens. This is especially useful for players who frequently swap builds.
 
 ### Personal Best Lookup
 The mod can access local PB info for dungeon runs and other relevant content without opening a complicated menu. That makes it a cleaner and faster way to check your recent performance.

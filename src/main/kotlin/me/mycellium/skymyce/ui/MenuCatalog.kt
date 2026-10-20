@@ -94,7 +94,6 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality and respiration bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
             MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
             MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
-            MenuFeature("wardrobe", "Wardrobe Keybinds", "Saved armor-slot keys and safeguards; this module is currently inactive", MenuCategory.COMBAT, "Gear", listOf("armor", "equipment", "wardrobe", "keybind")),
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
             MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
             MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
@@ -182,7 +181,6 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/NPC Dialogue/") -> "npc-dialogue"
                 path.startsWith("General/Signs/") -> "sign-confirm"
                 path.startsWith("General/Loadout Keybinds/") -> "loadouts"
-                path.startsWith("General/Wardrobe Keybinds/") -> "wardrobe"
                 path == "General/autoRefill" -> "auto-refill"
                 path == "General/displayAbilityCooldown" || path == "General/displayAbilityNotification" -> "ability-cooldowns"
                 path == "General/clientInfo" || path == "General/displayXp" || path == "General/displayXpBar" -> "information"
