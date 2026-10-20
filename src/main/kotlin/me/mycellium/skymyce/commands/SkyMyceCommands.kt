@@ -80,6 +80,7 @@ object SkyMyceCommands : SkyMyceModule() {
             }
             .then(dungeon())
             .then(bazaar())
+            .then(me.mycellium.skymyce.features.garden.greenhouse.GreenhousePlanner.command())
             .then(literal("crush-camera").executes {
                 MC.instance.execute { navigateMenu(me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen()) }
                 1

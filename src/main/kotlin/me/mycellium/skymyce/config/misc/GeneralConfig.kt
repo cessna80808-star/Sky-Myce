@@ -12,6 +12,7 @@ object GeneralConfig : CategoryKt("General") {
         category(StashHelperConfig)
         category(LoadoutConfig)
         category(PriceHistoryConfig)
+        category(GreenhouseConfig)
         category(StatusBarsConfig)
         category(NpcDialogueConfig)
         category(SignsConfig)
