@@ -1,6 +1,8 @@
 package me.mycellium.skymyce.features.performance
 
 import com.sun.management.ThreadMXBean
+import me.mycellium.skymyce.ui.AutoGraphicsController
+import me.mycellium.skymyce.ui.AutoResponse
 import me.mycellium.skymyce.features.instances.dungeons.friends.FriendActivity
 import me.mycellium.skymyce.features.instances.dungeons.friends.OnlineDungeonFriend
 import me.mycellium.skymyce.features.social.CosmeticIdentities
@@ -54,6 +56,18 @@ fun main() {
     val newActivity = measure { repeat(20) { friends.forEach { actual += it.activity.ordinal } } }
     check(expected == actual)
     report("Read 256 immutable friend activities (5120 reads)", oldActivity, newActivity)
+
+    autoGraphicsDifferential()
+    // One Auto graphics sample per client tick (20 Hz), steady state with a full 15 s Normal window (300 entries per series).
+    val oldAuto = PreviousAutoGraphicsController(); val newAuto = AutoGraphicsController()
+    var oldClock = 0L; var newClock = 0L
+    repeat(400) { oldAuto.sample(oldClock, 60, 16.6, 60, AutoResponse.NORMAL); oldClock += 50 }
+    repeat(400) { newAuto.sample(newClock, 60, 16.6, 60, AutoResponse.NORMAL); newClock += 50 }
+    val oldSamples = measure { repeat(200) { oldAuto.sample(oldClock, 58 + (oldClock / 50 % 5).toInt(), 15.0 + oldClock % 7 / 3.0, 60, AutoResponse.NORMAL); oldClock += 50 } }
+    val newSamples = measure { repeat(200) { newAuto.sample(newClock, 58 + (newClock / 50 % 5).toInt(), 15.0 + newClock % 7 / 3.0, 60, AutoResponse.NORMAL); newClock += 50 } }
+    check(oldAuto.quality == newAuto.quality && oldAuto.reason == newAuto.reason)
+    report("Auto graphics steady-state samples (200 ticks)", oldSamples, newSamples)
+    if (newSamples.bytes != null) check(newSamples.bytes < 200 * 64) { "Auto graphics allocates ${newSamples.bytes} B per 200 samples" }
     println("Feature work checks passed; warmed median JVM wall/allocation only, no live-client performance claim.")
 }
 
@@ -109,4 +123,33 @@ private fun previousActivity(location: String): FriendActivity = when {
     location.contains("SkyBlock", true) || Regex("(?i)\\b(?:mines|hollows|garden|crimson|end|park|rift|spider)\\b").containsMatchIn(location) -> FriendActivity.SKYBLOCK
     location.isBlank() || location.equals("Unknown", true) || location.contains("offline", true) -> FriendActivity.UNKNOWN
     else -> FriendActivity.OTHER_GAME
+}
+
+/**
+ * Replays seeded random measurement streams through the 2.7.29 controller and the current one, asserting identical tiers,
+ * reasons, change times and summaries after every call: clock jumps backwards and forwards, pauses, invalid frame times,
+ * zero FPS, every response and lowest tier, and frame caps.
+ */
+private fun autoGraphicsDifferential() {
+    val random = java.util.Random(26_1_2)
+    repeat(300) { stream ->
+        val old = PreviousAutoGraphicsController(); val new = AutoGraphicsController()
+        var now = random.nextLong(-1_000_000, 1_000_000_000)
+        val response = AutoResponse.entries[stream % AutoResponse.entries.size]
+        val lowest = AutoGraphicsController.AUTO_TIERS[random.nextInt(AutoGraphicsController.AUTO_TIERS.size)]
+        var fps = 20 + random.nextInt(200); var frame = 1000.0 / fps
+        repeat(2_000) {
+            now += when (random.nextInt(100)) { 0 -> -random.nextLong(1, 30_000); 1 -> random.nextLong(10_000, 120_000); else -> 40L + random.nextInt(25) }
+            if (random.nextInt(50) == 0) { fps = random.nextInt(300); frame = if (fps == 0) 0.0 else 1000.0 / fps }
+            val sampleFps = if (random.nextInt(40) == 0) 0 else (fps + random.nextInt(11) - 5).coerceAtLeast(0)
+            val sampleFrame = when (random.nextInt(60)) { 0 -> Double.NaN; 1 -> Double.POSITIVE_INFINITY; 2 -> -1.0; 3 -> 2_500.0; else -> frame * (0.5 + random.nextDouble()) }
+            val target = if (random.nextInt(30) == 0) 0 else 30 + random.nextInt(200)
+            if (random.nextInt(400) == 0) { old.pause(now); new.pause(now) }
+            val a = old.sample(now, sampleFps, sampleFrame, target, response, lowest)
+            val b = new.sample(now, sampleFps, sampleFrame, target, response, lowest)
+            check(a == b && old.tier == new.tier && old.reason == new.reason && old.lastChange == new.lastChange) { "Auto graphics diverged in stream $stream" }
+            check(old.summary(now) == new.summary(now)) { "Auto graphics summary diverged in stream $stream" }
+        }
+    }
+    check(AutoGraphicsController.percentile(listOf(1.0, 2.0, 3.0, 100.0), 0.5) == PreviousAutoGraphicsController.percentile(listOf(1.0, 2.0, 3.0, 100.0), 0.5))
 }
