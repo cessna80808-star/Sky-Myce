@@ -139,7 +139,7 @@ fun main() {
     check(qualities.take(2).all { !it.glow && !it.ambient && it.ambientIntervalNanos == 0L })
     check(GuiQuality.MEDIUM.ambientIntervalNanos == 100_000_000L && GuiQuality.HIGH.ambientIntervalNanos == 50_000_000L)
     check(qualities.drop(2).all { it.glow && it.ambient })
-    check(qualities.map { it.toString() } == listOf("Minimal", "Light", "Balanced", "Heavy"))
+    check(qualities.map { it.toString() } == listOf("Extremely Light", "Light", "Medium", "High"))
     check(GuiMotion.choices.map { it.toString() } == listOf("Light", "Medium", "Heavy", "Reduced", "Off"))
     for (mode in GuiMotion.entries) {
         for (life in listOf(1.0, 75.0, 500.0, 2000.0)) {

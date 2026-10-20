@@ -122,23 +122,25 @@ object AutoGraphics : SkyMyceModule() {
         val now = System.currentTimeMillis()
         val screen = MC.screen
         if (MC.instance.level == null || screen is LevelLoadingScreen || screen is ProgressScreen) { controller.pause(now); return }
-        controller.sample(now, MC.instance.fps, MC.instance.frameTimeNs / 1_000_000.0, target(), ThemeConfig.autoResponse, ThemeConfig.autoLowest)
+        controller.sample(now, MC.instance.fps, MC.instance.frameTimeNs / 1_000_000.0, target(), AutoResponse.NORMAL)
     }
 
     @Subscription(ServerDisconnectEvent::class)
     fun onDisconnect() = controller.pause(System.currentTimeMillis())
 
-    /** The user's target, but never above the frame limit (a capped game is not a slow one). */
+    private const val AUTO_TARGET_FPS = 60
+
+    /** The target, but never above the frame limit (a capped game is not a slow one). */
     fun target(): Int {
         val limit = MC.instance.options.framerateLimit().get()
         val capped = if (limit in 1 until 260) (limit * 0.95).toInt() else Int.MAX_VALUE
-        return minOf(ThemeConfig.autoTargetFps, capped).coerceAtLeast(20)
+        return minOf(AUTO_TARGET_FPS, capped).coerceAtLeast(20)
     }
 
     /** `/sm graphics`: mode, effective quality, recent measurements and the last change. */
     fun status(): List<String> {
         val mode = ThemeConfig.graphicsQuality
-        if (mode != GuiQuality.AUTO) return listOf("§bGraphics: §f$mode §7(fixed). Choose Auto in Settings → Performance to adapt.")
+        if (mode != GuiQuality.AUTO) return listOf("§bGraphics: §f$mode §7(fixed). Choose Auto in Settings → Appearance to adapt.")
         val (fps, p95) = controller.summary(System.currentTimeMillis())
         return listOf("§bGraphics: §fAuto §7→ now §f${controller.quality}",
             String.format(Locale.ROOT, "§7Recent: %.0f FPS, 95%% of frames under %.1f ms; target %d FPS", fps, p95, target()),

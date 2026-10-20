@@ -109,9 +109,8 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.UTILS, "Information", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
             MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.UTILS, "Inventory", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
-            MenuFeature("settings-appearance", "Appearance", "Shared theme colors, opacity and animation personality", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "animation", "animations", "motion", "accessibility", "reduced motion"), tool = "theme-editor"),
-            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility, scale and per-widget themes", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
-            MenuFeature("settings-performance", "Performance", "GUI rendering quality, raster detail, shadows and effects", MenuCategory.SETTINGS, "Performance", listOf("fps", "graphics", "quality", "rendering", "performance")),
+            MenuFeature("settings-appearance", "Appearance", "Theme preset and graphics mode; the mode also sets GUI animations", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "preset", "animation", "animations", "motion", "accessibility", "reduced motion", "fps", "graphics", "quality", "rendering", "performance")),
+            MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility and scale", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
             MenuFeature("settings-controls", "Controls", "Choose the key that opens the Sky-Myce menu", MenuCategory.SETTINGS, "Controls", listOf("keybind", "keyboard", "input", "controls")),
         )
 
@@ -121,12 +120,6 @@ class MenuCatalog(rows: List<SettingRow>) {
             "Appearance" to listOf("thickness", "opacity", "lineHeight"),
             "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
         )
-        // These existing editors own controls outside the generic visible Resourceful rows.
-        val themeColorTitles = linkedMapOf("primary" to "Primary accent", "secondary" to "Secondary accent",
-            "panel" to "Panel background", "card" to "Card background", "text" to "Primary text",
-            "muted" to "Secondary text", "border" to "Borders")
-        val themeFlagTitles = linkedMapOf("rounded" to "Rounded corners", "shadow" to "Text shadow", "borders" to "Show borders")
-        val themeNumberTitles = linkedMapOf("opacity" to "Panel opacity", "padding" to "Padding / compactness")
         val extraSettings: List<MenuSearchEntry> = buildList {
             fun addSetting(featureId: String, path: String, title: String, description: String, aliases: List<String>) {
                 val feature = definitions.first { it.id == featureId }
@@ -139,14 +132,6 @@ class MenuCatalog(rows: List<SettingRow>) {
                 "Customize the friend Message action using name, class and floor placeholders", listOf("message", "template", "lfg"))
             addSetting("party-finder", "Dungeons/Dungeon Friends/titleNotifications", "Title Notifications",
                 "Show invitations and joining players as titles", listOf("notification", "titles", "invite"))
-            for ((key, title) in themeColorTitles.filterKeys { it !in setOf("primary", "secondary") }) {
-                addSetting("settings-appearance", "Theme & Appearance/$key", title,
-                    "Choose an inherited theme color or an RGB override", listOf("color", "palette", "rgb", "red", "green", "blue", key))
-            }
-            for ((key, title) in themeFlagTitles) addSetting("settings-appearance", "Theme & Appearance/$key", title,
-                "Choose inherited, enabled or disabled in the shared theme editor", listOf("visual", "theme", key))
-            addSetting("settings-appearance", "Theme & Appearance/padding", themeNumberTitles.getValue("padding"),
-                "Adjust inherited panel spacing or an explicit padding override", listOf("padding", "spacing", "compact", "density"))
         }
 
         fun settingLocation(path: String): MenuSettingLocation {
@@ -186,7 +171,6 @@ class MenuCatalog(rows: List<SettingRow>) {
                 MenuSettingLocation(it.category, it.subcategory, it.id)
             }
             val section = when {
-                path == "Theme & Appearance/graphicsQuality" || path.startsWith("Theme & Appearance/auto") -> "Performance"
                 path.startsWith("Theme & Appearance/") -> "Appearance"
                 else -> "Controls"
             }

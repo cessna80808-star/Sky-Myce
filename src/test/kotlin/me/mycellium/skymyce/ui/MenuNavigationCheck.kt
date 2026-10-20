@@ -78,28 +78,25 @@ private fun checkStableCardEdges(layout: MenuLayout) {
     check(geometry.indexAt(Double.NaN, Double.POSITIVE_INFINITY) == null)
 }
 
-/** Explicit geometry overrides reach the same surfaces as shared controls. */
+/** Preset corner geometry reaches the same surfaces as shared controls. */
 private fun checkNavigationCornerOverrides() {
     val previousPreset = ThemeConfig.preset
-    val previousRounded = ThemeConfig.rounded
     val canvas = MenuCanvas()
     try {
-        for (preset in listOf(me.mycellium.skymyce.hud.ThemePreset.MINIMAL, me.mycellium.skymyce.hud.ThemePreset.HIGH_CONTRAST)) {
+        for (preset in listOf(me.mycellium.skymyce.hud.ThemePreset.MINIMAL, me.mycellium.skymyce.hud.ThemePreset.SIGNATURE)) {
             ThemeConfig.preset = preset
-            for (rounded in listOf(0, 1)) {
-                ThemeConfig.rounded = rounded
-                canvas.begin()
-                paintMenuNavigationTile(canvas, MenuRect(8.0, 64.0, 128.0, 34.0), 0, hover = 1.0, focused = true)
-                paintMenuHomeTile(canvas, MenuRect(8.0, 110.0, 128.0, 70.0), listOf("Dungeons"), emptyList(), 4, focused = true)
-                val surfaces = canvas.finishFrame(160, 220, 1.0).commands.filter { it.kind == 7 || it.kind == 8 }
-                val radius = if (rounded == 1) 2.0 else 0.0
-                check(surfaces.size >= 4 && surfaces.all { it.extra == radius }) {
-                    "Home cards or category navigation ignored the explicit corner override in $preset"
-                }
+            canvas.begin()
+            paintMenuNavigationTile(canvas, MenuRect(8.0, 64.0, 128.0, 34.0), 0, hover = 1.0, focused = true)
+            paintMenuHomeTile(canvas, MenuRect(8.0, 110.0, 128.0, 70.0), listOf("Dungeons"), emptyList(), 4, focused = true)
+            val surfaces = canvas.finishFrame(160, 220, 1.0).commands.filter { it.kind == 7 || it.kind == 8 }
+            val radius = MenuTheme.RADIUS.toDouble()
+            check(surfaces.size >= 4 && surfaces.all { it.extra == radius }) {
+                "Home cards or category navigation ignored the preset corners in $preset"
             }
         }
+        check(me.mycellium.skymyce.hud.ThemePreset.MINIMAL.palette.rounded.not())
     } finally {
-        canvas.close(); ThemeConfig.preset = previousPreset; ThemeConfig.rounded = previousRounded
+        canvas.close(); ThemeConfig.preset = previousPreset
     }
 }
 

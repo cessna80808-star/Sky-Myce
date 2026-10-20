@@ -47,8 +47,6 @@ import me.mycellium.skymyce.features.digest.DigestNewsState
 import me.mycellium.skymyce.features.digest.NewsSource
 import me.mycellium.skymyce.features.social.CosmeticsScreen
 import me.mycellium.skymyce.hud.HudTheme
-import me.mycellium.skymyce.hud.ThemeEditorScreen
-import me.mycellium.skymyce.hud.ThemeOverrides
 import me.mycellium.skymyce.hud.ThemePreset
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.base.BaseOwoScreen
@@ -198,11 +196,11 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("settings-light", ThemePreset.LIGHT) { SettingsScreen(null, SettingsTab.THEME) },
             Scene("settings-routing-breadcrumbs", ThemePreset.SIGNATURE) { SettingsScreen.forFeature(null, "starred-routes") },
             Scene("settings-routing-breadcrumbs-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { SettingsScreen.forFeature(null, "starred-routes") },
-            Scene("themes-signature", ThemePreset.SIGNATURE) { ThemeEditorScreen(null) },
+            Scene("themes-signature", ThemePreset.SIGNATURE) { SettingsScreen.forFeature(null, "settings-appearance") },
             Scene("crush-camera", ThemePreset.SIGNATURE) { me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen() },
             Scene("crush-camera-wide", ThemePreset.SIGNATURE, 1920, 1080, 2) { me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraScreen() },
             Scene("crush-camera-settings", ThemePreset.SIGNATURE) { SettingsScreen.forFeature(null, "healer-crush-camera") },
-            Scene("themes-light", ThemePreset.LIGHT) { ThemeEditorScreen(null) },
+            Scene("themes-light", ThemePreset.LIGHT) { SettingsScreen.forFeature(null, "settings-appearance") },
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
@@ -221,7 +219,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             },
             Scene("home-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
             Scene("home-keyboard-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { MenuHomeScreen() },
-            Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { ThemeEditorScreen(null) },
+            Scene("themes-narrow", ThemePreset.LIGHT, 640, 480, 4) { SettingsScreen.forFeature(null, "settings-appearance") },
             Scene("settings-narrow", ThemePreset.SIGNATURE, 640, 480, 4) { SettingsScreen(null, SettingsTab.PARTY) },
             Scene("home-small", ThemePreset.SIGNATURE, 480, 360, 4) { MenuHomeScreen() },
             Scene("home-wide", ThemePreset.BOREALIS, 1920, 1080, 1) { MenuHomeScreen() },
@@ -328,7 +326,6 @@ class GuiVisualCheckClient : ClientModInitializer {
                 client.options.guiScale().set(current.scale)
                 client.resizeGui()
                 ThemeConfig.preset = current.theme
-                ThemeConfig.apply(ThemeOverrides())
                 HudTheme.changed()
                 val next = current.screen()
                 trackerArchiveSnapshot = if (next is DungeonScreen) AcquisitionRepository.state else null

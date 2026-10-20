@@ -370,7 +370,7 @@ object LeapMenu : SkyMyceModule() {
 
 /**
  * Leap previews are decoration beside the player's choice, so lighter graphics tiers cap their frame rate:
- * Minimal at 10, Light at 15; Balanced and Heavy use the configured rate.
+ * Extremely Light at 10, Light at 15; Medium and High use the configured rate.
  */
 internal fun leapPreviewFps(configured: Int, quality: me.mycellium.skymyce.ui.GuiQuality): Int = when (quality) {
     me.mycellium.skymyce.ui.GuiQuality.EXTREMELY_LIGHT -> minOf(configured, 10)

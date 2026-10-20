@@ -70,9 +70,9 @@ Automatic updates are **Off** by default. You can check for and stage a signed u
 
 ## Graphics and performance
 
-**Settings → Performance → Graphics mode:**
-- **Auto** (the default for new setups) lowers Sky-Myce's own menu effects while your frame rate stays under its target, and restores them once frames are steady again.
-- **Light**, **Balanced** and **Heavy** are fixed. **Minimal** is the lightest.
+**Settings → Appearance** has two controls: **Theme** (a preset palette for menus and HUD widgets) and **Graphics mode**:
+- **Auto** (the default) lowers Sky-Myce's own menu effects while your frame rate stays under 60 FPS, and restores them once frames are steady again.
+- **Extremely Light**, **Light**, **Medium** and **High** are fixed. GUI animations are off in Extremely Light and Light; Auto keeps Medium animations.
 - HUD information, dungeon tracking, routes and the Crush Camera are never reduced, and Minecraft's own settings are not changed.
 
 ## If something goes wrong

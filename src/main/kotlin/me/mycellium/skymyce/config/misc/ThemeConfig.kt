@@ -3,100 +3,58 @@ package me.mycellium.skymyce.config.misc
 import com.google.gson.JsonObject
 import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
-import me.mycellium.skymyce.hud.ThemeOverrides
+import me.mycellium.skymyce.hud.ThemePalette
 import me.mycellium.skymyce.hud.ThemePreset
 import me.mycellium.skymyce.ui.GuiMotion
 import me.mycellium.skymyce.ui.GuiQuality
 
 object ThemeConfig : CategoryKt("Theme & Appearance") {
-    var migratedDigestTheme by boolean(false) { condition = { false } }
-    var themeVersion by int(0) { condition = { false } }
-    private var existingConfiguration = false
     var preset by enum(ThemePreset.SIGNATURE) {
-        name = TranslatableValue.literal("Theme preset")
-        description = TranslatableValue.literal("Shared palette and component styling inherited by menus and widgets. Personal overrides stay in place.")
+        name = TranslatableValue.literal("Theme")
+        description = TranslatableValue.literal("The palette and component style for every Sky-Myce menu and HUD widget.")
     }
     var graphicsQuality by enum(GuiQuality.AUTO) {
-        name = TranslatableValue.literal("Graphics Mode")
-        description = TranslatableValue.literal("Auto lowers Sky-Myce's menu sharpness, shadows, glow and ambient effects while your frame rate stays under its target, and restores them when it recovers; /sm graphics shows what it chose. Light, Balanced and Heavy are fixed; Minimal is the lightest. HUD information is never reduced, and Minecraft's own settings are untouched.")
-    }
-    var autoTargetFps by int(60) {
-        name = TranslatableValue.literal("Auto Target FPS")
-        description = TranslatableValue.literal("Auto keeps full quality while you stay above this frame rate. Never higher than your frame limit")
-        range = 30..240; slider = true
-    }
-    var autoResponse by enum(me.mycellium.skymyce.ui.AutoResponse.NORMAL) {
-        name = TranslatableValue.literal("Auto Response")
-        description = TranslatableValue.literal("Gentle waits longest before lowering quality; Quick protects the frame rate soonest. Raising quality always waits for steady frames")
-    }
-    var autoLowest by enum(GuiQuality.EXTREMELY_LIGHT) {
-        name = TranslatableValue.literal("Auto Lowest Quality")
-        description = TranslatableValue.literal("Auto never goes below this. Choose Balanced to always keep shadows and glow")
-    }
-    var animationMode by enum(GuiMotion.MEDIUM) {
-        name = TranslatableValue.literal("GUI Animations")
-        description = TranslatableValue.literal("Light is fast and precise, Medium is fluid, and Heavy adds physical depth. Reduced and Off simplify motion for accessibility.")
+        name = TranslatableValue.literal("Graphics mode")
+        description = TranslatableValue.literal("Extremely Light and Light keep Sky-Myce's menus plain and turn GUI animations off. Medium adds sharper menus, shadows, glow and animations; High is the fullest. Auto keeps Medium animations. " +
+            "Auto (recommended) moves between these to hold 60 FPS, never above your frame limit; /sm graphics shows what it chose. HUD information is never reduced, and Minecraft's own settings are untouched.")
     }
     var menuIntroPlayed by boolean(false) { condition = { false } }
 
-    /** An old file without a preset still used Dark glass; only a new installation starts with Signature. */
+    private var pinnedMotion: GuiMotion? = null
+
+    /** Not a setting: GUI animations follow the graphics mode; Auto keeps Medium so motion never switches mid-session. Checks may pin a mode. */
+    var animationMode: GuiMotion
+        get() = pinnedMotion ?: when (graphicsQuality) {
+            GuiQuality.EXTREMELY_LIGHT, GuiQuality.LIGHT -> GuiMotion.OFF
+            GuiQuality.HIGH -> GuiMotion.HEAVY
+            else -> GuiMotion.MEDIUM
+        }
+        internal set(value) { pinnedMotion = value }
+
+    /** An old file without a preset still used Dark glass; old custom colors move to the nearest preset. */
     fun restoreLegacyTheme(original: JsonObject) {
-        existingConfiguration = original.size() > 0
         preset = restoredThemePreset(original, preset)
     }
-
-    fun migrateDigestTheme() {
-        if (!existingConfiguration) {
-            migratedDigestTheme = true
-            themeVersion = 2
-            return
-        }
-        if (!migratedDigestTheme) {
-            if (primary == -1 && DailyDigestConfig.accent != DailyDigestConfig.Accent.CYAN) primary = DailyDigestConfig.accent.color
-            if (opacity == -1 && DailyDigestConfig.cardOpacity != 96) opacity = DailyDigestConfig.cardOpacity.coerceIn(20, 100)
-            migratedDigestTheme = true
-        }
-        if (themeVersion < 2) themeVersion = 2
-    }
-    var primary by int(-1) {
-        name = TranslatableValue.literal("Primary accent")
-        description = TranslatableValue.literal("Main highlight used throughout Sky-Myce menus and HUD panels.")
-        range = -1..0xFFFFFF
-    }
-    var secondary by int(-1) {
-        name = TranslatableValue.literal("Secondary accent")
-        description = TranslatableValue.literal("Secondary highlight for special information and selection outlines.")
-        range = -1..0xFFFFFF
-    }
-    var opacity by int(-1) {
-        name = TranslatableValue.literal("Panel opacity")
-        description = TranslatableValue.literal("Opacity of all Sky-Myce panels and buttons, from transparent to solid. Text remains fully readable.")
-        range = -1..100
-        slider = true
-    }
-    var panel by int(-1) { range = -1..0xFFFFFF; condition = { false } }
-    var card by int(-1) { range = -1..0xFFFFFF; condition = { false } }
-    var text by int(-1) { range = -1..0xFFFFFF; condition = { false } }
-    var muted by int(-1) { range = -1..0xFFFFFF; condition = { false } }
-    var border by int(-1) { range = -1..0xFFFFFF; condition = { false } }
-    var padding by int(-1) { range = -1..12; condition = { false } }
-    var rounded by int(-1) { range = -1..1; condition = { false } }
-    var shadow by int(-1) { range = -1..1; condition = { false } }
-    var borders by int(-1) { range = -1..1; condition = { false } }
-
-    fun overrides() = ThemeOverrides(primary.validColor(), secondary.validColor(), panel.validColor(), card.validColor(), text.validColor(),
-        muted.validColor(), border.validColor(), opacity.takeIf { it in 20..100 }, rounded.flag(), padding.takeIf { it in 2..12 }, shadow.flag(), borders.flag())
-    fun apply(value: ThemeOverrides) {
-        primary = value.primary ?: -1; secondary = value.secondary ?: -1; panel = value.panel ?: -1; card = value.card ?: -1
-        text = value.text ?: -1; muted = value.muted ?: -1; border = value.border ?: -1; opacity = value.opacity ?: -1
-        padding = value.padding ?: -1; rounded = value.rounded.encoded(); shadow = value.shadow.encoded(); borders = value.borders.encoded()
-    }
-    private fun Int.validColor() = takeIf { it in 0..0xFFFFFF }
-    private fun Int.flag() = when (this) { 0 -> false; 1 -> true; else -> null }
-    private fun Boolean?.encoded() = when (this) { true -> 1; false -> 0; null -> -1 }
 }
+
+private val legacyThemeKeys = listOf("primary", "secondary", "panel", "card", "text", "muted", "border", "opacity", "padding", "rounded",
+    "shadow", "borders", "animationMode", "autoTargetFps", "autoResponse", "autoLowest", "migratedDigestTheme", "themeVersion")
 
 internal fun restoredThemePreset(original: JsonObject, loaded: ThemePreset): ThemePreset {
     val theme = original.get("Theme & Appearance")?.takeIf { it.isJsonObject }?.asJsonObject
-    return if (original.size() > 0 && theme?.has("preset") != true) ThemePreset.DARK_GLASS else loaded
+    if (original.size() > 0 && theme?.has("preset") != true) return ThemePreset.DARK_GLASS
+    fun color(key: String) = theme?.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt?.takeIf { it in 0..0xFFFFFF }
+    val base = loaded.palette
+    val custom = base.copy(primary = color("primary") ?: base.primary, secondary = color("secondary") ?: base.secondary,
+        panel = color("panel") ?: base.panel, card = color("card") ?: base.card, text = color("text") ?: base.text,
+        muted = color("muted") ?: base.muted, border = color("border") ?: base.border)
+    legacyThemeKeys.forEach { theme?.remove(it) }
+    return if (custom == base) loaded else ThemePreset.entries.minBy { paletteDistance(it.palette, custom) }
 }
+
+/** Squared RGB distance over the colors a custom theme could change. */
+internal fun paletteDistance(a: ThemePalette, b: ThemePalette): Long =
+    listOf(a.primary to b.primary, a.secondary to b.secondary, a.panel to b.panel, a.card to b.card, a.text to b.text,
+        a.muted to b.muted, a.border to b.border).sumOf { (x, y) ->
+        (0..16 step 8).sumOf { shift -> ((x shr shift and 255) - (y shr shift and 255)).let { (it * it).toLong() } }
+    }

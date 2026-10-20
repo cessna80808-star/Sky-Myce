@@ -16,7 +16,7 @@ object MenuDirectory {
     val catalog by lazy { MenuCatalog(settingRows(SkyMyce.config)) }
 }
 
-internal val defaultMenuPins = listOf("Theme & Appearance/animationMode", "Theme & Appearance/graphicsQuality",
+internal val defaultMenuPins = listOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality",
     "General/displayAbilityCooldown")
 internal val defaultMenuHomeTools = listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest")
 

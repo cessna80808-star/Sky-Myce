@@ -87,7 +87,8 @@ fun checkSettings() {
     val commandRows = commandCenterRows(wrapped)
     check(commandRows.map { it.path }.distinct().size == commandRows.size)
     check(commandRows.none { it.path.endsWith("/themeVersion") || it.path.endsWith("/menuIntroPlayed") })
-    check(commandRows.any { it.path == "Theme & Appearance/border" })
+    check(commandRows.filter { it.path.startsWith("Theme & Appearance/") }.map { it.path }.toSet() ==
+        setOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality")) { "Appearance must expose exactly Theme and Graphics mode" }
     val categoryPaths = me.mycellium.skymyce.ui.MenuCategory.entries.flatMap {
         commandCenterSettings(catalog, commandRows, it, "").map { row -> row.path }
     }
@@ -105,7 +106,6 @@ fun checkSettings() {
         setOf("mode")) {
         "Community sharing controls must have one canonical owner and exclude migration metadata"
     }
-    check(commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.DUNGEONS, "text shadow").any { it.path == "Theme & Appearance/shadow" })
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.SOCIAL)
     check(settingsTab("Party Finder/matchPb") == SettingsTab.PARTY)
@@ -117,10 +117,10 @@ fun checkSettings() {
     check("Dungeon Friends" in settingGroups(rows, SettingsTab.PARTY, "notifications"))
     check("Availability" !in settingGroups(rows, SettingsTab.SOCIAL))
     check(settingsTab("Dungeons/Dungeon Tracker/dungeonTracker") == SettingsTab.COMBAT)
-    check(settingsTab("Theme & Appearance/opacity") == SettingsTab.THEME)
+    check(settingsTab("Theme & Appearance/preset") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
-    check(settingGroups(rows, "settings-performance").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality", "Theme & Appearance/autoTargetFps", "Theme & Appearance/autoResponse", "Theme & Appearance/autoLowest")) { settingGroups(rows, "settings-performance").toString() }
+    check(settingGroups(rows, "settings-appearance").values.flatten().map { it.path } == listOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality")) { settingGroups(rows, "settings-appearance").toString() }
     check(settingGroups(rows, "party-finder").values.flatten().all {
         it.path.startsWith("Party Finder/") || it.path.startsWith("Dungeons/Dungeon Friends/")
     })
@@ -159,19 +159,11 @@ fun checkSettings() {
     checkSettingsSectionLayout()
     check(parseThemeHex("#67ccf2") == 0x67CCF2 && parseThemeHex("FFFFFF") == 0xFFFFFF)
     listOf("", "#", "#123", "#12345678", "#GGFFFF", "-1").forEach { check(parseThemeHex(it) == null) }
-    val primary = ThemeConfig.primary
-    ThemeConfig.primary = 0x123456
-    check(HudTheme.ACCENT == 0x123456 && HudTheme.HUD_ACCENT == 0x123456)
-    check(me.mycellium.skymyce.ui.MenuTheme.ACCENT == 0x123456) { "Custom menus lost the user's accent override" }
-    ThemeConfig.primary = primary
     val previousPreset = ThemeConfig.preset
-    val priorDocument = currentThemeEditorDocument()
     try {
-        val nextPreset = ThemePreset.entries.first { it != previousPreset }
-        ThemeConfig.preset = nextPreset
-        val reopenedDocument = currentThemeEditorDocument()
-        check(reopenedDocument.preset == nextPreset && priorDocument.preset == previousPreset)
-        check(reopenedDocument.overrides == priorDocument.overrides) { "Refreshing a preset must retain existing palette overrides" }
+        ThemeConfig.preset = ThemePreset.LIGHT
+        check(HudTheme.ACCENT == ThemePreset.LIGHT.palette.primary && HudTheme.HUD_ACCENT == HudTheme.ACCENT)
+        check(me.mycellium.skymyce.ui.MenuTheme.ACCENT == ThemePreset.LIGHT.palette.primary) { "Menus and HUD must share the preset accent" }
     } finally { ThemeConfig.preset = previousPreset }
     check(HudTheme.alpha(0x123456, 0) == 0x123456 && HudTheme.alpha(0x123456, 100) == 0xFF123456.toInt())
     check(HudTheme.blend(0, 0xFFFFFF, 100) == 0xFFFFFF)

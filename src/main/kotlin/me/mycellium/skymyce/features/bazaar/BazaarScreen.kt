@@ -777,7 +777,7 @@ class BazaarScreen : MenuScreen(Component.literal("Bazaar")) {
                 confirm("Reset the Bazaar Assistant?", "Its settings return to their defaults, Auto Command and Auto Sign turn off, and its HUD returns to its default place.") {
                     Assist.resetAppearance()
                     val hud = me.mycellium.skymyce.features.bazaar.assist.BazaarAssistHud
-                    listOf(hud.panel, hud.popups).forEach { it.defaultLayout.copy(theme = it.theme).applyConfig(it) }
+                    listOf(hud.panel, hud.popups).forEach { it.defaultLayout.applyConfig(it) }
                     me.mycellium.skymyce.hud.widget.WidgetManager.save()
                     saveAssist()
                 }

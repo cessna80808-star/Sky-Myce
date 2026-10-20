@@ -9,7 +9,6 @@ import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.Insets
 import io.wispforest.owo.ui.core.CursorStyle
 import me.mycellium.skymyce.utils.MC
-import me.mycellium.skymyce.hud.ThemeEditorScreen
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.ui.*
@@ -50,7 +49,7 @@ internal fun hudEditorToolbar(screenWidth: Int, screenHeight: Int): FlowLayout {
 }
 
 internal fun hudEditorHelp(screenWidth: Int) = menuTextLines(Component.literal(
-    "Drag: move | Scroll: scale | Right click: theme\nCtrl: anchor | Shift: snap | V: visibility | R: reset hovered | H: hide controls"), screenWidth - 16)
+    "Drag: move | Scroll: scale\nCtrl: anchor | Shift: snap | V: visibility | R: reset hovered | H: hide controls"), screenWidth - 16)
 
 /** Keep the exact opening screen, including its selected settings tab and draft state. */
 class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instance, MC.font, Component.literal("Widget Editor")) {
@@ -95,12 +94,12 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         val toolbar = hudEditorToolbar(width, height)
         val resetButton = MenuButton(Component.literal("Reset positions")) {
             screenWidgets.forEach { widget ->
-                widget.defaultLayout.copy(theme = widget.theme).applyConfig(widget)
+                widget.defaultLayout.applyConfig(widget)
             }
         }.apply {
             themed()
             sizing(Sizing.expand(), Sizing.fill())
-            tooltip(Component.literal("Restore each widget's default position, scale and visibility. Theme overrides are retained."))
+            tooltip(Component.literal("Restore each widget's default position, scale and visibility."))
         }
 
         toolbar.child(resetButton)
@@ -209,12 +208,6 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
     override fun mouseClicked(button: MouseButtonEvent, doubled: Boolean): Boolean {
         if (closing) return true
         if (super.mouseClicked(button, doubled)) return true
-        if (button.button() == 1) {
-            val widget = screenWidgets.asReversed().firstOrNull { it.inBounds(button.x.toInt(), button.y.toInt()) } ?: return false
-            WidgetManager.save()
-            navigateMenu(ThemeEditorScreen(this, widget))
-            return true
-        }
         if (button.button() != 0) return false
         val resize = screenWidgets.asReversed().firstOrNull { widget -> widget.resizeHandler != null &&
             hudEditorResizeAt(button.x, button.y, widget.renderX, widget.renderY, widget.width, widget.height) }
@@ -294,7 +287,7 @@ class WidgetEditorScreen(private val parent: Screen? = null) : Screen(MC.instanc
         if (controlsVisible && !input.hasControlDown() && !input.hasAltDown()) {
             val widget = selectedWidget
             if (widget != null && input.key == GLFW.GLFW_KEY_V) { widget.visible = !widget.visible; WidgetManager.save(); return true }
-            if (widget != null && input.key == GLFW.GLFW_KEY_R) { widget.defaultLayout.copy(theme = widget.theme).applyConfig(widget); WidgetManager.save(); return true }
+            if (widget != null && input.key == GLFW.GLFW_KEY_R) { widget.defaultLayout.applyConfig(widget); WidgetManager.save(); return true }
         }
         snapPosition = input.hasShiftDown()
         anchorSelect = input.hasControlDown()

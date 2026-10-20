@@ -29,19 +29,11 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
         range = 20..500
         slider = true
     }
-    val accent by enum(Accent.CYAN) { condition = { false } } // Legacy values migrate to the shared theme.
-    val cardOpacity by int(96) {
-        name = TranslatableValue.literal("Card opacity")
-        condition = { false }
-        range = 75..100
-        slider = true
-    }
     val compact by boolean(false) {
         name = TranslatableValue.literal("Compact spacing")
         description = TranslatableValue.literal("Reduce card padding while retaining readable, scrollable layouts")
     }
 
-    enum class Accent(val color: Int) { CYAN(0x67CCF2), PURPLE(0xC2A2F5), GOLD(0xE8BF71), GREEN(0x87D6A2) }
 }
 
 /** Fold the former normal-news switch into News once; stale fields cannot override later user choices. */
