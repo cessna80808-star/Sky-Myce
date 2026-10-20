@@ -54,7 +54,7 @@ fun checkSettings() {
     check(wrapped.version() == 7 && wrapped.id() == delegate.id() && wrapped.info() === delegate.info())
     check(wrapped.categories() === delegate.categories())
     wrapped.save(); check(saves == 1)
-    check(rows.map { it.path }.containsAll(listOf("devMode", "gatherData", "openConfigKey")))
+    check("openConfigKey" in rows.map { it.path } && rows.none { it.path == "devMode" || it.path == "gatherData" }) { "Developer options must stay out of the menu" }
     check(rows.isNotEmpty() && rows.map { it.path }.distinct().size == rows.size)
     check(rows.all { it.title.isNotBlank() && it.tip.isNotBlank() })
     val catalog = me.mycellium.skymyce.ui.MenuCatalog(rows)
@@ -98,17 +98,16 @@ fun checkSettings() {
         check(scoped.map { it.path }.toSet() == commandRows.filter { catalog.featureForPath(it.path)?.id == feature.id }.map { it.path }.toSet())
     }
     val searched = commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.COSMETICS, "dungeon profit")
-    check(searched.any { it.path.startsWith("Dungeons/") } && searched.any { it.path == "Community Sharing/dungeons" } &&
+    check(searched.any { it.path.startsWith("Dungeons/") } && searched.any { it.path == "Community Sharing/mode" } &&
         searched.none { it.path.startsWith("Cosmetics/") }) { "Search must override the sidebar category and include matching community privacy controls" }
     val sharingSettings = settingGroups(rows, "community").values.flatten()
     check(sharingSettings.filter { it.path.startsWith("Community Sharing/") }.map { it.path.substringAfterLast('/') }.toSet() ==
-        setOf("enabled", "dungeons", "economy", "rng", "activity", "leaderboards", "publicName")) {
+        setOf("mode")) {
         "Community sharing controls must have one canonical owner and exclude migration metadata"
     }
     check(commandCenterSettings(catalog, commandRows, me.mycellium.skymyce.ui.MenuCategory.DUNGEONS, "text shadow").any { it.path == "Theme & Appearance/shadow" })
     check(rows.none { it.path.endsWith("migratedDigestTheme") || it.path == "General/Daily Digest/accent" || it.path == "General/Daily Digest/cardOpacity" })
     check(settingsTab("General/Daily Digest/automatic") == SettingsTab.SOCIAL)
-    check(settingsTab("General/Daily Digest/shareRng") == SettingsTab.SOCIAL)
     check(settingsTab("Party Finder/matchPb") == SettingsTab.PARTY)
     check(settingsTab("Dungeons/Dungeon Friends/enabled") == SettingsTab.PARTY)
     val friendSettings = settingGroups(rows, SettingsTab.PARTY)
@@ -120,7 +119,6 @@ fun checkSettings() {
     check(settingsTab("Dungeons/Dungeon Tracker/dungeonTracker") == SettingsTab.COMBAT)
     check(settingsTab("Theme & Appearance/opacity") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
-    check(settingGroups(rows, SettingsTab.GENERAL).values.flatten().map { it.path }.toSet() == setOf("gatherData", "devMode"))
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
     check(settingGroups(rows, "settings-performance").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality", "Theme & Appearance/autoTargetFps", "Theme & Appearance/autoResponse", "Theme & Appearance/autoLowest")) { settingGroups(rows, "settings-performance").toString() }
     check(settingGroups(rows, "party-finder").values.flatten().all {
@@ -159,12 +157,6 @@ fun checkSettings() {
     }
     checkSettingsCardLayout()
     checkSettingsSectionLayout()
-    val devMode = rows.single { it.path == "devMode" }
-    check(devMode.title == "Dev Mode" && settingsTab(devMode.path) == SettingsTab.GENERAL)
-    val previousDevMode = Config.devMode
-    try {
-        check(devMode.entry.setBoolean(!previousDevMode) && Config.devMode == !previousDevMode)
-    } finally { devMode.entry.setBoolean(previousDevMode) }
     check(parseThemeHex("#67ccf2") == 0x67CCF2 && parseThemeHex("FFFFFF") == 0xFFFFFF)
     listOf("", "#", "#123", "#12345678", "#GGFFFF", "-1").forEach { check(parseThemeHex(it) == null) }
     val primary = ThemeConfig.primary

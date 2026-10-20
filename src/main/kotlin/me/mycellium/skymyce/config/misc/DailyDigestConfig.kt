@@ -23,16 +23,6 @@ object DailyDigestConfig : CategoryKt("Daily Digest") {
         name = TranslatableValue.literal("Receive community RNG feed")
         description = TranslatableValue.literal("Show optional, unverified drop reports from other Sky-Hawk users")
     }
-    val shareRng by boolean(true) {
-        condition = { false } // Preserved and migrated to the canonical Community Sharing controls.
-        name = TranslatableValue.literal("Share personal RNG drops")
-        description = TranslatableValue.literal("Send only supported drop, activity, time and an optional public name through the authenticated relay. No chat or inventory is sent.")
-    }
-    val publicRngName by boolean(false) {
-        condition = { false }
-        name = TranslatableValue.literal("Show public RNG name")
-        description = TranslatableValue.literal("Attach your Minecraft name to shared drop reports; otherwise reports appear anonymous")
-    }
     val retainedRngEvents by int(100) {
         name = TranslatableValue.literal("Local RNG history size")
         description = TranslatableValue.literal("Maximum retained recent personal events; saved acquisition history remains available. Community reports are capped separately at 30.")

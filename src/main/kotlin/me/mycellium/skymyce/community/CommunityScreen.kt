@@ -55,7 +55,7 @@ class CommunityScreen(private val parent: Screen? = null) : MenuScreen(Component
         })
         content.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
             gap(8); verticalAlignment(VerticalAlignment.CENTER)
-            child(label("Sharing is on by default; your opt-outs are kept.", MenuTheme.MUTED).horizontalSizing(Sizing.expand()))
+            child(label("Community data sharing: ${me.mycellium.skymyce.config.misc.CommunitySharingConfig.mode} · ${CommunitySharing.status}", MenuTheme.MUTED).horizontalSizing(Sizing.expand()))
             child(button("Sharing settings") { navigateMenu(SettingsScreen.forFeature(this@CommunityScreen, "community")) }.horizontalSizing(Sizing.fixed(125)))
         })
         val updates = card(); content.child(updates)

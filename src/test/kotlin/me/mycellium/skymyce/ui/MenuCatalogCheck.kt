@@ -97,8 +97,8 @@ fun main() {
     check(MenuCatalog.settingLocation("Dungeons/dungeonChestProfit").category == MenuCategory.DUNGEONS)
     check(MenuCatalog.settingLocation("General/Stash Helper/stashHelper").category == MenuCategory.ECONOMY)
     val globalPaths = catalog.features.filter { it.category == MenuCategory.SETTINGS }.flatMap { it.settings }.map { it.path }.toSet()
-    check(globalPaths.all { it in setOf("openConfigKey", "gatherData", "devMode") || it.startsWith("Theme & Appearance/") || it.startsWith("Community Sharing/") })
-    for (key in listOf("enabled", "dungeons", "economy", "rng", "activity", "leaderboards", "publicName")) {
+    check(globalPaths.all { it == "openConfigKey" || it.startsWith("Theme & Appearance/") || it.startsWith("Community Sharing/") })
+    for (key in listOf("mode")) {
         check(catalog.featureForPath("Community Sharing/$key")?.id == "community")
     }
     check(catalog.featureForPath("Theme & Appearance/graphicsQuality")!!.id == "settings-performance")

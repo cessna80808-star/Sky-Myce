@@ -90,7 +90,7 @@ internal class BazaarCommunity(private val changed: () -> Unit) {
         }
         if (queued != state.queue) update(state.copy(queue = queued))
     }
-    private fun localConsent() = CommunitySharingConfig.enabled && CommunitySharingConfig.economy && CommunitySharingConfig.leaderboards
+    private fun localConsent() = CommunitySharingConfig.mode != me.mycellium.skymyce.community.SharingMode.OFF
     private data class Lease(val account: String, val player: String, val token: String, val generation: Long) {
         fun current() = CommunityClient.connected && token == CommunityClient.sessionToken && generation == CommunityClient.sessionGeneration &&
             account == CommunityClient.identity?.get("accountId")?.asString && player == CommunityClient.identity?.get("uuid")?.asString &&

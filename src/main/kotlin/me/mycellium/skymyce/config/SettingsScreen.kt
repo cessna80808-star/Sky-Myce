@@ -44,7 +44,7 @@ fun settingsTab(path: String): SettingsTab = MenuCatalog.settingLocation(path).l
 } }
 
 private fun legacySettingsFeature(tab: SettingsTab) = when (tab) {
-    SettingsTab.GENERAL -> "settings-general"
+    SettingsTab.GENERAL -> "settings-controls"
     SettingsTab.PARTY -> "party-finder"
     SettingsTab.COMBAT -> "dungeon-chests"
     SettingsTab.SOCIAL -> "daily-digest"

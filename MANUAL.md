@@ -62,7 +62,7 @@ The Healer Crush Camera has saved viewpoints and a preview for setup; configure 
 
 ## Chat, sharing, and updates
 
-Community features are optional. To use them, open **Community** from the menu or run `/sm community`, then follow the Discord connection flow. Sharing controls let you opt out of community data categories without turning off chat or cosmetics.
+Community features are optional. To use them, open **Community** from the menu or run `/sm community`, then follow the Discord connection flow. One setting, **Community data sharing**, controls what you share: **On** shares dungeon stats, RNG drops, activity and leaderboard statistics with your Minecraft name on public reports; **On (anon)**, the default, shares the same anonymously; **Off** shares nothing and removes or suppresses your earlier contributions. Chat and cosmetics work in every state.
 
 Global Chat opens with `/sm irc`. The chat screen supports replies and reactions; use its message controls for actions on your own messages. `/sm chat <ign>` temporarily routes normal chat to that friend. Run `/sm chat` or switch Hypixel chat channels to stop routing. Check the selected mode before sending a message.
 

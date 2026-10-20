@@ -31,13 +31,6 @@ object Config : ConfigKt("SkyMyce Config") {
         description = TranslatableValue.literal("Press this key to open the config screen")
     }
 
-    var gatherData by boolean(false) {
-        name = TranslatableValue.literal("Gather Data")
-        description = TranslatableValue.literal("Enable to gather data to help future updates!")
-    }
-
-    var devMode by boolean(false) {
-        name = TranslatableValue.literal("Dev Mode")
-        description = TranslatableValue.literal("Enables developer mode")
-    }
+    /** Developer-only: set `devMode` in the config file; it is not shown in the menu. */
+    var devMode by boolean(false) { condition = { false } }
 }

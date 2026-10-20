@@ -77,7 +77,7 @@ class MenuCatalog(rows: List<SettingRow>) {
 
     companion object {
         val definitions = listOf(
-            MenuFeature("community", "Discord & Community", "Connect Discord, control statistics sharing and choose updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
+            MenuFeature("community", "Discord & Community", "Connect Discord, choose community data sharing (On, On (anon) or Off) and updates", MenuCategory.SETTINGS, "Community", listOf("discord", "connect", "privacy", "sharing", "updates", "account"), tool = "community"),
             MenuFeature("leaderboards", "Community Leaderboards", "Compare consenting participants with source labels and UTC periods", MenuCategory.UTILS, "Progress", listOf("rank", "ranking", "economy", "dungeons", "rng", "weekly", "monthly"), tool = "leaderboards"),
             MenuFeature("rng-journal", "RNG Journal", "Search preserved personal acquisitions, dates, counts and measured history", MenuCategory.UTILS, "Progress", listOf("rare", "drops", "history", "journal", "rng", "weekly", "monthly"), tool = "rng-journal"),
             MenuFeature("party-finder", "Party Finder", "Online dungeon friends, LFG availability, invites and party filters", MenuCategory.DUNGEONS, "Parties", listOf("party", "friends", "lfg", "availability", "dungeon-friends", "secondary classes"), tool = "party-finder", enabledPath = "Dungeons/Dungeon Friends/enabled"),
@@ -109,7 +109,6 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("npc-dialogue", "NPC Dialogue", "Show NPC lines in a dialogue box with the speaker's portrait, and pick options with number keys", MenuCategory.UTILS, "Information", listOf("npc", "dialogue", "chat", "skycubed", "quest", "options", "talk"), enabledPath = "General/NPC Dialogue/enabled"),
             MenuFeature("sign-confirm", "Sign Enter", "Press Enter to finish Auction House, Bazaar and other signs", MenuCategory.UTILS, "Inventory", listOf("sign", "enter", "confirm", "ah", "bazaar", "price", "bid", "amount", "done")),
             MenuFeature("information", "Information Overlays", "Display client details and skill XP progress", MenuCategory.UTILS, "Information", listOf("xp", "skill", "client", "hud", "overlay")),
-            MenuFeature("settings-general", "General", "Client data collection and developer preferences", MenuCategory.SETTINGS, "General", listOf("client", "preferences", "developer", "data")),
             MenuFeature("settings-appearance", "Appearance", "Shared theme colors, opacity and animation personality", MenuCategory.SETTINGS, "Appearance", listOf("theme", "colors", "animation", "animations", "motion", "accessibility", "reduced motion"), tool = "theme-editor"),
             MenuFeature("settings-hud", "HUD", "Arrange widgets, visibility, scale and per-widget themes", MenuCategory.SETTINGS, "HUD", listOf("hud", "overlay", "layout", "widget", "scale", "visibility"), tool = "hud-editor"),
             MenuFeature("settings-performance", "Performance", "GUI rendering quality, raster detail, shadows and effects", MenuCategory.SETTINGS, "Performance", listOf("fps", "graphics", "quality", "rendering", "performance")),
@@ -189,8 +188,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             val section = when {
                 path == "Theme & Appearance/graphicsQuality" || path.startsWith("Theme & Appearance/auto") -> "Performance"
                 path.startsWith("Theme & Appearance/") -> "Appearance"
-                path == "openConfigKey" -> "Controls"
-                else -> "General"
+                else -> "Controls"
             }
             return MenuSettingLocation(MenuCategory.SETTINGS, section)
         }
