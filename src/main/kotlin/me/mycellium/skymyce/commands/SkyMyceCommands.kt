@@ -67,6 +67,7 @@ object SkyMyceCommands : SkyMyceModule() {
             dispatcher.register(root("skymyce"))
             dispatcher.register(root("sm"))
             dispatcher.register(m7PbCommand())
+            me.mycellium.skymyce.features.garden.greenhouse.GreenhousePlanner.serverCommandHints().forEach(dispatcher::register)
         }
     }
 

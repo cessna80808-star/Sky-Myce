@@ -63,7 +63,7 @@ fun parsePlantCatalog(text: String): PlantCatalog {
 }
 
 enum class PriceMode(val label: String) { SELL_OFFER("Sell Offer"), INSTANT_SELL("Instant Sell") }
-enum class ProfitMetric(val label: String) { PER_HOUR("Per hour"), PER_CYCLE("Per cycle") }
+enum class ProfitMetric(val label: String) { PER_HOUR("Per hour"), PER_CYCLE("Per cycle"), PER_DAY("Per day") }
 
 /** Bazaar quick-status pair: the highest buy order and lowest sell offer. */
 data class Quote(val buyOrder: Double, val sellOffer: Double)
@@ -95,6 +95,7 @@ fun cycleHours(plant: Plant, upgrade: Int, uniqueCrops: Int) = max(1, plant.stag
 data class RankedMutation(val plant: Plant, val revenue: Double, val inputCost: Double, val cycleHours: Double) {
     val profitPerCycle get() = revenue - inputCost
     val profitPerHour get() = profitPerCycle / cycleHours
+    val profitPerDay get() = profitPerHour * 24.0
 }
 
 /**
@@ -139,6 +140,66 @@ data class Layout(
     }
     val targets get() = placements.filter { it.role == Role.TARGET }
 }
+
+/**
+ * The solver's objective re-evaluated for a pinned layout at today's prices: target income per hour minus the ingredient
+ * cost spread over the fastest target cycle. Null when a price is missing.
+ */
+fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings): Double? {
+    val ingredients = placements.filter { it.role == Role.INGREDIENT }.map { catalog[it.plantId] ?: return null }
+    val unique = maxOf(settings.uniqueCrops, ingredients.filter { it.unique }.distinct().size).coerceAtMost(12)
+    var income = 0.0
+    var fastest = Double.MAX_VALUE
+    for (target in targets) {
+        val plant = catalog[target.plantId] ?: return null
+        val hours = cycleHours(plant, settings.upgrade, unique)
+        income += (revenuePrice(quotes[plant.bazaarId], settings.priceMode) ?: return null) / hours
+        fastest = minOf(fastest, hours)
+    }
+    if (fastest == Double.MAX_VALUE) return null
+    return income - ingredients.sumOf { costPrice(it, quotes) ?: return null } / fastest
+}
+
+/** A Greenhouse plot as saved: [facing] is a horizontal direction name. Each plot keeps its own pinned layout. */
+data class PlotAnchor(val x: Int, val y: Int, val z: Int, val facing: String)
+data class PlotState(val name: String, val anchor: PlotAnchor?, val locked: Set<Int>, val target: String?, val layout: Layout?)
+
+private val HORIZONTAL = setOf("NORTH", "EAST", "SOUTH", "WEST")
+
+fun PlotState.toJson(): JsonObject = JsonObject().apply {
+    addProperty("name", name)
+    anchor?.let { a -> add("anchor", JsonObject().apply { addProperty("x", a.x); addProperty("y", a.y); addProperty("z", a.z); addProperty("facing", a.facing) }) }
+    add("locked", com.google.gson.JsonArray().apply { locked.sorted().forEach { add(it) } })
+    target?.let { addProperty("target", it) }
+    layout?.let { add("layout", it.toJson()) }
+}
+
+/**
+ * Reads version 2 `plots`, or turns a version 1 file's single anchor, locks, target and active cached layout into plot "1".
+ * Each section is read independently, so one damaged section only loses itself.
+ */
+fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
+    fun plot(section: JsonObject, name: String, layout: Layout?): PlotState {
+        val anchor = runCatching {
+            val a = section.getAsJsonObject("anchor")
+            PlotAnchor(a["x"].asInt, a["y"].asInt, a["z"].asInt, a["facing"].asString.takeIf { it in HORIZONTAL }!!)
+        }.getOrNull()
+        val locked = runCatching { section.getAsJsonArray("locked").map { it.asInt }.filter { it in 0 until GREENHOUSE_CELLS }.toSet() }.getOrDefault(emptySet())
+        val target = runCatching { section["target"].asString }.getOrNull()?.takeIf { catalog[it]?.solvable == true }
+        return PlotState(name, anchor, locked, target, layout)
+    }
+    val plots = json["plots"]?.takeIf { it.isJsonArray } ?: return listOf(plot(json, "1", runCatching {
+        val active = json["active"].asString
+        layoutFromJson(json.getAsJsonArray("layouts").map { it.asJsonObject }.first { it["hash"].asString == active }, catalog)
+    }.getOrNull()))
+    return plots.asJsonArray.mapNotNull { element -> runCatching {
+        val section = element.asJsonObject
+        plot(section, section["name"].asString.takeIf { it.matches(PLOT_NAME) }!!,
+            runCatching { layoutFromJson(section.getAsJsonObject("layout"), catalog) }.getOrNull())
+    }.getOrNull() }.distinctBy { it.name.lowercase() }
+}
+
+val PLOT_NAME = Regex("[A-Za-z0-9_-]{1,16}")
 
 /** Price buckets are 25% wide, so ordinary Bazaar noise does not invalidate a cached layout. */
 fun priceBucket(price: Double?) = if (price == null || price <= 0) "-" else (ln(price) / ln(1.25)).roundToInt().toString()

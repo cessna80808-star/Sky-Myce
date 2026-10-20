@@ -10,7 +10,7 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
 
     val enabled by boolean(false) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Ranks mutations by estimated profit, solves a full Greenhouse layout and shows it as ghost blocks while you hold a crop or soil. Visual only; use /sm greenhouse. Profit formula and planner idea credit: skymutations.eu by palmaner")
+        description = TranslatableValue.literal("Ranks mutations by estimated profit, solves a full Greenhouse layout and shows it as ghost blocks for wrong soil and for the crop you hold. Visual only; use /sm greenhouse. Profit formula and planner idea credit: skymutations.eu by palmaner")
     }
 
     val priceMode by enum(PriceMode.SELL_OFFER) {
@@ -20,7 +20,7 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
 
     val profitMetric by enum(ProfitMetric.PER_HOUR) {
         name = TranslatableValue.literal("Profit Metric")
-        description = TranslatableValue.literal("Sort the ranking by profit per hour or per growth cycle")
+        description = TranslatableValue.literal("Sort the ranking by profit per hour or per growth cycle, or show it per day (per hour × 24)")
     }
 
     val maxTier by enum(Tier.LEGENDARY) {
@@ -38,6 +38,17 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         name = TranslatableValue.literal("Unique Crops Elsewhere")
         description = TranslatableValue.literal("Unique base crop types you already grow in other Greenhouse plots; the planner adds its own on top")
         range = 0..12; slider = true
+    }
+
+    val alwaysShowSoilGhosts by boolean(true) {
+        name = TranslatableValue.literal("Always Show Soil Ghosts")
+        description = TranslatableValue.literal("Mark every slot with the wrong soil without holding that soil. Crop ghosts still appear only while you hold the matching crop")
+    }
+
+    val maxDisplayedRequirements by int(8) {
+        name = TranslatableValue.literal("Missing Items Shown")
+        description = TranslatableValue.literal("How many missing crops and soils the HUD lists; /sm greenhouse missing prints the full list")
+        range = 0..30; slider = true
     }
 
     val opacity by int(40) {

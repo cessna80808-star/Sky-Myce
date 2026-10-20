@@ -80,5 +80,27 @@ fun main() {
     check(restored.placements == layout.placements && restored.cells == layout.cells && restored.inputsHash == hash) { "Round trip" }
     check(layout.cells.values.filter { it.plantId == "GLASSCORN" }.all { it.soil == Soil.SAND && it.role == Role.TARGET }) { "Soil" }
 
-    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, persistence")
+    // A pinned layout is re-priced, not re-solved: at the solve prices the estimate equals the solver's objective.
+    check(abs(layout.profitPerHour(catalog, priced, settings)!! - layout.totalProfitPerHour) < 1e-6) { "Repricing differs from the solver" }
+    val cheaper = priced + ("GLASSCORN" to Quote(4e5, 5e5))
+    check(layout.profitPerHour(catalog, cheaper, settings)!! < layout.totalProfitPerHour && layout.profitPerHour(catalog, priced - "GLASSCORN", settings) == null) { "Repricing" }
+    check(abs(glasscorn.profitPerDay - glasscorn.profitPerHour * 24) < 1e-9 && ProfitMetric.valueOf("PER_DAY").label == "Per day") { "Per day" }
+
+    // Plots: version 1 files become plot "1" with their pinned layout; version 2 keeps each plot's own layout.
+    val v1 = com.google.gson.JsonParser.parseString("""{"version":1,"anchor":{"x":1,"y":70,"z":-3,"facing":"EAST"},"locked":[3,250],"target":"GLASSCORN",
+        "active":"$hash","layouts":[]}""").asJsonObject.apply { getAsJsonArray("layouts").add(layout.toJson()) }
+    val migrated = plotsFromJson(v1, catalog).single()
+    check(migrated.name == "1" && migrated.anchor == PlotAnchor(1, 70, -3, "EAST") && migrated.locked == setOf(3) && migrated.target == "GLASSCORN" &&
+        migrated.layout?.placements == layout.placements) { "Version 1 migration $migrated" }
+    val second = PlotState("north", PlotAnchor(40, 70, 9, "SOUTH"), emptySet(), null, null)
+    val v2 = com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply {
+        add(migrated.toJson()); add(second.toJson())
+        add(com.google.gson.JsonParser.parseString("""{"name":"bad name!"}""")); add(com.google.gson.JsonParser.parseString("""{"name":"NORTH"}"""))
+        add(com.google.gson.JsonParser.parseString("""{"name":"up","anchor":{"x":0,"y":0,"z":0,"facing":"UP"},"layout":{"placements":7}}"""))
+    }) }
+    val plots = plotsFromJson(v2, catalog)
+    check(plots.map { it.name } == listOf("1", "north", "up") && plots[0].layout?.placements == layout.placements && plots[1] == second &&
+        plots[2].anchor == null && plots[2].layout == null) { "Version 2 plots $plots" }
+
+    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, layout and plot persistence")
 }
