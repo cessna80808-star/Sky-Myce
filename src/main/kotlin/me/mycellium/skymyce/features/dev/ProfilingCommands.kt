@@ -6,8 +6,6 @@ import me.mycellium.skymyce.api.AuctionAPI
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
-import me.mycellium.skymyce.features.instances.dungeons.friends.FriendWealthCache
-import me.mycellium.skymyce.features.instances.dungeons.friends.GearLending
 import me.mycellium.skymyce.features.social.CosmeticsClient
 import me.mycellium.skymyce.features.digest.DailyDigest
 import me.mycellium.skymyce.features.digest.DigestRng
@@ -71,8 +69,6 @@ private fun profilingGauges(): Map<String, Long> = buildMap {
     putAll(DungeonFriendRelay.diagnostics())
     putAll(DungeonFriendStatsCache.diagnostics())
     putAll(DungeonFriends.diagnostics())
-    putAll(FriendWealthCache.diagnostics())
-    putAll(GearLending.diagnostics())
     putAll(CosmeticsClient.diagnostics())
     putAll(DailyDigest.diagnostics())
     putAll(DigestRng.diagnostics())

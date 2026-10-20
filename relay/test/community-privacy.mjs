@@ -39,18 +39,17 @@ export async function checkCommunityPrivacy(script, proof) {
     const viewer=await socket(alice,'Alice');
     const sql=await mf.unsafeGetDurableObjectStorage('privacy-check','AccountStore',{name:'global'}),room=await mf.unsafeGetDurableObjectStorage('privacy-check','RelayRoom',{name:'friends'});
     const stats={state:'AVAILABLE',catacombs:40,classes:{},completionTimes:{},sPlusTimes:{},completedFloors:[]};
-    const seed=async()=>{await room.exec('INSERT OR REPLACE INTO player_stats VALUES(?,?,?,?,?)',bob.identity.uuid,'Bob',JSON.stringify(stats),Date.now(),carol.identity.uuid);await room.exec('INSERT INTO player_wealth(uuid,name,wealth,fetched_at,publisher) VALUES(?,?,?,?,?) ON CONFLICT(uuid) DO UPDATE SET fetched_at=excluded.fetched_at',bob.identity.uuid,'Bob',JSON.stringify({hasProfile:true,networth:100}),Date.now(),carol.identity.uuid);};
+    const seed=async()=>{await room.exec('INSERT OR REPLACE INTO player_stats VALUES(?,?,?,?,?)',bob.identity.uuid,'Bob',JSON.stringify(stats),Date.now(),carol.identity.uuid);};
     await update(alice,0,{dungeons:false,economy:false});await seed();
     const request=async(type)=>{const id=randomBytes(16).toString('hex');viewer.ws.send(JSON.stringify({type,id,name:'Bob',uuid:bob.identity.uuid}));let result;do{result=await viewer.next();}while(result.id!==id);return result;};
     assert.equal((await request('stats_get')).record.stats.catacombs,40,'Opting out does not disable receiving another consenting player cache');
-    assert.equal((await request('wealth_get')).record.wealth.networth,100);
     await sql.exec('DELETE FROM privacy_race');await sql.exec('INSERT INTO privacy_race VALUES(1,0)');
     const waiting=request('stats_get'),deadline=Date.now()+2000;while(!(await sql.exec('SELECT captured FROM privacy_race'))[0]?.captured){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,10));}
     await update(carol,0,{dungeons:false,economy:false,rng:false});
     const result=await waiting;assert.equal(result.record,null);assert.equal(result.error,'sharing_disabled','Captured pre-opt-out authority cannot leak a deleted cache record after an await');
-    assert.equal((await room.exec('SELECT * FROM player_stats')).length,0);assert.equal((await room.exec('SELECT * FROM player_wealth')).length,0,'Suppressing contributor deletes third-party cached subject rows');
+    assert.equal((await room.exec('SELECT * FROM player_stats')).length,0);
     await seed();await sql.exec('UPDATE privacy_race SET enabled=0');
-    assert.equal((await request('wealth_get')).record,null,'Contributor consent is checked even if the subject still shares');
+    assert.equal((await request('stats_get')).record,null,'Contributor consent is checked even if the subject still shares');
     viewer.ws.send(JSON.stringify({type:'party_set',floor:'F7',open:true,selectedClass:'MAGE'}));
     viewer.ws.send(JSON.stringify({type:'party_get',id:randomBytes(16).toString('hex'),names:['Bob']}));const party=await viewer.next();assert.equal(party.type,'party_result');
     assert.equal((await room.exec('SELECT not_before FROM room_sharing_cutoffs WHERE uuid=? AND category=?',carol.identity.uuid,'dungeons')).length,1);

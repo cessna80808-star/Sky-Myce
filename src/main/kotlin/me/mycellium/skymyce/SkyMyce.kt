@@ -25,7 +25,6 @@ import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
 import me.mycellium.skymyce.features.instances.dungeons.DungeonCleanChat
 import me.mycellium.skymyce.features.instances.dungeons.DungeonWinOverlay
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
-import me.mycellium.skymyce.features.instances.dungeons.friends.GearLending
 import me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRouting
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
@@ -77,7 +76,7 @@ object SkyMyce : ClientModInitializer {
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, me.mycellium.skymyce.features.general.overlays.StatusBars, me.mycellium.skymyce.features.general.overlays.NpcDialogue, me.mycellium.skymyce.features.general.SignConfirm, me.mycellium.skymyce.ui.AutoGraphics, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands, Waypoints,
-            StashHelper, PartyFinder, DungeonFriends, GearLending, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
+            StashHelper, PartyFinder, DungeonFriends, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,
             me.mycellium.skymyce.features.general.pricehistory.PriceHistoryFeature,

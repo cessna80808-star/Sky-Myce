@@ -50,7 +50,7 @@ data class MenuLayout(val width: Int, val height: Int, val sidebar: Int) {
 
 /** Existing caller labels remain compatible; their destinations use the shared feature identities. */
 enum class MenuPage(val title: String, val featureId: String) {
-    DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends & loans", "player-utilities"),
+    DIGEST("Daily Digest", "daily-digest"), PARTY("Party Finder", "party-finder"), FRIENDS("Friends", "player-utilities"),
     DUNGEONS("Dungeons", "dungeon-tracker"), SPLITS("Dungeon Splits", "dungeon-splits"), CRUSH_CAMERA("Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), HUD("HUD editor", "settings-hud")
 }
 

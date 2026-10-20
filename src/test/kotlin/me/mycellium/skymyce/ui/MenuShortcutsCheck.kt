@@ -34,35 +34,35 @@ fun main() {
     check(MenuShortcutState().copy(pins = emptyList()).copy(pins = defaultMenuPins).pins == defaultMenuPins)
 
     val tools = MenuCatalog.definitions.filter(::canUseMenuHomeTool)
-    check(defaultMenuHomeTools == listOf("party-finder", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "daily-digest"))
+    check(defaultMenuHomeTools == listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest"))
     check(defaultMenuHomeTools.all { id -> tools.any { it.id == id } } && defaultMenuHomeTools.distinct().size == 6)
     check(!canUseMenuHomeTool(MenuCatalog.definitions.first { it.id == "rng-test" }))
     check(!canUseMenuHomeTool(tools.first().copy(favoriteEligible = false)))
     val legacy = withSetting.json().apply { remove("homeTools") }
     val migrated = MenuShortcutState.read(legacy)
     check(migrated == withSetting && migrated.homeTools == defaultMenuHomeTools) { "Old shortcut files must preserve all existing lists and gain default Home tools" }
-    val custom = withSetting.copy(homeTools = listOf("missing", "rng-test", "starred-routes", "theme-editor", "loans", "loans", "community"))
+    val custom = withSetting.copy(homeTools = listOf("missing", "rng-test", "starred-routes", "theme-editor", "player-utilities", "player-utilities", "community"))
         .normalized({ it in validPins }, { it == favoriteSetting || it in validFeatures }, { it in validFeatures })
-    check(custom.homeTools == listOf("loans", "community", "party-finder", "dungeon-tracker", "auction-browser", "cosmetics"))
+    check(custom.homeTools == listOf("player-utilities", "community", "party-finder", "dungeon-tracker", "auction-browser", "cosmetics"))
     check(custom.pins == withSetting.pins && custom.favorites == withSetting.favorites && custom.recent == withSetting.recent)
     check(MenuShortcutState(homeTools = emptyList()).normalized({ false }, { false }).homeTools == defaultMenuHomeTools)
     val allTools = tools.map { it.id }
     check(MenuShortcutState(homeTools = allTools + allTools).normalized({ false }, { false }).homeTools == allTools.take(6))
     val swapped = migrated.replaceHomeTool(0, "daily-digest")
-    check(swapped.homeTools == listOf("daily-digest", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "party-finder"))
+    check(swapped.homeTools == listOf("daily-digest", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "party-finder"))
     check(swapped.homeTools.distinct().size == 6 && swapped.pins == migrated.pins && swapped.favorites == migrated.favorites && swapped.recent == migrated.recent)
     val homeEdited = edited.replaceHomeTool(2, "community")
-    check(homeEdited.homeTools == listOf("party-finder", "dungeon-tracker", "community", "loans", "cosmetics", "daily-digest"))
+    check(homeEdited.homeTools == listOf("party-finder", "dungeon-tracker", "community", "player-utilities", "cosmetics", "daily-digest"))
     check(homeEdited.replaceHomeTool(2, "community") == homeEdited)
     for (invalid in listOf("missing", "rng-test", "ability-cooldowns", "hud-editor")) check(homeEdited.replaceHomeTool(0, invalid) == homeEdited)
     check(homeEdited.replaceHomeTool(-1, "community") == homeEdited && homeEdited.replaceHomeTool(6, "community") == homeEdited)
     check(MenuShortcutState.read(homeEdited.json()) == homeEdited)
     check(homeEdited.copy(homeTools = defaultMenuHomeTools) == edited)
     fun homeJson(values: JsonArray) = edited.json().apply { add("homeTools", values) }
-    check(runCatching { MenuShortcutState.read(homeJson(JsonArray().apply { repeat(129) { add("loans") } })) }.isFailure)
+    check(runCatching { MenuShortcutState.read(homeJson(JsonArray().apply { repeat(129) { add("player-utilities") } })) }.isFailure)
     check(runCatching { MenuShortcutState.read(homeJson(JsonArray().apply { add("x".repeat(257)) })) }.isFailure)
     check(runCatching { MenuShortcutState.read(homeJson(JsonArray().apply { add(1) })) }.isFailure)
-    check(runCatching { MenuShortcutState.read(edited.json().apply { addProperty("homeTools", "loans") }) }.isFailure)
+    check(runCatching { MenuShortcutState.read(edited.json().apply { addProperty("homeTools", "player-utilities") }) }.isFailure)
 
     val folder = Files.createTempDirectory("skymyce-menu-check-")
     try {

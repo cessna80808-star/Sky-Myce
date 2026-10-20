@@ -111,7 +111,7 @@ fun main() {
     check(menuSearchWordMatches("fortune", "fortunne"))
     check(!menuSearchWordMatches("fortune", "fxrtxne"))
     val friends = catalog.search("friends")
-    check(friends.map { it.category }.toSet().containsAll(listOf(MenuCategory.DUNGEONS, MenuCategory.ECONOMY, MenuCategory.UTILS)))
+    check(friends.map { it.category }.toSet().containsAll(listOf(MenuCategory.DUNGEONS, MenuCategory.UTILS)))
     check(friends.map { it.category.ordinal } == friends.map { it.category.ordinal }.sorted())
     check(catalog.search("ah").any { it.featureId == "auction-browser" })
     check(catalog.search("fps").any { it.settingPath == "Theme & Appearance/graphicsQuality" })

@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { verifyAccount } from "./auth";
 import { classes, SharedStats, STATS_TTL, validateStats, type StatsGrant } from "./stats";
-import { SharedWealth, WEALTH_TTL, validateWealth } from "./wealth";
 import { DigestNews, DigestRng, rngPayload, type DigestConfig, type NewsResult, type NewsSource } from "./digest";
 import { PlayerCosmetics, codeHash, newLinkCode, normalizedCode, cosmeticPayload, watchCosmetics, watchesCosmetic, type CosmeticsConfig, type DiscordCommand, type CosmeticProfile } from "./cosmetics";
 import { handleCosmeticAssets } from "./cosmetic-assets";
@@ -61,9 +60,6 @@ type Session = LeapPovSession & {
   seen: string[];
   inbox: { id: string; from: string; expires: number; user?: boolean }[];
   uploads?: StatsGrant[];
-  wealthUploads?: StatsGrant[];
-  wealthCredits?: number;
-  wealthUpdated?: number;
   cacheCredits?: number;
   cacheUpdated?: number;
   party?: JoinPolicy;
@@ -171,7 +167,6 @@ export default {
 export class RelayRoom extends DurableObject<RelayEnv> {
   private readonly bazaarNotifications: BazaarNotifications;
   private readonly stats: SharedStats;
-  private readonly wealth: SharedWealth;
   private readonly news: DigestNews;
   private readonly rng: DigestRng;
   private readonly rngForward: RngForwardQueue;
@@ -187,7 +182,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.stats = new SharedStats(ctx.storage.sql);
-    this.wealth = new SharedWealth(ctx.storage.sql);
+    // Player Wealth was removed; drop the cached totals it held about other players.
+    ctx.storage.sql.exec("DROP TABLE IF EXISTS player_wealth");
     this.news = new DigestNews(ctx.storage.sql, env);
     this.rng = new DigestRng(ctx.storage.sql);
     this.rngForward = new RngForwardQueue(ctx.storage, {
@@ -401,7 +397,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         session.rngMetadataVersion = data.rngMetadataVersion === 1 ? 1 : undefined;
         session.challenge = "";
         this.leapPov.preserve(ws, session);
-        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: true, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 5, cosmeticsNames: true,
+        ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: false, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 5, cosmeticsNames: true,
           irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
           account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt,
           ...(!legacyRelay(this.env) && session.accountId ? { leapPovVersion: 1, bazaarVersion: 1 } : {}) }));
@@ -591,70 +587,10 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       return;
     }
 
+    // Player Wealth was removed. Clients that predate the removal still send these and close on unknown replies.
     if (data.type === "wealth_get" || data.type === "wealth_put") {
-      let permissions: { uuid: string; decision: SharingDecision }[] = [];
-      const now = Date.now();
-      if (encoder.encode(raw).length > 2048 || typeof data.id !== "string" || !uuid.test(data.id) ||
-          typeof data.name !== "string" || !username.test(data.name) ||
-          (data.uuid !== undefined && (typeof data.uuid !== "string" || !uuid.test(data.uuid))) ||
-          (data.canFetch !== undefined && typeof data.canFetch !== "boolean")) {
-        ws.close(1008, "Invalid wealth request"); return;
-      }
-      session.wealthCredits = Math.min(6, (session.wealthCredits ?? 6) + (now - (session.wealthUpdated ?? now)) / 1000);
-      session.wealthUpdated = now;
-      session.wealthUploads = (session.wealthUploads ?? []).filter(it => it.expires > now);
-      const allowed = session.wealthCredits >= 1;
-      if (allowed) session.wealthCredits--;
-      this.leapPov.preserve(ws, session);
-      if (!allowed) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "rate_limited", retryAt: now + 5000 })); return; }
-      if (!legacyRelay(this.env)) {
-        const requests = [{ uuid: session.uuid!, category: "economy" as const }, ...(typeof data.uuid === "string" ? [{ uuid: data.uuid, category: "economy" as const, ...(data.type === "wealth_put" && typeof data.fetchedAt === "number" ? { recordedAt: data.fetchedAt } : {}) }] : [])];
-        const decisions = await this.sharingPermissions(ws, session, requests); if (ws.readyState !== WebSocket.OPEN) return;
-        permissions = requests.map((request, index) => ({ uuid: request.uuid, decision: decisions[index] }));
-        if (data.type === "wealth_put" && permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, stored: false, error: "sharing_disabled" })); return; }
-      }
-      if (data.type === "wealth_get") {
-        const record = this.wealth.get(data.name, data.uuid as string | undefined, now, data.refresh === true && data.canFetch !== false);
-        if (record && !await this.visibleRecord(ws, session, record, "economy", this.wealth.publisher(record.uuid))) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, error: "sharing_disabled" })); return; }
-        const matches = (grant: StatsGrant) => grant.name === (data.name as string).toLowerCase() ||
-          (data.uuid !== undefined && grant.uuid === data.uuid);
-        // Cache-only viewers and clients in provider backoff must not reserve work they cannot perform.
-        if (data.canFetch === false) {
-          session.wealthUploads = session.wealthUploads.filter(grant => !matches(grant));
-          this.leapPov.preserve(ws, session);
-          ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return;
-        }
-        if (record) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record })); return; }
-        if (permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, error: "sharing_disabled" })); return; }
-        const own = session.wealthUploads.find(grant => matches(grant) &&
-          (!grant.uuid || grant.uuid === data.uuid));
-        if (own) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, upload: own.token })); return; }
-        // Socket attachments retain leases during hibernation. One client fetches each missing player.
-        const owner = this.ctx.getWebSockets().filter(other => other.readyState === WebSocket.OPEN)
-          .flatMap(other => ((other.deserializeAttachment() as Session).wealthUploads ?? []))
-          .find(grant => matches(grant) && grant.expires > now);
-        if (owner) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, retryAt: Math.min(owner.expires, now + 5000) })); return; }
-        const grant = { name: data.name.toLowerCase(), uuid: data.uuid as string | undefined,
-          token: crypto.randomUUID().replaceAll("-", ""), expires: now + 120_000 };
-        session.wealthUploads = [...session.wealthUploads.slice(-3), grant];
-        this.leapPov.preserve(ws, session);
-        ws.send(JSON.stringify({ type: "wealth_result", id: data.id, record: null, upload: grant.token }));
-      } else {
-        const grant = session.wealthUploads.find(it => (it.name === (data.name as string).toLowerCase() ||
-          (it.uuid !== undefined && it.uuid === data.uuid)) &&
-          it.token === data.upload && (!it.uuid || it.uuid === data.uuid));
-        const wealth = validateWealth(data.wealth);
-        if (!grant || !wealth || typeof data.uuid !== "string" || !uuid.test(data.uuid) ||
-            !Number.isSafeInteger(data.fetchedAt) || (data.fetchedAt as number) > now + 60_000 || (data.fetchedAt as number) <= now - WEALTH_TTL) {
-          ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "invalid_upload" })); return;
-        }
-        session.wealthUploads = session.wealthUploads.filter(it => it !== grant);
-        this.leapPov.preserve(ws, session);
-        if (permissions.some(value => !this.sharingCurrent(value.uuid, "economy", value.decision))) { ws.send(JSON.stringify({ type: "wealth_result", id: data.id, stored: false, error: "sharing_disabled" })); return; }
-        const stored = this.wealth.put({ name: data.name, uuid: data.uuid, wealth, fetchedAt: Math.min(data.fetchedAt as number, now) }, now, session.uuid);
-        // Only the requesting client receives totals; avoid broadcasting a wealth update to the entire room.
-        ws.send(JSON.stringify({ type: "wealth_result", id: data.id, stored }));
-      }
+      if (encoder.encode(raw).length > 2048 || typeof data.id !== "string" || !uuid.test(data.id)) { ws.close(1008, "Invalid wealth request"); return; }
+      ws.send(JSON.stringify({ type: "wealth_result", id: data.id, error: "sharing_disabled" }));
       return;
     }
 
@@ -888,17 +824,14 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     if (categories.includes("rng")) this.rngForward.suppress(players);
     const rng = categories.includes("rng") ? this.rng.deleteAuthors(players) : [];
     const stats = categories.includes("dungeons") ? this.stats.deleteSubjects(players) : [];
-    const wealth = categories.includes("economy") ? this.wealth.deleteSubjects(players) : [];
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
       if (categories.includes("dungeons") && players.includes(session.uuid ?? "") && session.party) delete session.party.selectedClass;
       if (categories.includes("dungeons")) session.uploads = players.includes(session.uuid ?? "") ? [] : session.uploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
-      if (categories.includes("economy")) session.wealthUploads = players.includes(session.uuid ?? "") ? [] : session.wealthUploads?.filter(grant => !grant.uuid || !players.includes(grant.uuid));
       this.leapPov.preserve(ws, session);
       if (ws.readyState !== WebSocket.OPEN || !session.name || !await this.authorized(ws, session)) continue;
       for (let index = 0; index < rng.length; index += 128) ws.send(JSON.stringify({ type: "rng_removed", ids: rng.slice(index, index + 128) }));
       for (let index = 0; index < stats.length; index += 128) ws.send(JSON.stringify({ type: "stats_removed", uuids: stats.slice(index, index + 128) }));
-      for (let index = 0; index < wealth.length; index += 128) ws.send(JSON.stringify({ type: "wealth_removed", uuids: wealth.slice(index, index + 128) }));
     }
   }
 

@@ -45,19 +45,4 @@ fun checkCommunitySharing() {
     history.removeCommunity()
     check(history.entries == listOf(personal)) // Deleting the public feed never deletes personal local history.
 
-    // A completed background cache response still waits for the client thread. Its timestamp
-    // can be ahead of the removal on this machine; local request generations reject it.
-    val wealthCache = me.mycellium.skymyce.features.instances.dungeons.friends.FriendWealthCache
-    val pendingWealth = me.mycellium.skymyce.features.instances.dungeons.friends.FriendWealth(
-        networth = 1200000.0, fetchedAt = System.currentTimeMillis() + 50000,
-        hasProfile = true, uuid = "f".repeat(32))
-    val requestedBeforeRemoval = wealthCache.sharedRemovalGeneration
-    check(wealthCache.acceptsSharedResponse(pendingWealth, requestedBeforeRemoval))
-    wealthCache.removeSharedSubjects(setOf("f".repeat(32)))
-    check(!wealthCache.acceptsSharedResponse(pendingWealth, requestedBeforeRemoval)) {
-        "A delayed wealth response restored a removed subject because the relay clock was ahead"
-    }
-    check(wealthCache.acceptsSharedResponse(pendingWealth, wealthCache.sharedRemovalGeneration)) {
-        "A newly authorized cache response could not recover after a privacy removal"
-    }
 }

@@ -161,7 +161,7 @@ fun main() {
     measureNavigationGeometry()
     check(menuSectionTitles == listOf("Dungeons", "Combat", "Economy", "Cosmetics", "Utils", "Settings"))
     val homeTools = defaultMenuHomeTools.indices.map { menuHomeFeature(it) }
-    check(homeTools.map { it.id } == listOf("party-finder", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "daily-digest"))
+    check(homeTools.map { it.id } == listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest"))
     check(homeTools.all(::canUseMenuHomeTool)) { "A Home card opens a category or settings-only feature instead of a tool" }
     val customized = defaultMenuHomeTools.toMutableList().apply { this[0] = "rng-journal" }
     check(menuHomeFeature(0, customized).tool == "rng-journal")

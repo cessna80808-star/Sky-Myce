@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.LongAdder
 
 /** Opt-in developer diagnostics. Disabled calls do not read clocks or allocate scopes. */
 object RuntimeProfiler {
-    enum class Area { COMMAND_TICK, FRIEND_TICK, COSMETIC_TICK, TRADE_CAPTURE, HUD, GUI, AUCTION_HTTP, RELAY_MESSAGE, RELAY_SEND, FRIEND_API, CHAT, DUNGEON_ROUTE }
+    enum class Area { COMMAND_TICK, FRIEND_TICK, COSMETIC_TICK, HUD, GUI, AUCTION_HTTP, RELAY_MESSAGE, RELAY_SEND, FRIEND_API, CHAT, DUNGEON_ROUTE }
     class Sample {
         val calls = LongAdder()
         val wall = LongAdder()

@@ -35,10 +35,9 @@ fun main() {
     checkMenuRefresh()
     checkFriendActionLayout()
     checkFriendActivityTheme()
-    checkWealthRefresh()
+    checkViewerProfileLookup()
     checkUserMessages()
     me.mycellium.skymyce.features.social.checkCosmetics()
-    checkSocialFeatures()
     check(friendActivity("in SkyBlock - The Catacombs") == FriendActivity.IN_RUN)
     check(friendActivity("in LIMBO") == FriendActivity.LIMBO)
     check(friendActivity("in SkyBlock - Dungeon Hub") == FriendActivity.IDLE)
@@ -927,36 +926,9 @@ private fun checkFriendActivityTheme() {
 }
 
 private fun checkJoinLookups() {
-    val shared = JsonParser.parseString("""{"name":"Alice","uuid":"${"a".repeat(32)}","fetchedAt":1000000,
-        "wealth":{"hasProfile":true,"networth":1000000000,"purse":1000,"wardrobe":42000,"profile":"Apple","status":""}}""").asJsonObject
-    val value = sharedFriendWealth(shared, "ALICE", null, 1000100)!!
-    check(value.networth == 1000000000.0 && value.purse == 1000.0 && value.bank == null)
-    check(value.wardrobe == 42000.0)
-    check(value.fetchedAt == 1000000L && value.expires == 87400000L)
-    check(sharedFriendWealth(shared, "Bob", null, 1000100) == null)
-    check(sharedFriendWealth(shared, "OldAliceName", java.util.UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), 1000100) == value)
-    check(sharedFriendWealth(shared, "Alice", java.util.UUID(0, 0), 1000100) == null)
-    check(sharedFriendWealth(shared, "Alice", null, 87399999)?.networth == value.networth)
-    check(sharedFriendWealth(shared, "Alice", null, 87400000) == null)
-    check(sharedFriendWealth(shared.deepCopy().apply { addProperty("fetchedAt", 1060101) }, "Alice", null, 1000100) == null)
-    check(sharedFriendWealth(shared.deepCopy().apply { getAsJsonObject("wealth").addProperty("purse", -1) }, "Alice", null, 1000100) == null)
-    check(sharedFriendWealth(shared.deepCopy().apply { getAsJsonObject("wealth").addProperty("purse", "1000") }, "Alice", null, 1000100) == null)
-    check(sharedFriendWealth(shared.deepCopy().apply { getAsJsonObject("wealth").addProperty("hasProfile", false) }, "Alice", null, 1000100) == null)
-    val absentShared = shared.deepCopy().apply { add("wealth", JsonParser.parseString("""{"hasProfile":false}""")) }
-    check(sharedFriendWealth(absentShared, "Alice", null, 1900000)?.hasProfile == false)
-
-    check(wealthLookupRetryAt(null, sharedAvailable = false, 1000) == 0L) // Offline relay permits local fallback.
-    check(wealthLookupRetryAt(null, sharedAvailable = true, 1000) == 6000L) // A full request queue must not bypass the shared cache.
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"error":"rate_limited"}""").asJsonObject, true, 1000) == 61000L)
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"error":"sharing_disabled"}""").asJsonObject, true, 1000) == 0L) // Privacy denial permits independent local calculation, without a publish grant.
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":9000}""").asJsonObject, true, 1000) == 9000L)
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":9999999}""").asJsonObject, true, 1000) == 121000L)
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"retryAt":"invalid"}""").asJsonObject, true, 1000) == 61000L)
-    check(wealthLookupRetryAt(JsonParser.parseString("""{"record":null,"upload":"${"a".repeat(32)}"}""").asJsonObject, true, 1000) == 0L)
-
     val cooldown = ProfileLookupCooldown()
     check(cooldown.start(1000))
-    check(!cooldown.start(1001)) // Wealth and dungeon stats cannot start simultaneous provider requests.
+    check(!cooldown.start(1001)) // Profile lookups cannot start simultaneous provider requests.
     cooldown.finish(2000, success = false)
     check(cooldown.nextRequest == 62000L && !cooldown.start(61999))
     check(cooldown.start(62000))
@@ -1033,7 +1005,6 @@ private fun checkFullFriendRoster() {
     check("dave" !in scanner.all && scanner.savedAllFriends!!.none { it.name == "Dave" })
     val folder = Files.createTempDirectory("friend-roster-check")
     val rosterPath = folder.resolve("friends.json")
-    val wealthPath = folder.resolve("wealth.json")
     try {
         val store = FriendListStore(rosterPath)
         store.save(scanner.savedFriends, scanner.savedAllFriends)
@@ -1050,68 +1021,8 @@ private fun checkFullFriendRoster() {
         restored.tick(1201)
         restored.tick(11201)
         check(restored.savedAllFriends!!.toList() == scanner.savedAllFriends!!.toList())
-        val played = FriendWealth(networth = 100.0, purse = 10.0, bank = 20.0, wardrobe = 30.0,
-            fetchedAt = 1000, hasProfile = true, uuid = "a".repeat(8) + "-aaaa-aaaa-aaaa-" + "a".repeat(12))
-        val absent = FriendWealth(fetchedAt = 1000, hasProfile = false, uuid = "b".repeat(8) + "-bbbb-bbbb-bbbb-" + "b".repeat(12))
-        val failed = FriendWealth(fetchedAt = 1000, status = "API unavailable")
-        check(!played.canRefreshManually(1001) && played.canRefreshManually(86401000))
-        check(!absent.canRefreshManually(1001) && failed.canRefreshManually(1001))
-        check(!played.copy(networth = 0.0, purse = 0.0, bank = 0.0, wardrobe = 0.0).canRefreshManually(1001))
-        for (partial in listOf(played.copy(networth = null), played.copy(purse = null),
-            played.copy(bank = null), played.copy(wardrobe = null))) {
-            check(partial.canRefreshManually(1001))
-            check(!partial.shouldRefresh(1001, online = true, skyBlockLocation = true)) // Manual only.
-        }
-        check(!played.shouldRefresh(999999, online = false, skyBlockLocation = false))
-        check(!played.shouldRefresh(301000, online = true, skyBlockLocation = true))
-        check(!played.shouldRefresh(86400999, online = true, skyBlockLocation = true))
-        check(!played.copy(expires = 0).shouldRefresh(86400999, online = true, skyBlockLocation = true)) // Old caches cannot bypass the original fetch date.
-        check(played.shouldRefresh(86401000, online = true, skyBlockLocation = true))
-        check(!absent.shouldRefresh(Long.MAX_VALUE, online = true, skyBlockLocation = false))
-        check(!absent.copy(expires = 0).shouldRefresh(999999, online = false, skyBlockLocation = false))
-        check(!absent.shouldRefresh(301000, online = true, skyBlockLocation = true))
-        check(absent.shouldRefresh(86401000, online = true, skyBlockLocation = true)) // Recheck newly active players only after 24h.
-        check(!failed.shouldRefresh(60999, true, false) && failed.shouldRefresh(61000, true, false))
-        val wealth = FriendWealthStore(wealthPath)
-        val stale = played.copy(fetchedAt = 0, expires = 86400000)
-        val partial = played.copy(wardrobe = null)
-        wealth.save(mapOf("alice" to played, "bob" to absent, "stale" to stale, "failed" to failed, "partial" to partial))
-        check(wealth.load() == mapOf("alice" to played, "bob" to absent, "stale" to stale, "partial" to partial)) // No negative entry on API failure.
-        FriendWealthCache.initialize(wealthPath)
-        FriendWealthCache.refresh(listOf("Alice", "Bob", "Stale", "NewFriend", "Partial"), 86400000)
-        check(FriendWealthCache.isQueued("Partial")) // A fresh incomplete entry can be retried manually.
-        FriendWealthCache.finishAttempt("Partial", retryable = false, now = 86400000, retryAt = 86460000)
-        check(FriendWealthCache.isQueued("Partial")) // A partial cache hit during provider cooldown must not cancel the retry.
-        check(!FriendWealthCache.canLookup("Partial", 86401000) && FriendWealthCache.canLookup("NewFriend", 86401000))
-        FriendWealthCache.finishAttempt("Partial", retryable = false, now = 86400000)
-        check(!FriendWealthCache.isQueued("ALICE")) // Manual refresh skips estimates under 24h, even without a relay connection.
-        check(FriendWealthCache.isQueued("Stale") && FriendWealthCache.isQueued("NewFriend"))
-        check(!FriendWealthCache.isQueued("Bob")) // Confirmed non-SkyBlock players remain cached.
-        FriendWealthCache.refresh(listOf("AnotherAccount"), 86460000)
-        check(!FriendWealthCache.isQueued("AnotherAccount")) // Repeated clicks cannot restart/extend an active pass.
-        FriendWealthCache.finishAttempt("Stale", retryable = true, now = 86400001)
-        check(!FriendWealthCache.isQueued("Stale") && FriendWealthCache.isQueued("NewFriend"))
-        // A cache miss (including no local provider) must not hold the next friend's hit for a minute.
-        check(!FriendWealthCache.canLookup("NewFriend", 86401000))
-        check(FriendWealthCache.canLookup("NewFriend", 86401001))
-        check(!FriendWealthCache.canLookup("STALE", 86401001))
-        check(FriendWealthCache.canLookup("Stale", 86460001)) // Retain the per-player retry cooldown.
-        FriendWealthCache.finishAttempt("NewFriend", retryable = false, now = 86400002)
-        check(!FriendWealthCache.canRefresh(86459999) && FriendWealthCache.canRefresh(86460000))
-        FriendWealthCache.refresh(listOf("Alice"), 86460000)
-        check(FriendWealthCache.isQueued("Alice"))
-        FriendWealthCache.finishAttempt("Alice", retryable = false, now = 86460001)
-        Files.writeString(wealthPath, "{bad json")
-        check(runCatching { wealth.load() }.isFailure && Files.readString(wealthPath) == "{bad json")
-        fun presence(text: String) = publicProfilePresence(JsonParser.parseString(text).asJsonObject)
-        check(presence("""{"success":true,"profiles":null}""") == false)
-        check(presence("""{"success":true,"profiles":[]}""") == false)
-        check(presence("""{"success":true,"profiles":[{}]}""") == true)
-        check(presence("""{"success":false,"profiles":[]}""") == null)
-        check(presence("""{"success":true}""") == null)
-        check(presence("""{"success":true,"profiles":[null]}""") == null)
     } finally {
-        Files.deleteIfExists(rosterPath); Files.deleteIfExists(wealthPath); Files.deleteIfExists(folder)
+        Files.deleteIfExists(rosterPath); Files.deleteIfExists(folder)
     }
 }
 
@@ -1180,12 +1091,8 @@ private fun checkMenuRefresh() {
 
     val cached = listOf(OnlineDungeonFriend("Alice", "in SkyBlock"), OnlineDungeonFriend("Bob", "Offline"), OnlineDungeonFriend("Carol", "Offline"))
     val social = FriendListScanner(cached.take(1), cached)
-    FriendWealthCache.refresh(social.all.keys, 100000000)
-    check(FriendWealthCache.isQueued("Carol")) // Offline players come from the saved roster.
     check(social.tick(100000000) == null && !social.scanning)
-    FriendWealthCache.refresh(social.all.keys, 100060000)
-    check(social.tick(100060000) == null) // A wealth refresh never starts or advances a friends-list scan.
-    social.all.keys.forEach { FriendWealthCache.finishAttempt(it, retryable = false, now = 100060000) }
+    check(social.tick(100060000) == null)
     check(social.savedAllFriends!!.toList() == cached)
     check(social.refreshOnOpen(100060000, full = true)) // Only the Party Finder status refresh requests a scan.
     check(social.tick(100060000) == "friend list 1")
@@ -1198,39 +1105,9 @@ private fun checkMenuRefresh() {
     check(social.tick(100063201) == null)
 }
 
-private fun checkWealthRefresh() {
-    val member = JsonParser.parseString("""{"currencies":{"coin_purse":1234},"inventory":{"inv_contents":{"data":"public"}}}""").asJsonObject
-    val bank = JsonParser.parseString("""{"banking":{"balance":4567}}""").asJsonObject
-    val profile = WealthProfileFixture(WealthBackingFixture(
-        CompletableFuture.completedFuture(WealthCurrencyFixture(member)),
-        CompletableFuture.completedFuture(WealthBankFixture(bank, JsonParser.parseString("""{"profile":{"bank_account":99}}""").asJsonObject)),
-        CompletableFuture.completedFuture(WealthInventoryFixture()),
-    ))
-    val partial = FriendWealthCache.fromProfile(profile)
-    check(partial.hasProfile == true && partial.purse == 1234.0 && partial.bank == 4666.0)
-    check(partial.networth == null && partial.status.startsWith("Networth calculation unavailable"))
-    profile.netWorth = CompletableFuture.completedFuture(99999L to mapOf(
-        WealthCategoryFixture.LOADOUT to mapOf("Armor" to 12000L, "Equipment" to 3000L),
-        WealthCategoryFixture.INVENTORY to mapOf("Other" to 80000L)))
-    val priced = FriendWealthCache.fromProfile(profile)
-    check(priced.networth == 99999.0 && priced.wardrobe == 15000.0) // Subtotal, not added to networth again.
-    profile.backingProfile.bank = CompletableFuture.failedFuture(IllegalStateException("Bank API disabled"))
-    val noBank = FriendWealthCache.fromProfile(profile)
-    check(noBank.networth == null && noBank.wardrobe == 15000.0 && noBank.purse == 1234.0)
-    profile.backingProfile.bank = CompletableFuture.completedFuture(WealthBankFixture(bank, JsonObject()))
-    for ((items, expected) in listOf(emptyMap<String, Any>() to 0.0, mapOf("Unknown" to -1) to null,
-        mapOf("Unknown" to Double.NaN) to null, mapOf("Unknown" to "100") to null)) {
-        profile.netWorth = CompletableFuture.completedFuture(99999L to mapOf(WealthCategoryFixture.LOADOUT to items))
-        check(FriendWealthCache.fromProfile(profile).wardrobe == expected)
-    }
-    profile.netWorth = CompletableFuture.completedFuture(99999L to emptyMap<WealthCategoryFixture, Map<String, Long>>())
-    check(FriendWealthCache.fromProfile(profile).wardrobe == null) // Missing breakdown is not an empty wardrobe.
-    profile.backingProfile.inventory = CompletableFuture.failedFuture(IllegalStateException("Inventory decoding failed"))
-    val inventoryFailed = FriendWealthCache.fromProfile(profile)
-    check(inventoryFailed.purse == 1234.0 && inventoryFailed.bank == 4567.0 && inventoryFailed.networth == null && inventoryFailed.wardrobe == null)
-    check(inventoryFailed.status.startsWith("Inventory calculation unavailable"))
-
-    val api = WealthApiFixture(profile)
+private fun checkViewerProfileLookup() {
+    val profile = ViewerProfileFixture()
+    val api = ViewerApiFixture(profile)
     val uuid = java.util.UUID(0, 1)
     check(DungeonFriendProfileProvider.fetchViewerProfile(uuid, false, api) === profile)
     val before = System.currentTimeMillis()
@@ -1241,104 +1118,16 @@ private fun checkWealthRefresh() {
     check(DungeonFriendProfileProvider.fetchViewerProfile(uuid, true, api) === profile && api.requests == 1)
 }
 
-data class WealthCurrencyFixture(val json: com.google.gson.JsonObject)
-data class WealthBankFixture(val json: com.google.gson.JsonObject, val member: com.google.gson.JsonObject)
-data class WealthLoadoutsFixture(val armorSets: Map<String, Any> = emptyMap())
-data class WealthInventoryFixture(val loadouts: WealthLoadoutsFixture = WealthLoadoutsFixture())
-enum class WealthCategoryFixture { LOADOUT, INVENTORY; override fun toString() = "Formatted name" }
-data class WealthBackingFixture(val currency: CompletableFuture<WealthCurrencyFixture>, var bank: CompletableFuture<WealthBankFixture>,
-    var inventory: CompletableFuture<WealthInventoryFixture>)
-data class WealthProfileIdFixture(val name: String = "Apple")
-data class WealthProfileFixture(val backingProfile: WealthBackingFixture, val selected: Boolean = true, val id: WealthProfileIdFixture = WealthProfileIdFixture(),
-    var netWorth: CompletableFuture<Pair<Long, Map<WealthCategoryFixture, Map<String, Any>>>> = CompletableFuture.failedFuture(IllegalStateException("Price calculation failed")))
-class WealthApiFixture(private val profile: WealthProfileFixture) {
+data class ViewerProfileFixture(val selected: Boolean = true)
+class ViewerApiFixture(private val profile: ViewerProfileFixture) {
     val maxCache = 300000L
-    var cached: List<WealthProfileFixture>? = listOf(profile)
+    var cached: List<ViewerProfileFixture>? = listOf(profile)
     var requests = 0
     fun getCached(uuid: Any) = cached
-    fun getDataAsync(uuid: Any, intent: String, callback: (Result<List<WealthProfileFixture>>) -> Unit) {
+    fun getDataAsync(uuid: Any, intent: String, callback: (Result<List<ViewerProfileFixture>>) -> Unit) {
         requests++
         callback(Result.success(listOf(profile)))
     }
-}
-
-private fun checkSocialFeatures() {
-    check(tradePartner("You     [MVP+] Alice_1") == "Alice_1")
-    check(tradePartner("You     Bob") == "Bob")
-    check(tradePartner("You                  MisterKris") == "MisterKris")
-    check(tradePartner("Trading with Bob") == null)
-    check(completedTradePartner("Trade completed with [MVP+] Alice_1!") == "Alice_1")
-    check(completedTradePartner("From Bob: Trade completed with Bob!") == null)
-    val item = TradedItem("item:hyperion", "Heroic Hyperion", 1, java.util.UUID.randomUUID().toString())
-    val trade = GearTrade(java.util.UUID.randomUUID().toString(), 1000, "Bob", null, "Apple", listOf(item), emptyList())
-    val capture = TradeCapture()
-    check(capture.complete("Bob", 1000) == null)
-    capture.observe(trade, 1000)
-    check(capture.complete("Alice", 1001) == null)
-    capture.observe(trade, 1000)
-    check(capture.complete("Bob", 6001) == null)
-    capture.observe(trade, 1000)
-    capture.keepAlive(60000) // An unchanged, still-open trade remains observable.
-    check(capture.active && capture.complete("Bob", 65000)?.sent == listOf(item))
-    check(!capture.active && capture.complete("Bob", 65001) == null)
-    capture.keepAlive(70000) // A tick cannot resurrect a consumed completion.
-    check(capture.complete("Bob", 70001) == null)
-    capture.observe(trade, 1000)
-    capture.keepAlive(60000)
-    check(capture.complete("Bob", 65001) == null) // The unchanged post-close TTL remains five seconds.
-    capture.observe(trade, 1000)
-    capture.clear() // Cancel/disconnect; later confirmation cannot resurrect an old offer.
-    check(capture.complete("Bob", 1001) == null)
-    capture.observe(trade, 1000)
-    check(capture.complete("bob", 1001)?.sent == listOf(item))
-    check(capture.complete("Bob", 1002) == null) // Duplicate confirmation.
-    capture.observe(trade, 1000)
-    capture.observe(trade.copy(sent = emptyList()), 1001) // Removed items are not lent.
-    check(capture.complete("Bob", 1002)?.sent?.isEmpty() == true)
-    val clippedTrade = trade.copy(id = java.util.UUID.randomUUID().toString(), friend = "MisterKris")
-    capture.observe(clippedTrade, 1000)
-    val completed = capture.complete(completedTradePartner("Trade completed with [MVP+] MisterKrister!")!!, 1001)
-    check(completed?.friend == "MisterKrister" && completed.sent == listOf(item))
-    check(capture.complete("MisterKrister", 1002) == null)
-    capture.observe(clippedTrade, 1000)
-    check(capture.complete("MisterOther", 1001) == null)
-    capture.observe(clippedTrade, 1000)
-    check(capture.complete("MisterKrister", 6001) == null)
-    capture.observe(trade, 1000)
-    check(capture.complete("Bobby", 1001) == null) // Short names are not arbitrary prefixes.
-    val folder = Files.createTempDirectory("skymyce-ledger-check")
-    val file = folder.resolve("ledger.json")
-    try {
-        val ledger = GearLedger(file)
-        check(ledger.record(trade) && ledger.record(trade) && ledger.trades.size == 1)
-        check(ledger.mark(trade.id, 0, LoanState.LENT))
-        check(GearLedger(file).trades.single().sent.single().loan == LoanState.LENT)
-        check(ledger.mark(trade.id, 0, LoanState.RETURNED))
-        check(GearLedger(file).trades.single().sent.single().loan == LoanState.RETURNED)
-        check(!ledger.mark(trade.id, 1, LoanState.LENT))
-        check(ledger.record(completed))
-        check(GearLedger(file).trades.last().friend == "MisterKrister")
-        val otherAccount = GearLedger(folder.resolve("other.json"))
-        check(otherAccount.trades.isEmpty())
-        Files.writeString(file, "{broken")
-        val broken = GearLedger(file)
-        check(broken.error != null && !broken.record(trade))
-        check(Files.readString(file) == "{broken")
-        Files.writeString(file, """{"version":99,"trades":[]}""")
-        check(!GearLedger(file).record(trade))
-    } finally {
-        Files.deleteIfExists(file)
-        Files.deleteIfExists(folder)
-    }
-    val balances = JsonParser.parseString("""{"banking":{"balance":0},"currencies":{"coin_purse":123.5}}""").asJsonObject
-    check(publicCoins(balances, "banking", "balance") == 0.0)
-    check(publicCoins(balances, "currencies", "coin_purse") == 123.5)
-    check(publicCoins(balances, "profile", "bank_account") == null)
-    check(publicCoins(JsonParser.parseString("""{"value":-1}""").asJsonObject, "value") == null)
-    check(publicCoins(JsonParser.parseString("""{"value":"NaN"}""").asJsonObject, "value") == null)
-    check(!hasPublicInventory(JsonParser.parseString("""{"inventory":{"bag_contents":{}}}""").asJsonObject))
-    check(!hasPublicInventory(JsonParser.parseString("""{"inventory":{"inv_contents":{"data":""}}}""").asJsonObject))
-    check(hasPublicInventory(JsonParser.parseString("""{"inventory":{"inv_contents":{"data":"encoded-NBT"}}}""").asJsonObject))
 }
 
 data class ViewerFloor(val completions: Long, val fastestTime: Duration, val fastestTimeSplus: Duration)

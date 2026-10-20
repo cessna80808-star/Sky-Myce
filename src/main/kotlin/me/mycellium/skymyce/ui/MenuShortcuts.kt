@@ -18,7 +18,7 @@ object MenuDirectory {
 
 internal val defaultMenuPins = listOf("Theme & Appearance/animationMode", "Theme & Appearance/graphicsQuality",
     "General/displayAbilityCooldown")
-internal val defaultMenuHomeTools = listOf("party-finder", "dungeon-tracker", "auction-browser", "loans", "cosmetics", "daily-digest")
+internal val defaultMenuHomeTools = listOf("party-finder", "dungeon-tracker", "auction-browser", "player-utilities", "cosmetics", "daily-digest")
 
 internal fun canUseMenuHomeTool(feature: MenuFeature) = feature.tool != null && feature.favoriteEligible && feature.id != "rng-test"
 private fun validMenuHomeTool(id: String) = MenuCatalog.definitions.any { it.id == id && canUseMenuHomeTool(it) }

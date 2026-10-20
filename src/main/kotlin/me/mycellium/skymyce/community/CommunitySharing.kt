@@ -159,6 +159,5 @@ object CommunitySharing {
         nextRefresh = System.currentTimeMillis() + 30000
         status = if (policy.enabled) "Account sharing preferences synchronized" else "Statistics sharing off · prior contributions removed or suppressed"
         SkyMyce.config.save()
-        me.mycellium.skymyce.features.instances.dungeons.friends.FriendWealthCache.publishOwnContribution()
     }
 }

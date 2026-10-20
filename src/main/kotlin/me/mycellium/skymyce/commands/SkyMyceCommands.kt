@@ -102,10 +102,6 @@ object SkyMyceCommands : SkyMyceModule() {
                 MC.instance.execute { navigateMenu(FriendsSocialScreen()) }
                 1
             })
-            .then(literal("loans").executes {
-                MC.instance.execute { navigateMenu(FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)) }
-                1
-            })
             .then(messageCommand("msg", RelayMessages::send))
             .then(relayChannelCommand("irc", RelayMessages::selectGlobal, RelayMessages::sendGlobal))
             .then(relayChannelCommand("global", RelayMessages::selectGlobal, RelayMessages::sendGlobal))

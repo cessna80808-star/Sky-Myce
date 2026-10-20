@@ -538,8 +538,6 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
         "leaderboards" -> me.mycellium.skymyce.community.LeaderboardScreen()
         "rng-journal" -> me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen()
         "rng-test" -> me.mycellium.skymyce.features.digest.testing.RngTestScreen()
-        "loans" -> FriendsSocialScreen(FriendsSocialScreen.Tab.LENDING)
-        "player-economy" -> FriendsSocialScreen(FriendsSocialScreen.Tab.WEALTH)
         "player-utilities" -> FriendsSocialScreen()
         "hud-editor" -> WidgetEditorScreen(parent)
         "status-bars" -> me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen(parent)

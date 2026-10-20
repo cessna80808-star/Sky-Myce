@@ -204,8 +204,6 @@ object DungeonFriendRelay {
     private var nextPolicyUpdate = 0L
     var sharedStatsAvailable = false
         private set
-    var sharedWealthAvailable = false
-        private set
     private var socket: WebSocket? = null
     private var sending: CompletableFuture<*> = CompletableFuture.completedFuture(null)
     @Volatile private var generation = 0L
@@ -364,7 +362,6 @@ object DungeonFriendRelay {
                                         check(json.get("name").asString.equals(user.name, true))
                                         connected = true
                                         sharedStatsAvailable = json.get("statsCache")?.asBoolean == true
-                                        sharedWealthAvailable = json.get("wealthCache")?.asBoolean == true
                                         policiesAvailable = json.get("partyPolicies")?.asBoolean == true
                                         digestNewsAvailable = json.get("digestNews")?.asBoolean == true
                                         rngFeedAvailable = json.get("rngFeed")?.asBoolean == true
@@ -384,7 +381,7 @@ object DungeonFriendRelay {
                                         deadline = DungeonFriends.now() + 90000
                                         nextPing = DungeonFriends.now() + 45000
                                         status = "Relay connected"
-                                        SkyMyce.logger.info("[Dungeon relay] Connected (shared wealth={})", sharedWealthAvailable)
+                                        SkyMyce.logger.info("[Dungeon relay] Connected")
                                         onDigestReady?.invoke()
                                         me.mycellium.skymyce.features.social.CosmeticsClient.ready()
                                         RelayMessages.globalReady()
@@ -442,15 +439,16 @@ object DungeonFriendRelay {
                                             }
                                         }
                                     }
-                                    "stats_result", "wealth_result" -> { check(connected); statsRequests.remove(json.get("id").asString)?.second?.complete(json) }
+                                    "stats_result" -> { check(connected); statsRequests.remove(json.get("id").asString)?.second?.complete(json) }
+                                    // Player Wealth was removed; relays deployed before that may still send its messages.
+                                    "wealth_result", "wealth_removed" -> check(connected)
                                     "digest_news_result", "rng_result" -> { check(connected); runCatching { digestRequests.remove(json.get("id").asString)?.second?.complete(json) } }
                                     "rng_event" -> { check(connected); runCatching { onDigestEvent?.invoke(json) } }
                                     "rng_removed" -> { check(connected); runCatching { onDigestEvent?.invoke(json) } }
-                                    "stats_removed", "wealth_removed" -> {
+                                    "stats_removed" -> {
                                         check(connected)
                                         val ids = json.getAsJsonArray("uuids")?.map { it.asString }?.take(256)?.filter { it.matches(Regex("[a-f0-9]{32}")) }?.toSet().orEmpty()
-                                        if (json.get("type").asString == "stats_removed") DungeonFriendStatsCache.removeSharedSubjects(ids)
-                                        else FriendWealthCache.removeSharedSubjects(ids)
+                                        DungeonFriendStatsCache.removeSharedSubjects(ids)
                                     }
                                     "cosmetics_result" -> { check(connected && cosmeticsAvailable); cosmeticsRequests.remove(json.get("id").asString)?.second?.complete(json) }
                                     "cosmetics_event" -> { check(connected && cosmeticsAvailable); runCatching { me.mycellium.skymyce.features.social.CosmeticsClient.event(json.getAsJsonObject("record")) } }
@@ -628,12 +626,7 @@ object DungeonFriendRelay {
         if (connected && cosmeticsAvailable) packet(mapOf("type" to "cosmetics_subscribe", "id" to UUID.randomUUID().toString().replace("-", ""), "enabled" to false))
     }
 
-    fun lookupWealth(name: String, uuid: String?, refresh: Boolean, canFetch: Boolean): CompletableFuture<JsonObject?>? {
-        if (!sharedWealthAvailable) return null
-        return lookupCache("wealth_get", name, uuid, refresh, canFetch)
-    }
-
-    /** Separate small queue so digest refreshes cannot consume party/wealth lookup slots. */
+    /** Separate small queue so digest refreshes cannot consume party/stats lookup slots. */
     fun digestRequest(type: String, fields: Map<String, Any> = emptyMap()): CompletableFuture<JsonObject?>? {
         digestRequests.entries.removeIf { it.value.second.isDone }
         if (!connected || digestRequests.size >= 4 || type !in setOf("digest_news_get", "rng_subscribe", "rng_publish")) return null
@@ -650,7 +643,7 @@ object DungeonFriendRelay {
         if (connected && rngFeedAvailable) packet(mapOf("type" to "rng_subscribe", "id" to UUID.randomUUID().toString().replace("-", ""), "enabled" to false))
     }
 
-    private fun lookupCache(type: String, name: String, uuid: String?, refresh: Boolean = false, canFetch: Boolean = true): CompletableFuture<JsonObject?>? {
+    private fun lookupCache(type: String, name: String, uuid: String?): CompletableFuture<JsonObject?>? {
         if (statsRequests.size >= 8) return null
         val id = UUID.randomUUID().toString().replace("-", "")
         val future = CompletableFuture<JsonObject?>()
@@ -658,8 +651,6 @@ object DungeonFriendRelay {
         packet(buildMap {
             put("type", type); put("id", id); put("name", name)
             uuid?.let { put("uuid", it) }
-            if (refresh) put("refresh", true)
-            if (type == "wealth_get") put("canFetch", canFetch)
         })
         return future
     }
@@ -711,12 +702,6 @@ object DungeonFriendRelay {
             "uuid" to uuid, "stats" to stats, "fetchedAt" to fetchedAt, "upload" to upload))
     }
 
-    fun publishWealth(name: String, wealth: FriendWealth, upload: String) {
-        if (!sharedWealthAvailable || wealth.uuid == null || !me.mycellium.skymyce.community.CommunitySharing.canShare(me.mycellium.skymyce.community.SharingCategory.ECONOMY)) return
-        packet(mapOf("type" to "wealth_put", "id" to UUID.randomUUID().toString().replace("-", ""), "name" to name,
-            "uuid" to wealth.uuid.replace("-", ""), "wealth" to wealth, "fetchedAt" to wealth.fetchedAt, "upload" to upload))
-    }
-
     private fun packet(data: Any, current: () -> Boolean = { true }) = RuntimeProfiler.measure(RuntimeProfiler.Area.RELAY_SEND) {
         val ws = socket ?: return@measure
         val token = generation
@@ -737,7 +722,6 @@ object DungeonFriendRelay {
         socket = null
         connected = false
         sharedStatsAvailable = false
-        sharedWealthAvailable = false
         digestNewsAvailable = false
         rngFeedAvailable = false
         userMessagesAvailable = false
