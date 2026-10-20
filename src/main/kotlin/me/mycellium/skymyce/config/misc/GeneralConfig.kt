@@ -13,6 +13,7 @@ object GeneralConfig : CategoryKt("General") {
         category(WardrobeConfig)
         category(LoadoutConfig)
         category(PriceHistoryConfig)
+        category(GreenhouseConfig)
         category(StatusBarsConfig)
         category(NpcDialogueConfig)
         category(SignsConfig)

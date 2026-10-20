@@ -28,6 +28,7 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 - **Status bars (off by default):** separate health, mana, defense, speed, vitality and respiration bars. Arrange them with `/sm bars`: anchors around the hotbar, snapping, sizes, colours and per-bar options.
 - **Overlays:** an NPC dialogue box with numbered options, a progress bar on the skill XP widget, and Enter to confirm Auction House, Bazaar and bank signs.
 - **Daily and inventory tools:** Daily Digest, Auto Refill, stash assistance, and wardrobe/loadout keybinds.
+- **Greenhouse Planner (off by default):** ranks mutations by estimated Bazaar profit, solves a full 10×10 Greenhouse layout and shows translucent ghost blocks where the crop or soil you are holding belongs, plus a HUD with progress and what is left to place. It never places anything for you. Look at the soil of the corner slot and run `/sm greenhouse anchor` once; rows run the way you face, columns to your right. Profit uses [skymutations.eu](https://skymutations.eu)'s formula (by palmaner); crop drops, copper and growth effects are not modelled, so treat the numbers as estimates.
 - **Cosmetics:** save local name, size, and cape choices. Sharing an appearance with the community is a separate optional action.
 - **Community:** connect Discord only if you want community features such as Global Chat, shared rankings, cosmetics sharing, or signed updates.
 
@@ -47,6 +48,7 @@ The Healer Crush Camera has saved viewpoints and a preview for setup; configure 
 | `/sm cosmetics` | Open Cosmetics Studio |
 | `/sm crush-camera` | Configure and preview camera viewpoints |
 | `/sm bars` | Arrange the status bars |
+| `/sm greenhouse` | Mutation profit ranking; click **[Plan]** to solve a layout. Also `plan <mutation>`, `auto`, `recompute`, `anchor`, `lock <row> <column>` |
 | `/sm goldor` | Goldor status; `/sm goldor guide <class> <section>` for the full steps |
 | `/sm graphics` | Show what the Auto graphics mode chose and why |
 | `/sm community` | Manage optional Discord connection, sharing, and updates |

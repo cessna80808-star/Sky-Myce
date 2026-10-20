@@ -102,6 +102,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("loans", "Loans & Lending", "Local trade history and the items lent to friends", MenuCategory.ECONOMY, "Loans", listOf("friends", "gear", "trade", "lending", "borrow"), tool = "loans"),
             MenuFeature("player-economy", "Player Wealth", "Compare cached friend networth, purse, bank and wardrobe estimates", MenuCategory.ECONOMY, "Players", listOf("friends", "player", "wealth", "networth", "compare"), tool = "player-economy"),
             MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
+            MenuFeature("greenhouse-planner", "Greenhouse Planner", "Profit-ranked mutations, a solved full-plot layout and ghost blocks for the crop or soil you hold. /sm greenhouse", MenuCategory.ECONOMY, "Garden", listOf("garden", "greenhouse", "mutation", "crops", "farming", "skymutations", "layout", "ghost"), enabledPath = "General/Greenhouse Planner/enabled"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
             MenuFeature("cosmetics", "Player Cosmetics", "Choose cosmetics and control rendered names and player scaling", MenuCategory.COSMETICS, "Player Appearance", listOf("appearance", "names", "scale", "scaling", "preview"), tool = "cosmetics"),
             MenuFeature("daily-digest", "Daily Digest", "Daily progress, public updates and optional community RNG reports", MenuCategory.UTILS, "Progress", listOf("news", "rng", "daily", "history", "rewards"), tool = "daily-digest"),
@@ -178,6 +179,7 @@ class MenuCatalog(rows: List<SettingRow>) {
                 path.startsWith("General/Party Commands/") -> "party-commands"
                 path.startsWith("General/Stash Helper/") -> "stash-helper"
                 path.startsWith("General/Price History/") -> "price-history"
+                path.startsWith("General/Greenhouse Planner/") -> "greenhouse-planner"
                 path.startsWith("General/Status Bars/") -> "status-bars"
                 path.startsWith("General/NPC Dialogue/") -> "npc-dialogue"
                 path.startsWith("General/Signs/") -> "sign-confirm"

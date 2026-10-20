@@ -683,6 +683,14 @@ val leapMenuCheck by tasks.registering(JavaExec::class) {
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenuCheckKt"
 }
 tasks.check { dependsOn(leapMenuCheck) }
+val greenhouseCheck by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Checks the Greenhouse catalog, skymutations.eu profit formula, layout solver parity and layout persistence"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "me.mycellium.skymyce.features.garden.GreenhouseCheckKt"
+}
+tasks.check { dependsOn(greenhouseCheck) }
 for (browserCheckName in listOf("BrowserLinks", "BrowserExtension")) {
     val browserCheck = tasks.register<JavaExec>(browserCheckName.replaceFirstChar { it.lowercase() } + "Check") {
         group = "verification"

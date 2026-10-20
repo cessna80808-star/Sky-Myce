@@ -81,6 +81,7 @@ object SkyMyce : ClientModInitializer {
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             me.mycellium.skymyce.features.social.CosmeticsClient,
             me.mycellium.skymyce.features.general.pricehistory.PriceHistoryFeature,
+            me.mycellium.skymyce.features.garden.greenhouse.GreenhousePlanner,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits,
             me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud,
             me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCoordinator,
