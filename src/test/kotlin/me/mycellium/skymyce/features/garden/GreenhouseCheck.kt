@@ -101,6 +101,38 @@ fun main() {
     val plots = plotsFromJson(v2, catalog)
     check(plots.map { it.name } == listOf("1", "north", "up") && plots[0].layout?.placements == layout.placements && plots[1] == second &&
         plots[2].anchor == null && plots[2].layout == null) { "Version 2 plots $plots" }
+    val scanned = second.copy(plantedAt = 5, spawned = mapOf(44 to 9L), status = "o".repeat(50) + "T".repeat(50), scannedAt = 7,
+        missingPlants = mapOf("CHLORONITE" to 2), missingSoil = mapOf(Soil.SAND to 3))
+    val reread = plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(scanned.toJson()) }) }, catalog).single()
+    check(reread == scanned) { "Scan state round trip $reread" }
 
-    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, layout and plot persistence")
+    // Import: the planted crops become the layout as they stand, instead of a fresh solve.
+    val planted = arrayOfNulls<String>(GREENHOUSE_CELLS)
+    val soil = arrayOfNulls<Soil>(GREENHOUSE_CELLS)
+    val open = layout.targets.first()
+    layout.placements.forEach { placement -> for (r in 0 until placement.size) for (c in 0 until placement.size) {
+        val cell = (placement.row + r) * GREENHOUSE_SIZE + placement.col + c
+        soil[cell] = layout.soils.getValue(placement)
+        if (placement != open) planted[cell] = placement.plantId
+    } }
+    val occupied = BooleanArray(GREENHOUSE_CELLS) { planted[it] != null }
+    val imported = importLayout(catalog, planted, occupied, soil, full, null, priced, settings, 9, "imported-x")!!
+    check(imported.targets.all { it.plantId == "GLASSCORN" } && imported.targets.size == layout.targets.size) { "Import targets ${imported.targets}" }
+    check(imported.placements.filter { it.role == Role.INGREDIENT }.toSet() == layout.placements.filter { it.role == Role.INGREDIENT }.toSet()) { "Import ingredients" }
+    validate(imported, full)
+    check(imported.totalProfitPerHour == imported.profitPerHour(catalog, priced, settings)) { "Import profit" }
+    check(importLayout(catalog, arrayOfNulls(GREENHOUSE_CELLS), BooleanArray(GREENHOUSE_CELLS), soil, full, null, priced, settings, 9, "x") == null) { "Empty import" }
+
+    // Harvest history: rolling totals per plot and calendar-day buckets.
+    val now = 1_800_000_000_000L
+    val hour = 3_600_000L
+    val history = listOf(Harvest(now - hour, "1", "GLASSCORN", 150.0, 50.0), Harvest(now - 72 * hour, "1", "GLASSCORN", 200.0, 0.0),
+        Harvest(now - 480 * hour, "north", "GLASSCORN", 300.0, 0.0), Harvest(now - 1440 * hour, "1", "GLASSCORN", 400.0, 0.0))
+    check(harvestTotals(history, now) == HarvestTotals(100.0, 300.0, 600.0, 1000.0, 4)) { "Totals ${harvestTotals(history, now)}" }
+    check(harvestTotals(history, now, "north") == HarvestTotals(0.0, 0.0, 300.0, 300.0, 1)) { "Plot totals" }
+    val days = dailyProfit(history, now, 14, java.time.ZoneOffset.UTC)
+    check(days.size == 14 && days.sum() == 300.0 && days[13] == 100.0 && days[10] == 200.0) { "Daily ${days.toList()}" }
+    check(history.all { harvestFromJson(it.toJson(), catalog) == it } && harvestFromJson(com.google.gson.JsonParser.parseString("""[1,"bad name!","GLASSCORN",1,1]"""), catalog) == null) { "Harvest json" }
+
+    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, plot persistence, import and harvest history")
 }

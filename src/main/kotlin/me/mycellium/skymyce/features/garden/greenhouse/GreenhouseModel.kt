@@ -162,7 +162,24 @@ fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, sett
 
 /** A Greenhouse plot as saved: [facing] is a horizontal direction name. Each plot keeps its own pinned layout. */
 data class PlotAnchor(val x: Int, val y: Int, val z: Int, val facing: String)
-data class PlotState(val name: String, val anchor: PlotAnchor?, val locked: Set<Int>, val target: String?, val layout: Layout?)
+data class PlotState(
+    val name: String, val anchor: PlotAnchor?, val locked: Set<Int>, val target: String?, val layout: Layout?,
+    /** When every ingredient was last seen becoming planted, or 0 when not observed. */
+    val plantedAt: Long = 0,
+    /** Target footprint (top-left cell) -> when its mutation was seen appearing. */
+    val spawned: Map<Int, Long> = emptyMap(),
+    /** The last world scan: one [CellStatus] code per cell, empty before the first scan. */
+    val status: String = "",
+    val scannedAt: Long = 0,
+    val missingPlants: Map<String, Int> = emptyMap(),
+    val missingSoil: Map<Soil, Int> = emptyMap(),
+)
+
+/** One character per cell in [PlotState.status]. */
+enum class CellStatus(val code: Char) {
+    UNUSED('.'), DONE('o'), MISSING_CROP('m'), WRONG_CROP('w'), WRONG_SOIL('s'), TARGET_WAITING('t'), TARGET_GROWING('T');
+    companion object { fun of(code: Char) = entries.firstOrNull { it.code == code } }
+}
 
 private val HORIZONTAL = setOf("NORTH", "EAST", "SOUTH", "WEST")
 
@@ -172,6 +189,11 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     add("locked", com.google.gson.JsonArray().apply { locked.sorted().forEach { add(it) } })
     target?.let { addProperty("target", it) }
     layout?.let { add("layout", it.toJson()) }
+    if (plantedAt > 0) addProperty("plantedAt", plantedAt)
+    if (spawned.isNotEmpty()) add("spawned", JsonObject().apply { spawned.forEach { (cell, at) -> addProperty(cell.toString(), at) } })
+    if (status.isNotEmpty()) { addProperty("status", status); addProperty("scannedAt", scannedAt) }
+    if (missingPlants.isNotEmpty()) add("missingPlants", JsonObject().apply { missingPlants.forEach { (id, n) -> addProperty(id, n) } })
+    if (missingSoil.isNotEmpty()) add("missingSoil", JsonObject().apply { missingSoil.forEach { (soil, n) -> addProperty(soil.name, n) } })
 }
 
 /**
@@ -186,7 +208,19 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
         }.getOrNull()
         val locked = runCatching { section.getAsJsonArray("locked").map { it.asInt }.filter { it in 0 until GREENHOUSE_CELLS }.toSet() }.getOrDefault(emptySet())
         val target = runCatching { section["target"].asString }.getOrNull()?.takeIf { catalog[it]?.solvable == true }
-        return PlotState(name, anchor, locked, target, layout)
+        fun counts(key: String) = runCatching {
+            section.getAsJsonObject(key).entrySet().associate { it.key to it.value.asInt.also { n -> require(n in 1..GREENHOUSE_CELLS) } }
+        }.getOrDefault(emptyMap())
+        val status = runCatching { section["status"].asString }.getOrNull()?.takeIf { text -> text.length == GREENHOUSE_CELLS && text.all { CellStatus.of(it) != null } }
+        return PlotState(name, anchor, locked, target, layout,
+            plantedAt = runCatching { section["plantedAt"].asLong }.getOrDefault(0L),
+            spawned = runCatching {
+                section.getAsJsonObject("spawned").entrySet().associate { it.key.toInt().also { cell -> require(cell in 0 until GREENHOUSE_CELLS) } to it.value.asLong }
+            }.getOrDefault(emptyMap()),
+            status = status.orEmpty(),
+            scannedAt = if (status == null) 0L else runCatching { section["scannedAt"].asLong }.getOrDefault(0L),
+            missingPlants = counts("missingPlants").filterKeys { catalog[it] != null },
+            missingSoil = counts("missingSoil").mapNotNull { (key, n) -> runCatching { Soil.valueOf(key) }.getOrNull()?.let { it to n } }.toMap())
     }
     val plots = json["plots"]?.takeIf { it.isJsonArray } ?: return listOf(plot(json, "1", runCatching {
         val active = json["active"].asString
@@ -241,3 +275,89 @@ fun layoutFromJson(json: JsonObject, catalog: PlantCatalog): Layout {
     }
     return Layout(soils.keys.toList(), soils, json["profitPerHour"].asDouble, json["uniqueCrops"].asInt, json["generatedAt"].asLong, json["hash"].asString)
 }
+
+/**
+ * Turns what is already planted on a plot into a layout instead of solving a new one. [planted] holds the identified
+ * plant per cell (null when empty or unidentified), [occupied] marks every cell with anything on it, [soil] the soil found.
+ * Cells holding the target become targets and every other identified crop an ingredient; empty unlocked spots whose ring
+ * already holds the target's ingredients become open targets. Without a [target], the mutation that yields the most
+ * profit (by count when unpriced) among those planted or fully supplied is chosen.
+ */
+fun importLayout(catalog: PlantCatalog, planted: Array<String?>, occupied: BooleanArray, soil: Array<Soil?>, unlocked: BooleanArray, target: String?,
+                 quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Layout? {
+    val present = planted.filterNotNull().toSet()
+    val candidates = if (target != null) listOf(target) else catalog.plants.filter { plant ->
+        plant.solvable && (plant.id in present || plant.requires.keys.all { it in present })
+    }.map { it.id }
+    return candidates.mapNotNull { id -> importFor(catalog, planted, occupied, soil, unlocked, id, quotes, settings, now, hash) }
+        .maxWithOrNull(compareBy<Layout>({ it.profitPerHour(catalog, quotes, settings) != null }, { it.profitPerHour(catalog, quotes, settings) ?: 0.0 }, { it.targets.size }))
+}
+
+private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: BooleanArray, soil: Array<Soil?>, unlocked: BooleanArray, targetId: String,
+                      quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Layout? {
+    val target = catalog[targetId]?.takeIf { it.solvable } ?: return null
+    val owner = arrayOfNulls<Placement>(GREENHOUSE_CELLS)
+    val placements = ArrayList<Placement>()
+    fun cells(row: Int, col: Int, size: Int) = (0 until size).flatMap { r -> (0 until size).map { c -> (row + r) * GREENHOUSE_SIZE + col + c } }
+    fun place(placement: Placement) { cells(placement.row, placement.col, placement.size).forEach { owner[it] = placement }; placements += placement }
+    // shortcut: a multi-tile crop's footprint starts at its first identified cell in reading order; revisit if Hypixel marks only a centre tile.
+    for (cell in 0 until GREENHOUSE_CELLS) {
+        val plant = planted[cell]?.let { catalog[it] } ?: continue
+        val row = cell / GREENHOUSE_SIZE; val col = cell % GREENHOUSE_SIZE
+        if (owner[cell] != null || row + plant.size > GREENHOUSE_SIZE || col + plant.size > GREENHOUSE_SIZE) continue
+        if (cells(row, col, plant.size).any { owner[it] != null }) continue
+        place(Placement(plant.id, row, col, plant.size, if (plant.id == targetId) Role.TARGET else Role.INGREDIENT))
+    }
+    for (row in 0..GREENHOUSE_SIZE - target.size) for (col in 0..GREENHOUSE_SIZE - target.size) {
+        if (cells(row, col, target.size).any { !unlocked[it] || occupied[it] || owner[it] != null }) continue
+        val counts = HashMap<String, Int>()
+        for (r in row - 1..row + target.size) for (c in col - 1..col + target.size) {
+            if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE || (r in row until row + target.size && c in col until col + target.size)) continue
+            owner[r * GREENHOUSE_SIZE + c]?.takeIf { it.role == Role.INGREDIENT }?.let { counts.merge(it.plantId, 1, Int::plus) }
+        }
+        if (target.requires.all { (id, count) -> (counts[id] ?: 0) >= count }) place(Placement(targetId, row, col, target.size, Role.TARGET))
+    }
+    if (placements.none { it.role == Role.TARGET }) return null
+    val soils = placements.associateWith { placement ->
+        val plant = catalog[placement.plantId]!!
+        soil[placement.row * GREENHOUSE_SIZE + placement.col]?.takeIf { it in plant.soils } ?: plant.soils.first()
+    }
+    val unique = maxOf(settings.uniqueCrops, placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]!!.unique }.map { it.plantId }.distinct().size).coerceAtMost(12)
+    val draft = Layout(placements, soils, 0.0, unique, now, hash)
+    return draft.copy(totalProfitPerHour = draft.profitPerHour(catalog, quotes, settings) ?: 0.0)
+}
+
+/** One harvested mutation, valued when it was harvested; [cost] is the layout's ingredient cost per target. Estimated. */
+data class Harvest(val at: Long, val plot: String, val plantId: String, val revenue: Double, val cost: Double) {
+    val profit get() = revenue - cost
+}
+
+data class HarvestTotals(val day: Double, val week: Double, val month: Double, val total: Double, val count: Int)
+
+private const val DAY_MS = 86_400_000L
+
+fun harvestTotals(history: List<Harvest>, now: Long, plot: String? = null): HarvestTotals {
+    val own = if (plot == null) history else history.filter { it.plot.equals(plot, true) }
+    fun since(ms: Long) = own.filter { it.at > now - ms }.sumOf { it.profit }
+    return HarvestTotals(since(DAY_MS), since(7 * DAY_MS), since(30 * DAY_MS), own.sumOf { it.profit }, own.size)
+}
+
+/** Profit per local calendar day, oldest first, ending today. */
+fun dailyProfit(history: List<Harvest>, now: Long, days: Int, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): DoubleArray {
+    val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    val result = DoubleArray(days)
+    for (harvest in history) {
+        val day = java.time.Instant.ofEpochMilli(harvest.at).atZone(zone).toLocalDate()
+        val index = days - 1 - java.time.temporal.ChronoUnit.DAYS.between(day, today).toInt()
+        if (index in 0 until days) result[index] += harvest.profit
+    }
+    return result
+}
+
+fun Harvest.toJson() = com.google.gson.JsonArray().apply { add(at); add(plot); add(plantId); add(revenue); add(cost) }
+
+fun harvestFromJson(json: com.google.gson.JsonElement, catalog: PlantCatalog): Harvest? = runCatching {
+    val row = json.asJsonArray
+    Harvest(row[0].asLong, row[1].asString.takeIf { it.matches(PLOT_NAME) }!!, row[2].asString.takeIf { catalog[it] != null }!!,
+        row[3].asDouble.takeIf { it.isFinite() }!!, row[4].asDouble.takeIf { it.isFinite() }!!)
+}.getOrNull()

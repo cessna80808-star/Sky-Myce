@@ -202,6 +202,8 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("crush-camera-settings", ThemePreset.SIGNATURE) { SettingsScreen.forFeature(null, "healer-crush-camera") },
             Scene("themes-light", ThemePreset.LIGHT) { SettingsScreen.forFeature(null, "settings-appearance") },
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
+            Scene("greenhouse", ThemePreset.SIGNATURE) { greenhouseFixture() },
+            Scene("greenhouse-narrow", ThemePreset.LIGHT, 640, 480, 2) { greenhouseFixture() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
