@@ -161,6 +161,27 @@ fun main() {
     val namedPlot = PlotState("north", null, emptySet(), null, null, learned = mapOf("block:melon_stem@farmland" to "COALROOT"))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(namedPlot.toJson()) }) }, catalog).single() == namedPlot) { "Plot looks" }
 
+    // Multi-tile crops seen on only some cells: a 3×3 with one head in the middle is centred on it, a full 2×2 keeps its
+    // corner, and two touching 2×2 groups are tiled.
+    val tiles = arrayOfNulls<String>(GREENHOUSE_CELLS)
+    tiles[44] = "SNOOZLING"
+    listOf(0, 1, 10, 11).forEach { tiles[it] = "GLASSCORN" }
+    listOf(7, 8, 17, 18, 27, 28, 37, 38).forEach { tiles[it] = "GLASSCORN" }
+    check(footprints(catalog, tiles).toSet() == setOf(Triple("SNOOZLING", 3, 3), Triple("GLASSCORN", 0, 0), Triple("GLASSCORN", 0, 7), Triple("GLASSCORN", 2, 7))) {
+        "Footprints ${footprints(catalog, tiles)}"
+    }
+    val edge = arrayOfNulls<String>(GREENHOUSE_CELLS).also { it[0] = "SNOOZLING" }
+    check(footprints(catalog, edge) == listOf(Triple("SNOOZLING", 0, 0))) { "Edge footprint" }
+
+    // Plant Diagnostics Tool readings: chat or menu text with colour codes, projected forward with the growth timer.
+    check(parseGrowth(listOf("§aCoalroot", "§7Growth Stage: §e5§7/§e8")) == (5 to 8) && parseGrowth(listOf("Stage 3 of 16")) == (3 to 16)) { "Growth parse" }
+    check(parseGrowth(listOf("Water Level: 80%", "Next Stage in 2h")) == null && parseGrowth(listOf("Growth Stage: 9/8")) == null) { "Growth rejects" }
+    val readAt = 1_800_000_000_000L
+    val reading = GrowthReading(5, 8, readAt - 6 * 3_600_000L)
+    check(abs(reading.projected(3.0, readAt) - 7.0) < 1e-9 && reading.projected(1.0, readAt) == 8.0) { "Growth projection" }
+    val grown = namedPlot.copy(growth = mapOf(33 to reading))
+    check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(grown.toJson()) }) }, catalog).single() == grown) { "Growth persistence" }
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L

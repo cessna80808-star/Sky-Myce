@@ -24,14 +24,19 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents
+import net.fabricmc.fabric.api.event.player.UseBlockCallback
+import net.fabricmc.fabric.api.event.player.UseEntityCallback
 import net.minecraft.commands.SharedSuggestionProvider
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
+import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.gizmos.GizmoStyle
 import net.minecraft.gizmos.Gizmos
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
+import net.minecraft.world.InteractionResult
+import net.minecraft.world.entity.Entity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.Block
@@ -43,6 +48,9 @@ import net.minecraft.world.phys.HitResult
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
+import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
+import tech.thatgravyboat.skyblockapi.api.events.level.RightClickEvent
+import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
 import tech.thatgravyboat.skyblockapi.api.events.level.BlockChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.render.RenderWorldEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
@@ -71,6 +79,7 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Planting, spawns and harvests count only between two scans this close, made with the player this near. */
     private const val CONTINUITY_MS = 10_000L
     private const val WATCH_DISTANCE = 24
+    private const val ANALYSIS_WINDOW = 5_000L
 
     private val file by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("greenhouse.json"), 262_144) }
     private val historyFile by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("greenhouse-history.json"), 1_048_576) }
@@ -107,6 +116,8 @@ object GreenhousePlanner : SkyMyceModule() {
         var missingSoil: Map<Soil, Int> = emptyMap()
         /** Block looks named on this plot; see [PlotState.learned]. */
         val learned = LinkedHashMap<String, String>()
+        /** Placement (top-left cell) → its last Plant Diagnostics Tool reading. */
+        val growth = HashMap<Int, GrowthReading>()
         /** The previous scan, kept in memory, so planting, spawns and harvests are seen as they happen. */
         var previous: BooleanArray? = null
         var previousAt = 0L
@@ -157,6 +168,15 @@ object GreenhousePlanner : SkyMyceModule() {
 
     override fun init() {
         ClientSendMessageEvents.COMMAND.register(::copyBazaarQuantity)
+        // Crops are mostly armor stands, so analysing one is an entity interaction; a block crop is a block interaction.
+        UseEntityCallback.EVENT.register { player, level, hand, entity, _ ->
+            if (level.isClientSide) startAnalysis(player.getItemInHand(hand), entity)
+            InteractionResult.PASS
+        }
+        UseBlockCallback.EVENT.register { player, level, hand, _ ->
+            if (level.isClientSide) startAnalysis(player.getItemInHand(hand), null)
+            InteractionResult.PASS
+        }
         Scheduling.schedule(Duration.ZERO) {
             val json = file.read()?.takeIf { it.isJsonObject }?.asJsonObject
             val harvests = historyFile.read()?.takeIf { it.isJsonObject }?.asJsonObject
@@ -248,6 +268,8 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     private fun pin(plot: Plot, layout: Layout) {
+        // Readings stay for crops still at the same place, so re-reading a plot after naming a crop keeps them.
+        plot.growth.keys.retainAll(layout.placements.map { it.row * GREENHOUSE_SIZE + it.col }.toSet())
         plot.layout = layout; plot.spawned.clear(); plot.plantedAt = 0; plot.previous = null; plot.status = ""; plot.scannedAt = 0
         plot.missingPlants = emptyMap(); plot.missingSoil = emptyMap()
         dirty = true; revision++; save()
@@ -362,6 +384,7 @@ object GreenhousePlanner : SkyMyceModule() {
             "gui" to "Your greenhouses: layout, growth timers, estimated and harvested profit",
             "anchor [name]" to "Look at the corner slot's soil to place a plot; reads crops already planted there",
             "import [mutation]" to "Read what is planted on this plot and pin it as the layout instead of solving a new one",
+            "(Plant Diagnostics Tool)" to "Analyze a few mutations: the planner estimates how far the whole plot has grown",
             "identify [crop]" to "Look at a planted crop to see what the planner reads, or name it; the plot is read again",
             "plan <mutation>" to "Solve a new layout for that mutation on this plot",
             "auto" to "Solve a new layout for the most profitable mutation",
@@ -585,6 +608,100 @@ object GreenhousePlanner : SkyMyceModule() {
 
     private fun soilOf(state: BlockState): Soil? = Soil.entries.firstOrNull { state.`is`(soilBlock(it)) }
 
+    // ---- Plant Diagnostics Tool ---------------------------------------------------------------------------------
+
+    /** An Analyze click waiting for the tool's output: which plot placement it was aimed at, and what has been shown since. */
+    private class Analysis(val plot: Plot, val key: Int, val plantId: String, val until: Long) { val lines = ArrayList<String>() }
+    private var analysis: Analysis? = null
+
+    @Subscription
+    fun onRightClick(event: RightClickEvent) = startAnalysis(event.stack, null)
+
+    /** Notes which planned crop the player analyses; the reading itself arrives in chat or a menu right after. Read-only. */
+    private fun startAnalysis(stack: ItemStack, entity: Entity?) {
+        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
+        if (stack.getData(DataTypes.ID)?.contains("DIAGNOSTIC") != true) return
+        val now = System.currentTimeMillis()
+        // One click can reach several hooks; the first one decides the target.
+        if (analysis?.let { now < it.until - ANALYSIS_WINDOW + 500 } == true) return
+        val level = MC.instance.level ?: return
+        // An armor-stand crop's head sits about 1.5 blocks above its feet.
+        val hit = MC.player.pick(6.0, 1f, false) as? BlockHitResult
+        val pos = when {
+            entity != null -> BlockPos.containing(entity.x, entity.y + 1.5, entity.z)
+            hit == null || hit.type != HitResult.Type.BLOCK -> return
+            soilOf(level.getBlockState(hit.blockPos)) != null -> hit.blockPos.above()
+            else -> hit.blockPos
+        }
+        val plot = plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null } ?: return
+        val cell = cellOf(plot.anchor!!, pos) ?: return
+        val placement = plot.layout?.placements?.firstOrNull { p ->
+            cell / GREENHOUSE_SIZE - p.row in 0 until p.size && cell % GREENHOUSE_SIZE - p.col in 0 until p.size
+        } ?: return
+        analysis = Analysis(plot, placement.row * GREENHOUSE_SIZE + placement.col, placement.plantId, now + ANALYSIS_WINDOW)
+    }
+
+    @Subscription
+    fun onAnalyzerChat(event: ChatReceivedEvent.Pre) { analysis?.let { capture(it, listOf(event.text)) } }
+
+    @Subscription
+    fun onAnalyzerMenu(event: ContainerInitializedEvent) {
+        val pending = analysis ?: return
+        capture(pending, listOf(event.title) + event.containerItems.filterNot { it.isEmpty }.flatMap { item ->
+            listOf(item.hoverName.string) + item.get(DataComponents.LORE)?.lines?.map { it.string }.orEmpty()
+        })
+    }
+
+    private fun capture(pending: Analysis, lines: List<String>) {
+        val now = System.currentTimeMillis()
+        if (now > pending.until) return
+        if (pending.lines.size < 120) pending.lines += lines.take(120 - pending.lines.size)
+        val (stage, stages) = parseGrowth(lines) ?: return
+        analysis = null
+        pending.plot.growth[pending.key] = GrowthReading(stage, stages, now)
+        revision++; save()
+        val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
+        val layout = pending.plot.layout
+        val target = layout?.targets?.any { it.row * GREENHOUSE_SIZE + it.col == pending.key } == true
+        displayModMessage("§a$name: growth stage $stage/$stages" + if (!target) "" else layout?.let { hoursPerStage(it) }?.let { hours ->
+            if (stage >= stages) " §7· fully grown" else " §7· fully grown in about ${age(((stages - stage) * hours * 3_600_000).toLong())}"
+        }.orEmpty())
+        growthSummary(pending.plot, now)?.let { summary ->
+            displayModMessage("§7Plot ${pending.plot.name}: ${summary.analysed} of ${summary.targets} analysed, about stage ${"%.1f".format(summary.stage)}/${summary.stages} on average" +
+                if (summary.readyInMs <= 0) ", ready now" else ", all grown in about ${age(summary.readyInMs)} (estimated from the growth timer)")
+        }
+    }
+
+    private fun expireAnalysis(now: Long) {
+        val pending = analysis?.takeIf { now > it.until } ?: return
+        analysis = null
+        SkyMyce.logger.info("Greenhouse analyzer output had no growth stage the planner understands: {}", pending.lines.joinToString(" | ").take(4000))
+        displayModMessage("§7No growth stage was found in what the Plant Diagnostics Tool showed; it was written to the log so the planner can learn to read it")
+    }
+
+    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, layout.uniqueCrops))
+
+    internal data class GrowthSummary(val analysed: Int, val targets: Int, val stage: Double, val stages: Int, val readyInMs: Long)
+
+    /** The plot's mutations' average growth, projected from the analysed ones with the growth timer; null before any reading. */
+    internal fun growthSummary(plot: Plot, now: Long = System.currentTimeMillis()): GrowthSummary? {
+        val layout = plot.layout ?: return null
+        val readings = layout.targets.mapNotNull { plot.growth[it.row * GREENHOUSE_SIZE + it.col] }
+        if (readings.isEmpty()) return null
+        val hours = hoursPerStage(layout)
+        val stages = readings.maxOf { it.stages }
+        val projected = readings.map { it.projected(hours, now) }
+        return GrowthSummary(readings.size, layout.targets.size, projected.average(), stages,
+            ((stages - projected.min()) * hours * 3_600_000).toLong().coerceAtLeast(0))
+    }
+
+    /** One placement's projected growth (stage, stages) from its own reading, for the grid tooltip; null when not analysed. */
+    internal fun targetGrowth(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): Pair<Double, Int>? {
+        val reading = plot.growth[placement.row * GREENHOUSE_SIZE + placement.col] ?: return null
+        val layout = plot.layout ?: return null
+        return reading.projected(hoursPerStage(layout), now) to reading.stages
+    }
+
     // ---- World overlay ------------------------------------------------------------------------------------------
 
     private fun clear() { ghosts = emptyList(); hudLines = null }
@@ -593,6 +710,7 @@ object GreenhousePlanner : SkyMyceModule() {
     fun onTick(event: TickEvent) {
         if (!loaded || !active()) return clear()
         val now = System.currentTimeMillis()
+        expireAnalysis(now)
         val inGarden = LocationAPI.island == SkyBlockIsland.GARDEN
         if (inGarden) pollPrices(now)
         val player = MC.instance.player
@@ -775,7 +893,8 @@ object GreenhousePlanner : SkyMyceModule() {
                 plots.forEach { plot ->
                     val anchor = plot.anchor?.let { PlotAnchor(it.pos.x, it.pos.y, it.pos.z, it.facing.name) }
                     add(PlotState(plot.name, anchor, plot.locked.indices.filter { plot.locked[it] }.toSet(), plot.target, plot.layout,
-                        plot.plantedAt, HashMap(plot.spawned), plot.status, plot.scannedAt, plot.missingPlants, plot.missingSoil, LinkedHashMap(plot.learned)).toJson())
+                        plot.plantedAt, HashMap(plot.spawned), plot.status, plot.scannedAt, plot.missingPlants, plot.missingSoil, LinkedHashMap(plot.learned),
+                        HashMap(plot.growth)).toJson())
                 }
             })
             add("prices", JsonObject().apply {
@@ -819,6 +938,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 status = state.status; scannedAt = state.scannedAt
                 missingPlants = state.missingPlants; missingSoil = state.missingSoil
                 learned.putAll(state.learned)
+                growth.putAll(state.growth)
             }
         }
     }

@@ -179,7 +179,26 @@ data class PlotState(
     val missingSoil: Map<Soil, Int> = emptyMap(),
     /** Block looks named on this plot; a vanilla stem or crop block can be a young mutation on one plot and itself on another. */
     val learned: Map<String, String> = emptyMap(),
+    /** Placement (top-left cell) → its last Plant Diagnostics Tool reading. */
+    val growth: Map<Int, GrowthReading> = emptyMap(),
 )
+
+/** A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]. */
+data class GrowthReading(val stage: Int, val stages: Int, val at: Long) {
+    /** Stages grown since the reading, from the site's growth timer; capped at fully grown. */
+    fun projected(hoursPerStage: Double, now: Long) = (stage + (now - at) / (hoursPerStage * 3_600_000)).coerceAtMost(stages.toDouble())
+}
+
+private val GROWTH_STAGE = Regex("(?i)(?:growth\\s+)?stage\\D{0,12}?(\\d{1,3})\\s*(?:/|of)\\s*(\\d{1,3})")
+private val FORMATTING = Regex("§.")
+
+/** The growth stage in the analyzer's output (chat or menu text, formatting codes allowed), or null. */
+fun parseGrowth(lines: List<String>): Pair<Int, Int>? = lines.firstNotNullOfOrNull { line ->
+    GROWTH_STAGE.find(line.replace(FORMATTING, ""))?.let { match ->
+        val stage = match.groupValues[1].toInt(); val stages = match.groupValues[2].toInt()
+        (stage to stages).takeIf { stages in 1..200 && stage in 0..stages }
+    }
+}
 
 /** One character per cell in [PlotState.status]. */
 enum class CellStatus(val code: Char) {
@@ -201,6 +220,9 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     if (missingPlants.isNotEmpty()) add("missingPlants", JsonObject().apply { missingPlants.forEach { (id, n) -> addProperty(id, n) } })
     if (missingSoil.isNotEmpty()) add("missingSoil", JsonObject().apply { missingSoil.forEach { (soil, n) -> addProperty(soil.name, n) } })
     if (learned.isNotEmpty()) add("learned", JsonObject().apply { learned.forEach { (look, id) -> addProperty(look, id) } })
+    if (growth.isNotEmpty()) add("growth", JsonObject().apply {
+        growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply { add(reading.stage); add(reading.stages); add(reading.at) }) }
+    })
 }
 
 /**
@@ -230,6 +252,13 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
             missingSoil = counts("missingSoil").mapNotNull { (key, n) -> runCatching { Soil.valueOf(key) }.getOrNull()?.let { it to n } }.toMap(),
             learned = runCatching {
                 section.getAsJsonObject("learned").entrySet().mapNotNull { (look, id) -> runCatching { id.asString }.getOrNull()?.takeIf { catalog[it] != null && look.length <= 256 }?.let { look to it } }.toMap()
+            }.getOrDefault(emptyMap()),
+            growth = runCatching {
+                section.getAsJsonObject("growth").entrySet().mapNotNull { (cell, value) -> runCatching {
+                    val row = value.asJsonArray
+                    cell.toInt().also { require(it in 0 until GREENHOUSE_CELLS) } to
+                        GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong).also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
+                }.getOrNull() }.toMap()
             }.getOrDefault(emptyMap()))
     }
     val plots = json["plots"]?.takeIf { it.isJsonArray } ?: return listOf(plot(json, "1", runCatching {
@@ -312,11 +341,8 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
     val placements = ArrayList<Placement>()
     fun cells(row: Int, col: Int, size: Int) = (0 until size).flatMap { r -> (0 until size).map { c -> (row + r) * GREENHOUSE_SIZE + col + c } }
     fun place(placement: Placement) { cells(placement.row, placement.col, placement.size).forEach { owner[it] = placement }; placements += placement }
-    // shortcut: a multi-tile crop's footprint starts at its first identified cell in reading order; revisit if Hypixel marks only a centre tile.
-    for (cell in 0 until GREENHOUSE_CELLS) {
-        val plant = planted[cell]?.let { catalog[it] } ?: continue
-        val row = cell / GREENHOUSE_SIZE; val col = cell % GREENHOUSE_SIZE
-        if (owner[cell] != null || row + plant.size > GREENHOUSE_SIZE || col + plant.size > GREENHOUSE_SIZE) continue
+    for ((id, row, col) in footprints(catalog, planted)) {
+        val plant = catalog[id] ?: continue
         if (cells(row, col, plant.size).any { owner[it] != null }) continue
         place(Placement(plant.id, row, col, plant.size, if (plant.id == targetId) Role.TARGET else Role.INGREDIENT))
     }
@@ -341,6 +367,49 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
     val unique = maxOf(settings.uniqueCrops, placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]!!.unique }.map { it.plantId }.distinct().size).coerceAtMost(12)
     val draft = Layout(placements, soils, 0.0, unique, now, hash)
     return draft.copy(totalProfitPerHour = draft.profitPerHour(catalog, quotes, settings) ?: 0.0) to supported
+}
+
+/**
+ * Where each recognised crop sits, as (plant, top-left row, top-left column). A multi-tile crop is often seen on only
+ * some of its cells (a 3×3 Snoozling shows one head on its middle cell), so each connected group of its cells gets a
+ * footprint centred on the group; a group too large for one footprint is tiled in reading order.
+ */
+internal fun footprints(catalog: PlantCatalog, planted: Array<String?>): List<Triple<String, Int, Int>> {
+    val result = ArrayList<Triple<String, Int, Int>>()
+    val seen = BooleanArray(GREENHOUSE_CELLS)
+    for (start in 0 until GREENHOUSE_CELLS) {
+        val plant = planted[start]?.let { catalog[it] } ?: continue
+        if (seen[start]) continue
+        if (plant.size == 1) { seen[start] = true; result += Triple(plant.id, start / GREENHOUSE_SIZE, start % GREENHOUSE_SIZE); continue }
+        val group = ArrayList<Int>()
+        val queue = ArrayDeque(listOf(start)); seen[start] = true
+        while (queue.isNotEmpty()) {
+            val cell = queue.removeFirst(); group += cell
+            val r = cell / GREENHOUSE_SIZE; val c = cell % GREENHOUSE_SIZE
+            for ((nr, nc) in listOf(r - 1 to c, r + 1 to c, r to c - 1, r to c + 1)) {
+                val next = nr * GREENHOUSE_SIZE + nc
+                if (nr in 0 until GREENHOUSE_SIZE && nc in 0 until GREENHOUSE_SIZE && !seen[next] && planted[next] == plant.id) { seen[next] = true; queue += next }
+            }
+        }
+        val rows = group.map { it / GREENHOUSE_SIZE }; val cols = group.map { it % GREENHOUSE_SIZE }
+        val limit = GREENHOUSE_SIZE - plant.size
+        if (rows.max() - rows.min() < plant.size && cols.max() - cols.min() < plant.size) {
+            // Integer halves round towards the top-left, which suits a 2×2 seen on one corner cell no worse than any other choice.
+            val row = ((rows.min() + rows.max() + 1 - plant.size) / 2).coerceIn(0, limit)
+            val col = ((cols.min() + cols.max() + 1 - plant.size) / 2).coerceIn(0, limit)
+            result += Triple(plant.id, row, col)
+        } else {
+            val taken = HashSet<Int>()
+            for (cell in group.sorted()) {
+                val r = cell / GREENHOUSE_SIZE; val c = cell % GREENHOUSE_SIZE
+                if (cell in taken || r > limit || c > limit) continue
+                val cover = (0 until plant.size).flatMap { dr -> (0 until plant.size).map { dc -> (r + dr) * GREENHOUSE_SIZE + c + dc } }
+                if (cover.any { it in taken }) continue
+                taken += cover; result += Triple(plant.id, r, c)
+            }
+        }
+    }
+    return result
 }
 
 /** One harvested mutation, valued when it was harvested; [cost] is the layout's ingredient cost per target. Estimated. */

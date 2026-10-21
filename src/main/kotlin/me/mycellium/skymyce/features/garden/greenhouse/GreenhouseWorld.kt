@@ -43,7 +43,10 @@ internal object GreenhouseWorld {
             (level.getBlockEntity(pos) as? SkullBlockEntity)?.ownerProfile?.let { textureKey(it.partialProfile()) }?.let { return "head:$it" }
             return blockKey(level, pos, state)
         }
-        val entities = level.getEntitiesOfClass(Entity::class.java, AABB(pos)) { it is ArmorStand || it is Display }
+        // Bare armor stands (no equipment) are Hypixel's invisible markers, not crops.
+        val entities = level.getEntitiesOfClass(Entity::class.java, AABB(pos)) { entity ->
+            entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty }
+        }
         for (entity in entities) {
             val stack = when (entity) {
                 is ArmorStand -> EquipmentSlot.entries.firstNotNullOfOrNull { slot -> entity.getItemBySlot(slot).takeUnless { it.isEmpty } }
