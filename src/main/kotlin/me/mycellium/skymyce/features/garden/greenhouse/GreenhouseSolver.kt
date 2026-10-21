@@ -28,8 +28,8 @@ class GreenhouseSolver(
     private val iterations: Int = 120_000,
 ) {
     private val targets = targetIds.mapNotNull { catalog[it] }.filter { plant ->
-        plant.solvable && revenuePrice(quotes[plant.bazaarId], settings.priceMode) != null &&
-            plant.requires.keys.all { costPrice(catalog[it]!!, quotes) != null }
+        // An ingredient without a price costs nothing here, matching the ranking; only the target must be priced.
+        plant.solvable && revenuePrice(quotes[plant.bazaarId], settings.priceMode) != null
     }.distinct()
     private val pool = (targets + targets.flatMap { it.requires.keys }.map { catalog[it]!! } +
         catalog.plants.filter { it.unique && costPrice(it, quotes) != null }).distinct()

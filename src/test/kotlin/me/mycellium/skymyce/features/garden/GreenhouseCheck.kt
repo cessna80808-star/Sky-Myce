@@ -59,6 +59,14 @@ fun main() {
     // PlantBoy Advance (2x2) is charged per tile, as on the site: 2 x 100k, not 1.
     check(ranked.single { it.plant.id == "ALL_IN_ALOE" }.inputCost == 6 * 100.0 + 2 * 1e5) { "PlantBoy exception" }
     check(ranked.none { it.plant.id == "SOGGYBUD" }) { "Unpriced mutation ranked" }
+    // Coalroot still ranks and solves when Scourroot has no price (no sell offers): only the priced Ashwreath is charged.
+    val noScourroot = mapOf("COALROOT" to Quote(1e5, 3.7e5), "ASHWREATH" to Quote(1_000.0, 1_800.0))
+    check(rankMutations(catalog, noScourroot, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER)).single { it.plant.id == "COALROOT" }.inputCost == 5 * 1_800.0) {
+        "Coalroot with an unpriced ingredient"
+    }
+    check(GreenhouseSolver(catalog, noScourroot, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER), full, listOf("COALROOT"), 20_000).solve(3, 0, "x") != null) {
+        "Coalroot solve with an unpriced ingredient"
+    }
     check(rankMutations(catalog, quotes, GreenhouseSettings(0, 0, PriceMode.INSTANT_SELL)).single { it.plant.id == "GLASSCORN" }.revenue == 900_000.0) { "Instant sell" }
 
     // Parity with api.skymutations.eu/solve "maximize" outputs captured 2026-10-20.

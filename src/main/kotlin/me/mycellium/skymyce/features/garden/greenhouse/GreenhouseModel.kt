@@ -107,8 +107,9 @@ data class RankedMutation(val plant: Plant, val revenue: Double, val inputCost: 
  * skymutations.eu's profit leaderboard: one mutation item per spawn priced at [revenuePrice], minus every spreading
  * ingredient bought at its instant-buy price. Multi-tile ingredients count one item per footprint (`ceil(qty / size)`),
  * except PlantBoy Advance, which the site always charges per tile. Crop drops, copper, sowdust, Ethereal Vine drops and
- * ingredient survival are not modelled, matching the site. Unlike the site, a missing target or ingredient price excludes
- * the mutation instead of counting as 0, and raw crops use their real Bazaar ids.
+ * ingredient survival are not modelled, matching the site. A missing ingredient price counts as 0, as on the site (often a
+ * crop with no sell offers); unlike the site, a missing target price excludes the mutation, and raw crops use their real
+ * Bazaar ids.
  */
 fun rankMutations(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings,
                   allowed: (Plant) -> Boolean = { true }): List<RankedMutation> = catalog.plants.mapNotNull { plant ->
@@ -118,7 +119,7 @@ fun rankMutations(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: G
     for ((id, quantity) in plant.requires) {
         val ingredient = catalog[id]!!
         val count = if (ingredient.size > 1 && id != "PLANTBOY_ADVANCE") ceil(quantity / ingredient.size.toDouble()) else quantity.toDouble()
-        cost += (costPrice(ingredient, quotes) ?: return@mapNotNull null) * count
+        cost += (costPrice(ingredient, quotes) ?: 0.0) * count
     }
     RankedMutation(plant, revenue, cost, cycleHours(plant, settings.upgrade, settings.uniqueCrops))
 }.sortedByDescending { it.profitPerHour }
