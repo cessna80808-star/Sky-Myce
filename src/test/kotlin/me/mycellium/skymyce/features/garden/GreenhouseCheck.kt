@@ -45,6 +45,9 @@ fun main() {
     check(catalog["WHEAT_SEEDS"]!!.bazaarId == "SEEDS" && catalog.plants.count { it.unique } == 12) { "Raw crop ids" }
     check(runCatching { parsePlantCatalog("""{"version":1,"plants":[{"id":"A","name":"A","rarity":"RARE","size":1,"soils":[],"stages":1,"requires":{"B":1}}]}""") }.isFailure) { "Dangling ingredient accepted" }
 
+    // The screen's grid is rotated: data row r is screen column r, data column c is screen row c; a 2×2 footprint at (2, 5) spans x 32..63, y 80..111 at 16px cells.
+    check(greenhouseCellAt(2 * 16 + 3, 5 * 16 + 1, 16) == 25 && greenhouseCellAt(63, 111, 16) == 36 && greenhouseCellAt(0, 0, 16) == 0 && greenhouseCellAt(159, 159, 16) == 99) { "Grid rotation" }
+
     // Site timing: 4h per stage minus 2.5 points per upgrade level (≤8), +5 at level 9, and 2.5 per unique crop.
     check(hoursPerStage(0, 0) == 4.0 && abs(hoursPerStage(9, 12) - 1.8) < 1e-9 && abs(hoursPerStage(8, 0) - 3.2) < 1e-9) { "Timer" }
 
