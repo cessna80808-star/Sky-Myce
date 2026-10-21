@@ -196,6 +196,32 @@ object GreenhousePlanner : SkyMyceModule() {
 
     internal fun selected(): Plot = plot ?: (plots.firstOrNull() ?: Plot("1").also(plots::add)).also { plot = it }
 
+    /** A plot nobody anchored yet, for ranking a new plot without touching the saved ones. */
+    private val unanchored = Plot("new")
+
+    /**
+     * The plot a layout-changing command acts on: the anchored plot the player stands on (or the only plot before any is
+     * anchored). Never the nearest one, so working on a new plot cannot overwrite a finished one.
+     */
+    private fun plotHere(): Plot? {
+        val pos = MC.instance.player?.blockPosition() ?: return null
+        plots.firstOrNull { p -> p.anchor?.let { standsOn(it, pos) } == true }?.let { return it }
+        return if (plots.none { it.anchor != null }) selected() else null
+    }
+
+    private fun plotHereOrExplain(): Plot? = plotHere() ?: null.also {
+        displayModMessage("§eStand on the plot you want to change. A new plot needs anchoring first: look at its corner soil and run /sm greenhouse anchor")
+    }
+
+    /** On the plot or its one-block edge, at most a few blocks above it. */
+    private fun standsOn(origin: Anchor, pos: BlockPos): Boolean {
+        val dx = pos.x - origin.pos.x; val dz = pos.z - origin.pos.z
+        val right = origin.facing.clockWise
+        val row = dx * origin.facing.stepX + dz * origin.facing.stepZ
+        val col = dx * right.stepX + dz * right.stepZ
+        return row in -1..GREENHOUSE_SIZE && col in -1..GREENHOUSE_SIZE && pos.y - origin.pos.y in -2..6
+    }
+
     private fun unlocked(plot: Plot) = BooleanArray(GREENHOUSE_CELLS) { !plot.locked[it] }
 
     // ---- Prices -------------------------------------------------------------------------------------------------
@@ -314,7 +340,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val queue = ArrayDeque(ranking().take(ESTIMATED).map { it.plant.id }.filter { estimates[inputsHash(unlocked, listOf(it), settings, catalog, quotes)] == null })
         if (queue.isEmpty()) return done()
         estimating = true
-        displayModMessage("§7Estimating how many of the top ${queue.size} mutations fit on plot ${plot.name}…")
+        displayModMessage("§7Estimating how many of the top ${queue.size} mutations fit on ${if (plot === unanchored) "an empty plot" else "plot ${plot.name}"}…")
         fun next() {
             val id = queue.removeFirstOrNull()
             if (id == null) { estimating = false; save(); done(); return }
@@ -339,11 +365,11 @@ object GreenhousePlanner : SkyMyceModule() {
             .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.filter { it.solvable }?.map { it.id }.orEmpty(), builder) }
             .executes { context -> val id = StringArgumentType.getString(context, "mutation").uppercase(); run { choose(id) } }))
         .then(literal("auto").executes { run { choose(null) } })
-        .then(literal("recompute").executes { run { plan(selected(), force = true) } })
-        .then(literal("import").executes { run { importPlot(selected(), null) } }
+        .then(literal("recompute").executes { run { plotHereOrExplain()?.let { plan(it, force = true) } } })
+        .then(literal("import").executes { run { plotHereOrExplain()?.let { importPlot(it, null) } } }
             .then(argument("mutation", StringArgumentType.word())
                 .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.filter { it.solvable }?.map { it.id }.orEmpty(), builder) }
-                .executes { context -> val id = StringArgumentType.getString(context, "mutation").uppercase(); run { importPlot(selected(), id) } }))
+                .executes { context -> val id = StringArgumentType.getString(context, "mutation").uppercase(); run { plotHereOrExplain()?.let { importPlot(it, id) } } }))
         .then(literal("identify").executes { run { identify(null) } }.then(argument("crop", StringArgumentType.word())
             .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.map { it.id }.orEmpty(), builder) }
             .executes { context -> val id = StringArgumentType.getString(context, "crop").uppercase(); run { identify(id) } }))
@@ -357,8 +383,8 @@ object GreenhousePlanner : SkyMyceModule() {
                 val row = IntegerArgumentType.getInteger(context, "row") - 1; val column = IntegerArgumentType.getInteger(context, "column") - 1
                 run { toggleLock(row, column) }
             })))
-        .then(literal("missing").executes { run { showMissing(selected()) } })
-        .then(literal("shopping").executes { run { showMissing(selected()) } })
+        .then(literal("missing").executes { run { showMissing(plotHere() ?: selected()) } })
+        .then(literal("shopping").executes { run { showMissing(plotHere() ?: selected()) } })
         .then(literal("buy").then(argument("crop", StringArgumentType.word()).executes { context ->
             val id = StringArgumentType.getString(context, "crop").uppercase(); run { buy(id) }
         }))
@@ -407,7 +433,8 @@ object GreenhousePlanner : SkyMyceModule() {
         val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
         if (!GreenhouseConfig.enabled) displayModMessage("§7Greenhouse Planner is off in settings; the ranking still works")
         if (prices.isEmpty()) { nextPoll = 0; pollPrices(System.currentTimeMillis()); return displayModMessage("§7Fetching Bazaar prices… run /sm greenhouse again in a moment") }
-        val plot = selected()
+        // Off any anchored plot, rank for an empty unlocked plot rather than the nearest saved one.
+        val plot = plotHere() ?: unanchored
         if (estimating) return displayModMessage("§7Still estimating whole-plot profit; the ranking follows when it is done")
         val now = System.currentTimeMillis()
         pollPrices(now)
@@ -426,6 +453,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val current = plot.layout
         val target = current?.targets?.firstOrNull()?.let { catalog[it.plantId]?.name }
         displayModMessage(when {
+            plot === unanchored -> "§7Counts are for an empty plot. Anchor the plot you are on before planning it"
             current == null -> "§7No layout yet${chatLabel(plot)}. Click [Plan], run /sm greenhouse auto, or import what is planted"
             else -> "§7Current plan${chatLabel(plot)}: §f$target ×${current.targets.size} §a${rate(estimate(current))} §7· ${if (current.inputsHash.startsWith(IMPORTED)) "imported" else "solved"} ${age(now - current.generatedAt)} ago"
         })
@@ -436,7 +464,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun choose(id: String?) {
         val plant = id?.let { catalog?.get(it) }
         if (id != null && plant?.solvable != true) return displayModMessage("§cUnknown or unsupported mutation: $id")
-        val plot = selected()
+        val plot = plotHereOrExplain() ?: return
         plot.target = plant?.id
         save()
         plan(plot, force = false)
@@ -468,7 +496,7 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     private fun toggleLock(row: Int, column: Int) {
-        val plot = selected()
+        val plot = plotHereOrExplain() ?: return
         val cell = row * GREENHOUSE_SIZE + column
         plot.locked[cell] = !plot.locked[cell]
         save()
