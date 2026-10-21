@@ -33,6 +33,8 @@ data class Plant(
     /** A spreading condition the solver cannot express as neighbour counts. */
     val special: String?,
     val requires: Map<String, Int>,
+    /** Skin texture (file name) of the player head the crop is planted as, when it is one. */
+    val head: String? = null,
 ) {
     val mutation get() = rarity != Rarity.RAW
     val solvable get() = special == null && requires.isNotEmpty()
@@ -40,6 +42,7 @@ data class Plant(
 
 class PlantCatalog(val plants: List<Plant>) {
     val byId = plants.associateBy { it.id }
+    val byHead = plants.filter { it.head != null }.associateBy { it.head!! }
     operator fun get(id: String) = byId[id]
 }
 
@@ -55,7 +58,8 @@ fun parsePlantCatalog(text: String): PlantCatalog {
             json.getAsJsonArray("soils").map { Soil.valueOf(it.asString) }, json["stages"].asInt.also { require(it in 0..1000) },
             json["bazaar"]?.asString ?: id, (json.getAsJsonArray("items")?.map { it.asString } ?: listOf(id)).toSet(),
             json["unique"]?.asBoolean == true, json["free"]?.asBoolean == true, json["special"]?.asString,
-            json.getAsJsonObject("requires")?.entrySet()?.associate { (key, value) -> key to value.asInt.also { require(it in 1..16) } }.orEmpty())
+            json.getAsJsonObject("requires")?.entrySet()?.associate { (key, value) -> key to value.asInt.also { require(it in 1..16) } }.orEmpty(),
+            json["head"]?.asString?.also { require(it.matches(Regex("[0-9a-f]{32,64}"))) })
     }
     val catalog = PlantCatalog(plants)
     require(catalog.byId.size == plants.size && plants.all { plant -> plant.requires.keys.all { it in catalog.byId } })
@@ -289,12 +293,14 @@ fun importLayout(catalog: PlantCatalog, planted: Array<String?>, occupied: Boole
     val candidates = if (target != null) listOf(target) else catalog.plants.filter { plant ->
         plant.solvable && (plant.id in present || plant.requires.keys.all { it in present })
     }.map { it.id }
+    // The mutation already growing with its ingredients around it is what the plot was built for; profit only breaks ties.
     return candidates.mapNotNull { id -> importFor(catalog, planted, occupied, soil, unlocked, id, quotes, settings, now, hash) }
-        .maxWithOrNull(compareBy<Layout>({ it.profitPerHour(catalog, quotes, settings) != null }, { it.profitPerHour(catalog, quotes, settings) ?: 0.0 }, { it.targets.size }))
+        .maxWithOrNull(compareBy<Pair<Layout, Int>>({ it.second }, { it.first.profitPerHour(catalog, quotes, settings) != null },
+            { it.first.profitPerHour(catalog, quotes, settings) ?: 0.0 }, { it.first.targets.size }))?.first
 }
 
 private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: BooleanArray, soil: Array<Soil?>, unlocked: BooleanArray, targetId: String,
-                      quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Layout? {
+                      quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Pair<Layout, Int>? {
     val target = catalog[targetId]?.takeIf { it.solvable } ?: return null
     val owner = arrayOfNulls<Placement>(GREENHOUSE_CELLS)
     val placements = ArrayList<Placement>()
@@ -308,14 +314,18 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
         if (cells(row, col, plant.size).any { owner[it] != null }) continue
         place(Placement(plant.id, row, col, plant.size, if (plant.id == targetId) Role.TARGET else Role.INGREDIENT))
     }
-    for (row in 0..GREENHOUSE_SIZE - target.size) for (col in 0..GREENHOUSE_SIZE - target.size) {
-        if (cells(row, col, target.size).any { !unlocked[it] || occupied[it] || owner[it] != null }) continue
+    fun supplied(row: Int, col: Int): Boolean {
         val counts = HashMap<String, Int>()
         for (r in row - 1..row + target.size) for (c in col - 1..col + target.size) {
             if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE || (r in row until row + target.size && c in col until col + target.size)) continue
             owner[r * GREENHOUSE_SIZE + c]?.takeIf { it.role == Role.INGREDIENT }?.let { counts.merge(it.plantId, 1, Int::plus) }
         }
-        if (target.requires.all { (id, count) -> (counts[id] ?: 0) >= count }) place(Placement(targetId, row, col, target.size, Role.TARGET))
+        return target.requires.all { (id, count) -> (counts[id] ?: 0) >= count }
+    }
+    val supported = placements.count { it.role == Role.TARGET && supplied(it.row, it.col) }
+    for (row in 0..GREENHOUSE_SIZE - target.size) for (col in 0..GREENHOUSE_SIZE - target.size) {
+        if (cells(row, col, target.size).any { !unlocked[it] || occupied[it] || owner[it] != null }) continue
+        if (supplied(row, col)) place(Placement(targetId, row, col, target.size, Role.TARGET))
     }
     if (placements.none { it.role == Role.TARGET }) return null
     val soils = placements.associateWith { placement ->
@@ -324,7 +334,7 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
     }
     val unique = maxOf(settings.uniqueCrops, placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]!!.unique }.map { it.plantId }.distinct().size).coerceAtMost(12)
     val draft = Layout(placements, soils, 0.0, unique, now, hash)
-    return draft.copy(totalProfitPerHour = draft.profitPerHour(catalog, quotes, settings) ?: 0.0)
+    return draft.copy(totalProfitPerHour = draft.profitPerHour(catalog, quotes, settings) ?: 0.0) to supported
 }
 
 /** One harvested mutation, valued when it was harvested; [cost] is the layout's ingredient cost per target. Estimated. */

@@ -12,19 +12,24 @@ import net.minecraft.world.item.ItemStack
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.entity.SkullBlockEntity
+import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.AABB
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
 
 /**
- * Reads what occupies a crop spot as a stable fingerprint: `block:<id>`, `head:<texture>` for a player head (as a block,
- * an armor stand's helmet or a display item), `item:<SkyBlock or vanilla id>`, or `entity:<type>` when nothing more is
- * known. Some crops (Scourroot and others) are armor stands or display entities above an air block. Null means empty.
+ * Reads what occupies a crop spot as a stable fingerprint: `block:<id>@<soil block>`, `head:<texture>` for a player head
+ * (as a block, an armor stand's helmet or a display item), `item:<SkyBlock or vanilla id>`, or `entity:<type>` when
+ * nothing more is known. Mutations are mostly player heads using their item's texture, but some reuse a vanilla crop
+ * block on a different soil (Ashwreath is wheat on soul sand), so block fingerprints carry the soil. Null means empty.
  */
 internal object GreenhouseWorld {
     private val TEXTURE_URL = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"")
 
-    /** Vanilla crop blocks for the base crops; everything else is matched by item id or learned. */
+    /** Mutations seen in game as a vanilla crop block on their own soil; checked before [VANILLA]. */
+    private val ON_SOIL = mapOf("block:wheat@soul_sand" to "ASHWREATH")
+
+    /** Vanilla crop blocks for the base crops, on any soil; everything else is matched by head texture, item id or learned. */
     private val VANILLA = mapOf(
         "wheat" to "WHEAT_SEEDS", "potatoes" to "POTATO", "carrots" to "CARROT", "melon_stem" to "MELON_SEEDS",
         "attached_melon_stem" to "MELON_SEEDS", "pumpkin_stem" to "PUMPKIN_SEEDS", "attached_pumpkin_stem" to "PUMPKIN_SEEDS",
@@ -36,14 +41,14 @@ internal object GreenhouseWorld {
         val state = level.getBlockState(pos)
         if (state.`is`(Blocks.FIRE) || !state.isAir && !state.canBeReplaced()) {
             (level.getBlockEntity(pos) as? SkullBlockEntity)?.ownerProfile?.let { textureKey(it.partialProfile()) }?.let { return "head:$it" }
-            return "block:" + BuiltInRegistries.BLOCK.getKey(state.block).path
+            return blockKey(level, pos, state)
         }
         val entities = level.getEntitiesOfClass(Entity::class.java, AABB(pos)) { it is ArmorStand || it is Display }
         for (entity in entities) {
             val stack = when (entity) {
                 is ArmorStand -> entity.getItemBySlot(EquipmentSlot.HEAD).takeUnless { it.isEmpty } ?: entity.getItemBySlot(EquipmentSlot.MAINHAND)
                 is Display.ItemDisplay -> entity.itemRenderState()?.itemStack()
-                is Display.BlockDisplay -> entity.blockRenderState()?.blockState()?.let { return "block:" + BuiltInRegistries.BLOCK.getKey(it.block).path }
+                is Display.BlockDisplay -> entity.blockRenderState()?.blockState()?.let { return blockKey(level, pos, it) }
                 else -> null
             }
             itemKey(stack)?.let { return it }
@@ -51,10 +56,14 @@ internal object GreenhouseWorld {
         return entities.firstOrNull()?.let { "entity:" + BuiltInRegistries.ENTITY_TYPE.getKey(it.type).path }
     }
 
-    /** The plant a fingerprint shows: learned first, then SkyBlock item ids, then vanilla crop blocks. */
+    private fun blockKey(level: Level, pos: BlockPos, state: BlockState) =
+        "block:" + BuiltInRegistries.BLOCK.getKey(state.block).path + "@" + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos.below()).block).path
+
+    /** The plant a fingerprint shows: learned first, then bundled head textures, SkyBlock item ids and vanilla crop blocks. */
     fun plantFor(fingerprint: String, catalog: PlantCatalog, learned: Map<String, String>): String? = learned[fingerprint] ?: when {
+        fingerprint.startsWith("head:") -> catalog.byHead[fingerprint.removePrefix("head:")]?.id
         fingerprint.startsWith("item:") -> fingerprint.removePrefix("item:").let { id -> catalog[id]?.id ?: catalog.plants.firstOrNull { id in it.itemIds }?.id }
-        else -> VANILLA[fingerprint]
+        else -> ON_SOIL[fingerprint] ?: VANILLA[fingerprint.substringBefore('@')]
     }
 
     private fun itemKey(stack: ItemStack?): String? {

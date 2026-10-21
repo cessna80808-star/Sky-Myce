@@ -123,6 +123,31 @@ fun main() {
     check(imported.totalProfitPerHour == imported.profitPerHour(catalog, priced, settings)) { "Import profit" }
     check(importLayout(catalog, arrayOfNulls(GREENHOUSE_CELLS), BooleanArray(GREENHOUSE_CELLS), soil, full, null, priced, settings, 9, "x") == null) { "Empty import" }
 
+    // A plot as seen in game (2026-10-21): two Coalroot, each ringed by 5 Ashwreath (wheat blocks on soul sand) and 3
+    // Scourroot heads, plus a stray Scourroot that has its own Potato and Carrot. Coalroot is what the plot is built for,
+    // even when Scourroot is priced higher.
+    check(GreenhouseWorld.plantFor("block:wheat@soul_sand", catalog, emptyMap()) == "ASHWREATH" &&
+        GreenhouseWorld.plantFor("block:wheat@farmland", catalog, emptyMap()) == "WHEAT_SEEDS" &&
+        GreenhouseWorld.plantFor("head:a9da3b8dcffbb5dd9708b83e54746fced475f0ee16c6c0ce4668cca7999c4d1e", catalog, emptyMap()) == "SCOURROOT" &&
+        GreenhouseWorld.plantFor("head:f946443fa0039354edd31a70c749c4f963464744dc20b79137bd9910356ee90", catalog, emptyMap()) == "COALROOT" &&
+        GreenhouseWorld.plantFor("head:unknown", catalog, mapOf("head:unknown" to "COALROOT")) == "COALROOT" &&
+        catalog.byHead.size == 41) { "Crop fingerprints" }
+    val field = arrayOfNulls<String>(GREENHOUSE_CELLS)
+    val fieldSoil = Array<Soil?>(GREENHOUSE_CELLS) { Soil.FARMLAND }
+    fun put(row: Int, col: Int, id: String) { field[row * 10 + col] = id; if (id == "ASHWREATH") fieldSoil[row * 10 + col] = Soil.SOUL_SAND }
+    for ((centreRow, centreCol) in listOf(2 to 2, 2 to 6)) {
+        put(centreRow, centreCol, "COALROOT")
+        listOf(-1 to -1, -1 to 1, 0 to -1, 1 to -1, 1 to 1).forEach { (r, c) -> put(centreRow + r, centreCol + c, "ASHWREATH") }
+        listOf(-1 to 0, 0 to 1, 1 to 0).forEach { (r, c) -> put(centreRow + r, centreCol + c, "SCOURROOT") }
+    }
+    put(7, 1, "SCOURROOT"); put(6, 0, "POTATO"); put(8, 0, "CARROT"); put(9, 8, "WHEAT_SEEDS"); put(9, 9, "WHEAT_SEEDS")
+    val scourrootRich = catalog.plants.associate { it.bazaarId to Quote(10.0, 10.0) } + ("SCOURROOT" to Quote(1e7, 1e7)) + ("COALROOT" to Quote(5e4, 5e4))
+    val fieldLayout = importLayout(catalog, field, BooleanArray(GREENHOUSE_CELLS) { field[it] != null }, fieldSoil, full, null, scourrootRich,
+        GreenhouseSettings(0, 0, PriceMode.SELL_OFFER), 9, "imported-field")!!
+    check(fieldLayout.targets.map { it.plantId }.toSet() == setOf("COALROOT") && fieldLayout.targets.size >= 2) { "Field import chose ${fieldLayout.targets}" }
+    check(fieldLayout.placements.filter { it.plantId == "ASHWREATH" }.all { fieldLayout.soils[it] == Soil.SOUL_SAND }) { "Ashwreath soil" }
+    validate(fieldLayout, full)
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L

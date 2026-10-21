@@ -530,8 +530,9 @@ object GreenhousePlanner : SkyMyceModule() {
         val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
         val plant = catalog[id] ?: return displayModMessage("§cUnknown crop: $id")
         val level = MC.instance.level ?: return
-        val hit = MC.instance.hitResult as? BlockHitResult
-        if (hit == null || hit.type != HitResult.Type.BLOCK) return displayModMessage("§cLook at the crop, or the soil under it, first")
+        // Further than block reach, so a crop in the middle of the plot can be named from its edge.
+        val hit = MC.player.pick(32.0, 1f, false) as? BlockHitResult
+        if (hit == null || hit.type != HitResult.Type.BLOCK) return displayModMessage("§cLook at the crop, or the soil under it, first (within 32 blocks)")
         val pos = if (soilOf(level.getBlockState(hit.blockPos)) != null) hit.blockPos.above() else hit.blockPos
         val fingerprint = GreenhouseWorld.fingerprint(level, pos) ?: return displayModMessage("§cNothing is planted there")
         learn(fingerprint, plant.id)

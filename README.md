@@ -23,7 +23,7 @@ Local features work without Discord or the optional community service. See the [
 
 ## Credits
 
-- The Greenhouse Planner's profit formula and planner concept follow [skymutations.eu](https://skymutations.eu) by palmaner. The bundled mutation facts (spreading conditions, soils, growth stages) were taken from skymutations.eu and cross-checked against the community SkyBlock wiki; the layout solver is an independent reimplementation.
+- The Greenhouse Planner's profit formula and planner concept follow [skymutations.eu](https://skymutations.eu) by palmaner. The bundled mutation facts (spreading conditions, soils, growth stages) were taken from skymutations.eu and cross-checked against the community SkyBlock wiki; the layout solver is an independent reimplementation. Planted mutations are recognised by their head textures, taken from the [NotEnoughUpdates item repository](https://github.com/NotEnoughUpdates/NotEnoughUpdates-REPO).
 
 ## Help and development
 
