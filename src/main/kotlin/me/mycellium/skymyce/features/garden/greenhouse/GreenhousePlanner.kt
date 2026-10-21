@@ -700,6 +700,14 @@ object GreenhousePlanner : SkyMyceModule() {
             ((stages - projected.min()) * hours * 3_600_000).toLong().coerceAtLeast(0))
     }
 
+    /** Milliseconds until an analysed placement is fully grown (0 when it is), from its reading and the growth timer; null when not analysed. */
+    internal fun targetReadyInMs(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): Long? {
+        val reading = plot.growth[placement.row * GREENHOUSE_SIZE + placement.col] ?: return null
+        val layout = plot.layout ?: return null
+        val hours = hoursPerStage(layout)
+        return ((reading.stages - reading.projected(hours, now)) * hours * 3_600_000).toLong().coerceAtLeast(0)
+    }
+
     /** One placement's projected growth (stage, stages) from its own reading, for the grid tooltip; null when not analysed. */
     internal fun targetGrowth(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): Pair<Double, Int>? {
         val reading = plot.growth[placement.row * GREENHOUSE_SIZE + placement.col] ?: return null
