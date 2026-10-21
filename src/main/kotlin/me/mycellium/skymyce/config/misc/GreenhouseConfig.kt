@@ -36,7 +36,7 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
 
     val uniqueCrops by int(0) {
         name = TranslatableValue.literal("Unique Crops Elsewhere")
-        description = TranslatableValue.literal("Unique base crop types you already grow in other Greenhouse plots; the planner adds its own on top")
+        description = TranslatableValue.literal("Counted automatically from your other saved plots. Raise it only for unique crops grown in plots the planner does not know")
         range = 0..12; slider = true
     }
 

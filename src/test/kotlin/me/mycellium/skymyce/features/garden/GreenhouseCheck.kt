@@ -218,6 +218,10 @@ fun main() {
     val grown = namedPlot.copy(growth = mapOf(33 to reading))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(grown.toJson()) }) }, catalog).single() == grown) { "Growth persistence" }
 
+    // Garden plot numbers for /tptoplot, as seen in game: anchors at 187/100 and 196/91 are plot 18, -92/-5 is plot 2.
+    check(gardenPlotAt(187, 100) == 18 && gardenPlotAt(196, 91) == 18 && gardenPlotAt(-92, -5) == 2 && gardenPlotAt(-101, 4) == 2) { "Garden plots" }
+    check(gardenPlotAt(0, 0) == null && gardenPlotAt(0, -100) == 1 && gardenPlotAt(-200, -200) == 21 && gardenPlotAt(500, 0) == null) { "Garden plot edges" }
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L

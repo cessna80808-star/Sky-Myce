@@ -34,6 +34,7 @@ import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.gizmos.GizmoStyle
 import net.minecraft.gizmos.Gizmos
 import net.minecraft.network.chat.ClickEvent
+import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.Entity
@@ -184,13 +185,26 @@ object GreenhousePlanner : SkyMyceModule() {
         }
     }
 
-    internal fun settings() = GreenhouseSettings(GreenhouseConfig.upgradeLevel, GreenhouseConfig.uniqueCrops, GreenhouseConfig.priceMode)
+    /** Settings for [plot]: the unique-crop count comes from the player's other saved plots unless the setting is higher. */
+    internal fun settings(plot: Plot? = null) =
+        GreenhouseSettings(GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode)
+
+    /**
+     * Unique base crops planned on the player's other plots, which count toward this plot's growth bonus.
+     * shortcut: combined with this plot's own unique crops by maximum, not union, as the solver takes a count; upgrade if
+     * plots often grow different unique crops.
+     */
+    internal fun uniqueElsewhere(plot: Plot?): Int = plots.asSequence().filter { it !== plot }
+        .flatMap { it.layout?.placements.orEmpty().asSequence() }
+        .filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }.toSet().size
+
+    private fun owner(layout: Layout) = plots.firstOrNull { it.layout === layout }
 
     private fun allowed(plant: Plant) = plant.rarity.ordinal <= GreenhouseConfig.maxTier.ordinal
 
-    fun ranking(): List<RankedMutation> {
+    internal fun ranking(plot: Plot? = null): List<RankedMutation> {
         val catalog = catalog ?: return emptyList()
-        val ranked = rankMutations(catalog, prices, settings(), ::allowed)
+        val ranked = rankMutations(catalog, prices, settings(plot), ::allowed)
         return if (GreenhouseConfig.profitMetric == ProfitMetric.PER_CYCLE) ranked.sortedByDescending { it.profitPerCycle } else ranked
     }
 
@@ -270,7 +284,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val target = plot.target ?: plotRanking(plot).firstOrNull()?.entry?.plant?.id ?: return displayModMessage("§cNo mutation up to your highest tier has Bazaar prices")
         val name = catalog[target]?.name ?: target
         val unlocked = unlocked(plot)
-        val settings = settings()
+        val settings = settings(plot)
         val hash = inputsHash(unlocked, listOf(target), settings, catalog, prices)
         if (!force) layouts[hash]?.let { cached ->
             pin(plot, cached)
@@ -303,12 +317,12 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** The pinned layout's profit at current prices; the solve-time figure when a price is missing. */
-    internal fun estimate(layout: Layout) = catalog?.let { layout.profitPerHour(it, prices, settings()) } ?: layout.totalProfitPerHour
+    internal fun estimate(layout: Layout) = catalog?.let { layout.profitPerHour(it, prices, settings(owner(layout))) } ?: layout.totalProfitPerHour
 
     /** Hours from a target appearing to its harvest, from the site's timer; null without a target. */
     internal fun cycleHours(layout: Layout): Double? {
         val plant = layout.targets.firstOrNull()?.let { catalog?.get(it.plantId) } ?: return null
-        return cycleHours(plant, GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, layout.uniqueCrops))
+        return cycleHours(plant, GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops))
     }
 
     private fun remember(hash: String, estimate: PlotEstimate) {
@@ -323,8 +337,8 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Ranks by what one plot of each mutation earns where that is estimated, then by per-mutation profit. */
     internal fun plotRanking(plot: Plot): List<PlotRanked> {
         val catalog = catalog ?: return emptyList()
-        val unlocked = unlocked(plot); val settings = settings()
-        return ranking().map { entry ->
+        val unlocked = unlocked(plot); val settings = settings(plot)
+        return ranking(plot).map { entry ->
             val known = estimates[inputsHash(unlocked, listOf(entry.plant.id), settings, catalog, prices)]
             PlotRanked(entry, known?.count, known?.profitPerHour)
         }.sortedWith(compareByDescending<PlotRanked> { it.plotPerHour != null }.thenByDescending { row ->
@@ -336,8 +350,8 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Solves the top mutations at reduced effort, one at a time, so an explicit plan waits for at most one of them. */
     private fun estimatePlot(plot: Plot, done: () -> Unit) {
         val catalog = catalog ?: return done()
-        val unlocked = unlocked(plot); val settings = settings(); val quotes = prices
-        val queue = ArrayDeque(ranking().take(ESTIMATED).map { it.plant.id }.filter { estimates[inputsHash(unlocked, listOf(it), settings, catalog, quotes)] == null })
+        val unlocked = unlocked(plot); val settings = settings(plot); val quotes = prices
+        val queue = ArrayDeque(ranking(plot).take(ESTIMATED).map { it.plant.id }.filter { estimates[inputsHash(unlocked, listOf(it), settings, catalog, quotes)] == null })
         if (queue.isEmpty()) return done()
         estimating = true
         displayModMessage("§7Estimating how many of the top ${queue.size} mutations fit on ${if (plot === unanchored) "an empty plot" else "plot ${plot.name}"}…")
@@ -385,9 +399,10 @@ object GreenhousePlanner : SkyMyceModule() {
             })))
         .then(literal("missing").executes { run { showMissing(plotHere() ?: selected()) } })
         .then(literal("shopping").executes { run { showMissing(plotHere() ?: selected()) } })
-        .then(literal("buy").then(argument("crop", StringArgumentType.word()).executes { context ->
-            val id = StringArgumentType.getString(context, "crop").uppercase(); run { buy(id) }
-        }))
+        .then(literal("get").then(argument("plot", StringArgumentType.word()).then(argument("item", StringArgumentType.word()).executes { context ->
+            val plot = StringArgumentType.getString(context, "plot"); val item = StringArgumentType.getString(context, "item").uppercase()
+            run { get(plot, item) }
+        })))
 
     /**
      * Tab completion for the server's /bz and /gfs. The nodes have no executor, so Fabric passes the typed command to the
@@ -395,10 +410,12 @@ object GreenhousePlanner : SkyMyceModule() {
      */
     fun serverCommandHints(): List<LiteralArgumentBuilder<FabricClientCommandSource>> = listOf(
         literal("bz").then(argument("item", StringArgumentType.greedyString()).suggests { _, builder ->
-            SharedSuggestionProvider.suggest(if (active()) plot?.missingPlants?.keys?.mapNotNull { catalog?.get(it)?.name }.orEmpty() else emptyList(), builder)
+            SharedSuggestionProvider.suggest(if (active()) plot?.missingPlants?.keys?.filter { it !in SACK_CROPS }?.mapNotNull { catalog?.get(it)?.name }.orEmpty() else emptyList(), builder)
         }),
         literal("gfs").then(argument("item", StringArgumentType.greedyString()).suggests { _, builder ->
-            SharedSuggestionProvider.suggest(if (active()) plot?.missingSoil?.map { (soil, count) -> "${sackId(soil)} $count" }.orEmpty() else emptyList(), builder)
+            val plot = plot?.takeIf { active() }
+            SharedSuggestionProvider.suggest(plot?.missingSoil?.map { (soil, count) -> "${sackId(soil)} $count" }.orEmpty() +
+                plot?.missingPlants?.filterKeys { it in SACK_CROPS }?.mapNotNull { (id, count) -> catalog?.get(id)?.let { "${gfsId(it)} $count" } }.orEmpty(), builder)
         }),
     )
 
@@ -438,7 +455,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (estimating) return displayModMessage("§7Still estimating whole-plot profit; the ranking follows when it is done")
         val now = System.currentTimeMillis()
         pollPrices(now)
-        if (ranking().take(ESTIMATED).any { estimates[inputsHash(unlocked(plot), listOf(it.plant.id), settings(), catalog, prices)] == null })
+        if (ranking(plot).take(ESTIMATED).any { estimates[inputsHash(unlocked(plot), listOf(it.plant.id), settings(plot), catalog, prices)] == null })
             return estimatePlot(plot, ::showRanking)
         val metric = GreenhouseConfig.profitMetric
         displayModMessage("§aGreenhouse profit per plot §7(${GreenhouseConfig.priceMode.label}, ${metric.label.lowercase()}, prices ${age(now - pricesObservedAt)} old)")
@@ -479,11 +496,20 @@ object GreenhousePlanner : SkyMyceModule() {
         val facing = MC.player.direction.takeIf { it.axis.isHorizontal } ?: Direction.NORTH
         val plot = if (name != null) plots.firstOrNull { it.name.equals(name, true) } ?: Plot(name).also(plots::add)
             else plots.firstOrNull { it.anchor == null } ?: plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null }
-                ?: Plot(generateSequence(1) { it + 1 }.map(Int::toString).first { n -> plots.none { it.name == n } }).also(plots::add)
+                ?: Plot(gardenPlotAt(pos.x, pos.z)?.toString()?.takeIf { n -> plots.none { it.name == n } }
+                    ?: generateSequence(1) { it + 1 }.map(Int::toString).first { n -> plots.none { it.name == n } }).also(plots::add)
         plot.anchor = Anchor(pos, facing); plot.previous = null
         this.plot = plot; dirty = true; revision++; save()
         displayModMessage("§aGreenhouse plot §f${plot.name}§a anchored at ${pos.x} ${pos.y} ${pos.z}: §7rows run ${facing.name.lowercase()}, columns to your right")
         if (plot.layout == null && !importPlot(plot, null, quiet = true)) displayModMessage("§7Plan it with /sm greenhouse auto, or click [Plan] in /sm greenhouse")
+    }
+
+    /** The Garden plot (for /tptoplot) a greenhouse is on, from its anchor. */
+    internal fun gardenPlot(plot: Plot): Int? = plot.anchor?.let { gardenPlotAt(it.pos.x, it.pos.z) }
+
+    internal fun teleport(plot: Plot) {
+        val number = gardenPlot(plot) ?: return displayModMessage("§cPlot ${plot.name} has no anchor, so its Garden plot is unknown")
+        MC.player.connection.sendCommand("tptoplot $number")
     }
 
     private fun removePlot(name: String) {
@@ -504,33 +530,66 @@ object GreenhousePlanner : SkyMyceModule() {
             if (plot.layout != null) "; run /sm greenhouse recompute to re-plan around it" else "")
     }
 
+    /** Base crops kept in sacks, so they are fetched with /gfs instead of bought. */
+    private val SACK_CROPS = setOf("CARROT", "POTATO", "CACTUS", "SUGAR_CANE", "WHEAT_SEEDS", "RED_MUSHROOM", "BROWN_MUSHROOM", "NETHER_WART", "SUNFLOWER", "WILD_ROSE")
+
+    private fun gfsId(plant: Plant) = plant.itemIds.first().lowercase()
+
+    /** What a plot still needs, one line per source; each item is a button that fetches or buys exactly what is missing. */
     internal fun showMissing(plot: Plot) {
         val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
         if (plot.layout == null) return displayModMessage("§7No layout yet${chatLabel(plot)}. Run /sm greenhouse auto or plan <mutation>")
         if (plot.scannedAt == 0L) return displayModMessage("§7Stand near Greenhouse plot ${plot.name} in the Garden to check what is missing")
         val stale = if (plot !== this.plot || hudLines == null) " §8(as of ${age(System.currentTimeMillis() - plot.scannedAt)} ago)" else ""
-        if (plot.missingPlants.isEmpty() && plot.missingSoil.isEmpty()) return displayModMessage("§aNothing missing${chatLabel(plot)}: every crop and soil matches the plan$stale")
-        displayModMessage("§aGreenhouse shopping list${chatLabel(plot)}$stale §7(click to open the Bazaar and copy the amount, or to fill in /gfs)")
-        plot.missingPlants.entries.sortedByDescending { it.value }.forEach { (id, count) ->
-            displayModMessage(Component.literal("§f$count× §7${catalog[id]?.name ?: id} ")
-                .append(Component.literal("§b[Bazaar]").withStyle { it.withClickEvent(ClickEvent.RunCommand("/sm greenhouse buy $id")) }))
+        if (plot.missingPlants.isEmpty() && plot.missingSoil.isEmpty()) return displayModMessage("§aPlot ${plot.name} has everything it needs$stale")
+        val crops = plot.missingPlants.entries.mapNotNull { (id, count) -> catalog[id]?.let { it to count } }.sortedByDescending { it.second }
+        val (sacked, bought) = crops.partition { it.first.id in SACK_CROPS }
+        val cropCount = crops.sumOf { it.second }; val soilCount = plot.missingSoil.values.sum()
+        displayModMessage("§aPlot ${plot.name} still needs " + listOfNotNull(
+            "§f$cropCount§a crop${if (cropCount == 1) "" else "s"}".takeIf { cropCount > 0 },
+            "§f$soilCount§a soil".takeIf { soilCount > 0 }).joinToString(" and ") + "$stale §7· click an item to get it")
+        fun line(label: String, items: List<Triple<String, Int, String>>, hint: (String, Int) -> String) {
+            if (items.isEmpty()) return
+            val text = Component.literal("§7$label ")
+            items.forEach { (name, count, key) ->
+                text.append(Component.literal("§8[§f$count §7$name§8] ").withStyle {
+                    it.withClickEvent(ClickEvent.RunCommand("/sm greenhouse get ${plot.name} $key")).withHoverEvent(HoverEvent.ShowText(Component.literal(hint(name, count))))
+                })
+            }
+            displayModMessage(text)
         }
-        plot.missingSoil.entries.sortedByDescending { it.value }.forEach { (soil, count) ->
-            displayModMessage(Component.literal("§f$count× §7${soilName(soil)} soil ")
-                .append(Component.literal("§b[Sacks]").withStyle { it.withClickEvent(ClickEvent.SuggestCommand("/gfs ${sackId(soil)} $count")) }))
+        line("Sacks", sacked.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Take $count $name from your sacks (/gfs)" }
+        line("Bazaar", bought.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Open $name in the Bazaar and copy $count for the buy sign" }
+        line("Soil", plot.missingSoil.entries.sortedByDescending { it.value }.map { (soil, count) -> Triple(soilName(soil), count, "SOIL_${soil.name}") }) { name, count ->
+            "Take $count $name from your sacks (/gfs)"
         }
     }
 
-    /** A shopping-list click sends one /bz; [copyBazaarQuantity] then copies the amount, as it does for a typed /bz. */
-    private fun buy(id: String) {
-        val name = catalog?.get(id)?.name ?: return displayModMessage("§cUnknown crop: $id")
-        MC.player.connection.sendCommand("bz $name")
+    private var copiedAt = 0L
+
+    /** One shopping-list click: /gfs for sack crops and soil, or /bz with the amount copied. Sends that one command. */
+    private fun get(plotName: String, key: String) {
+        val catalog = catalog ?: return
+        val plot = plots.firstOrNull { it.name.equals(plotName, true) } ?: return displayModMessage("§cNo Greenhouse plot named $plotName")
+        if (key.startsWith("SOIL_")) {
+            val soil = runCatching { Soil.valueOf(key.removePrefix("SOIL_")) }.getOrNull() ?: return
+            val count = plot.missingSoil[soil] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${soilName(soil)}")
+            return MC.player.connection.sendCommand("gfs ${sackId(soil)} $count")
+        }
+        val plant = catalog[key] ?: return displayModMessage("§cUnknown crop: $key")
+        val count = plot.missingPlants[plant.id] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${plant.name}")
+        if (plant.id in SACK_CROPS) return MC.player.connection.sendCommand("gfs ${gfsId(plant)} $count")
+        MC.instance.keyboardHandler.clipboard = count.toString()
+        copiedAt = System.currentTimeMillis()
+        displayModMessage("§7Copied §f$count§7 for the buy sign (${plant.name})")
+        MC.player.connection.sendCommand("bz ${plant.name}")
     }
 
     /** A /bz for a crop the selected plot still needs copies the missing amount, ready for the Bazaar buy sign. */
     private fun copyBazaarQuantity(command: String) {
         val verb = command.substringBefore(' ').lowercase()
-        if (verb != "bz" && verb != "bazaar" || !active()) return
+        // A shopping-list click has already copied its own plot's amount.
+        if (verb != "bz" && verb != "bazaar" || !active() || System.currentTimeMillis() - copiedAt < 2_000) return
         val query = command.substringAfter(' ', "").trim().replace('_', ' ')
         val catalog = catalog ?: return
         val (plant, count) = plot?.missingPlants.orEmpty().entries.firstNotNullOfOrNull { (id, count) ->
@@ -586,7 +645,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val now = System.currentTimeMillis()
         // An unrecognised look on a spot whose ring supplies the target is the mutation on its way, so it may become a target.
         val free = BooleanArray(GREENHOUSE_CELLS) { occupied[it] && looks[it] == null }
-        val layout = importLayout(catalog, planted, free, soil, unlocked(plot), target, prices, settings(), now, IMPORTED + now.toString(36), alternative)
+        val layout = importLayout(catalog, planted, free, soil, unlocked(plot), target, prices, settings(plot), now, IMPORTED + now.toString(36), alternative)
             ?: return fail("§cThe planted crops do not complete any ${target?.let { catalog[it]?.name } ?: "mutation"}'s ingredients yet")
         val targetCells = layout.targets.flatMap { t -> (0 until t.size).flatMap { r -> (0 until t.size).map { c -> (t.row + r) * GREENHOUSE_SIZE + t.col + c } } }.toSet()
         val unknownHint = unknownHint(looks.indices.count { looks[it] != null && it !in targetCells })
@@ -720,7 +779,7 @@ object GreenhousePlanner : SkyMyceModule() {
         displayModMessage("§7No growth stage was found in what the Plant Diagnostics Tool showed; it was written to the log so the planner can learn to read it")
     }
 
-    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, layout.uniqueCrops))
+    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops))
 
     internal data class GrowthSummary(val analysed: Int, val targets: Int, val stage: Double, val stages: Int, val readyInMs: Long)
 

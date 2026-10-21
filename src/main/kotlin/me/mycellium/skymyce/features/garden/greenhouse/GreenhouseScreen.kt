@@ -100,7 +100,10 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
         }
         return card(stripe).apply {
             val target = layout?.targets?.firstOrNull()?.let { catalog?.get(it.plantId)?.name }
-            val anchorText = plot.anchor?.let { "Anchored at ${it.pos.x} ${it.pos.y} ${it.pos.z}, rows run ${it.facing.name.lowercase()}" } ?: "Not anchored yet"
+            val garden = GreenhousePlanner.gardenPlot(plot)
+            val anchorText = plot.anchor?.let { "${garden?.let { n -> "Garden plot $n, a" } ?: "A"}nchored at ${it.pos.x} ${it.pos.y} ${it.pos.z}, rows run ${it.facing.name.lowercase()}" } ?: "Not anchored yet"
+            // Teleporting sends /tptoplot, so it closes the menu like the other chat actions.
+            val teleport = garden?.let { n -> button("Teleport", 64) { chat { GreenhousePlanner.teleport(plot) } }.tooltip(Component.literal("Go to Garden plot $n (/tptoplot $n)")) }
             child(row().apply {
                 gap(6)
                 child(label("§l${plot.name}").apply { fontSize = 12f })
@@ -113,6 +116,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                     gap(6)
                     child(label("Stand at the plot and run /sm greenhouse import to read what is planted, or plan one with auto or plan <mutation>.", MUTED).horizontalSizing(Sizing.expand()))
                     child(button("Import", 56) { chat { GreenhousePlanner.importPlot(plot, null) } }.tooltip(Component.literal("Read what is planted on this plot (stand near it)")))
+                    teleport?.let(::child)
                 })
                 return@apply
             }
@@ -148,8 +152,9 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                     rows.filter { it.state != GrowthState.WAITING }.takeIf { it.isNotEmpty() }?.let { child(GrowthRows(it)) }
                     child(GreenhouseLegend(layout))
                     child(label("Faded = not planted, red edge = wrong soil, dot = growing but not analysed, fill = growth, yellow = fully grown. Hover a slot for details.", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
-                    child(actions(listOf(
-                        button("Shopping list", 92) { chat { GreenhousePlanner.showMissing(plot) } }.tooltip(Component.literal("Everything still missing, with /bz and /gfs links")),
+                    child(actions(listOfNotNull(
+                        teleport,
+                        button("Shopping list", 92) { chat { GreenhousePlanner.showMissing(plot) } }.tooltip(Component.literal("Everything still missing; click an item to fetch it from your sacks or buy it")),
                         button("Import", 56) { chat { GreenhousePlanner.importPlot(plot, null) } }
                             .tooltip(Component.literal("Replace this layout with what is planted now (stand near the plot)")),
                         button("Recompute", 76) { chat { GreenhousePlanner.plan(plot, force = true) } }
@@ -332,7 +337,7 @@ internal class GrowthRows(private val rows: List<GrowthRow>) : BaseUIComponent()
         val g = graphics as MenuGraphics
         val slot = MenuCanvas.textWidth("R10 C10", size = size) + 4
         val stage = MenuCanvas.textWidth("20/20", bold = true, size = size) + 6
-        val text = MenuCanvas.textWidth("not analysed, ~10d 23h", size = size)
+        val text = MenuCanvas.textWidth("not analysed, may be ready", size = size)
         val bar = (width() - 11 - slot - stage - 8 - text).toInt().coerceAtLeast(20)
         rows.forEachIndexed { i, row ->
             val top = y() + i * line

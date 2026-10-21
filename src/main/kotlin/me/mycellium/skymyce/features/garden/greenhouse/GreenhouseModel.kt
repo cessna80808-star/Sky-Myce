@@ -277,6 +277,19 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
 
 val PLOT_NAME = Regex("[A-Za-z0-9_-]{1,16}")
 
+/** The Garden's plot numbers as laid out around the barn (0), north row first; each plot is 96 blocks square. */
+private val GARDEN_PLOTS = arrayOf(
+    intArrayOf(21, 13, 9, 14, 22),
+    intArrayOf(15, 5, 1, 6, 16),
+    intArrayOf(10, 2, 0, 3, 11),
+    intArrayOf(17, 7, 4, 8, 18),
+    intArrayOf(23, 19, 12, 20, 24),
+)
+
+/** The Garden plot number (as used by /tptoplot) containing a block, or null on the barn or outside the Garden grid. */
+fun gardenPlotAt(x: Int, z: Int): Int? =
+    GARDEN_PLOTS.getOrNull(Math.floorDiv(z + 240, 96))?.getOrNull(Math.floorDiv(x + 240, 96))?.takeIf { it > 0 }
+
 /** Price buckets are 25% wide, so ordinary Bazaar noise does not invalidate a cached layout. */
 fun priceBucket(price: Double?) = if (price == null || price <= 0) "-" else (ln(price) / ln(1.25)).roundToInt().toString()
 
