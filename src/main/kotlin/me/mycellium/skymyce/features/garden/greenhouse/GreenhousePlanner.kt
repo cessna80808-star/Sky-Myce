@@ -527,6 +527,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val occupied = BooleanArray(GREENHOUSE_CELLS)
         val soil = arrayOfNulls<Soil>(GREENHOUSE_CELLS)
         val looks = arrayOfNulls<String>(GREENHOUSE_CELLS)
+        val alternative = arrayOfNulls<String>(GREENHOUSE_CELLS)
         val known = knownLooks(plot)
         for (cell in 0 until GREENHOUSE_CELLS) {
             val soilPos = cellPos(origin, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE)
@@ -535,6 +536,8 @@ object GreenhousePlanner : SkyMyceModule() {
             occupied[cell] = true
             planted[cell] = GreenhouseWorld.plantFor(fingerprint, catalog, known)
             if (planted[cell] == null) looks[cell] = fingerprint
+            // A named block look may be a young mutation or just the vanilla crop it resembles; the import decides from the ring.
+            if (fingerprint.startsWith("block:") && fingerprint in known) alternative[cell] = GreenhouseWorld.plantFor(fingerprint, catalog, emptyMap())
         }
         // Every entity seen, so a crop the planner misreads can be matched from the log.
         SkyMyce.logger.info("Greenhouse plot {} import read: {}", plot.name, (0 until GREENHOUSE_CELLS).mapNotNull { cell ->
@@ -549,11 +552,15 @@ object GreenhousePlanner : SkyMyceModule() {
             val samples = unknown.keys.associateWith { look -> looks.indexOf(look).let { cell -> GreenhouseWorld.describe(level, cellPos(origin, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE).above()) } }
             SkyMyce.logger.info("Greenhouse plot {} has unidentified crops: {}; samples: {}", plot.name, unknown, samples)
         }
-        val unknownHint = if (unknown.isEmpty()) null else "§e${unknown.values.sum()} planted spots are still not recognised. Look at one and run /sm greenhouse identify"
-        if (planted.all { it == null }) { unknownHint?.let { if (!quiet) displayModMessage(it) }; return fail("§7Nothing recognisable is planted on plot ${plot.name}") }
+        fun unknownHint(count: Int) = if (count == 0) null else "§e$count planted spots are still not recognised. Look at one and run /sm greenhouse identify"
+        if (planted.all { it == null }) { unknownHint(unknown.values.sum())?.let { if (!quiet) displayModMessage(it) }; return fail("§7Nothing recognisable is planted on plot ${plot.name}") }
         val now = System.currentTimeMillis()
-        val layout = importLayout(catalog, planted, occupied, soil, unlocked(plot), target, prices, settings(), now, IMPORTED + now.toString(36))
+        // An unrecognised look on a spot whose ring supplies the target is the mutation on its way, so it may become a target.
+        val free = BooleanArray(GREENHOUSE_CELLS) { occupied[it] && looks[it] == null }
+        val layout = importLayout(catalog, planted, free, soil, unlocked(plot), target, prices, settings(), now, IMPORTED + now.toString(36), alternative)
             ?: return fail("§cThe planted crops do not complete any ${target?.let { catalog[it]?.name } ?: "mutation"}'s ingredients yet")
+        val targetCells = layout.targets.flatMap { t -> (0 until t.size).flatMap { r -> (0 until t.size).map { c -> (t.row + r) * GREENHOUSE_SIZE + t.col + c } } }.toSet()
+        val unknownHint = unknownHint(looks.indices.count { looks[it] != null && it !in targetCells })
         plot.target = layout.targets.first().plantId
         pin(plot, layout)
         val name = catalog[plot.target!!]?.name
@@ -640,7 +647,8 @@ object GreenhousePlanner : SkyMyceModule() {
         }
         val plot = plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null } ?: return
         val cell = cellOf(plot.anchor!!, pos) ?: return
-        val placement = plot.layout?.placements?.firstOrNull { p ->
+        // Only mutations have a growth stage worth tracking; analysing a base crop or ingredient is left alone.
+        val placement = plot.layout?.targets?.firstOrNull { p ->
             cell / GREENHOUSE_SIZE - p.row in 0 until p.size && cell % GREENHOUSE_SIZE - p.col in 0 until p.size
         } ?: return
         analysis = Analysis(plot, placement.row * GREENHOUSE_SIZE + placement.col, placement.plantId, now + ANALYSIS_WINDOW)
@@ -664,11 +672,10 @@ object GreenhousePlanner : SkyMyceModule() {
         val (stage, stages) = parseGrowth(lines) ?: return
         analysis = null
         pending.plot.growth[pending.key] = GrowthReading(stage, stages, now)
-        revision++; save()
+        revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
         val layout = pending.plot.layout
-        val target = layout?.targets?.any { it.row * GREENHOUSE_SIZE + it.col == pending.key } == true
-        displayModMessage("§a$name: growth stage $stage/$stages" + if (!target) "" else layout?.let { hoursPerStage(it) }?.let { hours ->
+        displayModMessage("§a$name: growth stage $stage/$stages" + layout?.let { hoursPerStage(it) }?.let { hours ->
             if (stage >= stages) " §7· fully grown" else " §7· fully grown in about ${age(((stages - stage) * hours * 3_600_000).toLong())}"
         }.orEmpty())
         growthSummary(pending.plot, now)?.let { summary ->
@@ -796,6 +803,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val held = heldId
         val heldSoils = held?.let(::soilsForItem).orEmpty()
         val allSoil = GreenhouseConfig.alwaysShowSoilGhosts
+        val analyzer = held?.contains("DIAGNOSTIC") == true
         val looks = knownLooks(plot)
         val alpha = GreenhouseConfig.opacity
         val previous = plot.previous?.takeIf { watching && now - plot.previousAt <= CONTINUITY_MS }
@@ -844,6 +852,15 @@ object GreenhousePlanner : SkyMyceModule() {
                 }.code
             }
             if (ingredient && !planted) plants.merge(plant.id, 1, Int::plus)
+            // Holding the Plant Diagnostics Tool marks each grown-in mutation: red until analysed since it appeared, then green.
+            if (analyzer && !ingredient && planted) {
+                val key = placement.row * GREENHOUSE_SIZE + placement.col
+                val reading = plot.growth[key]
+                val checked = reading != null && reading.at >= (plot.spawned[key] ?: 0L)
+                val box = AABB(cellPos(origin, placement.row, placement.col).above())
+                    .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
+                shown += Ghost(box, HudTheme.alpha(if (checked) 0x55FF55 else 0xFF5555, alpha))
+            }
             if (!ingredient) {
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 if (previous != null && planted && !wasOccupied) { plot.spawned[key] = now; changed = true }

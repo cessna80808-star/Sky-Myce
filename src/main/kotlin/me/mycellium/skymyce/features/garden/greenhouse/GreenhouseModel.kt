@@ -323,29 +323,42 @@ fun layoutFromJson(json: JsonObject, catalog: PlantCatalog): Layout {
  * profit (by count when unpriced) among those planted or fully supplied is chosen.
  */
 fun importLayout(catalog: PlantCatalog, planted: Array<String?>, occupied: BooleanArray, soil: Array<Soil?>, unlocked: BooleanArray, target: String?,
-                 quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Layout? {
+                 quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String,
+                 alternative: Array<String?> = arrayOfNulls(GREENHOUSE_CELLS)): Layout? {
     val present = planted.filterNotNull().toSet()
     val candidates = if (target != null) listOf(target) else catalog.plants.filter { plant ->
         plant.solvable && (plant.id in present || plant.requires.keys.all { it in present })
     }.map { it.id }
     // The mutation already growing with its ingredients around it is what the plot was built for; profit only breaks ties.
-    return candidates.mapNotNull { id -> importFor(catalog, planted, occupied, soil, unlocked, id, quotes, settings, now, hash) }
+    return candidates.mapNotNull { id -> importFor(catalog, planted, occupied, soil, unlocked, id, quotes, settings, now, hash, alternative) }
         .maxWithOrNull(compareBy<Pair<Layout, Int>>({ it.second }, { it.first.profitPerHour(catalog, quotes, settings) != null },
             { it.first.profitPerHour(catalog, quotes, settings) ?: 0.0 }, { it.first.targets.size }))?.first
 }
 
+/**
+ * [alternative] holds, for cells named only by a learned block look (a young mutation can look exactly like a melon stem),
+ * what that block is on its own; such a cell only counts as the target when its ring supplies the target.
+ */
 private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: BooleanArray, soil: Array<Soil?>, unlocked: BooleanArray, targetId: String,
-                      quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String): Pair<Layout, Int>? {
+                      quotes: Map<String, Quote>, settings: GreenhouseSettings, now: Long, hash: String, alternative: Array<String?>): Pair<Layout, Int>? {
     val target = catalog[targetId]?.takeIf { it.solvable } ?: return null
     val owner = arrayOfNulls<Placement>(GREENHOUSE_CELLS)
     val placements = ArrayList<Placement>()
     fun cells(row: Int, col: Int, size: Int) = (0 until size).flatMap { r -> (0 until size).map { c -> (row + r) * GREENHOUSE_SIZE + col + c } }
     fun place(placement: Placement) { cells(placement.row, placement.col, placement.size).forEach { owner[it] = placement }; placements += placement }
-    for ((id, row, col) in footprints(catalog, planted)) {
-        val plant = catalog[id] ?: continue
-        if (cells(row, col, plant.size).any { owner[it] != null }) continue
-        place(Placement(plant.id, row, col, plant.size, if (plant.id == targetId) Role.TARGET else Role.INGREDIENT))
+    val found = footprints(catalog, planted)
+    fun placeAll(entries: List<Triple<String, Int, Int>>) {
+        for ((id, row, col) in entries) {
+            val plant = catalog[id] ?: continue
+            if (cells(row, col, plant.size).any { owner[it] != null }) continue
+            place(Placement(plant.id, row, col, plant.size, if (plant.id == targetId) Role.TARGET else Role.INGREDIENT))
+        }
     }
+    // Multi-tile crops first, so the decorative vanilla blocks inside a Snoozling cannot claim its cells; then
+    // ingredients, so a doubtful target below can be checked against its ring.
+    val (large, single) = found.partition { (id) -> (catalog[id]?.size ?: 1) > 1 }
+    val (singleTargets, singleIngredients) = single.partition { (id) -> id == targetId }
+    placeAll(large); placeAll(singleIngredients)
     fun supplied(row: Int, col: Int): Boolean {
         val counts = HashMap<String, Int>()
         for (r in row - 1..row + target.size) for (c in col - 1..col + target.size) {
@@ -353,6 +366,12 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
             owner[r * GREENHOUSE_SIZE + c]?.takeIf { it.role == Role.INGREDIENT }?.let { counts.merge(it.plantId, 1, Int::plus) }
         }
         return target.requires.all { (id, count) -> (counts[id] ?: 0) >= count }
+    }
+    for (entry in singleTargets) {
+        val (_, row, col) = entry
+        val cell = row * GREENHOUSE_SIZE + col
+        val stand = alternative[cell]
+        if (stand == null || supplied(row, col)) placeAll(listOf(entry)) else placeAll(listOf(Triple(stand, row, col)))
     }
     val supported = placements.count { it.role == Role.TARGET && supplied(it.row, it.col) }
     for (row in 0..GREENHOUSE_SIZE - target.size) for (col in 0..GREENHOUSE_SIZE - target.size) {

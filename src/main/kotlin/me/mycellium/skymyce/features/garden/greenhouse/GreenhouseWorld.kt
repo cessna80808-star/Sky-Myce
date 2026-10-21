@@ -38,25 +38,28 @@ internal object GreenhouseWorld {
     ).mapKeys { "block:${it.key}" }
 
     fun fingerprint(level: Level, pos: BlockPos): String? {
+        // A mutation is a head on an armor stand, usually over a vanilla wheat or melon block that is only decoration,
+        // so a worn or displayed item wins over the block. Bare armor stands are Hypixel's invisible markers, not crops.
+        val entities = level.getEntitiesOfClass(Entity::class.java, column(pos)) { entity ->
+            entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty }
+        }
+        var fallback: String? = null
+        for (entity in entities) {
+            val stack = when (entity) {
+                is ArmorStand -> EquipmentSlot.entries.firstNotNullOfOrNull { slot -> entity.getItemBySlot(slot).takeUnless { it.isEmpty } }
+                is Display.ItemDisplay -> entity.itemRenderState()?.itemStack()
+                else -> null
+            }
+            itemKey(stack)?.let { return it }
+            fallback = fallback ?: (entity as? Display.BlockDisplay)?.blockRenderState()?.blockState()?.let { blockKey(level, pos, it) }
+                ?: ("entity:" + BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path)
+        }
         val state = level.getBlockState(pos)
         if (state.`is`(Blocks.FIRE) || !state.isAir && !state.canBeReplaced()) {
             (level.getBlockEntity(pos) as? SkullBlockEntity)?.ownerProfile?.let { textureKey(it.partialProfile()) }?.let { return "head:$it" }
             return blockKey(level, pos, state)
         }
-        // Bare armor stands (no equipment) are Hypixel's invisible markers, not crops.
-        val entities = level.getEntitiesOfClass(Entity::class.java, column(pos)) { entity ->
-            entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty }
-        }
-        for (entity in entities) {
-            val stack = when (entity) {
-                is ArmorStand -> EquipmentSlot.entries.firstNotNullOfOrNull { slot -> entity.getItemBySlot(slot).takeUnless { it.isEmpty } }
-                is Display.ItemDisplay -> entity.itemRenderState()?.itemStack()
-                is Display.BlockDisplay -> entity.blockRenderState()?.blockState()?.let { return blockKey(level, pos, it) }
-                else -> null
-            }
-            itemKey(stack)?.let { return it }
-        }
-        return entities.firstOrNull()?.let { "entity:" + BuiltInRegistries.ENTITY_TYPE.getKey(it.type).path }
+        return fallback
     }
 
     private fun blockKey(level: Level, pos: BlockPos, state: BlockState) =

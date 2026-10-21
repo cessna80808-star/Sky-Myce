@@ -148,6 +148,28 @@ fun main() {
     check(fieldLayout.placements.filter { it.plantId == "ASHWREATH" }.all { fieldLayout.soils[it] == Soil.SOUL_SAND }) { "Ashwreath soil" }
     validate(fieldLayout, full)
 
+    // A melon stem named Coalroot on this plot is only a young Coalroot where its ring supplies one; alone at the edge it is a melon.
+    val edged = field.copyOf().also { it[90] = "COALROOT" }
+    val edgeLooks = arrayOfNulls<String>(GREENHOUSE_CELLS).also { it[90] = "MELON_SEEDS" }
+    val edgedLayout = importLayout(catalog, edged, BooleanArray(GREENHOUSE_CELLS) { edged[it] != null }, fieldSoil, full, null, scourrootRich,
+        GreenhouseSettings(0, 0, PriceMode.SELL_OFFER), 9, "imported-edge", edgeLooks)!!
+    check(edgedLayout.placements.single { it.row == 9 && it.col == 0 }.let { it.plantId == "MELON_SEEDS" && it.role == Role.INGREDIENT } &&
+        edgedLayout.targets.size == fieldLayout.targets.size) { "Edge melon ${edgedLayout.placements.filter { it.row == 9 }}" }
+
+    // Snoozling as seen in game (2026-10-21): a plus of heads with decorative wheat in its corners, ringed by its 16 ingredients.
+    val snooze = arrayOfNulls<String>(GREENHOUSE_CELLS)
+    listOf(34, 43, 44, 45, 54).forEach { snooze[it] = "SNOOZLING" }
+    listOf(33, 35, 53, 55).forEach { snooze[it] = "WHEAT_SEEDS" }
+    val ring = listOf(22, 23, 24, 25, 26, 32, 36, 42, 46, 52, 56, 62, 63, 64, 65, 66)
+    val recipe = listOf("CREAMBLOOM", "CREAMBLOOM", "CREAMBLOOM", "CREAMBLOOM", "DUSTGRAIN", "DUSTGRAIN", "DUSTGRAIN", "WITHERBLOOM", "WITHERBLOOM",
+        "WITHERBLOOM", "DUSKBLOOM", "DUSKBLOOM", "DUSKBLOOM", "THORNSHADE", "THORNSHADE", "THORNSHADE")
+    ring.zip(recipe).forEach { (cell, id) -> snooze[cell] = id }
+    val snoozeLayout = importLayout(catalog, snooze, BooleanArray(GREENHOUSE_CELLS) { snooze[it] != null }, Array(GREENHOUSE_CELLS) { Soil.FARMLAND }, full, null,
+        catalog.plants.associate { it.bazaarId to Quote(100.0, 100.0) } + ("SNOOZLING" to Quote(5e6, 5e6)), GreenhouseSettings(0, 0, PriceMode.SELL_OFFER), 9, "imported-snooze")!!
+    check(snoozeLayout.targets == listOf(Placement("SNOOZLING", 3, 3, 3, Role.TARGET)) && snoozeLayout.placements.none { it.plantId == "WHEAT_SEEDS" }) {
+        "Snoozling import ${snoozeLayout.placements}"
+    }
+
     // Unrecognised looks are named from the recipe they would complete: the 3 unknown heads around each Coalroot are Scourroot.
     val partial = field.copyOf()
     val looks = arrayOfNulls<String>(GREENHOUSE_CELLS)
