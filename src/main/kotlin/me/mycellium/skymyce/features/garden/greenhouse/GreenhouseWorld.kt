@@ -40,8 +40,10 @@ internal object GreenhouseWorld {
     fun fingerprint(level: Level, pos: BlockPos): String? {
         // A mutation is a head on an armor stand, usually over a vanilla wheat or melon block that is only decoration,
         // so a worn or displayed item wins over the block. Bare armor stands are Hypixel's invisible markers, not crops.
+        // An entity belongs to the slot it stands in; one near a slot edge also overlaps its neighbour's column.
         val entities = level.getEntitiesOfClass(Entity::class.java, column(pos)) { entity ->
-            entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty }
+            entity.blockX == pos.x && entity.blockZ == pos.z &&
+                (entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty })
         }
         var fallback: String? = null
         for (entity in entities) {

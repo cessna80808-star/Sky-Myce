@@ -87,6 +87,8 @@ fun main() {
     check(abs(layout.profitPerHour(catalog, priced, settings)!! - layout.totalProfitPerHour) < 1e-6) { "Repricing differs from the solver" }
     val cheaper = priced + ("GLASSCORN" to Quote(4e5, 5e5))
     check(layout.profitPerHour(catalog, cheaper, settings)!! < layout.totalProfitPerHour && layout.profitPerHour(catalog, priced - "GLASSCORN", settings) == null) { "Repricing" }
+    // An ingredient without a price (Scourroot with no sell offers) is left out of the cost instead of voiding the estimate.
+    check(layout.profitPerHour(catalog, priced - "STARTLEVINE", settings)!! > layout.totalProfitPerHour) { "Unpriced ingredient" }
     check(abs(glasscorn.profitPerDay - glasscorn.profitPerHour * 24) < 1e-9 && ProfitMetric.valueOf("PER_DAY").label == "Per day") { "Per day" }
 
     // Plots: version 1 files become plot "1" with their pinned layout; version 2 keeps each plot's own layout.
@@ -134,7 +136,8 @@ fun main() {
         GreenhouseWorld.plantFor("head:a9da3b8dcffbb5dd9708b83e54746fced475f0ee16c6c0ce4668cca7999c4d1e", catalog, emptyMap()) == "SCOURROOT" &&
         GreenhouseWorld.plantFor("head:f946443fa0039354edd31a70c749c4f963464744dc20b79137bd9910356ee90", catalog, emptyMap()) == "COALROOT" &&
         GreenhouseWorld.plantFor("head:unknown", catalog, mapOf("head:unknown" to "COALROOT")) == "COALROOT" &&
-        catalog.byHead.size == 41) { "Crop fingerprints" }
+        GreenhouseWorld.plantFor("head:d4b3ea5cb6b6f046e326621ca11ffb7d6aec22d66c0d81e5039b19ee4400309f", catalog, emptyMap()) == "CACTUS" &&
+        catalog.byHead.size == 45) { "Crop fingerprints" }
     val field = arrayOfNulls<String>(GREENHOUSE_CELLS)
     val fieldSoil = Array<Soil?>(GREENHOUSE_CELLS) { Soil.FARMLAND }
     fun put(row: Int, col: Int, id: String) { field[row * 10 + col] = id; if (id == "ASHWREATH") fieldSoil[row * 10 + col] = Soil.SOUL_SAND }

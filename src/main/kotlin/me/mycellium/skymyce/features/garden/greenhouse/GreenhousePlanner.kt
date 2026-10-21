@@ -212,7 +212,8 @@ object GreenhousePlanner : SkyMyceModule() {
                 result.onSuccess { snapshot ->
                     val wanted = catalog?.plants?.map { it.bazaarId }?.toSet().orEmpty()
                     val quotes = snapshot.products.filter { it.id in wanted }.mapNotNull { product ->
-                        val buy = product.buyOrderPrice; val sell = product.sellOfferPrice
+                        // A side with no orders can arrive as 0; it is missing, not free (Scourroot often has no sell offers).
+                        val buy = product.buyOrderPrice?.takeIf { it > 0 }; val sell = product.sellOfferPrice?.takeIf { it > 0 }
                         if (buy == null && sell == null) null else product.id to Quote(buy ?: sell!!, sell ?: buy!!)
                     }.toMap()
                     if (quotes.isNotEmpty()) {
@@ -944,10 +945,11 @@ object GreenhousePlanner : SkyMyceModule() {
         runCatching {
             val section = json.getAsJsonObject("prices")
             pricesObservedAt = section["observedAt"].asLong
-            prices = section.entrySet().filter { it.key != "observedAt" }.associate { (id, value: JsonElement) ->
+            // One bad entry only loses itself.
+            prices = section.entrySet().filter { it.key != "observedAt" }.mapNotNull { (id, value: JsonElement) -> runCatching {
                 val pair = value.asJsonArray
                 id to Quote(pair[0].asDouble, pair[1].asDouble).also { require(it.buyOrder > 0 && it.sellOffer > 0) }
-            }
+            }.getOrNull() }.toMap()
         }
         runCatching { json.getAsJsonArray("layouts").forEach { element -> runCatching { layoutFromJson(element.asJsonObject, catalog) }.getOrNull()?.let { layouts[it.inputsHash] = it } } }
         runCatching { json.getAsJsonObject("estimates").entrySet().forEach { (hash, value) -> runCatching {

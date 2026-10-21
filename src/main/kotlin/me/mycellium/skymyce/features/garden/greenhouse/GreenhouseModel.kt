@@ -33,8 +33,8 @@ data class Plant(
     /** A spreading condition the solver cannot express as neighbour counts. */
     val special: String?,
     val requires: Map<String, Int>,
-    /** Skin texture (file name) of the player head the crop is planted as, when it is one. */
-    val head: String? = null,
+    /** Skin textures (file names) of the player heads the crop is planted as; base crops are heads in the Greenhouse too. */
+    val heads: Set<String> = emptySet(),
 ) {
     val mutation get() = rarity != Rarity.RAW
     val solvable get() = special == null && requires.isNotEmpty()
@@ -42,7 +42,7 @@ data class Plant(
 
 class PlantCatalog(val plants: List<Plant>) {
     val byId = plants.associateBy { it.id }
-    val byHead = plants.filter { it.head != null }.associateBy { it.head!! }
+    val byHead = plants.flatMap { plant -> plant.heads.map { it to plant } }.toMap()
     operator fun get(id: String) = byId[id]
 }
 
@@ -59,7 +59,8 @@ fun parsePlantCatalog(text: String): PlantCatalog {
             json["bazaar"]?.asString ?: id, (json.getAsJsonArray("items")?.map { it.asString } ?: listOf(id)).toSet(),
             json["unique"]?.asBoolean == true, json["free"]?.asBoolean == true, json["special"]?.asString,
             json.getAsJsonObject("requires")?.entrySet()?.associate { (key, value) -> key to value.asInt.also { require(it in 1..16) } }.orEmpty(),
-            json["head"]?.asString?.also { require(it.matches(Regex("[0-9a-f]{32,64}"))) })
+            (listOfNotNull(json["head"]?.asString) + json.getAsJsonArray("heads")?.map { it.asString }.orEmpty())
+                .onEach { require(it.matches(Regex("[0-9a-f]{32,64}"))) }.toSet())
     }
     val catalog = PlantCatalog(plants)
     require(catalog.byId.size == plants.size && plants.all { plant -> plant.requires.keys.all { it in catalog.byId } })
@@ -147,7 +148,7 @@ data class Layout(
 
 /**
  * The solver's objective re-evaluated for a pinned layout at today's prices: target income per hour minus the ingredient
- * cost spread over the fastest target cycle. Null when a price is missing.
+ * cost spread over the fastest target cycle. Null when a target has no price; unpriced ingredients cost nothing.
  */
 fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings): Double? {
     val ingredients = placements.filter { it.role == Role.INGREDIENT }.map { catalog[it.plantId] ?: return null }
@@ -161,7 +162,8 @@ fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, sett
         fastest = minOf(fastest, hours)
     }
     if (fastest == Double.MAX_VALUE) return null
-    return income - ingredients.sumOf { costPrice(it, quotes) ?: return null } / fastest
+    // An ingredient without a Bazaar price (none listed, or not sold there) is left out of the cost rather than voiding the estimate.
+    return income - ingredients.sumOf { costPrice(it, quotes) ?: 0.0 } / fastest
 }
 
 /** A Greenhouse plot as saved: [facing] is a horizontal direction name. Each plot keeps its own pinned layout. */
