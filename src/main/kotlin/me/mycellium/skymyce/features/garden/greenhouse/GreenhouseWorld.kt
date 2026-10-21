@@ -44,7 +44,7 @@ internal object GreenhouseWorld {
             return blockKey(level, pos, state)
         }
         // Bare armor stands (no equipment) are Hypixel's invisible markers, not crops.
-        val entities = level.getEntitiesOfClass(Entity::class.java, AABB(pos)) { entity ->
+        val entities = level.getEntitiesOfClass(Entity::class.java, column(pos)) { entity ->
             entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty }
         }
         for (entity in entities) {
@@ -63,7 +63,13 @@ internal object GreenhouseWorld {
         "block:" + BuiltInRegistries.BLOCK.getKey(state.block).path + "@" + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos.below()).block).path
 
     /** What is at a spot, for the log when a look is not recognised: entity types, names, flags and equipment. */
-    fun describe(level: Level, pos: BlockPos): String = level.getEntitiesOfClass(Entity::class.java, AABB(pos).inflate(0.5)) { it is ArmorStand || it is Display }
+    /**
+     * The space a crop's entities can occupy: its own block column from 1.5 below the crop block to 2.5 above. Armor-stand
+     * crops stand with their feet below the block so the head shows in it, and marker stands (no size) float above it.
+     */
+    private fun column(pos: BlockPos) = AABB(pos.x.toDouble(), pos.y - 1.5, pos.z.toDouble(), pos.x + 1.0, pos.y + 2.5, pos.z + 1.0)
+
+    fun describe(level: Level, pos: BlockPos): String = level.getEntitiesOfClass(Entity::class.java, column(pos)) { it is ArmorStand || it is Display }
         .take(4).joinToString("; ") { entity ->
             val equipment = (entity as? ArmorStand)?.let { stand -> EquipmentSlot.entries.mapNotNull { slot -> stand.getItemBySlot(slot).takeUnless { it.isEmpty }?.let { "$slot=${itemKey(it)}" } } }
             "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path} at ${"%.2f".format(entity.y - pos.y)} name=${entity.customName?.string} invisible=${entity.isInvisible}" +

@@ -536,6 +536,11 @@ object GreenhousePlanner : SkyMyceModule() {
             planted[cell] = GreenhouseWorld.plantFor(fingerprint, catalog, known)
             if (planted[cell] == null) looks[cell] = fingerprint
         }
+        // Every entity seen, so a crop the planner misreads can be matched from the log.
+        SkyMyce.logger.info("Greenhouse plot {} import read: {}", plot.name, (0 until GREENHOUSE_CELLS).mapNotNull { cell ->
+            val pos = cellPos(origin, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE).above()
+            GreenhouseWorld.describe(level, pos).takeUnless { it.startsWith("block ") }?.let { "r${cell / GREENHOUSE_SIZE + 1}c${cell % GREENHOUSE_SIZE + 1}=${planted[cell] ?: looks[cell] ?: "empty"}: $it" }
+        }.joinToString(" | ").take(20_000))
         val guessed = inferCrops(catalog, planted, looks)
         guessed.forEach { (look, id) -> learn(look, id, plot) }
         for (cell in 0 until GREENHOUSE_CELLS) looks[cell]?.let { look -> guessed[look]?.let { planted[cell] = it; looks[cell] = null } }
