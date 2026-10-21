@@ -131,9 +131,10 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                     child(label(detail, if (missing > 0) MenuTheme.YELLOW else MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.expand()) })
                 }
             })
+            val rows = growthRows(plot, layout, now)
             val tiles = row().apply {
                 gap(6); verticalAlignment(VerticalAlignment.TOP)
-                child(growth(plot, layout, growing, now))
+                child(growth(plot, layout, rows, now))
                 child(estimated(GreenhousePlanner.estimate(layout), 32))
                 child(harvested(harvestTotals(GreenhousePlanner.history, now, plot.name), 32))
             }
@@ -144,8 +145,9 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 child(UIContainers.verticalFlow(Sizing.expand(), Sizing.content()).apply {
                     gap(4)
                     if (!compact) child(tiles)
+                    rows.filter { it.state != GrowthState.WAITING }.takeIf { it.isNotEmpty() }?.let { child(GrowthRows(it)) }
                     child(GreenhouseLegend(layout))
-                    child(label("Faded = not planted, red edge = wrong soil, dot = mutation growing. Hover a slot for details.", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
+                    child(label("Faded = not planted, red edge = wrong soil, dot = growing but not analysed, fill = growth, yellow = fully grown. Hover a slot for details.", MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.fill()) })
                     child(actions(listOf(
                         button("Shopping list", 92) { chat { GreenhousePlanner.showMissing(plot) } }.tooltip(Component.literal("Everything still missing, with /bz and /gfs links")),
                         button("Import", 56) { chat { GreenhousePlanner.importPlot(plot, null) } }
@@ -158,26 +160,41 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
         }
     }
 
-    /** Growth timers, led by the Plant Diagnostics Tool readings when the player has analysed some mutations. */
-    private fun growth(plot: GreenhousePlanner.Plot, layout: Layout, growing: Int, now: Long): FlowLayout {
+    /** One row per target slot: analysed mutations first by time left, then growing but not analysed, then slots still waiting. */
+    private fun growthRows(plot: GreenhousePlanner.Plot, layout: Layout, now: Long): List<GrowthRow> {
+        val cycleMs = GreenhousePlanner.cycleHours(layout)?.let { (it * 3_600_000).toLong() }
+        return layout.targets.map { placement ->
+            val key = placement.row * GREENHOUSE_SIZE + placement.col
+            val where = "R${placement.row + 1} C${placement.col + 1}"
+            val code = plot.status.getOrNull(key)?.let(CellStatus::of)
+            if (code != CellStatus.TARGET_GROWING) return@map GrowthRow(where, placement.plantId, GrowthState.WAITING, 0.0, 0, null)
+            val (stage, stages) = GreenhousePlanner.targetGrowth(plot, placement, now)
+                ?: return@map GrowthRow(where, placement.plantId, GrowthState.UNANALYSED, 0.0, 0, plot.spawned[key]?.let { at -> cycleMs?.let { at + it - now } })
+            val ready = GreenhousePlanner.targetReadyInMs(plot, placement, now) ?: 0
+            GrowthRow(where, placement.plantId, if (ready <= 0) GrowthState.READY else GrowthState.GROWING, stage, stages, ready)
+        }.sortedWith(compareBy({ it.state.ordinal }, { it.readyInMs ?: Long.MAX_VALUE }))
+    }
+
+    /** When the next and the last mutation finish, from analysed readings or (estimated) spawn times. */
+    private fun growth(plot: GreenhousePlanner.Plot, layout: Layout, rows: List<GrowthRow>, now: Long): FlowLayout {
         val cycle = GreenhousePlanner.cycleHours(layout) ?: return tile("Growing", "—", MUTED, 32, listOf("No target"))
-        val cycleMs = (cycle * 3_600_000).toLong()
-        val ready = plot.spawned.values.map { it + cycleMs }
-        val due = ready.count { it <= now }
-        val next = ready.filter { it > now }.minOrNull()
-        val all = ready.maxOrNull()?.takeIf { it > now && ready.size > 1 }
-        val lines = ArrayList<String>()
-        val analysed = GreenhousePlanner.growthSummary(plot, now)
-        if (analysed != null) {
-            lines += "About stage ${"%.1f".format(analysed.stage)} of ${analysed.stages}, from ${analysed.analysed} analysed"
-            lines += if (analysed.readyInMs <= 0) "Fully grown now" else "Fully grown in about ${GreenhousePlanner.age(analysed.readyInMs)}"
+        val growing = rows.count { it.state != GrowthState.WAITING }
+        val ready = rows.count { it.state == GrowthState.READY }
+        val analysed = rows.count { it.state == GrowthState.READY || it.state == GrowthState.GROWING }
+        val pending = rows.mapNotNull { it.readyInMs?.takeIf { ms -> ms > 0 } }
+        val next = pending.minOrNull(); val last = pending.maxOrNull()?.takeIf { pending.size > 1 }
+        val (value, color) = when {
+            ready > 0 -> "$ready ready now" to MenuTheme.YELLOW
+            next != null -> "Next in ${GreenhousePlanner.age(next)}" to GREEN
+            else -> "$growing of ${rows.size} growing" to if (growing > 0) GREEN else TEXT
         }
-        if (due > 0) lines += "$due ready to harvest"
-        if (next != null) lines += "Next ready in ${GreenhousePlanner.age(next - now)}" + (all?.let { ", all in ${GreenhousePlanner.age(it - now)}" } ?: "")
-        if (growing > plot.spawned.size) lines += "${growing - plot.spawned.size} appeared while you were away"
+        val lines = ArrayList<String>()
+        if (ready > 0 && next != null) lines += "Next in ${GreenhousePlanner.age(next)}" + (last?.let { ", all in ${GreenhousePlanner.age(it)}" } ?: "")
+        else if (last != null) lines += "All ready in ${GreenhousePlanner.age(last)}"
+        lines += "$growing of ${rows.size} growing, " + if (growing > analysed) "${growing - analysed} not analysed" else "all analysed"
         lines += (if (plot.plantedAt > 0) "Planted ${GreenhousePlanner.age(now - plot.plantedAt)} ago" else "Planting time not seen yet") + ", ${"%.1f".format(cycle)}h cycle (est.)"
-        if (analysed == null && growing > 0) lines += "Analyze a few with the Plant Diagnostics Tool to see their stage"
-        return tile("Growing", "$growing of ${layout.targets.size}", if (due > 0) MenuTheme.YELLOW else if (growing > 0) GREEN else TEXT, 32, lines)
+        if (analysed == 0 && growing > 0) lines += "Analyze them with the Plant Diagnostics Tool to see their stage"
+        return tile("Growing", value, color, 32, lines)
     }
 
     private fun estimated(perHour: Double, share: Int) = tile("Estimated", "${GreenhousePlanner.signed(perHour * 24)}/day", GREEN, share,
@@ -221,8 +238,8 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
 }
 
 /**
- * The plot's 10×10 layout drawn from the pinned plan and the last scan; hovering a slot names it. Row 1 is the anchor's
- * row at the top and columns run right to left, so the grid matches the plot seen from above facing the anchor.
+ * The plot's 10×10 layout drawn from the pinned plan and the last scan; hovering a slot names it. Rows run left to
+ * right (row 1 at the left) and columns top to bottom, so the bottom of the grid is the greenhouse entrance.
  */
 internal class GreenhouseGrid(
     private val layout: Layout, private val status: String, private val cell: Int = 9,
@@ -238,13 +255,13 @@ internal class GreenhouseGrid(
         g.roundedRect(x(), y(), width(), height(), 2.0, MenuTheme.alpha(MenuTheme.BORDER, 35))
         for (index in 0 until GREENHOUSE_CELLS) {
             if (layout.cells[index] != null) continue
-            g.roundedRect(x() + (GREENHOUSE_SIZE - 1 - index % GREENHOUSE_SIZE) * cell + 1, y() + index / GREENHOUSE_SIZE * cell + 1, cell - 1, cell - 1, 1.0, MenuTheme.alpha(MenuTheme.MUTED, 12))
+            g.roundedRect(x() + index / GREENHOUSE_SIZE * cell + 1, y() + index % GREENHOUSE_SIZE * cell + 1, cell - 1, cell - 1, 1.0, MenuTheme.alpha(MenuTheme.MUTED, 12))
         }
         val dot = if (cell >= 14) 5 else 3
         for (placement in layout.placements) {
             val first = placement.row * GREENHOUSE_SIZE + placement.col
             val code = status.getOrNull(first)?.let(CellStatus::of)
-            val px = x() + (GREENHOUSE_SIZE - placement.col - placement.size) * cell + 1; val py = y() + placement.row * cell + 1
+            val px = x() + placement.row * cell + 1; val py = y() + placement.col * cell + 1
             val size = placement.size * cell - 1
             val strength = when (code) {
                 null -> 60
@@ -254,13 +271,17 @@ internal class GreenhouseGrid(
             }
             val color = if (code == CellStatus.WRONG_CROP) MenuTheme.RED else GreenhousePlanner.plantColor(placement.plantId)
             g.roundedRect(px, py, size, size, 1.5, MenuTheme.alpha(color, strength))
-            if (placement.role == Role.TARGET) g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(MenuTheme.TEXT, 70))
-            if (code == CellStatus.TARGET_GROWING) g.roundedRect(px + (size - dot) / 2, py + (size - dot) / 2, dot, dot, dot / 2.0, MenuTheme.alpha(MenuTheme.TEXT))
-            // An analysed mutation shows how far it has grown as a bar along its bottom edge.
-            if (placement.role == Role.TARGET) growth(placement)?.let { (stage, stages) ->
-                val filled = ((size - 2) * (stage / stages)).toInt().coerceIn(1, size - 2)
-                g.fill(px + 1, py + size - 3, px + size - 1, py + size - 1, MenuTheme.alpha(MenuTheme.PANEL, 80))
-                g.fill(px + 1, py + size - 3, px + 1 + filled, py + size - 1, MenuTheme.alpha(if (stage >= stages) MenuTheme.YELLOW else MenuTheme.GREEN))
+            val reading = if (code == CellStatus.TARGET_GROWING) growth(placement) else null
+            if (reading == null) {
+                if (placement.role == Role.TARGET) g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(MenuTheme.TEXT, 70))
+                if (code == CellStatus.TARGET_GROWING) g.roundedRect(px + (size - dot) / 2, py + (size - dot) / 2, dot, dot, dot / 2.0, MenuTheme.alpha(MenuTheme.TEXT))
+            } else {
+                // An analysed mutation fills its slot from the bottom as it grows and turns yellow once fully grown.
+                val (stage, stages) = reading
+                val done = stage >= stages
+                val level = if (done) size - 2 else ((size - 2) * (stage / stages)).toInt().coerceIn(1, size - 3)
+                g.fill(px + 1, py + size - 1 - level, px + size - 1, py + size - 1, MenuTheme.alpha(if (done) MenuTheme.YELLOW else MenuTheme.GREEN, 75))
+                g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(if (done) MenuTheme.YELLOW else MenuTheme.TEXT, 90))
             }
             val wrongSoil = (0 until placement.size).any { r -> (0 until placement.size).any { c ->
                 status.getOrNull(first + r * GREENHOUSE_SIZE + c) == CellStatus.WRONG_SOIL.code
@@ -268,7 +289,7 @@ internal class GreenhouseGrid(
             if (wrongSoil) g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(MenuTheme.RED))
         }
         val inside = mouseX in x() until x() + width() - 1 && mouseY in y() until y() + height() - 1
-        val index = if (inside) (mouseY - y()) / cell * GREENHOUSE_SIZE + GREENHOUSE_SIZE - 1 - (mouseX - x()) / cell else -1
+        val index = if (inside) greenhouseCellAt(mouseX - x(), mouseY - y(), cell) else -1
         if (index != hovered) {
             hovered = index
             if (index < 0) tooltip(null as List<ClientTooltipComponent>?) else tooltip(Component.literal(describe(index)))
@@ -290,8 +311,50 @@ internal class GreenhouseGrid(
             else -> "Not checked yet"
         }
         val placement = layout.placements.firstOrNull { index / GREENHOUSE_SIZE - it.row in 0 until it.size && index % GREENHOUSE_SIZE - it.col in 0 until it.size }
-        val stage = placement?.let(growth)?.let { (stage, stages) -> "\nAbout stage ${"%.1f".format(stage)} of $stages (Plant Diagnostics Tool)" }.orEmpty()
+        val stage = placement?.let(growth)?.let { (stage, stages) -> "\nAbout stage ${"%.1f".format(stage)} of $stages" + if (stage >= stages) ", fully grown" else "" }.orEmpty()
         return "$where\n$name (${if (plan.role == Role.TARGET) "target" else "ingredient"}) on ${GreenhousePlanner.soilName(plan.soil)}\n$state$stage"
+    }
+}
+
+internal enum class GrowthState { READY, GROWING, UNANALYSED, WAITING }
+
+/** One target slot's growth; [readyInMs] comes from a reading, or is an estimate from the spawn time when not analysed. */
+internal data class GrowthRow(val where: String, val plantId: String, val state: GrowthState, val stage: Double, val stages: Int, val readyInMs: Long?)
+
+/** Target slots as aligned rows: slot, stage, a progress bar and the time until fully grown. */
+internal class GrowthRows(private val rows: List<GrowthRow>) : BaseUIComponent() {
+    private val size = 8.0
+    private val line = MenuCanvas.lineHeight(size) + 2
+
+    init { sizing(Sizing.fill(), Sizing.fixed(rows.size * line)) }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        val slot = MenuCanvas.textWidth("R10 C10", size = size) + 4
+        val stage = MenuCanvas.textWidth("20/20", bold = true, size = size) + 6
+        val text = MenuCanvas.textWidth("not analysed, ~10d 23h", size = size)
+        val bar = (width() - 11 - slot - stage - 8 - text).toInt().coerceAtLeast(20)
+        rows.forEachIndexed { i, row ->
+            val top = y() + i * line
+            val (color, note) = when (row.state) {
+                GrowthState.READY -> MenuTheme.YELLOW to "ready now"
+                GrowthState.GROWING -> MenuTheme.GREEN to "ready in ${GreenhousePlanner.age(row.readyInMs ?: 0)}"
+                GrowthState.UNANALYSED -> MenuTheme.MUTED to "not analysed" + (row.readyInMs?.let { ", ~${GreenhousePlanner.age(it)}" } ?: "")
+                GrowthState.WAITING -> MenuTheme.MUTED to "not spawned"
+            }
+            val faded = row.state == GrowthState.WAITING
+            g.roundedRect(x(), top + 2, 7, 7, 1.5, MenuTheme.alpha(GreenhousePlanner.plantColor(row.plantId), if (faded) 35 else 100))
+            g.styledText(listOf(MenuCanvas.Run(row.where, MenuTheme.alpha(if (faded) MenuTheme.MUTED else MenuTheme.TEXT))), x() + 11.0, top.toDouble(), size)
+            val stageText = if (row.stages == 0) "—" else "${row.stage.toInt().coerceAtMost(row.stages)}/${row.stages}"
+            g.styledText(listOf(MenuCanvas.Run(stageText, MenuTheme.alpha(if (row.stages == 0) MenuTheme.MUTED else color), bold = row.stages > 0)), x() + 11 + slot, top.toDouble(), size)
+            val bx = (x() + 11 + slot + stage).toInt(); val by = top + 3
+            g.roundedRect(bx, by, bar, 5, 2.5, MenuTheme.alpha(MenuTheme.blend(MenuTheme.BORDER, MenuTheme.MUTED, 30), if (faded) 30 else 70))
+            if (row.stages > 0) {
+                val fill = (bar * (row.stage / row.stages)).toInt().coerceIn(5, bar)
+                g.roundedRect(bx, by, fill, 5, 2.5, MenuTheme.alpha(color, 90))
+            }
+            g.styledText(listOf(MenuCanvas.Run(note, MenuTheme.alpha(color))), bx + bar + 8.0, top.toDouble(), size)
+        }
     }
 }
 
@@ -373,3 +436,6 @@ internal class ProfitBars(private val values: DoubleArray) : BaseUIComponent() {
         }
     }
 }
+
+/** The data cell index under a point inside the rotated grid: screen x runs along data rows, screen y along columns. */
+internal fun greenhouseCellAt(dx: Int, dy: Int, cell: Int) = dx / cell * GREENHOUSE_SIZE + dy / cell
