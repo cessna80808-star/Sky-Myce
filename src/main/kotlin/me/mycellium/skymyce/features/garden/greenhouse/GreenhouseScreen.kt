@@ -339,7 +339,7 @@ internal class GrowthRows(private val rows: List<GrowthRow>) : BaseUIComponent()
             val (color, note) = when (row.state) {
                 GrowthState.READY -> MenuTheme.YELLOW to "ready now"
                 GrowthState.GROWING -> MenuTheme.GREEN to "ready in ${GreenhousePlanner.age(row.readyInMs ?: 0)}"
-                GrowthState.UNANALYSED -> MenuTheme.MUTED to "not analysed" + (row.readyInMs?.let { ", ~${GreenhousePlanner.age(it)}" } ?: "")
+                GrowthState.UNANALYSED -> MenuTheme.MUTED to "not analysed" + (row.readyInMs?.let { if (it < 60_000) ", may be ready" else ", ~${GreenhousePlanner.age(it)}" } ?: "")
                 GrowthState.WAITING -> MenuTheme.MUTED to "not spawned"
             }
             val faded = row.state == GrowthState.WAITING
