@@ -517,3 +517,6 @@ fun inferCrops(catalog: PlantCatalog, planted: Array<String?>, looks: Array<Stri
         if (best.value >= 2 && best.value * 2 >= runnerUp * 3 && best.value > runnerUp) look to best.key else null
     }.toMap()
 }
+
+/** Hypixel's Bazaar amount prompt (Buy Instantly or buy order "Custom Amount"): the player types on line 1, line 3 reads "Enter amount". */
+fun isBazaarAmountSign(lines: List<String>) = lines.size >= 3 && lines[2].trim().equals("Enter amount", true)

@@ -222,6 +222,10 @@ fun main() {
     check(gardenPlotAt(187, 100) == 18 && gardenPlotAt(196, 91) == 18 && gardenPlotAt(-92, -5) == 2 && gardenPlotAt(-101, 4) == 2) { "Garden plots" }
     check(gardenPlotAt(0, 0) == null && gardenPlotAt(0, -100) == 1 && gardenPlotAt(-200, -200) == 21 && gardenPlotAt(500, 0) == null) { "Garden plot edges" }
 
+    // Only the Bazaar amount sign gets the shopping-list amount typed in, never the price or search sign.
+    check(isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter amount", "to order")) && !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter price", "per unit")) &&
+        !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter query", "")) && !isBazaarAmountSign(emptyList())) { "Amount sign" }
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L

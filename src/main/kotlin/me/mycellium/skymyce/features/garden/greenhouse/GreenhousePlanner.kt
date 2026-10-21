@@ -6,6 +6,7 @@ import com.google.gson.JsonObject
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
+import me.mycellium.mixin.BazaarAssistSignAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GreenhouseConfig
@@ -27,6 +28,7 @@ import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents
 import net.fabricmc.fabric.api.event.player.UseBlockCallback
 import net.fabricmc.fabric.api.event.player.UseEntityCallback
 import net.minecraft.commands.SharedSuggestionProvider
+import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.core.component.DataComponents
@@ -81,6 +83,8 @@ object GreenhousePlanner : SkyMyceModule() {
     private const val CONTINUITY_MS = 10_000L
     private const val WATCH_DISTANCE = 24
     private const val ANALYSIS_WINDOW = 5_000L
+    /** How long after opening the Bazaar for a crop its amount waits for the amount sign. */
+    private const val AMOUNT_WINDOW = 120_000L
 
     private val file by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("greenhouse.json"), 262_144) }
     private val historyFile by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("greenhouse-history.json"), 1_048_576) }
@@ -566,6 +570,29 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     private var copiedAt = 0L
+    /** An amount to type into the next Bazaar amount sign, with when the offer lapses; set by a Bazaar shopping-list click or /bz. */
+    private var pendingAmount: Pair<Int, Long>? = null
+    private var filledSign = 0
+
+    /**
+     * Types the pending amount into the first line of the next "Enter amount" Bazaar sign, once, if that line is still
+     * empty; the player checks it and clicks Done. Nothing is sent.
+     */
+    private fun fillAmountSign(now: Long) {
+        val (amount, until) = pendingAmount ?: return
+        if (now > until) { pendingAmount = null; return }
+        val sign = MC.screen as? AbstractSignEditScreen ?: return
+        val id = System.identityHashCode(sign)
+        if (filledSign == id) return
+        val accessor = sign as BazaarAssistSignAccessor
+        val lines = accessor.`skymyce$getMessages`()?.map { it.orEmpty() }.orEmpty()
+        if (!isBazaarAmountSign(lines)) return
+        filledSign = id; pendingAmount = null
+        if (accessor.`skymyce$getLine`() != 0 || lines.first().isNotBlank()) return
+        val field = accessor.`skymyce$getSignField`() ?: return
+        field.selectAll()
+        field.insertText(amount.toString())
+    }
 
     /** One shopping-list click: /gfs for sack crops and soil, or /bz with the amount copied. Sends that one command. */
     private fun get(plotName: String, key: String) {
@@ -581,7 +608,8 @@ object GreenhousePlanner : SkyMyceModule() {
         if (plant.id in SACK_CROPS) return MC.player.connection.sendCommand("gfs ${gfsId(plant)} $count")
         MC.instance.keyboardHandler.clipboard = count.toString()
         copiedAt = System.currentTimeMillis()
-        displayModMessage("§7Copied §f$count§7 for the buy sign (${plant.name})")
+        pendingAmount = count to copiedAt + AMOUNT_WINDOW
+        displayModMessage("§7Opening ${plant.name}: §f$count§7 goes into the amount sign for you (also copied)")
         MC.player.connection.sendCommand("bz ${plant.name}")
     }
 
@@ -596,7 +624,8 @@ object GreenhousePlanner : SkyMyceModule() {
             catalog[id]?.takeIf { it.name.equals(query, true) || it.id.replace('_', ' ').equals(query, true) }?.let { it to count }
         } ?: return
         MC.instance.keyboardHandler.clipboard = count.toString()
-        displayModMessage("§7Copied §f$count§7 to the clipboard (${plant.name} still needed)")
+        pendingAmount = count to System.currentTimeMillis() + AMOUNT_WINDOW
+        displayModMessage("§7${plant.name}: §f$count§7 goes into the amount sign for you (also copied)")
     }
 
     // ---- Reading planted crops ----------------------------------------------------------------------------------
@@ -819,6 +848,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (!loaded || !active()) return clear()
         val now = System.currentTimeMillis()
         expireAnalysis(now)
+        fillAmountSign(now)
         val inGarden = LocationAPI.island == SkyBlockIsland.GARDEN
         if (inGarden) pollPrices(now)
         val player = MC.instance.player
