@@ -177,6 +177,8 @@ data class PlotState(
     val scannedAt: Long = 0,
     val missingPlants: Map<String, Int> = emptyMap(),
     val missingSoil: Map<Soil, Int> = emptyMap(),
+    /** Block looks named on this plot; a vanilla stem or crop block can be a young mutation on one plot and itself on another. */
+    val learned: Map<String, String> = emptyMap(),
 )
 
 /** One character per cell in [PlotState.status]. */
@@ -198,6 +200,7 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     if (status.isNotEmpty()) { addProperty("status", status); addProperty("scannedAt", scannedAt) }
     if (missingPlants.isNotEmpty()) add("missingPlants", JsonObject().apply { missingPlants.forEach { (id, n) -> addProperty(id, n) } })
     if (missingSoil.isNotEmpty()) add("missingSoil", JsonObject().apply { missingSoil.forEach { (soil, n) -> addProperty(soil.name, n) } })
+    if (learned.isNotEmpty()) add("learned", JsonObject().apply { learned.forEach { (look, id) -> addProperty(look, id) } })
 }
 
 /**
@@ -224,7 +227,10 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
             status = status.orEmpty(),
             scannedAt = if (status == null) 0L else runCatching { section["scannedAt"].asLong }.getOrDefault(0L),
             missingPlants = counts("missingPlants").filterKeys { catalog[it] != null },
-            missingSoil = counts("missingSoil").mapNotNull { (key, n) -> runCatching { Soil.valueOf(key) }.getOrNull()?.let { it to n } }.toMap())
+            missingSoil = counts("missingSoil").mapNotNull { (key, n) -> runCatching { Soil.valueOf(key) }.getOrNull()?.let { it to n } }.toMap(),
+            learned = runCatching {
+                section.getAsJsonObject("learned").entrySet().mapNotNull { (look, id) -> runCatching { id.asString }.getOrNull()?.takeIf { catalog[it] != null && look.length <= 256 }?.let { look to it } }.toMap()
+            }.getOrDefault(emptyMap()))
     }
     val plots = json["plots"]?.takeIf { it.isJsonArray } ?: return listOf(plot(json, "1", runCatching {
         val active = json["active"].asString
@@ -371,3 +377,39 @@ fun harvestFromJson(json: com.google.gson.JsonElement, catalog: PlantCatalog): H
     Harvest(row[0].asLong, row[1].asString.takeIf { it.matches(PLOT_NAME) }!!, row[2].asString.takeIf { catalog[it] != null }!!,
         row[3].asDouble.takeIf { it.isFinite() }!!, row[4].asDouble.takeIf { it.isFinite() }!!)
 }.getOrNull()
+
+/**
+ * Names unrecognised crops from what the recognised mutations around them still lack. Every unknown look (fingerprint)
+ * in the ring of a recognised mutation with at least half its ingredients in place votes for what that ring is short of,
+ * weighted by the shortfall; a look
+ * whose votes clearly favour one ingredient (at least two votes and half again the runner-up) is named after it.
+ * [looks] holds the fingerprint of each unrecognised cell, null elsewhere.
+ */
+fun inferCrops(catalog: PlantCatalog, planted: Array<String?>, looks: Array<String?>): Map<String, String> {
+    val votes = HashMap<String, HashMap<String, Int>>()
+    for (cell in 0 until GREENHOUSE_CELLS) {
+        val plant = planted[cell]?.let { catalog[it] }?.takeIf { it.solvable } ?: continue
+        val row = cell / GREENHOUSE_SIZE; val col = cell % GREENHOUSE_SIZE
+        // One instance per footprint: only its top-left recognised cell counts.
+        if (col > 0 && planted[cell - 1] == plant.id || row > 0 && planted[cell - GREENHOUSE_SIZE] == plant.id) continue
+        if (row + plant.size > GREENHOUSE_SIZE || col + plant.size > GREENHOUSE_SIZE) continue
+        val counts = HashMap<String, Int>()
+        val unknown = ArrayList<String>()
+        for (r in row - 1..row + plant.size) for (c in col - 1..col + plant.size) {
+            if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE || (r in row until row + plant.size && c in col until col + plant.size)) continue
+            val ring = r * GREENHOUSE_SIZE + c
+            planted[ring]?.let { counts.merge(it, 1, Int::plus) }
+            looks[ring]?.let(unknown::add)
+        }
+        val short = plant.requires.mapValues { (id, need) -> need - (counts[id] ?: 0) }.filterValues { it > 0 }
+        // Only a mutation with most of its ring in place is a target; an ingredient that is itself a mutation is not.
+        if (short.values.sum() * 2 > plant.requires.values.sum()) continue
+        for (look in unknown) for ((id, missing) in short) votes.getOrPut(look) { HashMap() }.merge(id, missing, Int::plus)
+    }
+    return votes.mapNotNull { (look, tally) ->
+        val ranked = tally.entries.sortedByDescending { it.value }
+        val best = ranked.first()
+        val runnerUp = ranked.getOrNull(1)?.value ?: 0
+        if (best.value >= 2 && best.value * 2 >= runnerUp * 3 && best.value > runnerUp) look to best.key else null
+    }.toMap()
+}

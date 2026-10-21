@@ -105,6 +105,8 @@ object GreenhousePlanner : SkyMyceModule() {
         var scannedAt = 0L
         var missingPlants: Map<String, Int> = emptyMap()
         var missingSoil: Map<Soil, Int> = emptyMap()
+        /** Block looks named on this plot; see [PlotState.learned]. */
+        val learned = LinkedHashMap<String, String>()
         /** The previous scan, kept in memory, so planting, spawns and harvests are seen as they happen. */
         var previous: BooleanArray? = null
         var previousAt = 0L
@@ -118,7 +120,7 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Solved layouts by inputs hash, so planning the same inputs again is instant. */
     private val layouts = LinkedHashMap<String, Layout>()
     private val estimates = LinkedHashMap<String, PlotEstimate>()
-    /** Crop fingerprint → plant id, learned while planting or from /sm greenhouse identify. */
+    /** Head, item and entity looks → plant id, learned while planting or from /sm greenhouse identify. Block looks are per plot. */
     private val learned = LinkedHashMap<String, String>()
     internal val history = ArrayList<Harvest>()
     private var prices: Map<String, Quote> = emptyMap()
@@ -319,7 +321,7 @@ object GreenhousePlanner : SkyMyceModule() {
             .then(argument("mutation", StringArgumentType.word())
                 .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.filter { it.solvable }?.map { it.id }.orEmpty(), builder) }
                 .executes { context -> val id = StringArgumentType.getString(context, "mutation").uppercase(); run { importPlot(selected(), id) } }))
-        .then(literal("identify").then(argument("crop", StringArgumentType.word())
+        .then(literal("identify").executes { run { identify(null) } }.then(argument("crop", StringArgumentType.word())
             .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.map { it.id }.orEmpty(), builder) }
             .executes { context -> val id = StringArgumentType.getString(context, "crop").uppercase(); run { identify(id) } }))
         .then(literal("anchor").executes { run { setAnchor(null) } }
@@ -360,7 +362,7 @@ object GreenhousePlanner : SkyMyceModule() {
             "gui" to "Your greenhouses: layout, growth timers, estimated and harvested profit",
             "anchor [name]" to "Look at the corner slot's soil to place a plot; reads crops already planted there",
             "import [mutation]" to "Read what is planted on this plot and pin it as the layout instead of solving a new one",
-            "identify <crop>" to "Look at a planted crop the planner does not recognise and name it",
+            "identify [crop]" to "Look at a planted crop to see what the planner reads, or name it; the plot is read again",
             "plan <mutation>" to "Solve a new layout for that mutation on this plot",
             "auto" to "Solve a new layout for the most profitable mutation",
             "recompute" to "Solve again, ignoring the cached layout",
@@ -501,17 +503,25 @@ object GreenhousePlanner : SkyMyceModule() {
         val planted = arrayOfNulls<String>(GREENHOUSE_CELLS)
         val occupied = BooleanArray(GREENHOUSE_CELLS)
         val soil = arrayOfNulls<Soil>(GREENHOUSE_CELLS)
-        val unknown = HashMap<String, Int>()
+        val looks = arrayOfNulls<String>(GREENHOUSE_CELLS)
+        val known = knownLooks(plot)
         for (cell in 0 until GREENHOUSE_CELLS) {
             val soilPos = cellPos(origin, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE)
             soil[cell] = soilOf(level.getBlockState(soilPos))
             val fingerprint = GreenhouseWorld.fingerprint(level, soilPos.above()) ?: continue
             occupied[cell] = true
-            planted[cell] = GreenhouseWorld.plantFor(fingerprint, catalog, learned)
-            if (planted[cell] == null) unknown.merge(fingerprint, 1, Int::plus)
+            planted[cell] = GreenhouseWorld.plantFor(fingerprint, catalog, known)
+            if (planted[cell] == null) looks[cell] = fingerprint
         }
-        if (unknown.isNotEmpty()) SkyMyce.logger.info("Greenhouse plot {} has unidentified crops: {}", plot.name, unknown)
-        val unknownHint = if (unknown.isEmpty()) null else "§e${unknown.values.sum()} planted spots were not recognised. Look at one and run /sm greenhouse identify <crop>, then import again"
+        val guessed = inferCrops(catalog, planted, looks)
+        guessed.forEach { (look, id) -> learn(look, id, plot) }
+        for (cell in 0 until GREENHOUSE_CELLS) looks[cell]?.let { look -> guessed[look]?.let { planted[cell] = it; looks[cell] = null } }
+        val unknown = looks.filterNotNull().groupingBy { it }.eachCount()
+        if (unknown.isNotEmpty()) {
+            val samples = unknown.keys.associateWith { look -> looks.indexOf(look).let { cell -> GreenhouseWorld.describe(level, cellPos(origin, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE).above()) } }
+            SkyMyce.logger.info("Greenhouse plot {} has unidentified crops: {}; samples: {}", plot.name, unknown, samples)
+        }
+        val unknownHint = if (unknown.isEmpty()) null else "§e${unknown.values.sum()} planted spots are still not recognised. Look at one and run /sm greenhouse identify"
         if (planted.all { it == null }) { unknownHint?.let { if (!quiet) displayModMessage(it) }; return fail("§7Nothing recognisable is planted on plot ${plot.name}") }
         val now = System.currentTimeMillis()
         val layout = importLayout(catalog, planted, occupied, soil, unlocked(plot), target, prices, settings(), now, IMPORTED + now.toString(36))
@@ -522,28 +532,53 @@ object GreenhousePlanner : SkyMyceModule() {
         val growing = layout.targets.count { t -> occupied[t.row * GREENHOUSE_SIZE + t.col] }
         displayModMessage("§aImported plot ${plot.name}: §f$name ×${layout.targets.size} §7($growing growing, ${layout.targets.size - growing} open), " +
             "${layout.placements.count { it.role == Role.INGREDIENT }} ingredients, §f${rate(estimate(layout))} §7estimated. This layout is now pinned")
+        if (guessed.isNotEmpty()) displayModMessage("§7Recognised from the recipe: ${guessed.values.groupingBy { it }.eachCount().entries.joinToString { (id, looks) ->
+            "${catalog[id]?.name}${if (looks > 1) " ($looks looks)" else ""}" }}. If one is wrong, look at it and run /sm greenhouse identify")
         unknownHint?.let(::displayModMessage)
         return true
     }
 
-    private fun identify(id: String) {
+    /**
+     * Names the crop under the crosshair and reads its plot again. Without a crop it says what the planner sees there
+     * and offers the plot's recipe crops as clickable choices.
+     */
+    private fun identify(id: String?) {
         val catalog = catalog ?: return displayModMessage("§cGreenhouse data is unavailable")
-        val plant = catalog[id] ?: return displayModMessage("§cUnknown crop: $id")
+        val plant = id?.let { catalog[it] ?: return displayModMessage("§cUnknown crop: $it") }
         val level = MC.instance.level ?: return
         // Further than block reach, so a crop in the middle of the plot can be named from its edge.
         val hit = MC.player.pick(32.0, 1f, false) as? BlockHitResult
         if (hit == null || hit.type != HitResult.Type.BLOCK) return displayModMessage("§cLook at the crop, or the soil under it, first (within 32 blocks)")
         val pos = if (soilOf(level.getBlockState(hit.blockPos)) != null) hit.blockPos.above() else hit.blockPos
         val fingerprint = GreenhouseWorld.fingerprint(level, pos) ?: return displayModMessage("§cNothing is planted there")
-        learn(fingerprint, plant.id)
-        displayModMessage("§aLearned: that crop is ${plant.name}. §7Run /sm greenhouse import to read the plot again")
+        val plot = plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null } ?: selected()
+        if (plant == null) {
+            val known = GreenhouseWorld.plantFor(fingerprint, catalog, knownLooks(plot))?.let { catalog[it]?.name }
+            val target = plot.target?.let { catalog[it] }
+            val choices = (listOfNotNull(target) + target?.requires?.keys.orEmpty().mapNotNull { catalog[it] }).distinct()
+            displayModMessage(if (known != null) "§7The planner reads that as §f$known§7. If it is something else, pick it:" else "§eThe planner does not recognise that crop. Which is it?")
+            if (choices.isEmpty()) return displayModMessage("§7Run /sm greenhouse identify <crop> (tab completes the names)")
+            val line = Component.literal("")
+            choices.forEach { choice ->
+                line.append(Component.literal("§b[${choice.name}] ").withStyle { it.withClickEvent(ClickEvent.RunCommand("/sm greenhouse identify ${choice.id}")) })
+            }
+            displayModMessage(line.append(Component.literal("§7or /sm greenhouse identify <crop>")))
+            return
+        }
+        learn(fingerprint, plant.id, plot)
+        displayModMessage("§aLearned: that crop is ${plant.name}${if (fingerprint.startsWith("block:")) " on plot ${plot.name}" else ""}. §7Reading the plot again…")
+        if (plot.anchor != null) importPlot(plot, null)
     }
 
-    private fun learn(fingerprint: String, plantId: String) {
-        learned.remove(fingerprint); learned[fingerprint] = plantId
-        while (learned.size > MAX_LEARNED) learned.remove(learned.keys.first())
+    /** Head, item and entity looks are the same crop everywhere; a block look is only trusted on the plot it was named on. */
+    private fun learn(fingerprint: String, plantId: String, plot: Plot) {
+        val into = if (fingerprint.startsWith("block:")) plot.learned else learned
+        into.remove(fingerprint); into[fingerprint] = plantId
+        while (into.size > MAX_LEARNED) into.remove(into.keys.first())
         save()
     }
+
+    private fun knownLooks(plot: Plot): Map<String, String> = if (plot.learned.isEmpty()) learned else learned + plot.learned
 
     private fun loaded(level: Level, origin: Anchor) = listOf(0 to 0, 0 to GREENHOUSE_SIZE - 1, GREENHOUSE_SIZE - 1 to 0, GREENHOUSE_SIZE - 1 to GREENHOUSE_SIZE - 1)
         .all { (row, col) -> level.hasChunkAt(cellPos(origin, row, col)) }
@@ -630,6 +665,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val held = heldId
         val heldSoils = held?.let(::soilsForItem).orEmpty()
         val allSoil = GreenhouseConfig.alwaysShowSoilGhosts
+        val looks = knownLooks(plot)
         val alpha = GreenhouseConfig.opacity
         val previous = plot.previous?.takeIf { watching && now - plot.previousAt <= CONTINUITY_MS }
         val occupiedNow = BooleanArray(GREENHOUSE_CELLS)
@@ -654,11 +690,12 @@ object GreenhousePlanner : SkyMyceModule() {
                 val occupied = fingerprint != null
                 occupiedNow[cell] = occupied
                 if (previous?.get(cell) == true) wasOccupied = true
-                var identified = fingerprint?.let { GreenhouseWorld.plantFor(it, catalog, learned) }
+                var identified = fingerprint?.let { GreenhouseWorld.plantFor(it, catalog, looks) }
                 if (ingredient && fingerprint != null && identified == null && previous?.get(cell) == false && held != null && held in plant.itemIds) {
-                    learn(fingerprint, plant.id); identified = plant.id
+                    learn(fingerprint, plant.id, plot); identified = plant.id
                 }
-                val wrongCrop = ingredient && identified != null && identified != plant.id
+                // Only a head is certain: a vanilla block look may be a young mutation that has not grown its head yet.
+                val wrongCrop = ingredient && fingerprint?.startsWith("head:") == true && identified != null && identified != plant.id
                 if (occupied && !wrongCrop) planted = true
                 if (!soilOk) {
                     soils.merge(soil, 1, Int::plus)
@@ -738,7 +775,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 plots.forEach { plot ->
                     val anchor = plot.anchor?.let { PlotAnchor(it.pos.x, it.pos.y, it.pos.z, it.facing.name) }
                     add(PlotState(plot.name, anchor, plot.locked.indices.filter { plot.locked[it] }.toSet(), plot.target, plot.layout,
-                        plot.plantedAt, HashMap(plot.spawned), plot.status, plot.scannedAt, plot.missingPlants, plot.missingSoil).toJson())
+                        plot.plantedAt, HashMap(plot.spawned), plot.status, plot.scannedAt, plot.missingPlants, plot.missingSoil, LinkedHashMap(plot.learned)).toJson())
                 }
             })
             add("prices", JsonObject().apply {
@@ -769,7 +806,8 @@ object GreenhousePlanner : SkyMyceModule() {
             estimates[hash] = PlotEstimate(pair[0].asInt.also { require(it in 0..GREENHOUSE_CELLS) }, pair[1].asDouble.also { require(it.isFinite()) })
         } } }
         runCatching { json.getAsJsonObject("fingerprints").entrySet().forEach { (fingerprint, value) ->
-            runCatching { value.asString }.getOrNull()?.takeIf { catalog[it] != null && fingerprint.length <= 256 }?.let { learned[fingerprint] = it }
+            // Block looks learned before 2.7.34 were global; they are dropped, since they belong to one plot (a young mutation can look like melon).
+            runCatching { value.asString }.getOrNull()?.takeIf { catalog[it] != null && fingerprint.length <= 256 && !fingerprint.startsWith("block:") }?.let { learned[fingerprint] = it }
         } }
         runCatching { plotsFromJson(json, catalog) }.onFailure { SkyMyce.logger.warn("Greenhouse plots could not be read", it) }.getOrNull()?.forEach { state ->
             plots += Plot(state.name).apply {
@@ -780,6 +818,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 plantedAt = state.plantedAt; spawned.putAll(state.spawned)
                 status = state.status; scannedAt = state.scannedAt
                 missingPlants = state.missingPlants; missingSoil = state.missingSoil
+                learned.putAll(state.learned)
             }
         }
     }

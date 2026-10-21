@@ -148,6 +148,19 @@ fun main() {
     check(fieldLayout.placements.filter { it.plantId == "ASHWREATH" }.all { fieldLayout.soils[it] == Soil.SOUL_SAND }) { "Ashwreath soil" }
     validate(fieldLayout, full)
 
+    // Unrecognised looks are named from the recipe they would complete: the 3 unknown heads around each Coalroot are Scourroot.
+    val partial = field.copyOf()
+    val looks = arrayOfNulls<String>(GREENHOUSE_CELLS)
+    for (cell in 0 until GREENHOUSE_CELLS) if (partial[cell] == "SCOURROOT" && cell != 71) { partial[cell] = null; looks[cell] = "head:young-scourroot" }
+    partial[71] = null; looks[71] = "head:lonely"
+    check(inferCrops(catalog, partial, looks) == mapOf("head:young-scourroot" to "SCOURROOT")) { "Inference ${inferCrops(catalog, partial, looks)}" }
+    // A look that could be either of two short ingredients stays unnamed.
+    val tied = arrayOfNulls<String>(GREENHOUSE_CELLS).also { it[22] = "COALROOT" }
+    val tiedLooks = arrayOfNulls<String>(GREENHOUSE_CELLS).also { cells -> listOf(11, 12, 13, 21, 23, 31, 32, 33).forEach { cells[it] = "head:same" } }
+    check(inferCrops(catalog, tied, tiedLooks).isEmpty()) { "Ambiguous inference" }
+    val namedPlot = PlotState("north", null, emptySet(), null, null, learned = mapOf("block:melon_stem@farmland" to "COALROOT"))
+    check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(namedPlot.toJson()) }) }, catalog).single() == namedPlot) { "Plot looks" }
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L

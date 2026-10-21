@@ -46,7 +46,7 @@ internal object GreenhouseWorld {
         val entities = level.getEntitiesOfClass(Entity::class.java, AABB(pos)) { it is ArmorStand || it is Display }
         for (entity in entities) {
             val stack = when (entity) {
-                is ArmorStand -> entity.getItemBySlot(EquipmentSlot.HEAD).takeUnless { it.isEmpty } ?: entity.getItemBySlot(EquipmentSlot.MAINHAND)
+                is ArmorStand -> EquipmentSlot.entries.firstNotNullOfOrNull { slot -> entity.getItemBySlot(slot).takeUnless { it.isEmpty } }
                 is Display.ItemDisplay -> entity.itemRenderState()?.itemStack()
                 is Display.BlockDisplay -> entity.blockRenderState()?.blockState()?.let { return blockKey(level, pos, it) }
                 else -> null
@@ -58,6 +58,14 @@ internal object GreenhouseWorld {
 
     private fun blockKey(level: Level, pos: BlockPos, state: BlockState) =
         "block:" + BuiltInRegistries.BLOCK.getKey(state.block).path + "@" + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos.below()).block).path
+
+    /** What is at a spot, for the log when a look is not recognised: entity types, names, flags and equipment. */
+    fun describe(level: Level, pos: BlockPos): String = level.getEntitiesOfClass(Entity::class.java, AABB(pos).inflate(0.5)) { it is ArmorStand || it is Display }
+        .take(4).joinToString("; ") { entity ->
+            val equipment = (entity as? ArmorStand)?.let { stand -> EquipmentSlot.entries.mapNotNull { slot -> stand.getItemBySlot(slot).takeUnless { it.isEmpty }?.let { "$slot=${itemKey(it)}" } } }
+            "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path} at ${"%.2f".format(entity.y - pos.y)} name=${entity.customName?.string} invisible=${entity.isInvisible}" +
+                ((entity as? ArmorStand)?.let { " marker=${it.isMarker} small=${it.isSmall} equipment=$equipment" } ?: "")
+        }.ifEmpty { "block " + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).block).path }
 
     /** The plant a fingerprint shows: learned first, then bundled head textures, SkyBlock item ids and vanilla crop blocks. */
     fun plantFor(fingerprint: String, catalog: PlantCatalog, learned: Map<String, String>): String? = learned[fingerprint] ?: when {

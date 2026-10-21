@@ -188,7 +188,10 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
     }
 }
 
-/** The plot's 10×10 layout drawn from the pinned plan and the last scan; hovering a slot names it. */
+/**
+ * The plot's 10×10 layout drawn from the pinned plan and the last scan; hovering a slot names it. Row 1 is the anchor's
+ * row at the top and columns run right to left, so the grid matches the plot seen from above facing the anchor.
+ */
 internal class GreenhouseGrid(private val layout: Layout, private val status: String) : BaseUIComponent() {
     private val cell = 9
     private var hovered = -1
@@ -200,12 +203,12 @@ internal class GreenhouseGrid(private val layout: Layout, private val status: St
         g.roundedRect(x(), y(), width(), height(), 2.0, MenuTheme.alpha(MenuTheme.BORDER, 35))
         for (index in 0 until GREENHOUSE_CELLS) {
             if (layout.cells[index] != null) continue
-            g.roundedRect(x() + index % GREENHOUSE_SIZE * cell + 1, y() + index / GREENHOUSE_SIZE * cell + 1, cell - 1, cell - 1, 1.0, MenuTheme.alpha(MenuTheme.MUTED, 12))
+            g.roundedRect(x() + (GREENHOUSE_SIZE - 1 - index % GREENHOUSE_SIZE) * cell + 1, y() + index / GREENHOUSE_SIZE * cell + 1, cell - 1, cell - 1, 1.0, MenuTheme.alpha(MenuTheme.MUTED, 12))
         }
         for (placement in layout.placements) {
             val first = placement.row * GREENHOUSE_SIZE + placement.col
             val code = status.getOrNull(first)?.let(CellStatus::of)
-            val px = x() + placement.col * cell + 1; val py = y() + placement.row * cell + 1
+            val px = x() + (GREENHOUSE_SIZE - placement.col - placement.size) * cell + 1; val py = y() + placement.row * cell + 1
             val size = placement.size * cell - 1
             val strength = when (code) {
                 null -> 60
@@ -223,7 +226,7 @@ internal class GreenhouseGrid(private val layout: Layout, private val status: St
             if (wrongSoil) g.roundedBorder(px, py, size, size, 1.5, 1.0, MenuTheme.alpha(MenuTheme.RED))
         }
         val inside = mouseX in x() until x() + width() - 1 && mouseY in y() until y() + height() - 1
-        val index = if (inside) (mouseY - y()) / cell * GREENHOUSE_SIZE + (mouseX - x()) / cell else -1
+        val index = if (inside) (mouseY - y()) / cell * GREENHOUSE_SIZE + GREENHOUSE_SIZE - 1 - (mouseX - x()) / cell else -1
         if (index != hovered) {
             hovered = index
             if (index < 0) tooltip(null as List<ClientTooltipComponent>?) else tooltip(Component.literal(describe(index)))
