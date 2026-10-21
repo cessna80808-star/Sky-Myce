@@ -204,6 +204,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("cosmetics-light", ThemePreset.LIGHT) { CosmeticsScreen() },
             Scene("greenhouse", ThemePreset.SIGNATURE) { greenhouseFixture() },
             Scene("greenhouse-narrow", ThemePreset.LIGHT, 640, 480, 2) { greenhouseFixture() },
+            Scene("greenhouse-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) { greenhouseFixture() },
             Scene("search-light", ThemePreset.LIGHT) { MenuDirectoryScreen() },
             Scene("leaderboards-community-return", ThemePreset.SIGNATURE) { LeaderboardScreen() },
             Scene("daily-news-normal", ThemePreset.SIGNATURE) { DailyDigestScreen("news") },
