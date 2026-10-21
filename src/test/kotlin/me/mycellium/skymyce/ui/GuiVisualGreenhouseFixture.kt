@@ -29,6 +29,7 @@ internal fun greenhouseFixture(): GreenhouseScreen {
             this.status = String(status); scannedAt = now - 2 * 60_000L; plantedAt = now - 30 * hour
             layout.targets.filterIndexed { i, _ -> i % 2 == 0 }.forEachIndexed { i, t -> spawned[t.row * GREENHOUSE_SIZE + t.col] = now - (i * 9 + 4) * hour }
             missingPlants = mapOf("CHLORONITE" to 2, "STARTLEVINE" to 1); missingSoil = mapOf(Soil.SAND to 3)
+            layout.targets.take(3).forEachIndexed { i, t -> growth[t.row * GREENHOUSE_SIZE + t.col] = GrowthReading(3 + i * 2, 8, now - 2 * hour) }
         }
         // A 3×3 mutation with many single unique crops, so the legend's "1 each" group and a fully built plot are covered.
         val snoozling = GreenhouseSolver(catalog, quotes + ("SNOOZLING" to Quote(4e5, 5e5)), GreenhouseSettings(3, 12, PriceMode.SELL_OFFER), BooleanArray(GREENHOUSE_CELLS) { true }, listOf("SNOOZLING"), 8_000)
