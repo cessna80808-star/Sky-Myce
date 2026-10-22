@@ -123,6 +123,11 @@ class GoldorRunState(var profile: StrategyProfile) {
         if (after != before) { players[key] = after; if (after.role != before.role || after.sm != before.sm || after.alive != before.alive) changed() }
     }
 
+    /** Drops everyone not in [names] (this run's party), so players from an earlier run or who left stop getting plans. */
+    fun retainPlayers(names: Collection<String>) {
+        if (players.keys.removeIf { key -> names.none { it.equals(key, ignoreCase = true) } }) changed()
+    }
+
     /** Fresh position for [name], or null if unseen or older than [POSITION_TTL]. */
     fun position(name: String, now: Long): BossPoint? = player(name)?.takeIf { (it.seenAt ?: return@takeIf false) >= now - POSITION_TTL }?.position
 

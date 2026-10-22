@@ -251,6 +251,8 @@ object GoldorCoordinator : SkyMyceModule() {
     private fun refreshRoster(now: Long) {
         val players = MC.instance.level?.players().orEmpty()
         val party = DungeonAPI.teammates + listOfNotNull(DungeonAPI.ownPlayer)
+        // An empty list means the party is not read yet, not that everyone left.
+        if (party.isNotEmpty()) state.retainPlayers(party.map { it.name } + selfName())
         for (member in party) {
             val role = overrides.entries.firstOrNull { it.key.equals(member.name, true) }?.value ?: GoldorRole.ofName(member.dungeonClass?.name)
             val entity = players.firstOrNull { it.gameProfile.name.equals(member.name, true) }

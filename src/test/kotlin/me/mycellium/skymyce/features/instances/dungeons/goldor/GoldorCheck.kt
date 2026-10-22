@@ -152,6 +152,10 @@ private fun checkPreLeapFallback() {
     check(advise(s, "Tanky", now).self!!.leap?.targetName == "Arch") { "Closest of Healer/Archer to S3 T1" }
     s.seen("Arch", BossPoint(110.0, 113.0, 73.0), now)
     check(advise(s, "Tanky", now).self!!.leap?.targetName == "Healz") { "The target changes when positions change" }
+    // Players from an earlier party are dropped once this run's party is known.
+    val stale = GoldorRunState(GoldorProfiles.SKY_MYCE).apply { updatePlayer("Bingo8") { it }; updatePlayer("Old") { it.copy(alive = false) }; updatePlayer("Tanky") { it.copy(alive = false) } }
+    stale.retainPlayers(listOf("tanky", "Healz"))
+    check(stale.players.keys == setOf("Tanky")) { "Stale party members: ${stale.players.keys}" }
 }
 
 private fun checkS3S4() {
