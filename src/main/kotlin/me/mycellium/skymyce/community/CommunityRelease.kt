@@ -10,9 +10,10 @@ import java.util.Properties
 
 internal const val MAX_COMMUNITY_JAR = 128L * 1024 * 1024
 internal data class CommunityRelease(val version: String, val size: Long, val sha256: String, val notes: String)
+/** X.Y.Z or X.Y.Z-beta-N; a release sorts after every beta of the same X.Y.Z. */
 internal fun communityVersion(value: String): List<Int> {
-    require(value.matches(Regex("[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}")))
-    return value.split('.').map(String::toInt)
+    val match = requireNotNull(Regex("([0-9]{1,5})\\.([0-9]{1,5})\\.([0-9]{1,5})(?:-beta-([0-9]{1,5}))?").matchEntire(value))
+    return match.groupValues.subList(1, 4).map(String::toInt) + (match.groupValues[4].toIntOrNull() ?: Int.MAX_VALUE)
 }
 internal fun newerCommunityVersion(next: String, current: String): Boolean {
     val left = communityVersion(next); val right = communityVersion(current)

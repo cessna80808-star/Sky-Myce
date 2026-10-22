@@ -39,6 +39,9 @@ fun main() {
     }
     check(verifyCommunityRelease(signed(manifest), config, now).version == "2.5.1")
     check(newerCommunityVersion("2.10.0", "2.9.9") && !newerCommunityVersion("2.5.0", "2.5.0") && !newerCommunityVersion("2.4.9", "2.5.0"))
+    check(newerCommunityVersion("2.8.0-beta-001", "2.7.42") && newerCommunityVersion("2.8.0-beta-010", "2.8.0-beta-9") &&
+        newerCommunityVersion("2.8.0", "2.8.0-beta-999") && !newerCommunityVersion("2.8.0-beta-002", "2.8.0"))
+    check(runCatching { communityVersion("2.8.0-beta") }.isFailure && runCatching { communityVersion("2.8.0-rc-1") }.isFailure)
     for ((field, value) in listOf("product" to "sky-myce-loader", "installation" to "loader", "artifact" to "../../mods/other.jar", "minecraft" to "1.21", "version" to "latest")) {
         val changed = manifest.deepCopy().apply { addProperty(field, value) }
         check(runCatching { verifyCommunityRelease(signed(changed), config, now) }.isFailure)

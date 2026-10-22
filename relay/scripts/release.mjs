@@ -48,7 +48,7 @@ try {
     console.log("Sky-Myce signing key files created. Restrict the private file to the release operator; never publish it.");
   } else if (args[0] === "sign-community") {
     const [, artifactPath, keyPath, kid, minecraft, modVersion, notesPath, output] = args;
-    if (args.length !== 8 || !/^[A-Za-z0-9_-]{1,48}$/.test(kid) || !/^\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$/.test(minecraft) || !version(modVersion)) fail("Invalid community signing arguments");
+    if (args.length !== 8 || !/^[A-Za-z0-9_-]{1,48}$/.test(kid) || !/^\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$/.test(minecraft) || !/^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-beta-\d{1,5})?$/.test(modVersion)) fail("Invalid community signing arguments");
     const key = createPrivateKey(await readFile(keyPath)); if (key.asymmetricKeyType !== "ed25519") fail("Ed25519 required");
     const artifact = await readFile(artifactPath); if (artifact.length < 4 || artifact.length > 128 * 1024 * 1024) fail("Invalid artifact size");
     const metadata = fabricMetadata(artifact);

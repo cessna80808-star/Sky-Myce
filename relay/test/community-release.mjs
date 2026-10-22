@@ -26,6 +26,9 @@ for (const change of [{ protocol: 3 }, { installation: 'loader' }, { minimumLoad
 envelope = signed(base); envelope.payload = Buffer.from(JSON.stringify({ ...base, size: 1024 })).toString('base64url');
 await assert.rejects(verifyCommunityManifest(envelope, env));
 assert.equal((await handleCommunityRelease(new Request('https://example.test/community/release', { method: 'POST' }), env)).status, 405);
+const beta = { ...base, version: '2.8.0-beta-001', artifact: 'releases/Sky-Myce-2.8.0-beta-001.jar' };
+assert.deepEqual(await verifyCommunityManifest(signed(beta), env), beta);
+await assert.rejects(verifyCommunityManifest(signed({ ...beta, version: '2.8.0-rc-1', artifact: 'releases/Sky-Myce-2.8.0-rc-1.jar' }), env));
 envelope = signed(base); fetched = [];
 const cached = new Map(), pending = [], previousCaches = globalThis.caches;
 globalThis.caches = { default: {

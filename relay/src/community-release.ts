@@ -12,7 +12,7 @@ export async function verifyCommunityManifest(envelope: any, env: CommunityRelea
   if (signature.length !== 64 || !await crypto.subtle.verify("Ed25519", await installationKey(keys[envelope.kid]), signature, payload)) throw Error("invalid_signature");
   const manifest = JSON.parse(new TextDecoder().decode(payload));
   if (manifest.product !== "sky-myce" || manifest.protocol !== 4 || manifest.installation !== "fabric" ||
-    manifest.minecraft !== (env.MINECRAFT_VERSION ?? "26.1.2") || !/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(manifest.version) ||
+    manifest.minecraft !== (env.MINECRAFT_VERSION ?? "26.1.2") || !/^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-beta-\d{1,5})?$/.test(manifest.version) ||
     manifest.artifact !== `releases/Sky-Myce-${manifest.version}.jar` || Object.hasOwn(manifest, "minimumLoaderVersion") ||
     !Number.isSafeInteger(manifest.size) || manifest.size < 4 || manifest.size > 128 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(manifest.sha256) ||
     !Number.isSafeInteger(manifest.issuedAt) || !Number.isSafeInteger(manifest.expiresAt) || manifest.issuedAt > now + 300000 ||
