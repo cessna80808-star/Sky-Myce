@@ -52,6 +52,7 @@ import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
+import tech.thatgravyboat.skyblockapi.api.events.info.TabListChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.level.RightClickEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
 import tech.thatgravyboat.skyblockapi.api.events.level.BlockChangeEvent
@@ -60,6 +61,7 @@ import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import kotlin.math.abs
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -190,8 +192,31 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** Settings for [plot]: the unique-crop count comes from the player's other saved plots unless the setting is higher. */
-    internal fun settings(plot: Plot? = null) =
-        GreenhouseSettings(GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode)
+    internal fun settings(plot: Plot? = null) = GreenhouseSettings(GreenhouseConfig.upgradeLevel,
+        maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode, gardenLevel() ?: 15)
+
+    /** The Garden level from the setting, else as last read from the tab list; null while unknown. */
+    internal fun gardenLevel(): Int? = GreenhouseConfig.gardenLevel.takeIf { it > 0 } ?: detectedGardenLevel
+
+    private var detectedGardenLevel: Int? = null
+    private var tabLogged = false
+
+    @Subscription
+    fun onTabList(event: TabListChangeEvent) {
+        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
+        val lines = event.new.flatten().map { it.stripped }
+        val level = lines.firstNotNullOfOrNull(::parseGardenLevel)
+        if (level == null) {
+            // Logged once a session so the line format can be checked if the level is never found.
+            if (!tabLogged && detectedGardenLevel == null) SkyMyce.logger.info("Greenhouse: no Garden level in the tab list: {}", lines.filter { it.contains("garden", true) })
+            tabLogged = true
+            return
+        }
+        if (level == detectedGardenLevel) return
+        SkyMyce.logger.info("Greenhouse: Garden level {} from the tab list", level)
+        detectedGardenLevel = level
+        save(); dirty = true; revision++
+    }
 
     /**
      * Unique base crops planned on the player's other plots, which count toward this plot's growth bonus.
@@ -285,8 +310,11 @@ object GreenhousePlanner : SkyMyceModule() {
             return displayModMessage("§7Waiting for Bazaar prices before solving…")
         }
         if (solving) return displayModMessage("§7Still solving the previous layout; try again in a moment")
-        val target = plot.target ?: plotRanking(plot).firstOrNull()?.entry?.plant?.id ?: return displayModMessage("§cNo mutation up to your highest tier has Bazaar prices")
+        val target = plot.target ?: plotRanking(plot).firstOrNull()?.entry?.plant?.id ?: return displayModMessage("§cNo mutation up to your highest tier and Garden level has Bazaar prices")
         val name = catalog[target]?.name ?: target
+        catalog[target]?.let { gardenLevelFor(catalog, it) }?.takeIf { it > settings(plot).gardenLevel }?.let {
+            return displayModMessage("§c$name needs Garden level $it for its crops; yours is ${gardenLevel()}")
+        }
         val unlocked = unlocked(plot)
         val settings = settings(plot)
         val hash = inputsHash(unlocked, listOf(target), settings, catalog, prices)
@@ -414,12 +442,12 @@ object GreenhousePlanner : SkyMyceModule() {
      */
     fun serverCommandHints(): List<LiteralArgumentBuilder<FabricClientCommandSource>> = listOf(
         literal("bz").then(argument("item", StringArgumentType.greedyString()).suggests { _, builder ->
-            SharedSuggestionProvider.suggest(if (active()) plot?.missingPlants?.keys?.filter { it !in SACK_CROPS }?.mapNotNull { catalog?.get(it)?.name }.orEmpty() else emptyList(), builder)
+            SharedSuggestionProvider.suggest(if (active()) plot?.missingPlants?.keys?.mapNotNull { catalog?.get(it) }?.filter { sackFetch(it, 1) == null }?.map { it.name }.orEmpty() else emptyList(), builder)
         }),
         literal("gfs").then(argument("item", StringArgumentType.greedyString()).suggests { _, builder ->
             val plot = plot?.takeIf { active() }
             SharedSuggestionProvider.suggest(plot?.missingSoil?.map { (soil, count) -> "${sackId(soil)} $count" }.orEmpty() +
-                plot?.missingPlants?.filterKeys { it in SACK_CROPS }?.mapNotNull { (id, count) -> catalog?.get(id)?.let { "${gfsId(it)} $count" } }.orEmpty(), builder)
+                plot?.missingPlants?.mapNotNull { (id, count) -> catalog?.get(id)?.let { sackFetch(it, count) }?.let { (item, amount) -> "$item $amount" } }.orEmpty(), builder)
         }),
     )
 
@@ -537,7 +565,15 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Base crops kept in sacks, so they are fetched with /gfs instead of bought. */
     private val SACK_CROPS = setOf("CARROT", "POTATO", "CACTUS", "SUGAR_CANE", "WHEAT_SEEDS", "RED_MUSHROOM", "BROWN_MUSHROOM", "NETHER_WART", "SUNFLOWER", "WILD_ROSE")
 
-    private fun gfsId(plant: Plant) = plant.itemIds.first().lowercase()
+    /** Seeds no one sells: taken from sacks as the crop they are crafted from, named here. */
+    private val CRAFTED_SEEDS = mapOf("MELON_SEEDS" to "Melon Slice", "PUMPKIN_SEEDS" to "Pumpkin")
+
+    /** What /gfs takes for [count] of [plant]: the crop itself, or the item its seeds are crafted from. Null when bought. */
+    private fun sackFetch(plant: Plant, count: Int): Pair<String, Int>? = when (plant.id) {
+        in CRAFTED_SEEDS -> plant.bazaarId.lowercase() to (count + plant.perItem - 1) / plant.perItem
+        in SACK_CROPS -> plant.itemIds.first().lowercase() to count
+        else -> null
+    }
 
     /** What a plot still needs, one line per source; each item is a button that fetches or buys exactly what is missing. */
     internal fun showMissing(plot: Plot) {
@@ -547,7 +583,8 @@ object GreenhousePlanner : SkyMyceModule() {
         val stale = if (plot !== this.plot || hudLines == null) " §8(as of ${age(System.currentTimeMillis() - plot.scannedAt)} ago)" else ""
         if (plot.missingPlants.isEmpty() && plot.missingSoil.isEmpty()) return displayModMessage("§aPlot ${plot.name} has everything it needs$stale")
         val crops = plot.missingPlants.entries.mapNotNull { (id, count) -> catalog[id]?.let { it to count } }.sortedByDescending { it.second }
-        val (sacked, bought) = crops.partition { it.first.id in SACK_CROPS }
+        val crafted = crops.filter { it.first.id in CRAFTED_SEEDS }
+        val (sacked, bought) = (crops - crafted.toSet()).partition { sackFetch(it.first, it.second) != null }
         val cropCount = crops.sumOf { it.second }; val soilCount = plot.missingSoil.values.sum()
         displayModMessage("§aPlot ${plot.name} still needs " + listOfNotNull(
             "§f$cropCount§a crop${if (cropCount == 1) "" else "s"}".takeIf { cropCount > 0 },
@@ -563,6 +600,10 @@ object GreenhousePlanner : SkyMyceModule() {
             displayModMessage(text)
         }
         line("Sacks", sacked.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Take $count $name from your sacks (/gfs)" }
+        line("Craft", crafted.map { (plant, count) ->
+            val (_, amount) = sackFetch(plant, count)!!
+            Triple("${CRAFTED_SEEDS.getValue(plant.id)} §8→ §7$count ${plant.name}", amount, plant.id)
+        }) { name, count -> "Take $count ${name.substringBefore(" §8")} from your sacks (/gfs), then craft them into seeds" }
         line("Bazaar", bought.map { (plant, count) -> Triple(plant.name, count, plant.id) }) { name, count -> "Open $name in the Bazaar and copy $count for the buy sign" }
         line("Soil", plot.missingSoil.entries.sortedByDescending { it.value }.map { (soil, count) -> Triple(soilName(soil), count, "SOIL_${soil.name}") }) { name, count ->
             "Take $count $name from your sacks (/gfs)"
@@ -601,17 +642,31 @@ object GreenhousePlanner : SkyMyceModule() {
         if (key.startsWith("SOIL_")) {
             val soil = runCatching { Soil.valueOf(key.removePrefix("SOIL_")) }.getOrNull() ?: return
             val count = plot.missingSoil[soil] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${soilName(soil)}")
-            return MC.player.connection.sendCommand("gfs ${sackId(soil)} $count")
+            return fetch("${sackId(soil)} $count")
         }
         val plant = catalog[key] ?: return displayModMessage("§cUnknown crop: $key")
         val count = plot.missingPlants[plant.id] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${plant.name}")
-        if (plant.id in SACK_CROPS) return MC.player.connection.sendCommand("gfs ${gfsId(plant)} $count")
+        sackFetch(plant, count)?.let { (item, amount) -> return fetch("$item $amount") }
         MC.instance.keyboardHandler.clipboard = count.toString()
         copiedAt = System.currentTimeMillis()
         pendingAmount = count to copiedAt + AMOUNT_WINDOW
         displayModMessage("§7Opening ${plant.name}: §f$count§7 goes into the amount sign for you (also copied)")
         MC.player.connection.sendCommand("bz ${plant.name}")
     }
+
+    private var fetchedAt = 0L
+    private fun fetch(arguments: String) {
+        fetchedAt = System.currentTimeMillis()
+        MC.player.connection.sendCommand("gfs $arguments")
+    }
+
+    /** Hides the sack "Moved …" reply to a shopping-list /gfs, which would push the list out of view. */
+    @Subscription
+    fun onSackChat(event: ChatReceivedEvent.Pre) {
+        if (System.currentTimeMillis() - fetchedAt < 5_000 && SACK_MOVED.matches(event.text.trim())) event.cancel()
+    }
+
+    private val SACK_MOVED = Regex("Moved [\\d,]+ .+ from your Sacks to your inventory\\.?")
 
     /** A /bz for a crop the selected plot still needs copies the missing amount, ready for the Bazaar buy sign. */
     private fun copyBazaarQuantity(command: String) {
@@ -1052,6 +1107,7 @@ object GreenhousePlanner : SkyMyceModule() {
             add("layouts", JsonArray().apply { layouts.values.forEach { add(it.toJson()) } })
             add("estimates", JsonObject().apply { estimates.forEach { (hash, e) -> add(hash, JsonArray().apply { add(e.count); add(e.profitPerHour) }) } })
             add("fingerprints", JsonObject().apply { learned.forEach { (fingerprint, id) -> addProperty(fingerprint, id) } })
+            detectedGardenLevel?.let { addProperty("gardenLevel", it) }
         }
         writer.submit(json)
     }
@@ -1068,6 +1124,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 id to Quote(pair[0].asDouble, pair[1].asDouble).also { require(it.buyOrder > 0 && it.sellOffer > 0) }
             }.getOrNull() }.toMap()
         }
+        detectedGardenLevel = runCatching { json["gardenLevel"]?.asInt?.takeIf { it in 1..15 } }.getOrNull()
         runCatching { json.getAsJsonArray("layouts").forEach { element -> runCatching { layoutFromJson(element.asJsonObject, catalog) }.getOrNull()?.let { layouts[it.inputsHash] = it } } }
         runCatching { json.getAsJsonObject("estimates").entrySet().forEach { (hash, value) -> runCatching {
             val pair = value.asJsonArray

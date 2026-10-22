@@ -35,6 +35,10 @@ data class Plant(
     val requires: Map<String, Int>,
     /** Skin textures (file names) of the player heads the crop is planted as; base crops are heads in the Greenhouse too. */
     val heads: Set<String> = emptySet(),
+    /** Seeds crafted per [bazaarId] item (4 Pumpkin Seeds per Pumpkin), so one plant costs a fraction of that item. */
+    val perItem: Int = 1,
+    /** Garden level that unlocks planting this base crop; 0 when it has none. */
+    val gardenLevel: Int = 0,
 ) {
     val mutation get() = rarity != Rarity.RAW
     val solvable get() = special == null && requires.isNotEmpty()
@@ -60,7 +64,8 @@ fun parsePlantCatalog(text: String): PlantCatalog {
             json["unique"]?.asBoolean == true, json["free"]?.asBoolean == true, json["special"]?.asString,
             json.getAsJsonObject("requires")?.entrySet()?.associate { (key, value) -> key to value.asInt.also { require(it in 1..16) } }.orEmpty(),
             (listOfNotNull(json["head"]?.asString) + json.getAsJsonArray("heads")?.map { it.asString }.orEmpty())
-                .onEach { require(it.matches(Regex("[0-9a-f]{32,64}"))) }.toSet())
+                .onEach { require(it.matches(Regex("[0-9a-f]{32,64}"))) }.toSet(),
+            json["perItem"]?.asInt?.also { require(it in 1..64) } ?: 1, json["gardenLevel"]?.asInt?.also { require(it in 0..15) } ?: 0)
     }
     val catalog = PlantCatalog(plants)
     require(catalog.byId.size == plants.size && plants.all { plant -> plant.requires.keys.all { it in catalog.byId } })
@@ -73,7 +78,19 @@ enum class ProfitMetric(val label: String) { PER_HOUR("Per hour"), PER_CYCLE("Pe
 /** Bazaar quick-status pair: the highest buy order and lowest sell offer. */
 data class Quote(val buyOrder: Double, val sellOffer: Double)
 
-data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode)
+/** [gardenLevel] is 15 (everything unlocked) while the player's level is unknown. */
+data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode, val gardenLevel: Int = 15)
+
+/** The Garden level a mutation needs: the highest unlock level among the base crops it spreads from. */
+fun gardenLevelFor(catalog: PlantCatalog, plant: Plant) = plant.requires.keys.maxOfOrNull { catalog[it]?.gardenLevel ?: 0 } ?: 0
+
+/** The Garden level from a tab list line such as "Garden Level: XII" or "Garden Level 12"; null for anything else. */
+fun parseGardenLevel(line: String): Int? {
+    val value = Regex("""\bGarden Level:?\s+([IVX]{1,5}|\d{1,2})\b""").find(line)?.groupValues?.get(1) ?: return null
+    val level = value.toIntOrNull() ?: value.map { mapOf('I' to 1, 'V' to 5, 'X' to 10).getValue(it) }
+        .let { digits -> digits.indices.sumOf { i -> if (i + 1 < digits.size && digits[i] < digits[i + 1]) -digits[i] else digits[i] } }
+    return level.takeIf { it in 1..15 }
+}
 
 /**
  * skymutations.eu prices with `instantBuy = max(sellPrice, buyPrice)` for both the target ("Sell Offer") and the ingredients
@@ -84,7 +101,7 @@ fun revenuePrice(quote: Quote?, mode: PriceMode): Double? = quote?.let {
 }?.takeIf { it.isFinite() && it > 0 }
 
 fun costPrice(plant: Plant, quotes: Map<String, Quote>): Double? =
-    if (plant.free) 0.0 else quotes[plant.bazaarId]?.let { max(it.buyOrder, it.sellOffer) }?.takeIf { it.isFinite() && it > 0 }
+    if (plant.free) 0.0 else quotes[plant.bazaarId]?.let { max(it.buyOrder, it.sellOffer) / plant.perItem }?.takeIf { it.isFinite() && it > 0 }
 
 /**
  * skymutations.eu's growth timer: 4 hours per stage, reduced by percentage points from the Greenhouse upgrade
@@ -113,7 +130,7 @@ data class RankedMutation(val plant: Plant, val revenue: Double, val inputCost: 
  */
 fun rankMutations(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings,
                   allowed: (Plant) -> Boolean = { true }): List<RankedMutation> = catalog.plants.mapNotNull { plant ->
-    if (!plant.solvable || !allowed(plant)) return@mapNotNull null
+    if (!plant.solvable || !allowed(plant) || gardenLevelFor(catalog, plant) > settings.gardenLevel) return@mapNotNull null
     val revenue = revenuePrice(quotes[plant.bazaarId], settings.priceMode) ?: return@mapNotNull null
     var cost = 0.0
     for ((id, quantity) in plant.requires) {

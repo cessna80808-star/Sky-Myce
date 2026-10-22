@@ -40,6 +40,12 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         range = 0..12; slider = true
     }
 
+    val gardenLevel by int(0) {
+        name = TranslatableValue.literal("Garden Level")
+        description = TranslatableValue.literal("0 reads it from the tab list in your Garden. Mutations needing a base crop your Garden level has not unlocked (Sunflower and Moonflower at 11, Wild Rose at 12) are left out")
+        range = 0..15; slider = true
+    }
+
     val alwaysShowSoilGhosts by boolean(true) {
         name = TranslatableValue.literal("Always Show Soil Ghosts")
         description = TranslatableValue.literal("Mark every slot with the wrong soil without holding that soil. Crop ghosts still appear only while you hold the matching crop")

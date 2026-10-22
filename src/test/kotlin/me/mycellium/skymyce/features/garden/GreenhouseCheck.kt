@@ -226,6 +226,17 @@ fun main() {
     check(isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter amount", "to order")) && !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter price", "per unit")) &&
         !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter query", "")) && !isBazaarAmountSign(emptyList())) { "Amount sign" }
 
+    // Four Pumpkin Seeds are crafted from one Pumpkin; Melon Seeds one per slice.
+    check(costPrice(catalog["PUMPKIN_SEEDS"]!!, mapOf("PUMPKIN" to Quote(40.0, 40.0))) == 10.0 &&
+        costPrice(catalog["MELON_SEEDS"]!!, mapOf("MELON" to Quote(3.0, 3.0))) == 3.0) { "Crafted seed cost" }
+    // Garden level gates mutations through their base crops: Thornshade needs Wild Rose (12).
+    check(parseGardenLevel(" Garden Level: XII") == 12 && parseGardenLevel("Garden Level 9") == 9 && parseGardenLevel("Garden Level: XIV") == 14 &&
+        parseGardenLevel("Garden Visitors: 3") == null && parseGardenLevel("Garden Level: 99") == null) { "Garden level parse" }
+    val roseQuotes = mapOf("THORNSHADE" to Quote(1e5, 1e5), "WILD_ROSE" to Quote(5.0, 5.0), "VEILSHROOM" to Quote(10.0, 10.0))
+    check(gardenLevelFor(catalog, catalog["THORNSHADE"]!!) == 12 &&
+        rankMutations(catalog, roseQuotes, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER, 11)).none { it.plant.id == "THORNSHADE" } &&
+        rankMutations(catalog, roseQuotes, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER, 12)).any { it.plant.id == "THORNSHADE" }) { "Garden level gate" }
+
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
     val hour = 3_600_000L
