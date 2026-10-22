@@ -249,6 +249,11 @@ object IrcChatRendering {
         // Replacement/deletion cannot retain the old GPU image or clickable placeholder.
         textures.keys.filter { it.startsWith(message.key.tag + ":") }.forEach { textures.remove(it)?.texture?.close() }
     }
+    /** Rewrites vanilla chat lines in place (another feature's clickable list); [transform] returns the line unchanged to keep it. */
+    internal fun rewriteChat(transform: (GuiMessage) -> GuiMessage) {
+        val chat = accessor()
+        if (updateIrcHistory(chat.`skymyce$getMessages`(), transform)) refresh(chat)
+    }
     private fun refresh(chat: IrcChatAccessor) {
         val scroll = chat.`skymyce$getScroll`()
         withRefreshMessages { chat.`skymyce$refreshMessages`() }

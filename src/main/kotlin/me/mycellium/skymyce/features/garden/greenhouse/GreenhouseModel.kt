@@ -230,6 +230,17 @@ fun parseGrowth(lines: List<String>): Pair<Int, Int>? {
 private val FULLY_GROWN = Regex("(?i)\\bstage:\\s*fully grown")
 private val GROWTH_STAGES = Regex("(?i)growth stages:\\s*(\\d{1,3})")
 
+/**
+ * Why holding [held] (a crop when [crop], else a soil placing [soils]) is wrong for a slot planned as [plan], or null
+ * when it fits. Targets and unplanned slots take no crop; a slot without a plan takes any soil.
+ */
+fun wrongSlot(plan: CellPlan?, plant: Plant?, held: String, crop: Boolean, soils: Set<Soil>, soilName: (Soil) -> String): String? = when {
+    crop && (plan == null || plan.role != Role.INGREDIENT) -> "nothing is planted there"
+    crop && held !in plant?.itemIds.orEmpty() -> "that slot is for ${plant?.name}"
+    !crop && plan != null && plan.soil !in soils -> "that slot needs ${soilName(plan.soil)}"
+    else -> null
+}
+
 /** One character per cell in [PlotState.status]. */
 enum class CellStatus(val code: Char) {
     UNUSED('.'), DONE('o'), MISSING_CROP('m'), WRONG_CROP('w'), WRONG_SOIL('s'), TARGET_WAITING('t'), TARGET_GROWING('T');

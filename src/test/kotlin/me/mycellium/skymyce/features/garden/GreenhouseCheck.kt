@@ -229,6 +229,16 @@ fun main() {
     check(isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter amount", "to order")) && !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter price", "per unit")) &&
         !isBazaarAmountSign(listOf("", "^^^^^^^^^^^^^^^", "Enter query", "")) && !isBazaarAmountSign(emptyList())) { "Amount sign" }
 
+    // Block wrong clicks: the right crop or soil passes, anything else is named.
+    val carrotSlot = CellPlan("CARROT", Soil.FARMLAND, Role.INGREDIENT); val carrot = catalog["CARROT"]!!
+    check(wrongSlot(carrotSlot, carrot, "CARROT_ITEM", true, emptySet()) { it.name } == null &&
+        wrongSlot(carrotSlot, carrot, "POTATO_ITEM", true, emptySet()) { it.name } == "that slot is for Carrot" &&
+        wrongSlot(CellPlan("GLASSCORN", Soil.SAND, Role.TARGET), catalog["GLASSCORN"], "CARROT_ITEM", true, emptySet()) { it.name } != null &&
+        wrongSlot(null, null, "CARROT_ITEM", true, emptySet()) { it.name } != null &&
+        wrongSlot(carrotSlot, carrot, "DIRT", false, setOf(Soil.DIRT, Soil.FARMLAND)) { it.name } == null &&
+        wrongSlot(carrotSlot, carrot, "SAND", false, setOf(Soil.SAND)) { it.name } == "that slot needs FARMLAND" &&
+        wrongSlot(null, null, "SAND", false, setOf(Soil.SAND)) { it.name } == null) { "Wrong clicks" }
+
     // Four Pumpkin Seeds are crafted from one Pumpkin; Melon Seeds one per slice.
     check(costPrice(catalog["PUMPKIN_SEEDS"]!!, mapOf("PUMPKIN" to Quote(40.0, 40.0))) == 10.0 &&
         costPrice(catalog["MELON_SEEDS"]!!, mapOf("MELON" to Quote(3.0, 3.0))) == 3.0) { "Crafted seed cost" }

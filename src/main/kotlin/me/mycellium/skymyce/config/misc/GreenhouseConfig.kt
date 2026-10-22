@@ -46,6 +46,11 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         range = 0..15; slider = true
     }
 
+    val blockWrongClicks by boolean(true) {
+        name = TranslatableValue.literal("Block Wrong Clicks")
+        description = TranslatableValue.literal("Do not plant a crop or place soil in a slot the plot's layout plans for something else; the click is not sent")
+    }
+
     val alwaysShowSoilGhosts by boolean(true) {
         name = TranslatableValue.literal("Always Show Soil Ghosts")
         description = TranslatableValue.literal("Mark every slot with the wrong soil without holding that soil. Crop ghosts still appear only while you hold the matching crop")

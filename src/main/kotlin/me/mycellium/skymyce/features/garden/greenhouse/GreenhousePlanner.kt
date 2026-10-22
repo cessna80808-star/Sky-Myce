@@ -12,6 +12,7 @@ import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GreenhouseConfig
 import me.mycellium.skymyce.features.bazaar.BazaarTransport
 import me.mycellium.skymyce.features.general.pricehistory.formatCoins
+import me.mycellium.skymyce.features.instances.dungeons.friends.IrcChatRendering
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.hudPanel
 import me.mycellium.skymyce.hud.updateTextLines
@@ -29,6 +30,7 @@ import net.fabricmc.fabric.api.event.player.UseBlockCallback
 import net.fabricmc.fabric.api.event.player.UseEntityCallback
 import net.minecraft.commands.SharedSuggestionProvider
 import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
+import net.minecraft.client.multiplayer.chat.GuiMessage
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.core.component.DataComponents
@@ -180,9 +182,11 @@ object GreenhousePlanner : SkyMyceModule() {
             if (level.isClientSide) startAnalysis(player.getItemInHand(hand), entity)
             InteractionResult.PASS
         }
-        UseBlockCallback.EVENT.register { player, level, hand, _ ->
-            if (level.isClientSide) startAnalysis(player.getItemInHand(hand), null)
-            InteractionResult.PASS
+        UseBlockCallback.EVENT.register { player, level, hand, hit ->
+            if (!level.isClientSide) return@register InteractionResult.PASS
+            startAnalysis(player.getItemInHand(hand), null)
+            // FAIL on the client stops the click before it is sent.
+            if (wrongClick(player.getItemInHand(hand), hit.blockPos)) InteractionResult.FAIL else InteractionResult.PASS
         }
         Scheduling.schedule(Duration.ZERO) {
             val json = file.read()?.takeIf { it.isJsonObject }?.asJsonObject
@@ -680,16 +684,36 @@ object GreenhousePlanner : SkyMyceModule() {
         if (key.startsWith("SOIL_")) {
             val soil = runCatching { Soil.valueOf(key.removePrefix("SOIL_")) }.getOrNull() ?: return
             val count = plot.missingSoil[soil] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${soilName(soil)}")
+            markClicked(plot.name, key)
             return fetch("${sackId(soil)} $count")
         }
         val plant = catalog[key] ?: return displayModMessage("§cUnknown crop: $key")
         val count = plot.missingPlants[plant.id] ?: return displayModMessage("§7Plot ${plot.name} no longer needs ${plant.name}")
+        markClicked(plot.name, key)
         sackFetch(plant, count)?.let { (item, amount) -> return fetch("$item $amount") }
         MC.instance.keyboardHandler.clipboard = count.toString()
         copiedAt = System.currentTimeMillis()
         pendingAmount = count to copiedAt + AMOUNT_WINDOW
         displayModMessage("§7Opening ${plant.name}: §f$count§7 goes into the amount sign for you (also copied)")
         MC.player.connection.sendCommand("bz ${plant.name}")
+    }
+
+    /** Turns a clicked shopping-list button green with a tick, in every list still in chat; it stays clickable. */
+    private fun markClicked(plotName: String, key: String) {
+        val command = "/sm greenhouse get $plotName $key"
+        IrcChatRendering.rewriteChat { message ->
+            markButton(message.content(), command)?.let { GuiMessage(message.addedTime(), it, message.signature(), message.source(), message.tag()) } ?: message
+        }
+    }
+
+    private fun markButton(component: Component, command: String): Component? {
+        if ((component.style.clickEvent as? ClickEvent.RunCommand)?.command() == command) {
+            val label = component.string.replace(Regex("§."), "").trim().removeSurrounding("[", "]").removePrefix("✔ ")
+            return Component.literal("§8[§a✔ $label§8] ").setStyle(component.style)
+        }
+        val siblings = component.siblings.map { markButton(it, command) }
+        if (siblings.all { it == null }) return null
+        return component.plainCopy().setStyle(component.style).also { copy -> component.siblings.forEachIndexed { i, s -> copy.append(siblings[i] ?: s) } }
     }
 
     private var fetchedAt = 0L
@@ -977,6 +1001,26 @@ object GreenhousePlanner : SkyMyceModule() {
     fun onBlockChange(event: BlockChangeEvent) {
         val origin = plot?.anchor ?: return
         if (abs(event.pos.y - origin.pos.y) <= 2 && event.pos.distSqr(origin.pos) <= square(GREENHOUSE_SIZE * 2)) dirty = true
+    }
+
+    /** A crop or soil going into a slot the pinned layout plans for something else. Locked and unplanned slots are free. */
+    private fun wrongClick(stack: ItemStack, pos: BlockPos): Boolean {
+        if (!active() || !GreenhouseConfig.blockWrongClicks || LocationAPI.island != SkyBlockIsland.GARDEN) return false
+        val catalog = catalog ?: return false
+        val held = heldItemId(stack) ?: return false
+        val crop = catalog.plants.any { held in it.itemIds }
+        val soils = soilsForItem(held)
+        if (!crop && soils.isEmpty()) return false
+        for (plot in plots) {
+            val cell = cellOf(plot.anchor ?: continue, pos) ?: continue
+            val layout = plot.layout ?: return false
+            if (plot.locked[cell]) return false
+            val plan = layout.cells[cell]
+            val reason = wrongSlot(plan, plan?.let { catalog[it.plantId] }, held, crop, soils, ::soilName) ?: return false
+            MC.instance.gui.setOverlayMessage(Component.literal("§cBlocked: $reason"), false)
+            return true
+        }
+        return false
     }
 
     private fun heldItemId(stack: ItemStack): String? = if (stack.isEmpty) null
