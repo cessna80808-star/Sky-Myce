@@ -6,6 +6,7 @@ import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.features.bazaar.BazaarBadge
 import me.mycellium.skymyce.features.bazaar.BazaarProgressBar
 import me.mycellium.skymyce.hud.themed
@@ -32,7 +33,8 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 child(label("§lGreenhouses").horizontalSizing(Sizing.expand()))
                 child(button("Ranking", 64) { chat(GreenhousePlanner::showRanking) }.tooltip(Component.literal("Profit per plot for each mutation, in chat")))
                 child(button("Help", 44) { chat(GreenhousePlanner::showHelp) }.tooltip(Component.literal("Every /sm greenhouse command, in chat")))
-                child(button("Settings", 64) { openMenuFeature("greenhouse-planner", configure = true) })
+                // Opened with this screen as its parent, so Done and Esc come back here.
+                child(button("Settings", 64) { navigateMenu(SettingsScreen.forFeature(this@GreenhouseScreen, "greenhouse-planner")) })
             })
             results = menuScroll(Sizing.fill(), Sizing.expand(), UIContainers.verticalFlow(Sizing.fill(), Sizing.content())).apply {
                 scrollbar(ScrollContainer.Scrollbar.flat(Color.ofRgb(MenuTheme.ACCENT))); scrollbarThiccness(2); padding(Insets.right(4))

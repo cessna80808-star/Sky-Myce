@@ -212,10 +212,48 @@ object GreenhousePlanner : SkyMyceModule() {
             tabLogged = true
             return
         }
-        if (level == detectedGardenLevel) return
-        SkyMyce.logger.info("Greenhouse: Garden level {} from the tab list", level)
-        detectedGardenLevel = level
-        save(); dirty = true; revision++
+        if (level != detectedGardenLevel) {
+            SkyMyce.logger.info("Greenhouse: Garden level {} from the tab list", level)
+            detectedGardenLevel = level
+            save(); dirty = true; revision++
+        }
+        dropLocked()
+    }
+
+    /** The server refusing a crop ("You need Garden Level 12 to place Wild Rose!") caps the level below that. */
+    @Subscription
+    fun onGardenLevelChat(event: ChatReceivedEvent.Pre) {
+        if (!active()) return
+        val needed = GARDEN_LEVEL_REFUSAL.find(event.text)?.groupValues?.get(1)?.toIntOrNull() ?: return
+        if ((gardenLevel() ?: 15) >= needed) {
+            detectedGardenLevel = needed - 1
+            save(); dirty = true; revision++
+        }
+        dropLocked()
+    }
+
+    private val GARDEN_LEVEL_REFUSAL = Regex("You need Garden Level (\\d{1,2}) to place .+!")
+
+    /**
+     * Removes base crops the Garden level cannot plant from pinned layouts (a layout solved before the level was known
+     * can hold a Wild Rose as a unique-crop filler), leaving the rest of the layout as it is.
+     */
+    private fun dropLocked() {
+        val catalog = catalog ?: return
+        val level = gardenLevel() ?: return
+        var changed = false
+        for (plot in plots) {
+            val layout = plot.layout ?: continue
+            val locked = layout.placements.filter { it.role == Role.INGREDIENT && (catalog[it.plantId]?.gardenLevel ?: 0) > level }.toSet()
+            if (locked.isEmpty()) continue
+            val kept = layout.placements - locked
+            plot.layout = layout.copy(placements = kept, soils = layout.soils - locked,
+                uniqueCrops = kept.filter { catalog[it.plantId]?.unique == true }.map { it.plantId }.toSet().size)
+            val names = locked.groupingBy { catalog[it.plantId]?.name ?: it.plantId }.eachCount().entries.joinToString { (name, count) -> "$count $name" }
+            displayModMessage("§7Removed $names from plot ${plot.name}: your Garden level ($level) cannot plant ${if (locked.size == 1) "it" else "them"} yet")
+            changed = true
+        }
+        if (changed) { dirty = true; revision++; save() }
     }
 
     /**
