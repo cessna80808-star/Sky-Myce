@@ -213,12 +213,22 @@ private val GROWTH_STAGE = Regex("(?i)(?:growth\\s+)?stage\\D{0,12}?(\\d{1,3})\\
 private val FORMATTING = Regex("§.")
 
 /** The growth stage in the analyzer's output (chat or menu text, formatting codes allowed), or null. */
-fun parseGrowth(lines: List<String>): Pair<Int, Int>? = lines.firstNotNullOfOrNull { line ->
-    GROWTH_STAGE.find(line.replace(FORMATTING, ""))?.let { match ->
-        val stage = match.groupValues[1].toInt(); val stages = match.groupValues[2].toInt()
-        (stage to stages).takeIf { stages in 1..200 && stage in 0..stages }
-    }
+fun parseGrowth(lines: List<String>): Pair<Int, Int>? {
+    val text = lines.map { it.replace(FORMATTING, "") }
+    text.firstNotNullOfOrNull { line ->
+        GROWTH_STAGE.find(line)?.let { match ->
+            val stage = match.groupValues[1].toInt(); val stages = match.groupValues[2].toInt()
+            (stage to stages).takeIf { stages in 1..200 && stage in 0..stages }
+        }
+    }?.let { return it }
+    // A grown crop shows "Stage: FULLY GROWN" instead of x/y; Scourroot (0 stages) always does.
+    if (text.none { FULLY_GROWN.containsMatchIn(it) }) return null
+    val stages = text.firstNotNullOfOrNull { GROWTH_STAGES.find(it)?.groupValues?.get(1)?.toInt() }?.coerceIn(1, 200) ?: 1
+    return stages to stages
 }
+
+private val FULLY_GROWN = Regex("(?i)\\bstage:\\s*fully grown")
+private val GROWTH_STAGES = Regex("(?i)growth stages:\\s*(\\d{1,3})")
 
 /** One character per cell in [PlotState.status]. */
 enum class CellStatus(val code: Char) {

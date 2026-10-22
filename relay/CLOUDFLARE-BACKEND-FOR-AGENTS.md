@@ -2,7 +2,7 @@
 
 ## Current deployment
 
-As of 2026-10-22, the standalone mod release is **2.8.0-beta-001**. Its backend is the `sky-myce-backend` Worker, configured by the `backend` environment in `relay/wrangler.jsonc` and served at `https://sky-myce-backend.skyblock-relay.workers.dev`.
+As of 2026-10-22, the standalone mod release is **2.8.0-beta-002**. Its backend is the `sky-myce-backend` Worker, configured by the `backend` environment in `relay/wrangler.jsonc` and served at `https://sky-myce-backend.skyblock-relay.workers.dev`.
 
 The root Worker, `skyblock-relay`, is the separate production Discord Gateway. Its source of truth is `D:\Code\Cessna fork\relay`; do not deploy this checkout's root environment to replace it. The backend calls its `GatewayControl` service binding for global chat.
 

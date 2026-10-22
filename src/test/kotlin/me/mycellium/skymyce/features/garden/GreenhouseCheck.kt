@@ -212,6 +212,9 @@ fun main() {
     // Plant Diagnostics Tool readings: chat or menu text with colour codes, projected forward with the growth timer.
     check(parseGrowth(listOf("§aCoalroot", "§7Growth Stage: §e5§7/§e8")) == (5 to 8) && parseGrowth(listOf("Stage 3 of 16")) == (3 to 16)) { "Growth parse" }
     check(parseGrowth(listOf("Water Level: 80%", "Next Stage in 2h")) == null && parseGrowth(listOf("Growth Stage: 9/8")) == null) { "Growth rejects" }
+    // As read in game on 2026-10-22: Scourroot has 0 stages and is always "FULLY GROWN".
+    check(parseGrowth(listOf("Scourroot", "Growth Stages: 0", "Stage: FULLY GROWN", "Next Stage: FULLY GROWN")) == (1 to 1) &&
+        parseGrowth(listOf("Growth Stages: 8", "§7Stage: §aFULLY GROWN")) == (8 to 8)) { "Fully grown" }
     val readAt = 1_800_000_000_000L
     val reading = GrowthReading(5, 8, readAt - 6 * 3_600_000L)
     check(abs(reading.projected(3.0, readAt) - 7.0) < 1e-9 && reading.projected(1.0, readAt) == 8.0) { "Growth projection" }
