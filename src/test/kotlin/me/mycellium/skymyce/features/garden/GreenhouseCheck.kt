@@ -217,8 +217,22 @@ fun main() {
         parseGrowth(listOf("Growth Stages: 8", "§7Stage: §aFULLY GROWN")) == (8 to 8)) { "Fully grown" }
     val readAt = 1_800_000_000_000L
     val reading = GrowthReading(5, 8, readAt - 6 * 3_600_000L)
-    check(abs(reading.projected(3.0, readAt) - 7.0) < 1e-9 && reading.projected(1.0, readAt) == 8.0) { "Growth projection" }
-    val grown = namedPlot.copy(growth = mapOf(33 to reading))
+    val coalroot = catalog["COALROOT"]
+    check(estimateGrowth(coalroot, reading, 3.0, readAt).let { abs(it.stage - 7.0) < 1e-9 && !it.ready && it.readyInMs == 3 * 3_600_000L }) { "Growth projection" }
+    check(estimateGrowth(coalroot, reading, 1.0, readAt).let { it.stage == 8.0 && it.ready && it.readyInMs == 0L }) { "Growth projection caps" }
+    // Snoozling sleeps at 5, 10 and 15 until right-clicked: read at 3, it stops at 5; woken there, it grows on to 10.
+    val snoozling = catalog["SNOOZLING"]
+    check(estimateGrowth(snoozling, GrowthReading(3, 20, readAt - 30 * 3_600_000L), 3.0, readAt).let { it.paused && it.stage == 5.0 && it.readyInMs == null }) { "Snoozling sleeps" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt), 3.0, readAt).paused) { "Read asleep" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 6 * 3_600_000L, awake = true), 3.0, readAt).let { !it.paused && it.stage == 7.0 }) { "Woken Snoozling" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 60 * 3_600_000L, awake = true), 3.0, readAt).let { it.paused && it.stage == 10.0 }) { "Sleeps again" }
+    // Glasscorn is ready at 7 and 8, then another stage starts it again from 1.
+    val glasscornPlant = catalog["GLASSCORN"]
+    check(estimateGrowth(glasscornPlant, GrowthReading(6, 8, readAt - 3 * 3_600_000L), 3.0, readAt).ready) { "Glasscorn ready at 7" }
+    check(estimateGrowth(glasscornPlant, GrowthReading(8, 8, readAt - 3 * 3_600_000L), 3.0, readAt).let { it.stage == 1.0 && !it.ready && it.readyInMs == 6 * 3 * 3_600_000L }) { "Glasscorn restarts" }
+    // Fleshtrap stops when hungry, so a reading is not projected.
+    check(estimateGrowth(catalog["FLESHTRAP"], GrowthReading(4, 14, readAt - 30 * 3_600_000L), 3.0, readAt).let { it.stage == 4.0 && !it.ready && it.readyInMs == null }) { "Unpredictable growth" }
+    val grown = namedPlot.copy(growth = mapOf(33 to reading, 34 to GrowthReading(5, 20, readAt, awake = true)))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(grown.toJson()) }) }, catalog).single() == grown) { "Growth persistence" }
 
     // Garden plot numbers for /tptoplot, as seen in game: anchors at 187/100 and 196/91 are plot 18, -92/-5 is plot 2.

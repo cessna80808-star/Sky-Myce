@@ -179,12 +179,13 @@ object GreenhousePlanner : SkyMyceModule() {
         ClientSendMessageEvents.COMMAND.register(::copyBazaarQuantity)
         // Crops are mostly armor stands, so analysing one is an entity interaction; a block crop is a block interaction.
         UseEntityCallback.EVENT.register { player, level, hand, entity, _ ->
-            if (level.isClientSide) startAnalysis(player.getItemInHand(hand), entity)
+            if (level.isClientSide) { startAnalysis(player.getItemInHand(hand), entity); noteWake(player.getItemInHand(hand), entity) }
             InteractionResult.PASS
         }
         UseBlockCallback.EVENT.register { player, level, hand, hit ->
             if (!level.isClientSide) return@register InteractionResult.PASS
             startAnalysis(player.getItemInHand(hand), null)
+            noteWake(player.getItemInHand(hand), null)
             // FAIL on the client stops the click before it is sent.
             if (wrongClick(player.getItemInHand(hand), hit.blockPos)) InteractionResult.FAIL else InteractionResult.PASS
         }
@@ -870,22 +871,41 @@ object GreenhousePlanner : SkyMyceModule() {
         val now = System.currentTimeMillis()
         // One click can reach several hooks; the first one decides the target.
         if (analysis?.let { now < it.until - ANALYSIS_WINDOW + 500 } == true) return
-        val level = MC.instance.level ?: return
+        val (plot, placement) = aimedTarget(entity) ?: return
+        analysis = Analysis(plot, placement.row * GREENHOUSE_SIZE + placement.col, placement.plantId, now + ANALYSIS_WINDOW)
+    }
+
+    /** The planned mutation the player is clicking: [entity] when the click hit one, else the block looked at. */
+    private fun aimedTarget(entity: Entity?): Pair<Plot, Placement>? {
+        val level = MC.instance.level ?: return null
         // An armor-stand crop's head sits about 1.5 blocks above its feet.
         val hit = MC.player.pick(6.0, 1f, false) as? BlockHitResult
         val pos = when {
             entity != null -> BlockPos.containing(entity.x, entity.y + 1.5, entity.z)
-            hit == null || hit.type != HitResult.Type.BLOCK -> return
+            hit == null || hit.type != HitResult.Type.BLOCK -> return null
             soilOf(level.getBlockState(hit.blockPos)) != null -> hit.blockPos.above()
             else -> hit.blockPos
         }
-        val plot = plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null } ?: return
-        val cell = cellOf(plot.anchor!!, pos) ?: return
-        // Only mutations have a growth stage worth tracking; analysing a base crop or ingredient is left alone.
+        val plot = plots.firstOrNull { p -> p.anchor?.let { cellOf(it, pos) } != null } ?: return null
+        val cell = cellOf(plot.anchor!!, pos) ?: return null
+        // Only mutations have a growth stage worth tracking; a base crop or ingredient is left alone.
         val placement = plot.layout?.targets?.firstOrNull { p ->
             cell / GREENHOUSE_SIZE - p.row in 0 until p.size && cell % GREENHOUSE_SIZE - p.col in 0 until p.size
-        } ?: return
-        analysis = Analysis(plot, placement.row * GREENHOUSE_SIZE + placement.col, placement.plantId, now + ANALYSIS_WINDOW)
+        } ?: return null
+        return plot to placement
+    }
+
+    /** Right-clicking a mutation stopped at a pause (an asleep Snoozling) wakes it, so its growth is timed on from the click. */
+    private fun noteWake(stack: ItemStack, entity: Entity?) {
+        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
+        if (stack.getData(DataTypes.ID)?.contains("DIAGNOSTIC") == true) return
+        val (plot, placement) = aimedTarget(entity) ?: return
+        val key = placement.row * GREENHOUSE_SIZE + placement.col
+        val reading = plot.growth[key] ?: return
+        val estimate = targetEstimate(plot, placement)?.takeIf { it.paused } ?: return
+        plot.growth[key] = GrowthReading(estimate.stage.toInt(), reading.stages, System.currentTimeMillis(), awake = true)
+        revision++; dirty = true; save()
+        displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
     }
 
     @Subscription
@@ -905,16 +925,24 @@ object GreenhousePlanner : SkyMyceModule() {
         if (pending.lines.size < 120) pending.lines += lines.take(120 - pending.lines.size)
         val (stage, stages) = parseGrowth(lines) ?: return
         analysis = null
-        pending.plot.growth[pending.key] = GrowthReading(stage, stages, now)
+        val reading = GrowthReading(stage, stages, now)
+        pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
-        val layout = pending.plot.layout
-        displayModMessage("§a$name: growth stage $stage/$stages" + layout?.let { hoursPerStage(it) }?.let { hours ->
-            if (stage >= stages) " §7· fully grown" else " §7· fully grown in about ${age(((stages - stage) * hours * 3_600_000).toLong())}"
-        }.orEmpty())
+        val estimate = pending.plot.layout?.let { estimateGrowth(catalog?.get(pending.plantId), reading, hoursPerStage(it), now) }
+        displayModMessage("§a$name: growth stage $stage/$stages" + when {
+            estimate == null -> ""
+            estimate.ready -> if (stage >= stages) " §7· fully grown" else " §7· ready to harvest"
+            estimate.paused -> " §7· stopped until you act on it (wake it up)"
+            estimate.readyInMs == null -> " §7· its growth cannot be timed; analyze it again later"
+            else -> " §7· ready in about ${age(estimate.readyInMs)}"
+        })
         growthSummary(pending.plot, now)?.let { summary ->
-            displayModMessage("§7Plot ${pending.plot.name}: ${summary.analysed} of ${summary.targets} analysed, about stage ${"%.1f".format(summary.stage)}/${summary.stages} on average" +
-                if (summary.readyInMs <= 0) ", ready now" else ", all grown in about ${age(summary.readyInMs)} (estimated from the growth timer)")
+            displayModMessage("§7Plot ${pending.plot.name}: ${summary.analysed} of ${summary.targets} analysed, about stage ${"%.1f".format(summary.stage)}/${summary.stages} on average" + when {
+                summary.readyInMs == null -> ", some need you or another analysis before they finish"
+                summary.readyInMs <= 0 -> ", ready now"
+                else -> ", all ready in about ${age(summary.readyInMs)} (estimated from the growth timer)"
+            })
         }
     }
 
@@ -927,33 +955,29 @@ object GreenhousePlanner : SkyMyceModule() {
 
     private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops))
 
-    internal data class GrowthSummary(val analysed: Int, val targets: Int, val stage: Double, val stages: Int, val readyInMs: Long)
+    /** [readyInMs] is when the last analysed one is ready, or null when one of them cannot be timed. */
+    internal data class GrowthSummary(val analysed: Int, val targets: Int, val stage: Double, val stages: Int, val readyInMs: Long?)
 
     /** The plot's mutations' average growth, projected from the analysed ones with the growth timer; null before any reading. */
     internal fun growthSummary(plot: Plot, now: Long = System.currentTimeMillis()): GrowthSummary? {
         val layout = plot.layout ?: return null
-        val readings = layout.targets.mapNotNull { plot.growth[it.row * GREENHOUSE_SIZE + it.col] }
-        if (readings.isEmpty()) return null
-        val hours = hoursPerStage(layout)
-        val stages = readings.maxOf { it.stages }
-        val projected = readings.map { it.projected(hours, now) }
-        return GrowthSummary(readings.size, layout.targets.size, projected.average(), stages,
-            ((stages - projected.min()) * hours * 3_600_000).toLong().coerceAtLeast(0))
+        val estimates = layout.targets.filter { plot.growth[it.row * GREENHOUSE_SIZE + it.col] != null }.mapNotNull { targetEstimate(plot, it, now) }
+        if (estimates.isEmpty()) return null
+        return GrowthSummary(estimates.size, layout.targets.size, estimates.map { it.stage }.average(), estimates.maxOf { it.stages },
+            if (estimates.any { it.readyInMs == null }) null else estimates.maxOf { it.readyInMs!! })
     }
 
-    /** Milliseconds until an analysed placement is fully grown (0 when it is), from its reading and the growth timer; null when not analysed. */
-    internal fun targetReadyInMs(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): Long? {
-        val reading = plot.growth[placement.row * GREENHOUSE_SIZE + placement.col] ?: return null
+    /**
+     * A planted target's growth now, following its mutation's rules; null when it has not been analysed since it appeared.
+     * A mutation with no growth stages is grown the moment it appears.
+     */
+    internal fun targetEstimate(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): GrowthEstimate? {
         val layout = plot.layout ?: return null
-        val hours = hoursPerStage(layout)
-        return ((reading.stages - reading.projected(hours, now)) * hours * 3_600_000).toLong().coerceAtLeast(0)
-    }
-
-    /** One placement's projected growth (stage, stages) from its own reading, for the grid tooltip; null when not analysed. */
-    internal fun targetGrowth(plot: Plot, placement: Placement, now: Long = System.currentTimeMillis()): Pair<Double, Int>? {
-        val reading = plot.growth[placement.row * GREENHOUSE_SIZE + placement.col] ?: return null
-        val layout = plot.layout ?: return null
-        return reading.projected(hoursPerStage(layout), now) to reading.stages
+        val plant = catalog?.get(placement.plantId)
+        val key = placement.row * GREENHOUSE_SIZE + placement.col
+        val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }
+            ?: return if (plant?.stages == 0) GrowthEstimate(0.0, 0, ready = true, paused = false, readyInMs = 0) else null
+        return estimateGrowth(plant, reading, hoursPerStage(layout), now)
     }
 
     // ---- World overlay ------------------------------------------------------------------------------------------
@@ -1107,19 +1131,26 @@ object GreenhousePlanner : SkyMyceModule() {
                 }.code
             }
             if (ingredient && !planted) plants.merge(plant.id, 1, Int::plus)
-            // Holding the Plant Diagnostics Tool marks each grown-in mutation: red until analysed since it appeared, then green.
-            if (analyzer && !ingredient && planted) {
-                val key = placement.row * GREENHOUSE_SIZE + placement.col
-                val reading = plot.growth[key]
-                val checked = reading != null && reading.at >= (plot.spawned[key] ?: 0L)
-                val box = AABB(cellPos(origin, placement.row, placement.col).above())
-                    .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
-                shown += Ghost(box, HudTheme.alpha(if (checked) 0x55FF55 else 0xFF5555, alpha))
+            // Grown mutations are green and ones waiting on the player (an asleep Snoozling) yellow; holding the Plant
+            // Diagnostics Tool also marks the ones not analysed since they appeared red.
+            if (!ingredient && planted) {
+                val estimate = targetEstimate(plot, placement, now)
+                val color = when {
+                    estimate?.ready == true -> 0x55FF55
+                    estimate?.paused == true -> 0xFFFF55
+                    analyzer && estimate == null -> 0xFF5555
+                    else -> null
+                }
+                if (color != null) {
+                    val box = AABB(cellPos(origin, placement.row, placement.col).above())
+                        .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
+                    shown += Ghost(box, HudTheme.alpha(color, alpha))
+                }
             }
             if (!ingredient) {
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 if (previous != null && planted && !wasOccupied) { plot.spawned[key] = now; changed = true }
-                if (previous != null && !planted && wasOccupied) { recordHarvest(plot, current, placement, now); changed = true }
+                if (previous != null && !planted && wasOccupied) { recordHarvest(plot, current, placement, now); plot.growth.remove(key); changed = true }
                 if (!planted && plot.spawned.remove(key) != null) changed = true
             }
         }

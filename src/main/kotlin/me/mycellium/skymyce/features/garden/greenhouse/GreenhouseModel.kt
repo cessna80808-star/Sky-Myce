@@ -39,6 +39,14 @@ data class Plant(
     val perItem: Int = 1,
     /** Garden level that unlocks planting this base crop; 0 when it has none. */
     val gardenLevel: Int = 0,
+    /** Stage it is ready at when that is before its last (Glasscorn can be harvested at 7), else null. */
+    val readyStage: Int? = null,
+    /** Stages it stops growing at until the player acts on it (Snoozling falls asleep at 5, 10 and 15 until right-clicked). */
+    val pauses: List<Int> = emptyList(),
+    /** Growth that halts or resets for reasons the planner cannot see (hunger, charge, random resets): not projected past a reading. */
+    val unpredictable: Boolean = false,
+    /** Another stage passing at its last starts it again from stage 1 (Glasscorn). */
+    val restarts: Boolean = false,
 ) {
     val mutation get() = rarity != Rarity.RAW
     val solvable get() = special == null && requires.isNotEmpty()
@@ -65,7 +73,9 @@ fun parsePlantCatalog(text: String): PlantCatalog {
             json.getAsJsonObject("requires")?.entrySet()?.associate { (key, value) -> key to value.asInt.also { require(it in 1..16) } }.orEmpty(),
             (listOfNotNull(json["head"]?.asString) + json.getAsJsonArray("heads")?.map { it.asString }.orEmpty())
                 .onEach { require(it.matches(Regex("[0-9a-f]{32,64}"))) }.toSet(),
-            json["perItem"]?.asInt?.also { require(it in 1..64) } ?: 1, json["gardenLevel"]?.asInt?.also { require(it in 0..15) } ?: 0)
+            json["perItem"]?.asInt?.also { require(it in 1..64) } ?: 1, json["gardenLevel"]?.asInt?.also { require(it in 0..15) } ?: 0,
+            json["readyStage"]?.asInt?.also { require(it in 1..1000) }, json.getAsJsonArray("pauses")?.map { it.asInt.also { s -> require(s in 1..1000) } }.orEmpty(),
+            json["unpredictable"]?.asBoolean == true, json["restarts"]?.asBoolean == true)
     }
     val catalog = PlantCatalog(plants)
     require(catalog.byId.size == plants.size && plants.all { plant -> plant.requires.keys.all { it in catalog.byId } })
@@ -203,10 +213,36 @@ data class PlotState(
     val growth: Map<Int, GrowthReading> = emptyMap(),
 )
 
-/** A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]. */
-data class GrowthReading(val stage: Int, val stages: Int, val at: Long) {
-    /** Stages grown since the reading, from the site's growth timer; capped at fully grown. */
-    fun projected(hoursPerStage: Double, now: Long) = (stage + (now - at) / (hoursPerStage * 3_600_000)).coerceAtMost(stages.toDouble())
+/** A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]; [awake] when the player woke it at that stage since. */
+data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false)
+
+/** A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told. */
+data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?)
+
+/**
+ * Projects a reading with the growth timer, following [plant]'s rules: it stops at a pause until woken, a restarting crop
+ * wraps back to stage 1, and unpredictable growth stays at what was read. Estimated: water and day/night are not modelled.
+ */
+fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double, now: Long): GrowthEstimate {
+    val stages = reading.stages
+    val readyAt = plant?.readyStage?.coerceAtMost(stages) ?: stages
+    val stageMs = hoursPerStage * 3_600_000
+    val unpredictable = plant?.unpredictable == true
+    val raw = reading.stage + if (unpredictable) 0.0 else (now - reading.at).coerceAtLeast(0) / stageMs
+    val pause = plant?.pauses?.firstOrNull { it in reading.stage until stages && (it > reading.stage || !reading.awake) }
+    val paused = pause != null && raw >= pause
+    val stage = when {
+        paused -> pause!!.toDouble()
+        plant?.restarts == true && raw >= stages + 1 -> 1 + (raw - stages - 1) % stages
+        else -> raw.coerceAtMost(stages.toDouble())
+    }
+    val ready = stage >= readyAt
+    val readyInMs = when {
+        ready -> 0L
+        paused || unpredictable -> null
+        else -> ((readyAt - stage) * stageMs).toLong()
+    }
+    return GrowthEstimate(stage, stages, ready, paused, readyInMs)
 }
 
 private val GROWTH_STAGE = Regex("(?i)(?:growth\\s+)?stage\\D{0,12}?(\\d{1,3})\\s*(?:/|of)\\s*(\\d{1,3})")
@@ -262,7 +298,7 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     if (missingSoil.isNotEmpty()) add("missingSoil", JsonObject().apply { missingSoil.forEach { (soil, n) -> addProperty(soil.name, n) } })
     if (learned.isNotEmpty()) add("learned", JsonObject().apply { learned.forEach { (look, id) -> addProperty(look, id) } })
     if (growth.isNotEmpty()) add("growth", JsonObject().apply {
-        growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply { add(reading.stage); add(reading.stages); add(reading.at) }) }
+        growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply { add(reading.stage); add(reading.stages); add(reading.at); if (reading.awake) add(true) }) }
     })
 }
 
@@ -298,7 +334,7 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
                 section.getAsJsonObject("growth").entrySet().mapNotNull { (cell, value) -> runCatching {
                     val row = value.asJsonArray
                     cell.toInt().also { require(it in 0 until GREENHOUSE_CELLS) } to
-                        GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong).also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
+                        GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong, row.size() > 3 && row[3].asBoolean).also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
                 }.getOrNull() }.toMap()
             }.getOrDefault(emptyMap()))
     }
