@@ -3,20 +3,21 @@ package me.mycellium.skymyce.features.instances.dungeons.friends
 import java.net.URI
 import com.google.gson.JsonParser
 
-private val ircGrapheme = Regex("\\X")
+internal val ircGrapheme = Regex("\\X")
 private val customIrcEmoji = Regex("<a?:([A-Za-z0-9_]{1,32}):([0-9]{17,20})>")
 private val discordAttachmentPath = Regex("/attachments/[0-9]{1,20}/[0-9]{1,20}/[^/]+")
 internal val IRC_REACTION_NAMES = listOf("Like", "Love", "Laugh", "Celebrate", "Eyes", "Fire")
 internal data class IrcReadableText(val text: String, val original: String? = null, val emoji: Boolean = false)
 
-private val ircEmojiGlyphs by lazy {
-    val resource = "/assets/skymyce/font/irc_emoji_index.json"
+/** Twemoji code point keys (FE0F removed) in glyph order: key N paints as U+E000 + N. */
+internal val ircEmojiKeys: List<String> by lazy {
+    // Kept outside font/ so Minecraft's font loader does not parse it as a font definition.
+    val resource = "/assets/skymyce/irc/emoji_index.json"
     requireNotNull(IrcReadableText::class.java.getResourceAsStream(resource)).bufferedReader().use { reader ->
-        JsonParser.parseReader(reader).asJsonArray.mapIndexed { index, key ->
-            key.asString to (0xE000 + index).toChar().toString()
-        }.toMap()
+        JsonParser.parseReader(reader).asJsonArray.map { it.asString }
     }
 }
+private val ircEmojiGlyphs by lazy { ircEmojiKeys.withIndex().associate { (index, key) -> key to (0xE000 + index).toChar().toString() } }
 
 /** One bundled bitmap glyph per joined emoji; only presentation changes, never the wire text. */
 internal fun ircReadableText(text: String): List<IrcReadableText> {

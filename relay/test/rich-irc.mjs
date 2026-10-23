@@ -184,7 +184,8 @@ export async function checkRichIrc(script, proof) {
     send(globalBot, 'global', enriched);
     for (const client of [alice, bob, isolated]) {
       const update = await client.next(); assert.equal(update.type, 'irc_update'); assert.equal(update.messageId, canonical);
-      assert.equal(update.text, enriched.text); assert.equal(update.media.length, 1); assert.equal(update.media[0].sourceUrl, page);
+      // Preview text never replaces the body; the snapshot's media replaces the fragment's.
+      assert.equal(update.text, undefined); assert.equal(update.media.length, 1); assert.equal(update.media[0].sourceUrl, page);
     }
     assert.equal((await globalBot.next()).error, undefined); await ping(legacy);
     const retainedCount = (await canonicalSql.exec('SELECT COUNT(*) AS count FROM irc_metadata WHERE source_id=?', source))[0].count;

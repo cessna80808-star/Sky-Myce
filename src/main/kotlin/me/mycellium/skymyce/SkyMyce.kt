@@ -31,6 +31,7 @@ import me.mycellium.skymyce.features.instances.dungeons.DungeonWinOverlay
 import me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCamera
 import me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraHud
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
+import me.mycellium.skymyce.features.instances.dungeons.friends.IrcEmojiChat
 import me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCoordinator
 import me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorHud
 import me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenu
@@ -90,7 +91,7 @@ object SkyMyce : ClientModInitializer {
             MiscApi, AuctionAPI, DungeonApi, ServerUtils, HudRenderer, WidgetManager,
             DevTooltips,
             LoadoutKeybinds, SkyMyceCommands, SkillXpOverlay, StatusBars, NpcDialogue, SignConfirm, AutoGraphics, AbilityCooldownOverlay, AutoRefill, ClientInfoOverlay, PartyCommands,
-            StashHelper, PartyFinder, DungeonFriends, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
+            StashHelper, PartyFinder, DungeonFriends, IrcEmojiChat, InstanceRequeue, MissingPlayers, DungeonChestOverlay, DungeonChestProtection, DungeonTracker, DungeonTrackerWidget, DungeonCleanChat, DungeonWinOverlay,
             MiningFeatures, Plane, AcquisitionRepository, DailyDigest, DigestActivities, DigestRng, RecentRngWidget, StarredClearRouting,
             CosmeticsClient,
             PriceHistoryFeature,

@@ -357,7 +357,30 @@ private fun checkServerClock() {
     check(clock.now == null)
 }
 
+private fun checkPace() {
+    val m7 = splitDefinitions.getValue("M7"); val n = m7.sections.size
+    // Pace uses the newest ten runs only: 20 s per section, not the older 10 s ones.
+    val history = (1..30).map { i -> run("p$i", "M7", i * 1000L, chained(m7, List(n) { if (i > 20) 20_000L else 10_000L })) }
+    val averages = floorSplitStats(history, m7, SplitWindow.LAST_10)
+    val first = m7.sections[0].milestone
+    fun live(elapsed: Long, finished: Boolean = false) = SplitHudRun(mapOf(START to 0L, first to 15_000L), emptyMap(), true, elapsed, null, finished, null)
+    check(splitPace(m7, live(18_000L), averages, SplitClock.REAL) == 15_000L + (n - 1) * 20_000L) { "Remaining sections at their average" }
+    check(splitPace(m7, live(40_000L), averages, SplitClock.REAL) == 15_000L + 25_000L + (n - 2) * 20_000L) { "A slow running section counts its time so far" }
+    check(splitPace(m7, live(18_000L), floorSplitStats(emptyList(), m7, SplitWindow.LAST_10), SplitClock.REAL) == null) { "No history, no pace" }
+    check(splitPace(m7, live(18_000L, finished = true), averages, SplitClock.REAL) == null)
+    check(splitPace(m7, live(18_000L), averages, SplitClock.SERVER) == null) { "No server ticks, no server pace" }
+    val view = splitHudView(m7, live(18_000L), null, SplitHudOptions(comparison = null, pace = true), averages)
+    check(view.footer.any { "Pace" in it && formatSplitTime(15_000L + (n - 1) * 20_000L) in it && "est." in it }) { view.footer.toString() }
+    check(splitHudView(m7, live(18_000L), null, SplitHudOptions(comparison = null), averages).footer.none { "Pace" in it }) { "Off by default" }
+    // Chat summary: real time, server time and the lag between them.
+    val ended = run("s", "M7", 1, mapOf(END to 300_000L)).copy(ticks = mapOf(START to 0L, END to 5_900L))
+    val summary = splitRunSummary(ended)!!
+    check(formatSplitTime(300_000L) in summary && formatSplitTime(295_000L) in summary && "+${formatSplitTime(5_000L)}" in summary) { summary }
+    check(splitRunSummary(run("s", "M7", 1, mapOf(END to 300_000L)))!!.contains("server time unavailable"))
+    check(splitRunSummary(run("s", "M7", 1, mapOf(END to 300_000L), start = false)) == null) { "A late join has no run time" }
+}
+
 fun main() {
-    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock(); checkLagMeter()
+    checkSignals(); checkDefinitions(); checkTimeline(); checkStats(); checkStore(); checkScore(); checkHud(); checkServerTime(); checkServerClock(); checkLagMeter(); checkPace()
     println("Dungeon split checks passed: triggers, ordering, PBs, theoretical best, averages, storage, 300 score, HUD rows, comparisons, Terms and server time")
 }

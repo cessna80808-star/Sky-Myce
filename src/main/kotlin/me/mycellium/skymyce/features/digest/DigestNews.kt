@@ -81,7 +81,7 @@ internal fun safeDigestNewsUrl(value: String?, source: NewsSource): String? =
 internal fun digestNewsLinks(content: String, links: List<String> = emptyList()): List<String> {
     var length = 0
     return (links.asSequence() + globalChatSpans(content).asSequence().mapNotNull { it.url?.toString() })
-        .mapNotNull { BrowserLinks.supported(it)?.toASCIIString() }.distinct()
+        .mapNotNull { BrowserLinks.trusted(it)?.toASCIIString() }.distinct()
         .filter { if (length + it.length > 1024) false else { length += it.length; true } }.take(8).toList()
 }
 

@@ -101,7 +101,7 @@ object RelayMessages {
         ClientSendMessageEvents.ALLOW_CHAT.register { text ->
             if (suppressChatLog() || IrcChatRendering.addingMessage()) return@register false
             session()
-            if (!irc.chat(text) { if (irc.party) sendParty(it) else sendGlobal(it) }) return@register false
+            if (!irc.chat(text) { val message = IrcEmojiChat.ircText(it); if (irc.party) sendParty(message) else sendGlobal(message) }) return@register false
             conversations.allowChat(text, ::send)
         }
         ClientSendMessageEvents.ALLOW_COMMAND.register { command ->
@@ -131,7 +131,7 @@ object RelayMessages {
     @JvmStatic fun selectedIrcComposer(): Boolean { session(); return irc.selected }
     @JvmStatic fun allowComposerChat(text: String): Boolean {
         return irc.composer(text, suppressChatLog() || IrcChatRendering.addingMessage()) {
-            if (irc.party) sendParty(it) else sendGlobal(it)
+            val message = IrcEmojiChat.ircText(it); if (irc.party) sendParty(message) else sendGlobal(message)
         }
     }
     fun recipients(prefix: String): List<String> = relayRecipients(FriendsAPI.friends.map { it.name } + DungeonFriends.scanner.online.values.map { it.name }, prefix)

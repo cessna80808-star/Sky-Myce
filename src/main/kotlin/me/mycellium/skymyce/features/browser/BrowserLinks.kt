@@ -3,17 +3,20 @@ package me.mycellium.skymyce.features.browser
 import java.net.URI
 import java.util.Locale
 
-/** Entry points are videos or Hypixel pages; browser navigation never admits local files or custom protocols. */
+/** Any public HTTPS website may open; navigation never admits local files, custom protocols, IP literals or local hosts. */
 object BrowserLinks {
+    private val numericHost = Regex("[0-9.]+")
     private val videoId = Regex("[A-Za-z0-9_-]{11}")
     private val videoPath = Regex("/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})")
-    private val numericHost = Regex("[0-9.]+")
     private val youtubeHosts = setOf("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be")
 
-    fun supported(value: String?): URI? {
+    fun supported(value: String?): URI? = https(value)?.takeIf { publicHost(it.host) }
+
+    /** Hypixel pages and YouTube videos only: the sources Daily Digest news may link to. */
+    fun trusted(value: String?): URI? {
         val uri = https(value) ?: return null
         val host = uri.host.lowercase(Locale.ROOT)
-        if (hypixel(host)) return uri
+        if (host == "hypixel.net" || host.endsWith(".hypixel.net")) return uri
         if (host !in youtubeHosts) return null
         val path = uri.path.orEmpty()
         val video = if (host == "youtu.be") path.removePrefix("/").takeIf(videoId::matches)
@@ -25,14 +28,13 @@ object BrowserLinks {
         } }
     }
 
-    fun navigationAllowed(value: String?): Boolean {
-        if (value == "about:blank") return true
-        val uri = https(value) ?: return false
-        val host = uri.host.lowercase(Locale.ROOT)
-        return hypixel(host) || host in youtubeHosts || host == "consent.youtube.com"
-    }
+    fun navigationAllowed(value: String?): Boolean = value == "about:blank" || supported(value) != null
 
-    private fun hypixel(host: String) = host == "hypixel.net" || host.endsWith(".hypixel.net")
+    private fun publicHost(value: String): Boolean {
+        val host = value.lowercase(Locale.ROOT)
+        return '.' in host && ':' !in host && !host.matches(numericHost) &&
+            host != "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local")
+    }
 
     private fun https(value: String?, maximumLength: Int = 2048): URI? = value?.takeIf { it.length in 1..maximumLength && it.none(Char::isISOControl) }?.let {
         runCatching { URI(it) }.getOrNull()?.takeIf { uri ->
@@ -43,9 +45,6 @@ object BrowserLinks {
     fun resourceAllowed(value: String?): Boolean {
         if (value == "about:blank" || value?.startsWith("data:") == true || value?.startsWith("chrome-extension://") == true) return true
         if (value?.startsWith("blob:") == true) return navigationAllowed(value.removePrefix("blob:"))
-        val uri = https(value, 8192) ?: return false
-        val host = uri.host.lowercase(Locale.ROOT)
-        return '.' in host && ':' !in host && !host.matches(numericHost) &&
-            host != "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local")
+        return https(value, 8192)?.let { publicHost(it.host) } == true
     }
 }

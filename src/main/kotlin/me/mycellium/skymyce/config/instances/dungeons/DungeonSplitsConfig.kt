@@ -56,6 +56,16 @@ object DungeonSplitsConfig : CategoryKt("Dungeon Splits") {
         description = TranslatableValue.literal("Show the run's elapsed time and the floor's actual and theoretical best in the HUD")
     }
 
+    val pace by boolean(false) {
+        name = TranslatableValue.literal("Pace Timer")
+        description = TranslatableValue.literal("Show an estimated finish time in the HUD: your time so far plus each remaining split's average over your last 10 runs. The split you are on counts at least its time so far")
+    }
+
+    val chatSummary by boolean(true) {
+        name = TranslatableValue.literal("Run Time in Chat")
+        description = TranslatableValue.literal("When a run ends, show its real time, server time and the time lost to lag in chat")
+    }
+
     val showServerTime by boolean(true) {
         name = TranslatableValue.literal("Show Both Clocks")
         description = TranslatableValue.literal("Show each split's time on the other clock in brackets, and the time lost to lag. Server time counts server ticks, so lag does not add to it")

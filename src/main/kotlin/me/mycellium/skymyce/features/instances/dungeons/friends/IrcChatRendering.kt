@@ -44,10 +44,17 @@ internal data class IrcThumbnailLayout(val width: Int, val height: Int, val rows
     fun title(fullTitle: String, textWidth: Int, index: Int) = if (textWidth <= width) fullTitle else "[${index + 1}]"
 }
 
-internal fun ircThumbnailLayout(percent: Int, availableWidth: Int, lineHeight: Int): IrcThumbnailLayout {
+/**
+ * The preview box: at most the 4:3 thumbnail size, shrunk to the media's own aspect ratio when its dimensions are known,
+ * so wide or tall images reserve no empty rows. Sized from metadata only, so the reserved rows match what is painted.
+ */
+internal fun ircThumbnailLayout(percent: Int, availableWidth: Int, lineHeight: Int, mediaWidth: Int? = null, mediaHeight: Int? = null): IrcThumbnailLayout {
     val requestedWidth = (IRC_THUMBNAIL_WIDTH * percent.coerceIn(50, 200) / 100.0).roundToInt()
-    val width = minOf(requestedWidth, availableWidth.coerceAtLeast(1))
-    val height = (width * IRC_THUMBNAIL_HEIGHT.toDouble() / IRC_THUMBNAIL_WIDTH).roundToInt().coerceAtLeast(1)
+    val maxWidth = minOf(requestedWidth, availableWidth.coerceAtLeast(1))
+    val maxHeight = (maxWidth * IRC_THUMBNAIL_HEIGHT.toDouble() / IRC_THUMBNAIL_WIDTH).roundToInt().coerceAtLeast(1)
+    val aspect = if (mediaWidth != null && mediaHeight != null && mediaWidth > 0 && mediaHeight > 0) mediaWidth.toDouble() / mediaHeight else null
+    val width = if (aspect == null) maxWidth else minOf(maxWidth, (maxHeight * aspect).roundToInt()).coerceAtLeast(minOf(16, maxWidth))
+    val height = if (aspect == null) maxHeight else minOf(maxHeight, (width / aspect).roundToInt()).coerceAtLeast(1)
     val rows = (height - 1) / lineHeight.coerceAtLeast(1) + 1
     return IrcThumbnailLayout(width, height, rows)
 }
@@ -199,7 +206,9 @@ object IrcChatRendering {
         }
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen !is ChatScreen) return@register
+            IrcEmojiPicker.layout(screen)
             ScreenMouseEvents.allowMouseClick(screen).register { _, click ->
+                if (click.button() == 0 && IrcEmojiPicker.click(screen, click.x().toInt(), click.y().toInt())) return@register false
                 if (click.button() == 0 && !suggestionsVisible() && IrcInlineControls.click(screen, click.x().toInt(), click.y().toInt())) return@register false
                 if (click.button() == 0 && !click.hasShiftDown() && openSupportedLink(screen, click.x().toInt(), click.y().toInt())) return@register false
                 val action = actionAt(click.x().toInt(), click.y().toInt())
@@ -207,12 +216,19 @@ object IrcChatRendering {
                 else { RelayMessages.chatAction(action.command, click.x().toInt(), click.y().toInt()); false }
             }
             ScreenKeyboardEvents.allowKeyPress(screen).register { _, key ->
-                !(key.key() == GLFW.GLFW_KEY_ESCAPE && !suggestionsVisible() && IrcInlineControls.escape())
+                !(key.key() == GLFW.GLFW_KEY_ESCAPE && !suggestionsVisible() && IrcInlineControls.escape() ||
+                    !suggestionsVisible() && IrcEmojiPicker.key(screen, key))
             }
-            ScreenEvents.remove(screen).register { IrcInlineControls.clear() }
-            ScreenEvents.afterExtract(screen).register { _, output, mouseX, mouseY, _ ->
+            ScreenKeyboardEvents.allowCharType(screen).register { _, character -> !IrcEmojiPicker.charTyped(character) }
+            ScreenKeyboardEvents.afterCharType(screen).register { _, character -> IrcEmojiPicker.afterCharTyped(screen, character) }
+            ScreenMouseEvents.allowMouseScroll(screen).register { _, mouseX, mouseY, _, vertical ->
+                !IrcEmojiPicker.scroll(screen, mouseX.toInt(), mouseY.toInt(), vertical)
+            }
+            ScreenEvents.remove(screen).register { IrcInlineControls.clear(); IrcEmojiPicker.clear() }
+            ScreenEvents.afterExtract(screen).register { _, output, mouseX, mouseY, delta ->
                 render(output)
                 if (!suggestionsVisible()) IrcInlineControls.render(screen, output, mouseX, mouseY)
+                IrcEmojiPicker.render(screen, output, mouseX, mouseY, delta, suggestionsVisible())
                 val action = actionAt(mouseX, mouseY)
                 val message = action?.let { RelayMessages.chatStore.get(RelayMessages.key(it.scope, it.id)) }
                 if (action?.kind == "media" && message != null) {
@@ -372,7 +388,7 @@ object IrcChatRendering {
                         IrcMediaAssets.view(media, false).detail ?: "Open the media viewer for details"))
                     return@forEachIndexed
                 }
-                val layout = thumbnailLayout()
+                val layout = thumbnailLayout(media)
                 val fullTitle = "[$label ${index + 1}]"
                 val title = layout.title(fullTitle, MC.instance.font.width(fullTitle), index)
                 val spaceWidth = MC.instance.font.width("\u00a0").coerceAtLeast(1)
@@ -425,11 +441,12 @@ object IrcChatRendering {
     }
     /** Let ordinary HUD widgets handle every click except our current, native-chat action areas. */
     fun hasInteractionAt(mouseX: Int, mouseY: Int) = actionAt(mouseX, mouseY) != null || supportedLinkAt(mouseX, mouseY) != null || !suggestionsVisible() &&
-        (MC.screen as? ChatScreen)?.let { IrcInlineControls.hasInteractionAt(it, mouseX, mouseY) } == true
+        (MC.screen as? ChatScreen)?.let { IrcInlineControls.hasInteractionAt(it, mouseX, mouseY) } == true ||
+        (MC.screen as? ChatScreen)?.let { IrcEmojiPicker.hasInteractionAt(it, mouseX, mouseY) } == true
     private fun suggestionsVisible() = (MC.screen as? IrcChatScreenAccessor)?.`skymyce$getSuggestions`()?.isVisible == true
-    private fun thumbnailLayout() = ircThumbnailLayout(GlobalChatConfig.previewSize,
+    private fun thumbnailLayout(media: IrcMedia) = ircThumbnailLayout(GlobalChatConfig.previewSize,
         (ChatComponent.getWidth(MC.instance.options.chatWidth().get()) / MC.instance.options.chatScale().get()).toInt(),
-        (MC.instance.font.lineHeight * (MC.instance.options.chatLineSpacing().get() + 1)).toInt())
+        (MC.instance.font.lineHeight * (MC.instance.options.chatLineSpacing().get() + 1)).toInt(), media.width, media.height)
 
     private fun render(output: GuiGraphicsExtractor) {
         frame++
@@ -455,14 +472,15 @@ object IrcChatRendering {
             val state = IrcMediaAssets.view(media, false)
             val asset = state.asset
             if (asset == null && compactIrcMedia(state.status)) continue
-            val layout = thumbnailLayout()
+            val layout = thumbnailLayout(media)
             val scissor = anchor.rectangle(layout.width)
             if (scissor.width() <= 0 || scissor.height() <= 0) continue
             output.scissorStack.push(scissor)
             output.pose().pushMatrix()
             output.pose().set(anchor.parameters.pose())
             output.pose().translate(anchor.x.toFloat(), anchor.top.toFloat())
-            output.fill(0, 0, layout.width, layout.height, 0xFF17212E.toInt())
+            // Only a pending or failed preview gets a backdrop; a loaded image fills its own aspect-sized box.
+            if (asset == null) output.fill(0, 0, layout.width, layout.height, 0xFF17212E.toInt())
             if (asset != null) {
                 val textureKey = key.tag + ":" + media.id
                 var texture = textures[textureKey]

@@ -34,7 +34,8 @@ internal data class SplitHudRun(val marks: Map<SplitMilestone, Long>, val ticks:
  * brackets (real time when [clock] is server time) and the lag lost.
  */
 internal data class SplitHudOptions(val comparison: SplitComparison? = SplitComparison.BEST, val upcoming: Boolean = true, val total: Boolean = true,
-                                    val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL)
+                                    val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL,
+                                    val pace: Boolean = false)
 
 /** Real time of a span, then its server time; each is null when an end was not seen. [to] null means "until now". */
 private fun span(run: SplitHudRun, from: SplitMilestone, to: SplitMilestone?): Pair<Long?, Long?> {
@@ -49,12 +50,34 @@ private fun span(run: SplitHudRun, from: SplitMilestone, to: SplitMilestone?): P
 }
 
 /**
+ * Estimated finish on [clock] if nothing goes wrong: the time so far plus each remaining section's average from
+ * [averages] (the last 10 runs); the running section counts at least its time so far. Null without a start, before any
+ * remaining section has an average, or once the run is over.
+ */
+internal fun splitPace(definition: SplitDefinition, run: SplitHudRun, averages: FloorSplitStats, clock: SplitClock): Long? {
+    if (!run.startObserved || run.finished) return null
+    fun pick(times: Pair<Long?, Long?>) = if (clock == SplitClock.REAL) times.first else times.second
+    val latest = definition.chain.indexOfLast { it in run.marks || it == SplitMilestone.START }
+    val elapsed = pick(span(run, SplitMilestone.START, null)) ?: return null
+    val done = if (latest <= 0) 0L else pick(span(run, SplitMilestone.START, definition.chain[latest])) ?: return null
+    var total = done
+    definition.sections.forEachIndexed { index, _ ->
+        val position = index + 1
+        if (position <= latest) return@forEachIndexed
+        val average = averages.sections[index].average?.toLong() ?: return null
+        total += if (position == latest + 1) maxOf(average, elapsed - done) else average
+    }
+    return total
+}
+
+/**
  * The current run only: each finished section with its time on the chosen clock, the other clock in brackets (as
  * NoammAddons shows them) and its difference from the section's best, average or worst; the running section; and
  * optionally upcoming ones. Grouped sections (Terms) get a header row with their total and are indented beneath it.
  * History stays in the menu.
  */
-internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: FloorSplitStats?, options: SplitHudOptions): SplitHudView {
+internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: FloorSplitStats?, options: SplitHudOptions,
+                           paceStats: FloorSplitStats? = null): SplitHudView {
     fun time(value: Long?) = formatSplitTime(value, options.precise)
     fun pick(real: Long?, server: Long?, clock: SplitClock) = if (clock == SplitClock.REAL) real else server
     // Without server time (it stops after a reconnect), a row falls back to real time and is not compared.
@@ -159,6 +182,10 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
             }
         }
     }
+    if (options.pace && !run.finished && run.startObserved) {
+        val pace = paceStats?.let { splitPace(definition, run, it, options.clock) }
+        footer += "§7Pace §f${time(pace)} §8(est. · last 10 avg)"
+    }
     return SplitHudView("§b§l${definition.floor} Splits", rows, footer)
 }
 
@@ -191,6 +218,7 @@ object DungeonSplitsHud : SkyMyceModule() {
 
     private var statsKey: List<Any>? = null
     private var stats: FloorSplitStats? = null
+    private var paceStats: FloorSplitStats? = null
     private var builtAt = 0L
     private var builtRevision = -1L
     private lateinit var clockKey: KeyMapping
@@ -218,12 +246,16 @@ object DungeonSplitsHud : SkyMyceModule() {
         if (builtRevision == DungeonSplits.revision && (run.timeline.finished || now - builtAt < 100_000_000L)) return@Widget live.panel
         builtRevision = DungeonSplits.revision; builtAt = now
         val clock = Settings.bestsClock
-        val key = listOf(DungeonSplitStore.revision, run.definition.floor, clock, Settings.averageWindow)
-        if (key != statsKey) { statsKey = key; stats = floorSplitStats(DungeonSplitStore.runs, run.definition, Settings.averageWindow, clock) }
+        val key = listOf(DungeonSplitStore.revision, run.definition.floor, clock, Settings.averageWindow, Settings.pace)
+        if (key != statsKey) {
+            statsKey = key; stats = floorSplitStats(DungeonSplitStore.runs, run.definition, Settings.averageWindow, clock)
+            paceStats = if (Settings.pace) floorSplitStats(DungeonSplitStore.runs, run.definition, SplitWindow.LAST_10, clock) else null
+        }
         val timeline = run.timeline
         live.show(splitHudView(run.definition, SplitHudRun(timeline.marks, timeline.ticks, timeline.startObserved, timeline.elapsed(now),
             timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate, run.lag.shown, run.scoreExact), stats,
-            SplitHudOptions(Settings.comparison.target, Settings.showUpcoming, Settings.showTotal, Settings.precise, Settings.showServerTime, clock)))
+            SplitHudOptions(Settings.comparison.target, Settings.showUpcoming, Settings.showTotal, Settings.precise, Settings.showServerTime, clock, Settings.pace),
+            paceStats))
     }
 
     /** Fixed editor example; never written to history. */

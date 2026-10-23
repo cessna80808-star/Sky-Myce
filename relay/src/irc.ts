@@ -456,28 +456,25 @@ export class RoomIrc {
       if (data.mentions !== undefined && (!Array.isArray(data.mentions) || data.mentions.length > 100 || data.mentions.some(id => typeof id !== "string" || !snowflake.test(id)))) { result("invalid_mentions"); return; }
       if (continuation && (data.reply !== undefined || Array.isArray(data.mentions) && data.mentions.length > 0)) { result("invalid_part"); return; }
       if (continuation) {
-        // Older Gateways sent only the delayed embed fragment. Enrich its media without replacing
-        // the original body with a truncated reply preview. Current Gateways send the full snapshot.
+        // Discord's delayed link previews only change media. Gateways also send the preview's author, title, description
+        // and links as text, but the body itself never changed, so that text is never applied: it flooded Minecraft chat.
+        // A full snapshot (replacement) replaces the media list; an older fragment merges into it.
         const record = this.lifecycle.fromDiscord(data.id);
         if (!record || record.source !== "discord" || record.scope !== "global" || record.room !== GLOBAL_CHAT_ROOM || record.discordId !== data.discordId) { result("unknown_message"); return; }
-        const operationId = (await ircTextDigest(`${data.id}\n${data.replacement ? data.text : "media"}\n${JSON.stringify(media)}`)).slice(0, 32);
-        if (data.replacement === true) {
-          const outcome = await this.operation({ ...session, richChatVersion: 1 }, { ...data, type: "discord_operation", id: operationId,
-            operation: "edit", message_id: data.id, media }, "global");
-          result(outcome.error);
-        } else {
+        const operationId = (await ircTextDigest(`${data.id}\n${data.replacement ? "snapshot" : "media"}\n${JSON.stringify(media)}`)).slice(0, 32);
+        {
           // The digest yields to other websocket events. Merge from current metadata, not
           // the snapshot captured before a full edit or deletion could have committed.
           const latest = this.lifecycle.get(record.id);
           if (!latest || latest.deleted) { result(latest ? "message_deleted" : "unknown_message"); return; }
-          if (latest.bodyRevision !== undefined || latest.editedAt !== undefined) { result(); return; }
-          const merged = new Map(latest.media.map(item => [ircMediaKey(item.url), item]));
+          if (latest.bodyRevision !== undefined || latest.editedAt !== undefined || data.replacement !== true && latest.mediaSnapshot) { result(); return; }
+          const merged = new Map(data.replacement === true ? [] : latest.media.map(item => [ircMediaKey(item.url), item]));
           for (const item of media) {
             for (const [key, previous] of merged) if (previous.id === item.id) merged.delete(key);
             merged.set(ircMediaKey(item.url), item);
           }
           const outcome = this.lifecycle.operate(`dc:${data.discordId}`, { id: operationId, messageId: record.id, operation: "edit",
-            media: [...merged.values()].slice(0, 4), mediaOnly: true }, { native: true, discordId: data.discordId });
+            media: [...merged.values()].slice(0, 4), mediaOnly: true, ...(data.replacement === true ? { snapshot: true as const } : {}) }, { native: true, discordId: data.discordId });
           if (outcome.update && outcome.record) this.refreshQueuedGlobal(outcome.record, outcome.update);
           if (outcome.update) await Promise.allSettled(this.rooms().map(room => this.env.RELAY_ROOMS.getByName(room).globalChatUpdate(outcome.update!, this.mineActors(record.id))));
           result(outcome.error);

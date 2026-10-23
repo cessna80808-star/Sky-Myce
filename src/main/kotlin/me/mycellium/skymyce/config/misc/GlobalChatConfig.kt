@@ -34,4 +34,8 @@ object GlobalChatConfig : CategoryKt("Global SkyMyce Chat") {
         name = TranslatableValue.literal("Mention sound")
         description = TranslatableValue.literal("Play one subtle ping for a new party or global message that mentions your account.")
     }
+    val emojiInNormalChat by boolean(true) {
+        name = TranslatableValue.literal("Emoji in Normal Chat")
+        description = TranslatableValue.literal("Use the emoji picker and :shortcode: suggestions in normal chat too. Emoji sent to Hypixel become readable :names: (as many as fit in 256 characters), and :names: in received chat show as emoji for you. Sky-Myce IRC always sends real emoji.")
+    }
 }

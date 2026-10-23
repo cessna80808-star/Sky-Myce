@@ -31,7 +31,7 @@ internal class BrowserSession(url: String, width: Int, height: Int, private val 
             handle.addRequestHandler(object : CefRequestHandlerAdapter() {
                 override fun onBeforeBrowse(browser: CefBrowser, frame: CefFrame, request: CefRequest, userGesture: Boolean, redirect: Boolean): Boolean {
                     val allowed = if (frame.isMain) BrowserLinks.navigationAllowed(request.url) else BrowserLinks.resourceAllowed(request.url)
-                    if (!allowed && frame.isMain) status("This destination is outside YouTube and Hypixel.")
+                    if (!allowed && frame.isMain) status("Only public HTTPS websites open here. Use Open externally.")
                     return !allowed
                 }
                 override fun onOpenURLFromTab(browser: CefBrowser, frame: CefFrame, target: String, userGesture: Boolean): Boolean {

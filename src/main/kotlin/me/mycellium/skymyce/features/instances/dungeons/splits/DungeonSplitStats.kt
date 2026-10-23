@@ -194,6 +194,17 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), checkpoints, worstRun)
 }
 
+/** The chat line for an ended run: real time, server time and the lag between them; null when the start was missed. */
+internal fun splitRunSummary(record: SplitRunRecord): String? {
+    if (!record.startObserved) return null
+    val real = record.marks[SplitMilestone.END] ?: return null
+    val ticks = record.times(SplitClock.SERVER)
+    val server = ticks[SplitMilestone.END]?.takeIf { ticks[SplitMilestone.START] == 0L }
+        ?: return "§b${record.floor} §7run §f${formatSplitTime(real)} §8· §7server time unavailable"
+    val lag = (real - server).coerceAtLeast(0)
+    return "§b${record.floor} §7run §f${formatSplitTime(real)} §8· §7server §b${formatSplitTime(server)} §8· §7lag ${if (lag >= 1_000) "§c" else "§7"}+${formatSplitTime(lag)}"
+}
+
 fun formatSplitTime(millis: Long?, precise: Boolean = true): String {
     if (millis == null || millis < 0) return "—"
     val totalSeconds = millis / 1000

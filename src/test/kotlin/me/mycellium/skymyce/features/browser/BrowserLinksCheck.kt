@@ -4,20 +4,20 @@ fun main() {
     listOf("https://www.youtube.com/watch?v=ovmsEmAhoIQ", "https://m.youtube.com/watch?v=ovmsEmAhoIQ&t=15",
         "https://youtu.be/ovmsEmAhoIQ?si=test", "https://www.youtube.com/shorts/ovmsEmAhoIQ",
         "https://www.youtube.com/live/ovmsEmAhoIQ", "https://www.youtube.com/embed/ovmsEmAhoIQ",
-        "https://hypixel.net/threads/example.123/#post", "https://www.hypixel.net/", "HTTPS://HYPIXEL.NET/news/1").forEach {
+        "https://hypixel.net/threads/example.123/#post", "https://www.hypixel.net/", "HTTPS://HYPIXEL.NET/news/1",
+        "https://x.com/TheInternetFish/status/2113364266501931412", "https://github.com/").forEach {
         check(BrowserLinks.supported(it) != null) { "Supported website was rejected: $it" }
     }
     listOf(null, "", "file:///C:/private", "javascript:alert(1)", "data:text/html,hello", "http://hypixel.net/",
-        "https://hypixel.net@evil.example/", "https://hypixel.net.evil.example/", "https://evil-hypixel.net/",
-        "https://hypixel.net:8443/", "https://hypixel.net/\nprivate", "https://www.youtube.com/watch?v=short",
-        "https://www.youtube.com/redirect?q=https://hypixel.net/", "https://www.youtube.com/watch?v=ovmsEmAhoIQ&v=abcdefghijk",
-        "https://www.youtube.com/watch?v=ovmsEmAhoIQ&redirect=https://evil.example/", "https://youtu.be/short",
-        "https://localhost/", "https://hypixel.net/" + "x".repeat(2048)).forEach {
+        "https://hypixel.net@evil.example/", "https://hypixel.net:8443/", "https://hypixel.net/\nprivate",
+        "https://localhost/", "https://127.0.0.1/", "https://[::1]/", "https://2130706433/", "https://host.local/",
+        "https://hypixel.net/" + "x".repeat(2048)).forEach {
         check(BrowserLinks.supported(it) == null) { "Unexpected browser destination: $it" }
     }
     check(BrowserLinks.navigationAllowed("about:blank"))
     check(BrowserLinks.navigationAllowed("https://consent.youtube.com/"))
-    listOf("file:///private", "mod://skymyce/secret", "https://evil.example/", "chrome://settings/", "about:config")
+    check(BrowserLinks.navigationAllowed("https://x.com/"))
+    listOf("file:///private", "mod://skymyce/secret", "https://192.168.1.1/", "chrome://settings/", "about:config")
         .forEach { check(!BrowserLinks.navigationAllowed(it)) }
     check(BrowserLinks.resourceAllowed("https://r1.googlevideo.com/videoplayback?signature=" + "x".repeat(3000)))
     check(BrowserLinks.resourceAllowed("https://i.ytimg.com/vi/abcdefghijk/default.jpg"))

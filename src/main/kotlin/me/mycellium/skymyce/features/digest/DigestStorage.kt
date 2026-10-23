@@ -89,7 +89,7 @@ class DigestStateStore(private val file: Path) {
                 require(item.thumbnailUrl == null || item.source == NewsSource.DERAILIOUS && safeDigestVideoUrl(item.thumbnailUrl, true) != null)
                 require(requireNotNull(item.links).size <= 8 && item.links.distinct().size == item.links.size)
                 require(item.links.sumOf { it.length } <= 1024)
-                require(item.links.all { BrowserLinks.supported(it) != null })
+                require(item.links.all { BrowserLinks.trusted(it) != null })
             }
         }
         state.global?.let { global ->

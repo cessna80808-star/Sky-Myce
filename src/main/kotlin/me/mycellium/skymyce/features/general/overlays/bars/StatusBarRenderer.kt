@@ -26,7 +26,9 @@ object StatusBarRenderer {
         val barRight = rect.right - if (config.icon == IconPosition.RIGHT) iconSpace else 0
         val barWidth = barRight - barLeft
         if (barWidth < 4) return
-        val flash = if (animate) motion.flash(now) else 0.0
+        // Hits and heals are health's language; on mana and the rest they turn steady spending into constant flicker.
+        val impacts = animate && type == BarType.HEALTH
+        val flash = if (impacts) motion.flash(now) else 0.0
         // A big hit nudges the bar a pixel for a moment.
         val shake = if (animate && flash > 0.4) (if ((now / 30) % 2 == 0L) 1 else -1) else 0
         val top = rect.y + 1 // The 7-pixel body.
@@ -66,7 +68,7 @@ object StatusBarRenderer {
             }
         }
         // A heal sweeps a bright band from the old end to the new one.
-        motion.heal(now)?.takeIf { animate }?.let { progress ->
+        motion.heal(now)?.takeIf { impacts }?.let { progress ->
             val from = innerWidth * motion.healFrom; val to = innerWidth * motion.healTo
             val head = (from + (to - from) * easeOut(progress)).roundToInt()
             for (i in 0 until 5) {

@@ -9,9 +9,11 @@ export type IrcReply = { messageId?: string; discordMessageId?: string; from: st
 export type IrcReaction = { emoji: string; count: number; mine?: boolean };
 export type IrcRecord = { id: string; scope: IrcScope; room: string; source: "minecraft" | "discord"; sourceId: string;
   from: string; discordId: string; uuid?: string; sender: IrcPublicSender; preview: string; media: IrcMedia[]; reply?: IrcReply;
-  revision: number; timestamp: number; expiresAt: number; discordMessageId?: string; editedAt?: number; deleted?: boolean; bodyDigest?: string; bodyRevision?: number };
+  revision: number; timestamp: number; expiresAt: number; discordMessageId?: string; editedAt?: number; deleted?: boolean; bodyDigest?: string; bodyRevision?: number;
+  /** A complete Discord link-preview snapshot set the media; older fragments may no longer add to it. */
+  mediaSnapshot?: true };
 export type IrcOperation = { id: string; messageId: string; operation: "edit" | "delete" | "reaction"; text?: string;
-  emoji?: string; active?: boolean; media?: IrcMedia[]; editedAt?: number; bodyDigest?: string; mediaOnly?: true };
+  emoji?: string; active?: boolean; media?: IrcMedia[]; editedAt?: number; bodyDigest?: string; mediaOnly?: true; snapshot?: true };
 export async function ircTextDigest(text: string): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -179,7 +181,7 @@ export class IrcLifecycle {
       const credits = Math.min(12, limit ? limit.credits + (now - limit.updated) / 2000 : 12);
       if (credits < 1) return { error: "rate_limited" };
       // Unversioned legacy embed fragments cannot prove they belong to an already edited body.
-      if (operation.mediaOnly && (record.bodyRevision !== undefined || record.editedAt !== undefined)) return {};
+      if (operation.mediaOnly && (record.bodyRevision !== undefined || record.editedAt !== undefined || !operation.snapshot && record.mediaSnapshot)) return {};
       // Discord can enrich embeds without changing the actual edit timestamp.
       if (operation.operation === "edit" && operation.editedAt !== undefined && (record.editedAt ?? 0) > operation.editedAt) return {};
       sql.exec("INSERT INTO irc_operation_limits VALUES(?,?,?) ON CONFLICT(actor) DO UPDATE SET credits=excluded.credits,updated=excluded.updated", actor, credits - 1, now);
@@ -199,6 +201,7 @@ export class IrcLifecycle {
       } else {
         changed = !operation.mediaOnly && record.bodyDigest !== operation.bodyDigest || JSON.stringify(record.media) !== JSON.stringify(operation.media);
         record.media = operation.media!;
+        if (operation.snapshot) record.mediaSnapshot = true;
         if (!operation.mediaOnly) {
           record.preview = ircPreview(operation.text!); record.bodyDigest = operation.bodyDigest;
           record.bodyRevision = record.revision + (changed ? 1 : 0);

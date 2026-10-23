@@ -7,7 +7,7 @@ import net.minecraft.resources.Identifier
 import net.minecraft.util.FormattedCharSequence
 import kotlin.math.roundToInt
 
-private val inputEmojiStyle = Style.EMPTY.withFont(FontDescription.Resource(Identifier.fromNamespaceAndPath("skymyce", "irc_emoji")))
+internal val ircEmojiStyle = Style.EMPTY.withFont(FontDescription.Resource(Identifier.fromNamespaceAndPath("skymyce", "irc_emoji")))
     .withColor(0xFFFFFF).withBold(false).withItalic(false)
 
 /** Raw UTF-16 indices remain owned by EditBox; one joined emoji occupies one displayed glyph. */
@@ -97,15 +97,15 @@ class IrcEmojiInputLayout internal constructor(val value: String) {
     }
 
     fun position(index: Int, font: Font): Int = position(index) { text, emoji ->
-        if (emoji) font.width(FormattedCharSequence.forward(text, inputEmojiStyle)) else font.width(text)
+        if (emoji) font.width(FormattedCharSequence.forward(text, ircEmojiStyle)) else font.width(text)
     }
 
     fun index(offset: Int, font: Font): Int = index(offset) { text, emoji ->
-        if (emoji) font.width(FormattedCharSequence.forward(text, inputEmojiStyle)) else font.width(text)
+        if (emoji) font.width(FormattedCharSequence.forward(text, ircEmojiStyle)) else font.width(text)
     }
 
     fun scroll(index: Int, current: Int, available: Int, font: Font): Int = scroll(index, current, available) { text, emoji ->
-        if (emoji) font.width(FormattedCharSequence.forward(text, inputEmojiStyle)) else font.width(text)
+        if (emoji) font.width(FormattedCharSequence.forward(text, ircEmojiStyle)) else font.width(text)
     }
 
     fun display(source: FormattedCharSequence): FormattedCharSequence {
@@ -119,7 +119,7 @@ class IrcEmojiInputLayout internal constructor(val value: String) {
             var complete = true
             for (run in runs) {
                 if (!complete) break
-                if (run.emoji) complete = sink.accept(run.start, inputEmojiStyle, run.shown[0].code)
+                if (run.emoji) complete = sink.accept(run.start, ircEmojiStyle, run.shown[0].code)
                 else {
                     var index = run.start
                     while (complete && index < run.end) {

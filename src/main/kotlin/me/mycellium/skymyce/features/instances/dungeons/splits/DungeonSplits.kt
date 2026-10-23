@@ -5,6 +5,7 @@ import me.mycellium.skymyce.config.instances.dungeons.DungeonSplitsConfig as Set
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonCompletionFloor
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.Utils.displayDevMessage
+import me.mycellium.skymyce.utils.Utils.displayModMessage
 import net.minecraft.network.protocol.common.ClientboundPingPacket
 import net.minecraft.network.chat.Component
 import net.minecraft.network.protocol.game.ClientboundBossEventPacket
@@ -275,9 +276,11 @@ object DungeonSplits : SkyMyceModule() {
         mark(run, SplitMilestone.END, at)
         val outcome = if (run.defeated) SplitOutcome.COMPLETED else SplitOutcome.FAILED
         if (run.outcome == outcome) return
+        val first = run.outcome == null
         // The summary header can arrive just before "☠ Defeated"; the later line upgrades the same record.
         run.outcome = outcome
         save(run, outcome)
+        if (first && Settings.chatSummary) splitRunSummary(run.timeline.record(run.id, run.recordedAt, outcome))?.let(::displayModMessage)
         revision++
     }
 

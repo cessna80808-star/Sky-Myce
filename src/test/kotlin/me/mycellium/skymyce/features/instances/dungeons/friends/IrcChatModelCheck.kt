@@ -138,6 +138,11 @@ fun checkIrcChatModel() {
     check(ircThumbnailLayout(0, 320, 9) == ircThumbnailLayout(50, 320, 9))
     check(ircThumbnailLayout(999, 320, 9) == ircThumbnailLayout(200, 320, 9))
     check(ircThumbnailLayout(100, 0, 0) == IrcThumbnailLayout(1, 1, 1))
+    // Known dimensions shrink the box to the image: a wide 3:1 screenshot reserves 4 rows, not 8; a tall one is narrow.
+    check(ircThumbnailLayout(100, 320, 9, 900, 300) == IrcThumbnailLayout(96, 32, 4))
+    check(ircThumbnailLayout(100, 320, 9, 300, 900) == IrcThumbnailLayout(24, 72, 8))
+    check(ircThumbnailLayout(100, 320, 9, 400, 300) == ircThumbnailLayout(100, 320, 9)) { "4:3 is unchanged" }
+    check(ircThumbnailLayout(100, 320, 9, 0, 300) == ircThumbnailLayout(100, 320, 9)) { "Unusable dimensions fall back to 4:3" }
     for (percent in 50..200) for (width in listOf(40, 73, 96, 192, 320)) for (lineHeight in 9..18) {
         val layout = ircThumbnailLayout(percent, width, lineHeight)
         check(layout.width in 1..width && layout.height > 0 && layout.rows > 0)
@@ -224,6 +229,7 @@ fun checkIrcChatModel() {
         check(style.font == emojiFont && style.clickEvent == null && style.hoverEvent == null && style.insertion == null); true
     }
     checkIrcEmojiFont()
+    checkIrcEmojiNames()
     val unsigned = URI("https://cdn.discordapp.com/attachments/1/2/clip.gif")
     val signed = URI("https://media.discordapp.net/attachments/1/2/clip.gif?ex=123&is=2&hm=abc")
     check(ircMediaIdentity(unsigned) == ircMediaIdentity(signed))
@@ -399,7 +405,7 @@ private fun checkIrcHistoryUpdates() {
 
 private fun checkIrcEmojiFont() {
     fun resource(path: String) = requireNotNull(IrcReadableText::class.java.getResourceAsStream(path))
-    val index = resource("/assets/skymyce/font/irc_emoji_index.json").bufferedReader().use { JsonParser.parseReader(it).asJsonArray }
+    val index = resource("/assets/skymyce/irc/emoji_index.json").bufferedReader().use { JsonParser.parseReader(it).asJsonArray }
     val font = resource("/assets/skymyce/font/irc_emoji.json").bufferedReader().use { JsonParser.parseReader(it).asJsonObject }
     val glyphs = arrayListOf<Int>()
     for (provider in font.getAsJsonArray("providers")) {
@@ -416,6 +422,7 @@ private fun checkIrcEmojiFont() {
         }
         glyphs.addAll(rows.flatten().filter { it != 0 })
     }
+    check(IrcReadableText::class.java.getResource("/assets/skymyce/font/irc_emoji_index.json") == null) // fonts.json must not see it
     check(index.size() in 3001..6400 && glyphs == (0xE000 until 0xE000 + index.size()).toList())
     for ((offset, key) in index.withIndex()) {
         val unicode = key.asString.split('-').joinToString("") { String(Character.toChars(it.toInt(16))) }
