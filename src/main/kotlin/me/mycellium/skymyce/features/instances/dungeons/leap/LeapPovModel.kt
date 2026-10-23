@@ -5,6 +5,10 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 
+// Compiled once: LeapPovSharing checks these every tick in the Catacombs.
+internal val leapServerId = Regex("[A-Za-z0-9_-]{1,64}")
+internal val leapFloorId = Regex("E|ENTRANCE|[FM][1-7]")
+
 data class LeapPovContext(val epoch: String, val server: String, val floor: String, val alpha: Boolean,
     val party: String, val allowed: Map<UUID, String>)
 
@@ -135,11 +139,9 @@ class LeapPovCache {
         const val MAX_INTEGER = 9_007_199_254_740_991L
         val HEX = Regex("[a-f0-9]{32}")
         val NAME = Regex("[A-Za-z0-9_]{1,16}")
-        val SERVER = Regex("[A-Za-z0-9_-]{1,64}")
-        val FLOOR = Regex("E|ENTRANCE|[FM][1-7]")
 
         fun validContext(value: LeapPovContext) = HEX.matches(value.epoch) && HEX.matches(value.party) &&
-            SERVER.matches(value.server) && FLOOR.matches(value.floor) && value.allowed.size <= 4 &&
+            leapServerId.matches(value.server) && leapFloorId.matches(value.floor) && value.allowed.size <= 4 &&
             value.allowed.all { (uuid, name) -> uuid != UUID(0, 0) && NAME.matches(name) } &&
             value.allowed.values.map { it.lowercase(Locale.ROOT) }.distinct().size == value.allowed.size
 

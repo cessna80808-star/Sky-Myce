@@ -25,8 +25,9 @@ class CosmeticsStudio {
     private companion object {
         val worker = StudioAsyncWorker("Sky-Myce cosmetics studio", 2, 4)
         val chooser = StudioAsyncWorker("Sky-Myce cape chooser", 1, 0)
+        // One client for every screen: each HttpClient keeps its own selector thread alive until collected.
+        val http: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
     }
-    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()
 
     fun refresh() = work("Loading saved cosmetics…", false, { owner, token, guard ->
         guard.check()
@@ -55,10 +56,6 @@ class CosmeticsStudio {
             requireNotNull(parseCosmeticProfile(result.getAsJsonObject("profile")))
         }) { result -> profile = result; CosmeticsClient.acceptOwn(result); status = "Saved revision ${result.revision} • synchronized" }
     }
-
-    fun upload(path: String, accepted: (CapeAsset) -> Unit = {}) = work("Validating and uploading cape…", true, { owner, token, guard ->
-        uploadCape(path, owner, token, guard)
-    }) { asset -> assets = (assets.filterNot { it.id == asset.id } + asset).takeLast(8); status = "Uploaded cape ${asset.id.take(8)}; select it, then Save"; accepted(asset) }
 
     /** One accepted mutation retains Publish intent across screen close, with authority checked between requests. */
     fun publishLocal(draft: CosmeticProfile, name: com.google.gson.JsonElement?, path: String) {

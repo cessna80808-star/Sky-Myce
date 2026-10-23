@@ -434,7 +434,8 @@ object GreenhousePlanner : SkyMyceModule() {
             if (id == null) { estimating = false; save(); done(); return }
             val hash = inputsHash(unlocked, listOf(id), settings, catalog, quotes)
             worker.execute {
-                val layout = runCatching { GreenhouseSolver(catalog, quotes, settings, unlocked, listOf(id), ESTIMATE_ITERATIONS).solve(hash.hashCode().toLong(), 0, hash) }.getOrNull()
+                val layout = runCatching { GreenhouseSolver(catalog, quotes, settings, unlocked, listOf(id), ESTIMATE_ITERATIONS).solve(hash.hashCode().toLong(), 0, hash) }
+                    .onFailure { SkyMyce.logger.warn("Greenhouse estimate for {} could not be solved", id, it) }.getOrNull()
                 MC.instance.execute { remember(hash, PlotEstimate(layout?.targets?.size ?: 0, layout?.totalProfitPerHour ?: 0.0)); next() }
             }
         }
@@ -850,7 +851,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun knownLooks(plot: Plot): Map<String, String> = if (plot.learned.isEmpty()) learned else learned + plot.learned
 
     private fun loaded(level: Level, origin: Anchor) = listOf(0 to 0, 0 to GREENHOUSE_SIZE - 1, GREENHOUSE_SIZE - 1 to 0, GREENHOUSE_SIZE - 1 to GREENHOUSE_SIZE - 1)
-        .all { (row, col) -> level.hasChunkAt(cellPos(origin, row, col)) }
+        .all { (row, col) -> cellPos(origin, row, col).let { level.hasChunk(Math.floorDiv(it.x, 16), Math.floorDiv(it.z, 16)) } }
 
     private fun soilOf(state: BlockState): Soil? = Soil.entries.firstOrNull { state.`is`(soilBlock(it)) }
 

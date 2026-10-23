@@ -88,6 +88,9 @@ internal fun dungeonGridSegment(x: Double, z: Double) = RoomSegment(
 private val MAP_DIRECTIONS = listOf(RoomSegment(-1, 0), RoomSegment(1, 0), RoomSegment(0, -1), RoomSegment(0, 1))
 private val ROOM_MAP_COLOURS = setOf(18, 30, 34, 62, 63, 66, 74, 82, 85)
 private val OPEN_MAP_DOOR_COLOURS = setOf(30, 34, 62, 63, 66, 74, 82)
+/** Normal and unopened room colours, the only ones whose tiles join into larger rooms. */
+private val JOINABLE_MAP_COLOURS = setOf(63, 85)
+private val CHECKMARK_MAP_COLOURS = setOf(30, 34)
 private fun ByteArray.mapColour(x: Int, z: Int) = if (size == 16384 && x in 0..127 && z in 0..127) this[x + z * 128].toInt() and 255 else -1
 private fun roomKey(segments: Set<RoomSegment>) = "live:" + segments.sortedWith(compareBy({ it.x }, { it.z })).joinToString(";") { "${it.x},${it.z}" }
 
@@ -149,15 +152,15 @@ internal fun dungeonScannedRoom(scan: DungeonScannedMap, current: RoomSegment,
 private fun dungeonRoomTiles(colours: ByteArray, layout: DungeonMapLayout, tile: RoomSegment): Set<RoomSegment>? {
     val tiles = linkedSetOf(tile)
     val queue = ArrayDeque<RoomSegment>().apply { add(tile) }
-    if (colours.mapColour(tile.x, tile.z) in setOf(63, 85)) while (queue.isNotEmpty()) {
+    if (colours.mapColour(tile.x, tile.z) in JOINABLE_MAP_COLOURS) while (queue.isNotEmpty()) {
         val from = queue.removeFirst()
         for (direction in MAP_DIRECTIONS) {
             val next = RoomSegment(from.x + direction.x * layout.stride, from.z + direction.z * layout.stride)
             val seamX = from.x + when (direction.x) { -1 -> -2; 1 -> layout.roomSize + 2; else -> layout.roomSize / 2 }
             val seamZ = from.z + when (direction.z) { -1 -> -2; 1 -> layout.roomSize + 2; else -> layout.roomSize / 2 }
-            if (colours.mapColour(next.x, next.z) in setOf(63, 85) &&
-                colours.mapColour(seamX, seamZ) in setOf(63, 85) &&
-                colours.mapColour(seamX - if (direction.z != 0) 4 else 0, seamZ - if (direction.x != 0) 4 else 0) in setOf(63, 85) && tiles.add(next)) {
+            if (colours.mapColour(next.x, next.z) in JOINABLE_MAP_COLOURS &&
+                colours.mapColour(seamX, seamZ) in JOINABLE_MAP_COLOURS &&
+                colours.mapColour(seamX - if (direction.z != 0) 4 else 0, seamZ - if (direction.x != 0) 4 else 0) in JOINABLE_MAP_COLOURS && tiles.add(next)) {
                 if (tiles.size > 4) return null
                 queue.add(next)
             }
@@ -176,7 +179,7 @@ internal fun dungeonMapRoom(colours: ByteArray, layout: DungeonMapLayout, curren
     val segments = tiles.mapTo(linkedSetOf(), layout::world)
     val checked = tiles.any {
         val centre = colours.mapColour(it.x + layout.roomSize / 2, it.z + layout.roomSize / 2)
-        centre in setOf(30, 34) && centre != colours.mapColour(it.x, it.z)
+        centre in CHECKMARK_MAP_COLOURS && centre != colours.mapColour(it.x, it.z)
     }
     val name = when (colour) { 18 -> "Blood room"; 30 -> "Entrance"; 34 -> "Rare room"; 62 -> "Trap room"; 66 -> "Puzzle room"; 74 -> "Miniboss room"; 82 -> "Fairy room"; else -> "Dungeon room" }
     return LiveDungeonRoom(roomKey(segments), name, segments, checked && colour != 30,

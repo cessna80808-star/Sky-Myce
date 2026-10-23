@@ -7,6 +7,7 @@ import me.mycellium.skymyce.features.instances.dungeons.splits.terminalProgress
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils
 import me.mycellium.skymyce.utils.Utils
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.world.entity.player.Inventory
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
@@ -143,10 +144,11 @@ object GoldorCoordinator : SkyMyceModule() {
 
     /** Applies another client's events. Exposed for the `/sm goldor chat` debug command. */
     internal fun apply(sender: String, events: List<GoldorEvent>, now: Long) {
-        state.updatePlayer(sender) { it.copy(sm = true, lastMessageAt = now) }
+        state.updatePlayer(sender) { it.copy(sm = true) }
         for (event in events) when (event) {
             is GoldorEvent.Role -> state.updatePlayer(sender) { it.copy(role = overrides[sender] ?: it.role ?: event.role) }
-            is GoldorEvent.Section -> state.updatePlayer(sender) { it.copy(reportedSection = event.section) }
+            // A sender's section is accepted on the wire but nothing uses it.
+            is GoldorEvent.Section -> Unit
             is GoldorEvent.Working -> state.markActive(event.terminal, sender, event.puzzle, event.quarters, StateSource.SHARED, now)
             is GoldorEvent.Completed -> state.exactComplete(event.terminal, sender, now)
             is GoldorEvent.Lever -> state.exactComplete(event.lever, sender, now)
@@ -208,7 +210,7 @@ object GoldorCoordinator : SkyMyceModule() {
         val sections = listOfNotNull(state.section, state.section.next)
         val station = sections.firstNotNullOfOrNull { GoldorLayout.nearest(it, ObjectiveKind.TERMINAL, player.x, player.y, player.z, emptySet()) } ?: return
         openTerminal = station.objective; openPuzzle = puzzle
-        val quarters = puzzleQuarters(puzzle, event.screen.menu.slots.filter { it.container !is Inventory }.map { BuiltInRegistries.ITEM.getKey(it.item.item).toString() }) ?: 0
+        val quarters = puzzleQuarters(puzzle, terminalItemIds(event.screen)) ?: 0
         state.markActive(station.objective, selfName(), puzzle, quarters, StateSource.LOCAL, now)
         offer(GoldorEvent.Working(station.objective, puzzle, quarters))
     }
@@ -218,11 +220,15 @@ object GoldorCoordinator : SkyMyceModule() {
         val terminal = openTerminal ?: return
         val puzzle = openPuzzle ?: return
         if (!inBoss() || PuzzleType.ofTitle(event.title) != puzzle) return
-        val quarters = puzzleQuarters(puzzle, event.screen.menu.slots.filter { it.container !is Inventory }.map { BuiltInRegistries.ITEM.getKey(it.item.item).toString() }) ?: return
+        val quarters = puzzleQuarters(puzzle, terminalItemIds(event.screen)) ?: return
         if (quarters <= state.state(terminal).quarters) return
         state.markActive(terminal, selfName(), puzzle, quarters, StateSource.LOCAL, now())
         offer(GoldorEvent.Working(terminal, puzzle, quarters))
     }
+
+    /** Item ids of the terminal's own slots, without the player inventory below it. */
+    private fun terminalItemIds(screen: AbstractContainerScreen<*>) =
+        screen.menu.slots.filter { it.container !is Inventory }.map { BuiltInRegistries.ITEM.getKey(it.item.item).toString() }
 
     @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class)
     fun onLeave() {

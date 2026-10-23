@@ -40,9 +40,6 @@ data class FloorTracker(
     fun hourlyRate(value: Double): Double? = if (!incompleteTime && totalTimeHours > 0 && value.isFinite())
         (value / totalTimeHours).takeIf(Double::isFinite) else null
 
-    val totalChestsOpened: Int
-        get() = chests.values.sumOf { it.chestCount }
-
     val totalChestsCost: Double
         get() = chests.values.sumOf { it.chestCost }
 
@@ -54,9 +51,6 @@ data class FloorTracker(
 
     val netProfit: Double
         get() = chests.values.sumOf { it.netProfit }
-
-    val grossProfit: Double
-        get() = chests.values.sumOf { it.grossProfit }
 
     val totalTimeHours: Double
         get() = totalTimeMillis.milliseconds.toDouble(DurationUnit.HOURS)

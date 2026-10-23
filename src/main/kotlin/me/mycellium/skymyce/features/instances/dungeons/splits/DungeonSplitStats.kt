@@ -3,10 +3,6 @@ package me.mycellium.skymyce.features.instances.dungeons.splits
 import java.util.Locale
 
 /**
- * How a saved run ended. Only [COMPLETED] runs with an observed start can supply an actual PB, a theoretical PB section
- * or an overall average; other runs keep their directly observed sections for section averages only.
- */
-/**
  * Which clock a time is measured on. [REAL] is the stopwatch and includes lag; [SERVER] counts server ticks × 50 ms,
  * so lag does not add to it. The difference between them is the time lost to lag.
  */
@@ -22,6 +18,10 @@ enum class SplitComparison(val title: String) {
     override fun toString() = title
 }
 
+/**
+ * How a saved run ended. Only [COMPLETED] runs with an observed start can supply an actual PB, a theoretical PB section
+ * or an overall average; other runs keep their directly observed sections for section averages only.
+ */
 enum class SplitOutcome(val title: String) { COMPLETED("Completed"), FAILED("Failed"), ABANDONED("Left early") }
 
 /**
@@ -193,9 +193,6 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
     return FloorSplitStats(definition, clock, markers, actual, theoretical, sections, groups, totals.takeIf { it.isNotEmpty() }?.average(),
         totals.size, completed.size, floorRuns.size, lag.takeIf { it.isNotEmpty() }?.average(), checkpoints, worstRun)
 }
-
-/** Live comparison against the saved section PB; null when no comparable best exists yet. */
-fun sectionDelta(duration: Long, best: SectionBest?): Long? = best?.let { duration - it.duration }
 
 fun formatSplitTime(millis: Long?, precise: Boolean = true): String {
     if (millis == null || millis < 0) return "—"

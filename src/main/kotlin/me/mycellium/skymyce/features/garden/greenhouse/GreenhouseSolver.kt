@@ -48,10 +48,10 @@ class GreenhouseSolver(
     fun solve(seed: Long, now: Long, hash: String): Layout? {
         if (targets.isEmpty()) return null
         val random = Random(seed)
-        var ingredients = prune(anneal(emptyList(), random, ::mutate, ::evaluate))
+        var ingredients = prune(anneal(random, ::mutate, ::evaluate))
         if (targets.all { target -> target.requires.keys.all { catalog[it]!!.size == 1 } }) {
             // Rings shared between multi-tile targets need all their tiles at once; choosing footprints first finds those lattices.
-            val footprints = anneal(emptyList(), random, ::mutateTargets, ::assign)
+            val footprints = anneal(random, ::mutateTargets, ::assign)
             val alternative = prune(assign(footprints).ingredients)
             if (evaluate(alternative).exact > evaluate(ingredients).exact) ingredients = alternative
         }
@@ -62,8 +62,8 @@ class GreenhouseSolver(
         return Layout(placements, placements.associateWith { catalog[it.plantId]!!.soils.first() }, final.exact, final.unique, now, hash)
     }
 
-    private fun anneal(start: List<Item>, random: Random, mutate: (List<Item>, Random) -> List<Item>?, evaluate: (List<Item>) -> Evaluation): List<Item> {
-        var current = start
+    private fun anneal(random: Random, mutate: (List<Item>, Random) -> List<Item>?, evaluate: (List<Item>) -> Evaluation): List<Item> {
+        var current = emptyList<Item>()
         var currentScore = evaluate(current)
         var best = current
         var bestScore = currentScore
@@ -140,7 +140,7 @@ class GreenhouseSolver(
     private fun mutate(items: List<Item>, random: Random): List<Item>? {
         val roll = random.nextInt(100)
         if (roll < 30) return repair(items, random)
-        if (items.isEmpty() || roll < 45) return add(items, items, random.nextInt(plantable.size).let { plantable[it] }, random)
+        if (items.isEmpty() || roll < 45) return add(items, random.nextInt(plantable.size).let { plantable[it] }, random)
         val i = random.nextInt(items.size)
         val item = items[i]
         val rest = items.toMutableList().apply { removeAt(i) }
@@ -150,13 +150,13 @@ class GreenhouseSolver(
                 val options = plantable.filter { pool[it].size == item.size && it != item.plant }
                 if (options.isEmpty()) null else items.toMutableList().apply { set(i, item.copy(plant = options[random.nextInt(options.size)])) }
             }
-            else -> add(rest, rest, item.plant, random)
+            else -> add(rest, item.plant, random)
         }
     }
 
-    private fun add(base: List<Item>, occupied: List<Item>, plant: Int, random: Random): List<Item>? {
+    private fun add(base: List<Item>, plant: Int, random: Random): List<Item>? {
         val cells = IntArray(GREENHOUSE_CELLS) { -1 }
-        occupied.forEachIndexed { i, item -> occupy(cells, item, i) }
+        base.forEachIndexed { i, item -> occupy(cells, item, i) }
         val size = pool[plant].size
         val row = random.nextInt(GREENHOUSE_SIZE - size + 1); val col = random.nextInt(GREENHOUSE_SIZE - size + 1)
         return if (fits(cells, row, col, size)) base + Item(plant, row, col, size) else null
@@ -206,7 +206,7 @@ class GreenhouseSolver(
         val roll = random.nextInt(100)
         if (items.isEmpty() || roll < 40) {
             val plant = targetIndices[random.nextInt(targetIndices.size)]
-            return add(items, items, plant, random)
+            return add(items, plant, random)
         }
         val i = random.nextInt(items.size)
         val item = items[i]

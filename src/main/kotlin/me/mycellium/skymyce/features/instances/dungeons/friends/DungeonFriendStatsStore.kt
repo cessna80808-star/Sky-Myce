@@ -15,6 +15,8 @@ data class CachedDungeonFriend(val stats: DungeonFriendStats, val uuid: String?,
         (stats.state == StatsState.UNAVAILABLE || (stats.catacombs ?: 0) > 40)
 }
 
+private val sharedStatsGson = GsonBuilder().create()
+
 /** Shared stats are fresh reports from verified mod users, not a signed Hypixel response. */
 fun sharedDungeonFriend(json: JsonObject, name: String, uuid: String?, now: Long): CachedDungeonFriend? = runCatching {
     require(json.get("name").asString.equals(name, true))
@@ -22,7 +24,7 @@ fun sharedDungeonFriend(json: JsonObject, name: String, uuid: String?, now: Long
     require(id.matches(Regex("[a-f0-9]{32}")) && (uuid == null || uuid == id))
     val fetchedAt = json.get("fetchedAt").asLong
     require(fetchedAt > now - 600000 && fetchedAt <= now + 60000)
-    val stats = GsonBuilder().create().fromJson(json.get("stats"), DungeonFriendStats::class.java)
+    val stats = sharedStatsGson.fromJson(json.get("stats"), DungeonFriendStats::class.java)
     validateDungeonFriendStats(stats)
     require(stats.state != StatsState.UNAVAILABLE)
     CachedDungeonFriend(stats, id, minOf(fetchedAt, now) + 600000)

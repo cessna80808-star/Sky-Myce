@@ -528,7 +528,7 @@ class MenuCanvas {
         private fun mix(a: Int, b: Int, f: Double): Int {
             if (a == b) return a
             var result = 0
-            for (shift in listOf(0, 8, 16, 24)) {
+            for (shift in 0..24 step 8) {
                 val start = a ushr shift and 255
                 val end = b ushr shift and 255
                 result = result or (kotlin.math.round(start + (end - start) * f).toInt().coerceIn(0, 255) shl shift)

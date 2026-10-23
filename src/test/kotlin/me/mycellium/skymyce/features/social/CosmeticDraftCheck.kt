@@ -74,6 +74,11 @@ internal fun cosmeticDraftChecks() {
     prepareCosmeticPreview(state)
     check(!state.isInvisible && state.showCape && state.chestEquipment.isEmpty)
     check(state.capeFlap == 0f && state.capeLean == 0f && state.capeLean2 == 0f)
+    // The preview keeps the real chestplate; only wings, which would hide the edited cape, are dropped.
+    fun chest(asset: net.minecraft.resources.ResourceKey<net.minecraft.world.item.equipment.EquipmentAsset>) =
+        net.minecraft.world.item.equipment.Equippable.builder(net.minecraft.world.entity.EquipmentSlot.CHEST).setAsset(asset).build()
+    check(!previewHidesChest(chest(net.minecraft.world.item.equipment.EquipmentAssets.DIAMOND)) && !previewHidesChest(null))
+    check(previewHidesChest(chest(net.minecraft.world.item.equipment.EquipmentAssets.ELYTRA)))
 }
 
 private fun cosmeticWorkspaceChecks() {

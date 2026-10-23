@@ -296,9 +296,15 @@ internal class IrcMediaCache(private val maximumBytes: Long = 48L * 1024 * 1024,
     internal val decodedBytes get() = entries.values.sumOf { it.state.asset?.decodedBytes() ?: 0L }
     internal val size get() = entries.size
     private fun remove(key: String) { entries.remove(key)?.let { it.state.asset?.release(); revision++ } }
-    private fun expire(now: Long) = entries.filterValues {
-        it.state.status != IrcMediaAssetStatus.LOADING && now - it.touched >= ttlNanos
-    }.keys.toList().forEach(::remove)
+    // Runs on every view (each rendered frame); iterate in place instead of copying the map.
+    private fun expire(now: Long) {
+        val iterator = entries.values.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.state.status == IrcMediaAssetStatus.LOADING || now - entry.touched < ttlNanos) continue
+            iterator.remove(); entry.state.asset?.release(); revision++
+        }
+    }
     fun view(key: String, now: Long): IrcMediaAssetState {
         expire(now)
         return entries[key]?.also { it.touched = now }?.state ?: IrcMediaAssetState(IrcMediaAssetStatus.IDLE)

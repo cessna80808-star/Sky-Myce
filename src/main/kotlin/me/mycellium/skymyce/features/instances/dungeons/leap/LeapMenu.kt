@@ -47,6 +47,7 @@ object LeapMenu : SkyMyceModule() {
     private var intentLevel: ClientLevel? = null
     private var intentPlayer: Player? = null
     private val earlyKeys = mutableSetOf<Int>()
+    private val spiritLeapIds = setOf("SPIRIT_LEAP", "INFINITE_SPIRIT_LEAP")
     private var initializedScreen: AbstractContainerScreen<*>? = null
     private var initializedLevel: ClientLevel? = null
 
@@ -96,7 +97,6 @@ object LeapMenu : SkyMyceModule() {
                 when (key.key()) {
                     GLFW.GLFW_KEY_ESCAPE -> true
                     GLFW.GLFW_KEY_TAB, GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN -> true
-                    GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER, GLFW.GLFW_KEY_SPACE -> false
                     else -> false
                 }
             }
@@ -132,7 +132,7 @@ object LeapMenu : SkyMyceModule() {
         if (key == KeyMappingHelper.getBoundKeyOf(options.keyUse)) {
             val id = client.player?.mainHandItem?.getData(DataTypes.ID)
             if (contextAvailable() && client.isWindowActive && client.overlay == null &&
-                id in setOf("SPIRIT_LEAP", "INFINITE_SPIRIT_LEAP")) armIntent(System.nanoTime())
+                id in spiritLeapIds) armIntent(System.nanoTime())
             else clearIntent()
         } else if (listOf(options.keyUp, options.keyDown, options.keyLeft, options.keyRight,
                 options.keyJump, options.keyShift, options.keySprint).none { KeyMappingHelper.getBoundKeyOf(it) == key }) clearIntent()
@@ -159,7 +159,7 @@ object LeapMenu : SkyMyceModule() {
 
     @Subscription(priority = Subscription.LOWEST, receiveCancelled = true)
     fun onItemUse(event: RightClickEvent) {
-        if (event.isCancelled || event.stack.getData(DataTypes.ID) !in setOf("SPIRIT_LEAP", "INFINITE_SPIRIT_LEAP")) clearIntent()
+        if (event.isCancelled || event.stack.getData(DataTypes.ID) !in spiritLeapIds) clearIntent()
         else if (validIntent(System.nanoTime())) intent.confirm(System.nanoTime())
     }
 

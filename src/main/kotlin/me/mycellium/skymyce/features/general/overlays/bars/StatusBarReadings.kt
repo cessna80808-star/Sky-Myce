@@ -49,22 +49,40 @@ internal fun speedMax(speed: Int) = if (speed > 400) 500 else 400
 /** Defense fills by the share of damage it removes: 100 defense removes half. */
 internal fun defenseFill(defense: Int) = defense.coerceAtLeast(0) / (defense.coerceAtLeast(0) + 100.0)
 
+private val pairPattern = Regex("([\\d,]+)\\s*/\\s*([\\d,]+)")
+private val formattingCode = Regex("§.")
+
 /** "x/y" pairs from an action bar fragment such as "1,200/1,500♨". */
 internal fun parsePair(text: String): Pair<Int, Int>? {
-    val match = Regex("([\\d,]+)\\s*/\\s*([\\d,]+)").find(text.replace(Regex("§."), "")) ?: return null
+    val match = pairPattern.find(text.replace(formattingCode, "")) ?: return null
     val a = match.groupValues[1].replace(",", "").toIntOrNull() ?: return null
     val b = match.groupValues[2].replace(",", "").toIntOrNull() ?: return null
     return a to b
 }
 
-/** The label for a reading under [config]'s options; [health] feeds defense's effective-health option. */
-internal fun barLabel(type: BarType, config: BarConfig, value: Int, max: Int, overflow: Int, health: Int? = null): String {
-    val main = when (type) {
-        BarType.DEFENSE -> if (config.extra && health != null) "${statusNumber(value)} · ${NumberUtils.condense(effectiveHealth(health, value))} EHP" else statusNumber(value)
-        BarType.RESPIRATION -> "${(value * 100 / max.coerceAtLeast(1))}%"
-        else -> if (config.showMax && type.hasMax) "${statusNumber(value)}/${statusNumber(max)}" else statusNumber(value)
+/** How the bars write numbers (the Status Bars settings): with a "/max", the extra split off as "+extra", separators. */
+data class BarFormat(val showMax: Boolean = false, val split: Boolean = false, val commas: Boolean = true) {
+    fun number(value: Int): String = if (commas) statusNumber(value) else value.toString()
+
+    /** The value alone (any extra added in), for bars too narrow for the full label. */
+    fun short() = copy(showMax = false, split = false)
+
+    /**
+     * [value] with its [extra] (absorption, overflow mana) added in, or after it as "+extra" when [split]. With
+     * [showMax] and a [max], "/max" too; unsplit, the maximum counts the extra as well ("4,800/4,800").
+     */
+    fun numbers(value: Int, max: Int?, extra: Int): String {
+        val main = if (split) number(value) else number(value + extra)
+        val withMax = if (showMax && max != null) "$main/${number(if (split) max else max + extra)}" else main
+        return if (split && extra > 0) "$withMax +${number(extra)}" else withMax
     }
-    return if (config.showOverflow && type.hasOverflow && overflow > 0) "$main +${statusNumber(overflow)}" else main
+}
+
+/** The label for a reading under [config]'s options and [format]; [health] feeds defense's effective-health option. */
+internal fun barLabel(type: BarType, config: BarConfig, format: BarFormat, value: Int, max: Int, overflow: Int, health: Int? = null): String = when (type) {
+    BarType.DEFENSE -> if (config.extra && health != null) "${format.number(value)} · ${NumberUtils.condense(effectiveHealth(health, value))} EHP" else format.number(value)
+    BarType.RESPIRATION -> "${(value * 100 / max.coerceAtLeast(1))}%"
+    else -> format.numbers(value, max.takeIf { type.hasMax }, if (config.showOverflow && type.hasOverflow) overflow else 0)
 }
 
 /**

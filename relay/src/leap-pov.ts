@@ -29,7 +29,11 @@ export class LeapPov {
   preserve(ws: WebSocket, snapshot: LeapPovSession): void {
     const current = ws.deserializeAttachment() as LeapPovSession | null;
     ws.serializeAttachment({ ...snapshot, bazaar: current?.bazaar, leapPov: current?.leapPov, leapPovRevision: current?.leapPovRevision,
-      leapPovSequence: current?.leapPovSequence, leapPovTraffic: current?.leapPovTraffic });
+      leapPovSequence: current?.leapPovSequence, leapPovTraffic: current?.leapPovTraffic,
+      // IRC owns its receipts: a delayed party/stats snapshot must not silently unsubscribe a confirmed chat channel.
+      ircSubscribed: current?.ircSubscribed, globalChatSubscribed: current?.globalChatSubscribed, richChatVersion: current?.richChatVersion,
+      partySubscribed: current?.partySubscribed, partyId: current?.partyId, partySubscribeRevision: current?.partySubscribeRevision,
+      partyConsentExpiresAt: current?.partyConsentExpiresAt });
   }
 
   /** Called before authorization can yield, including for malformed controls: old consent stops immediately. */

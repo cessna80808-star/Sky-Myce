@@ -194,8 +194,6 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
     private var toggleInitialized = false
     private var selectionInitialized = false
     private var pressed = false
-    internal var paintedInteraction = MotionPose()
-        private set
     private var wrappedMessage: Component? = null
     private var wrappedWidth = -1
     private var wrappedNavigation = false
@@ -253,7 +251,6 @@ open class MenuButton(message: Component, action: (ButtonComponent) -> Unit) : B
         val chosen = selectionMotion.sample().coerceIn(0.0, 1.0)
         val press = pressMotion.sample().coerceIn(0.0, 1.0)
         val pose = interactionPose(hover, press)
-        paintedInteraction = pose
         graphics.layer(y = pose.y, scale = pose.scale, pivotX = pose.pivotX, pivotY = pose.pivotY) {
             paint(graphics, delta, hover, chosen, press)
         }
@@ -487,7 +484,7 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         (g as MenuGraphics).layer(painted.alpha, painted.x, painted.y, painted.scale, painted.pivotX, painted.pivotY) {
             super.draw(g, mouseX, mouseY, partialTicks, delta)
         }
-        children().filterIsInstance<MenuDropdown>().filter { it.finishedClosing }.toList().forEach(::removeChild)
+        children().filterIsInstance<MenuDropdown>().filter { it.finishedClosing }.forEach(::removeChild)
     }
     private fun closeNested() { children().filterIsInstance<MenuDropdown>().forEach { it.beginClose() } }
 
@@ -549,7 +546,7 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         if (closing) return
         entries.children().firstOrNull { it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }?.let {
             entryViewport.scrollTo(it)
-            focusHandler()?.focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE)
+            focusHandler().focus(it, UIComponent.FocusSource.KEYBOARD_CYCLE)
         }
     }
     fun pointer(x: Double, y: Double): Pair<Double, Double>? {
@@ -573,11 +570,11 @@ internal class MenuDropdown(minimumWidth: Int, private val close: () -> Unit) : 
         collectDescendants(rows)
         rows.removeAll { it !is MenuDropdownEntry || !it.canFocus(UIComponent.FocusSource.KEYBOARD_CYCLE) }
         if (rows.isEmpty()) return
-        val current = rows.indexOf(focusHandler()?.focused())
+        val current = rows.indexOf(focusHandler().focused())
         val next = Math.floorMod(current + if (forward) 1 else -1, rows.size)
         val selected = rows[next]
         generateSequence(selected.parent()) { it.parent() }.filterIsInstance<ScrollContainer<*>>().firstOrNull()?.scrollTo(selected)
-        focusHandler()?.focus(selected, UIComponent.FocusSource.KEYBOARD_CYCLE)
+        focusHandler().focus(selected, UIComponent.FocusSource.KEYBOARD_CYCLE)
     }
 }
 
@@ -618,7 +615,6 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
     private val checkMotion = MotionValue(if (checked?.invoke() == true) 1.0 else 0.0)
     private val pressMotion = MotionValue(0.0)
     private val appearance = MotionValue(0.0)
-    private var appeared = false
     private val interactive get() = generateSequence(parent()) { it.parent() }.filterIsInstance<MenuDropdown>().none { it.closing }
     init { color(Color.ofRgb(MenuTheme.TEXT)); verticalTextAlignment(VerticalAlignment.CENTER); cursorStyle(CursorStyle.HAND) }
     override fun canFocus(source: UIComponent.FocusSource) = interactive
@@ -636,12 +632,9 @@ private class MenuDropdownEntry(value: Component, private val checked: (() -> Bo
         pressMotion.animateTo(0.0, 145, MotionEasing.SETTLE, ThemeConfig.animationMode)
         action()
     }
-    fun resetAppearance() { appeared = false; appearance.snap(0.0); hoverMotion.snap(0.0); pressMotion.snap(0.0) }
+    fun resetAppearance() { appearance.snap(0.0); hoverMotion.snap(0.0); pressMotion.snap(0.0) }
     override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
-        if (!appeared) {
-            appeared = true
-            appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis)
-        } else appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis)
+        appearance.animateTo(1.0, 130, MotionEasing.QUICK, ThemeConfig.animationMode, delayMillis)
         val hover = interactive && (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY) ||
             focusHandler()?.focused() === this)
         hoverMotion.animateTo(if (hover) 1.0 else 0.0, 100, MotionEasing.QUICK, ThemeConfig.animationMode)

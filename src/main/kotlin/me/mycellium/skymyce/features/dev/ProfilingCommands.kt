@@ -64,7 +64,7 @@ private fun profilingGauges(): Map<String, Long> = buildMap {
     }.toLong())
     // These are configured methods, not an invented count of Fabric/SBAPI's private global listeners.
     put("client.fps", MC.fps.toLong())
-    (MC.screen as? MenuScreen)?.cacheSizes()?.forEach { (name, size) -> put("gui.$name", size.toLong()) }
+    (MC.screen as? MenuScreen)?.cacheSizes()?.forEach { (name, size) -> put("gui.$name", size) }
     putAll(AuctionAPI.diagnostics())
     putAll(DungeonFriendRelay.diagnostics())
     putAll(DungeonFriendStatsCache.diagnostics())

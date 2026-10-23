@@ -18,8 +18,6 @@ import net.minecraft.world.phys.HitResult
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.nio.file.Files
-import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Explicit, local room authoring. Only the client tick reads live collision geometry. */
@@ -151,11 +149,7 @@ object RoomTemplateRecorder {
         return pos
     }
 
-    private fun feetCell(): GridCell {
-        val point = requireNotNull(MC.instance.player).position()
-        // Slabs/stairs use the next integer candidate height, checked against live collision/support.
-        return GridCell(floor(point.x).toInt(), ceil(point.y - 0.00001).toInt(), floor(point.z).toInt())
-    }
+    private fun feetCell(): GridCell = routeFeetCell(requireNotNull(MC.instance.player).position())
 
     fun cancel() {
         draft = null

@@ -93,9 +93,11 @@ internal class InGameBrowserScreen(private val parent: Screen, private val initi
             } catch (failure: Exception) {
                 failed = true
                 status = "Browser unavailable. Reopen it to retry setup, or use Open externally."
+                SkyMyce.logger.warn("Could not open the in-game browser page", failure)
             } catch (failure: LinkageError) {
                 failed = true
                 status = "Chromium could not start on this platform. Use Open externally."
+                SkyMyce.logger.warn("Could not open the in-game browser page", failure)
             }
         }
         val browser = session?.browser

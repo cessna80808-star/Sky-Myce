@@ -26,7 +26,7 @@ object WidgetManager : SkyMyceModule() {
     override fun init() {
         val file = AtomicJsonFile(saveFile.toPath(), 256 * 1024)
         writer = StateWriter({ file.write(it) }, { action -> Scheduling.schedule(500.milliseconds) { action() } },
-            { SkyMyce.logger.warn("Could not save HUD layout; previous file retained") })
+            { SkyMyce.logger.warn("Could not save HUD layout; previous file retained", it) })
         Scheduling.schedule(0.milliseconds) {
             val json = file.read()
             if (json != null) file.preserveOriginal()
@@ -82,13 +82,6 @@ object WidgetManager : SkyMyceModule() {
     fun widgetAt(mouseX: Int, mouseY: Int): Widget? =
         instances.lastAliveOrNull { it.isRenderable && it.inBounds(mouseX, mouseY) }
 
-    val renderableWidgets: List<Widget>
-        get() = widgets.filter { it.isRenderable }
-
-    fun getActiveWidgets(): List<Widget> {
-        val now = System.currentTimeMillis()
-        return widgets.filter { (now - it.sinceActive) < 10000 }
-    }
 }
 
 internal fun <T : Any> MutableList<WeakReference<T>>.forEachAlive(action: (T) -> Unit) {

@@ -5,9 +5,7 @@ package me.mycellium.skymyce.features.instances.dungeons.goldor
  * the route itself; [CONDITIONAL] steps apply only when their condition holds; [OPTIONAL] steps are allowed but
  * never asked for; [RECOVERY] steps are for when something went wrong.
  */
-enum class StepKind(val title: String) {
-    PREP("Prep"), REQUIRED("Step"), CONDITIONAL("If"), OPTIONAL("Optional"), RECOVERY("Recovery"), REMINDER("Reminder")
-}
+enum class StepKind { PREP, REQUIRED, CONDITIONAL, OPTIONAL, RECOVERY, REMINDER }
 
 /** How a condition is known: from the game and party updates, sometimes from them, or only from the player. */
 enum class Observability(val title: String) { OBSERVED("seen by the mod"), PARTIAL("seen when Sky-Myce users share it"), CONFIRM("you confirm it") }

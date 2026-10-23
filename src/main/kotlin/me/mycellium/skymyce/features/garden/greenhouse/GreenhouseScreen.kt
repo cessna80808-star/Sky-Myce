@@ -255,7 +255,7 @@ internal class GreenhouseGrid(
     /** A placement's growth from the Plant Diagnostics Tool, or null when not analysed. */
     private val growth: (Placement) -> GrowthEstimate? = { null },
 ) : BaseUIComponent() {
-    private var hovered = -1
+    private var hoveredIndex = -1
 
     init { sizing(Sizing.fixed(cell * GREENHOUSE_SIZE + 1), Sizing.fixed(cell * GREENHOUSE_SIZE + 1)) }
 
@@ -298,8 +298,8 @@ internal class GreenhouseGrid(
         }
         val inside = mouseX in x() until x() + width() - 1 && mouseY in y() until y() + height() - 1
         val index = if (inside) greenhouseCellAt(mouseX - x(), mouseY - y(), cell) else -1
-        if (index != hovered) {
-            hovered = index
+        if (index != hoveredIndex) {
+            hoveredIndex = index
             if (index < 0) tooltip(null as List<ClientTooltipComponent>?) else tooltip(Component.literal(describe(index)))
         }
     }
@@ -423,7 +423,7 @@ internal class GreenhouseLegend(layout: Layout) : BaseUIComponent() {
 
 /** Daily harvest profit as static bars; losses hang below the zero line. */
 internal class ProfitBars(private val values: DoubleArray) : BaseUIComponent() {
-    private var hovered = -2
+    private var hoveredIndex = -2
     init { sizing(Sizing.fill(), Sizing.fixed(48)) }
 
     override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
@@ -442,8 +442,8 @@ internal class ProfitBars(private val values: DoubleArray) : BaseUIComponent() {
         }
         g.fill(x() + 2, zero, x() + width() - 2, zero + 1, MenuTheme.alpha(MenuTheme.MUTED, 50))
         val index = if (mouseX in x() until x() + width() && mouseY in y() until y() + height()) ((mouseX - x() - 2) / slot.coerceAtLeast(1)).coerceIn(0, values.size - 1) else -1
-        if (index != hovered) {
-            hovered = index
+        if (index != hoveredIndex) {
+            hoveredIndex = index
             val ago = values.size - 1 - index
             if (index < 0) tooltip(null as List<ClientTooltipComponent>?) else tooltip(Component.literal("${if (ago == 0) "Today" else "$ago days ago"}: ${GreenhousePlanner.signed(values[index])}"))
         }

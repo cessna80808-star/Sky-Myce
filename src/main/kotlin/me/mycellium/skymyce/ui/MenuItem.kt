@@ -127,7 +127,7 @@ class MenuItem(stack: ItemStack) : ItemComponent(stack) {
         if (modelArt.isNotEmpty()) modelArt.forEach { (g as MenuGraphics).picture(it, x, y, width, height) }
         else art?.let { (g as MenuGraphics).picture(it, x, y, width, height) } ?: run {
             MenuTheme.box(g, x, y, width, height, MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, 12))
-            val initials = stack.hoverName.string.replace(Regex("\u00A7."), "").split(Regex("\\s+"))
+            val initials = stack.hoverName.string.replace(formatting, "").split(whitespace)
                 .filter { it.firstOrNull()?.isLetterOrDigit() == true }.take(2).joinToString("") { it.take(1).uppercase() }
                 .ifEmpty { "?" }
             val left = x + ((width - MenuCanvas.textWidth(initials, true)) / 2).toInt()
@@ -142,6 +142,8 @@ class MenuItem(stack: ItemStack) : ItemComponent(stack) {
     }
 
     companion object {
+        private val formatting = Regex("§.")
+        private val whitespace = Regex("\\s+")
         // Render-thread-only cache; item pages share immutable icons without retaining stacks/profiles.
         private val skullIcons = object : LinkedHashMap<Identifier, BufferedImage>(128, .75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Identifier, BufferedImage>?) = size > 128

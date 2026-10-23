@@ -56,7 +56,6 @@ object AuctionAPI : SkyMyceModule() {
         }
     }
 
-    fun getData() = beginBrowserSession(true)
     fun stopBrowserSession() = index.cancel()
 
     /** Only visible listings become item stacks; cap both the decode queue and retained stacks. */

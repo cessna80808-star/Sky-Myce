@@ -14,6 +14,7 @@ internal const val SPLIT_STORE_VERSION = 1
 /** Newest runs are kept; older ones are dropped once this many are saved across all floors. */
 internal const val SPLIT_STORE_LIMIT = 4000
 private const val MAX_MARK = 6 * 60 * 60 * 1000L
+private val SAVED_INTEGER = Regex("-?[0-9]{1,15}")
 
 internal fun encodeSplitRun(run: SplitRunRecord) = JsonObject().apply {
     addProperty("id", run.id); addProperty("floor", run.floor); addProperty("definition", run.definition)
@@ -32,7 +33,7 @@ internal fun parseSplitRun(element: JsonElement?): SplitRunRecord? = runCatching
     val row = element?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
     fun string(key: String) = row.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
     fun long(value: JsonElement?) = value?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asString
-        ?.takeIf { it.matches(Regex("-?[0-9]{1,15}")) }?.toLong()
+        ?.takeIf { it.matches(SAVED_INTEGER) }?.toLong()
     val id = string("id")?.takeIf { it.length in 1..64 } ?: return null
     val floor = string("floor")?.takeIf { it in splitDefinitions } ?: return null
     val definition = long(row.get("definition"))?.toInt() ?: return null
@@ -94,7 +95,7 @@ object DungeonSplitStore {
         })
         Scheduling.schedule(0.milliseconds) {
             val decoded = runCatching { parseSplitStore(file.read()) }
-                .onFailure { SkyMyce.logger.warn("Could not read dungeon splits; starting with an empty history") }.getOrDefault(emptyList())
+                .onFailure { SkyMyce.logger.warn("Could not read dungeon splits; starting with an empty history", it) }.getOrDefault(emptyList())
             val damaged = file.damaged
             MC.instance.execute {
                 saved = (decoded + pending).distinctBy { it.id }.takeLast(SPLIT_STORE_LIMIT)

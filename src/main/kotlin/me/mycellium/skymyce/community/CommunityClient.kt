@@ -228,7 +228,7 @@ object CommunityClient {
         status = if (code.contains("blacklist")) "Online services are restricted for this identity. Local features remain available." else "Discord session ended. Reconnect in Community settings."
     }
     private fun clearConnection(message: String) { epoch++; sessionToken = null; refreshToken = null; identity = null; accessExpiresAt = 0; flow = null; cancellation.clear(); connectingEpoch = null; cancelledConnectEpoch = null; fallbackCode = null; browserUrl = null; sessionGeneration++; status = message }
-    fun relayAuthorization(@Suppress("UNUSED_PARAMETER") nonce: String): Map<String, String> = mapOf("communityToken" to requireNotNull(sessionToken), "modVersion" to version)
+    fun relayAuthorization(): Map<String, String> = mapOf("communityToken" to requireNotNull(sessionToken), "modVersion" to version)
     private fun <T> work(action: () -> T, discarded: ((Result<T>) -> Unit)? = null, success: (T) -> Unit) {
         val boundary = epoch; busy = true
         worker.submit {

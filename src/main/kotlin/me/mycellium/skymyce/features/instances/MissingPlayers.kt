@@ -9,7 +9,7 @@ import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
 
 object MissingPlayers : SkyMyceModule() {
-    val startingRegex = Regex("^Starting in \\d+ seconds.%")
+    private val startingRegex = Regex("^Starting in \\d+ seconds.$")
 
     @Subscription
     fun onChat(event: ChatReceivedEvent.Pre) {

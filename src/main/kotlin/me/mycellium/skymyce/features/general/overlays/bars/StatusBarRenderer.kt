@@ -15,6 +15,7 @@ import kotlin.math.roundToInt
 object StatusBarRenderer {
     private val sprites = HashMap<String, Identifier>()
     private const val ICON = 9
+    private val ORB = Identifier.withDefaultNamespace("textures/entity/experience/experience_orb.png")
 
     fun draw(graphics: GuiGraphicsExtractor, type: BarType, config: BarConfig, rect: BarRect, reading: BarReading, motion: BarMotion,
              now: Long, animate: Boolean, opacity: Double = 1.0) {
@@ -82,7 +83,7 @@ object StatusBarRenderer {
     private fun label(graphics: GuiGraphicsExtractor, config: BarConfig, reading: BarReading, rect: BarRect, barLeft: Int, barWidth: Int, alpha: Double) {
         val font = MC.instance.font
         // The full label if it fits over the whole bar (icon included), else the value alone.
-        val label = listOf(reading.label, reading.short).firstOrNull { font.width(it) <= rect.width } ?: reading.short
+        val label = if (font.width(reading.label) <= rect.width) reading.label else reading.short
         val split = label.lastIndexOf(" +")
         val main = if (split > 0) label.substring(0, split) else label
         val extra = if (split > 0) label.substring(split) else ""
@@ -99,7 +100,9 @@ object StatusBarRenderer {
 
     private fun icon(graphics: GuiGraphicsExtractor, type: BarType, config: BarConfig, x: Int, y: Int, alpha: Double) {
         val sprite = type.sprite
-        if (sprite != null) {
+        // The smallest vanilla orb (8×8 at 4,4 of the 64×64 sheet), greyscale and tinted the way the game tints it.
+        if (type == BarType.EXPERIENCE) graphics.blit(RenderPipelines.GUI_TEXTURED, ORB, x, y, 4f, 4f, 8, 8, 64, 64, argb(config.textColor, alpha))
+        else if (sprite != null) {
             val id = sprites.getOrPut(sprite) { Identifier.withDefaultNamespace(sprite) }
             graphics.blitSprite(RenderPipelines.GUI_TEXTURED, id, x, y, ICON, ICON, argb(0xFFFFFF, alpha))
         } else {

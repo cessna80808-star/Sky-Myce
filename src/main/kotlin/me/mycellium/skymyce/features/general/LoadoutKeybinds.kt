@@ -17,7 +17,6 @@ import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEven
 import tech.thatgravyboat.skyblockapi.api.events.screen.ScreenKeyPressedEvent
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
-import kotlin.collections.iterator
 import kotlin.time.Duration.Companion.seconds
 
 object LoadoutKeybinds : SkyMyceModule() {

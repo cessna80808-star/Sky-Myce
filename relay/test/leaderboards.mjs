@@ -17,7 +17,7 @@ const source = `import {DurableObject} from 'cloudflare:workers';
    this.boards=new CommunityLeaderboards(this.sql,{check:(...x)=>this.sharing.check(...x),record:(...x)=>this.sharing.recordContribution(...x)});
   }
   seed(uuid,name,owner='owner:'+uuid){this.sql.exec('INSERT OR IGNORE INTO sky_accounts VALUES(?,?)',owner,'91'+String(parseInt(uuid.slice(0,4),16)).padStart(15,'0'));this.sql.exec('INSERT OR REPLACE INTO minecraft_accounts VALUES(?,?,?)',uuid,owner,name)}
-  contribution(uuid,id,metric,value,at,complete=true,extra={}){const a=this.sql.exec('SELECT account_id FROM minecraft_accounts WHERE uuid=?',uuid).one();const category=metric.startsWith('dungeon_')?'dungeons':metric==='rng_drops'?'rng':'economy';this.sql.exec('INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',id,extra.owner??a.account_id,uuid,extra.category??category,metric,value,extra.unit??(metric==='dungeon_runs'?'runs':metric==='dungeon_run_time'?'milliseconds':metric==='rng_drops'?'drops':'coins'),at,at,extra.source??'client-observation',extra.verification??'estimated',complete?1:0,0)}
+  contribution(uuid,id,metric,value,at,complete=true,extra={}){const a=this.sql.exec('SELECT account_id FROM minecraft_accounts WHERE uuid=?',uuid).one();const category=metric.startsWith('dungeon_')?'dungeons':metric==='rng_drops'?'rng':'economy';this.sql.exec('INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,extra.owner??a.account_id,uuid,extra.category??category,metric,value,extra.unit??(metric==='dungeon_runs'?'runs':metric==='dungeon_run_time'?'milliseconds':metric==='rng_drops'?'drops':'coins'),at,at,extra.source??'client-observation',extra.verification??'estimated',complete?1:0,0,extra.floor??null)}
   query(raw,now){return this.boards.query(raw,now)}
   message(result){return discordLeaderboardMessage(result)}
   comparison(uuid,raw,now){return this.boards.journalComparison(uuid,raw,now)}
@@ -90,6 +90,16 @@ try {
  const timePage=await store.query({...averageQuery,limit:1,page:2},now);assert.equal(timePage.entries[0].rank,2);assert.equal(timePage.entries[0].value,300001.5);
  const allTimes=await store.query({...averageQuery,period:'all-time'},now);assert.equal(allTimes.entries[0].sampleSize,3);assert.equal(allTimes.entries[0].value,(1000+300001+300002)/3);
  assert.deepEqual((await store.query({category:'dungeons',metric:'dungeon_runs'},now)).entries.map(e=>e.value),[5,5,1],'Timing samples do not change completed-run totals');
+ await store.contribution(a,'e0'.repeat(16),'dungeon_run_time',200000,now-1000,true,{floor:'F7'});
+ await store.contribution(b,'e1'.repeat(16),'dungeon_run_time',400000,now-1000,true,{floor:'M7'});
+ const f7=await store.query({...averageQuery,floor:'F7'},now);
+ assert.equal(f7.floor,'F7');assert.match(f7.description,/timed F7 runs/);assert.deepEqual(f7.entries.map(e=>[e.rank,e.player,e.value,e.sampleSize]),[[1,'ExampleOne',200000,1]],'A floor board ranks only that floor');
+ assert.deepEqual((await store.query({...averageQuery,floor:'M7'},now)).entries.map(e=>[e.player,e.value]),[['ExampleTwo',400000]]);
+ assert.equal((await store.query({...averageQuery,floor:'M1'},now)).total,0,'Legacy rows without a floor never enter a floor board');
+ const allFloors=await store.query(averageQuery,now);
+ assert.ok(!Object.hasOwn(allFloors,'floor'));assert.match(allFloors.description,/across all floors/);assert.equal(allFloors.entries.find(e=>e.player==='ExampleOne').sampleSize,3,'Omitting floor keeps the all-floors average, including floor-tagged runs');
+ for(const invalid of[{...averageQuery,floor:'F8'},{...averageQuery,floor:'f7'},{...averageQuery,floor:''},{...averageQuery,floor:7},{category:'dungeons',metric:'dungeon_runs',floor:'F7'},{category:'dungeons',floor:'F7'},{category:'economy',metric:'bazaar_profit',floor:'F7'}])
+  assert.equal((await store.query(invalid,now)).error,'invalid_leaderboard');
  await store.contribution(a,'6'.repeat(32),'networth',100,month-1);await store.contribution(a,'7'.repeat(32),'networth',90,now-2000);await store.contribution(a,'8'.repeat(32),'networth',80,now-1000);
  const snapshot=await store.query({category:'economy',metric:'networth',period:'monthly'});assert.equal(snapshot.entries[0].value,80);assert.equal(snapshot.entries[0].sampleSize,1);assert.match(snapshot.description,/not net-worth gain/);
  assert.equal((await store.query({category:'other',metric:'completed_tasks'})).available,false);
@@ -148,6 +158,8 @@ try {
  for(const receipts of[null,{},[{id:confirmedId,messageId:123}],[{id:confirmedId,messageId:Number(confirmedMessage)}],Array(2).fill({id:confirmedId,messageId:confirmedMessage}),Array(33).fill({id:confirmedId,messageId:confirmedMessage}),[{id:confirmedId,messageId:confirmedMessage,privateUuid:c}]])assert.equal((await request({action:'claim',receipts})).response.status,400);
  const denied=await mf.dispatchFetch('https://fixture.example/community/leaderboard');assert.equal(denied.status,401);
  const http=await mf.dispatchFetch('https://fixture.example/community/leaderboard?category=economy&metric=networth',{headers:{Authorization:'Bearer '+'t'.repeat(43)}});assert.equal(http.status,200);assert.equal((await http.json()).entries[0].value,80);
+ const floorHttp=await mf.dispatchFetch('https://fixture.example/community/leaderboard?category=dungeons&metric=dungeon_run_time&floor=M7',{headers:{Authorization:'Bearer '+'t'.repeat(43)}});assert.equal(floorHttp.status,200);assert.equal((await floorHttp.json()).floor,'M7');
+ assert.equal((await mf.dispatchFetch('https://fixture.example/community/leaderboard?category=dungeons&metric=dungeon_run_time&floor=M9',{headers:{Authorization:'Bearer '+'t'.repeat(43)}})).status,400);
 
  // Both projections use the same persisted RNG dataset, UTC window and current/ledger-owner privacy rules.
  const comparisonStore=(await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('comparison');
@@ -191,7 +203,7 @@ try {
  for(const [access,uuid,expires,revoked]of[[firstToken,firstPlayer,authNow+600000,null],[siblingToken,siblingPlayer,authNow+600000,null],[revokedToken,firstPlayer,authNow+600000,authNow],[expiredToken,firstPlayer,authNow-1,null]]){
   await authSql.exec('INSERT INTO community_sessions(session_id,account_id,uuid,generation,refresh_hash,refresh_expires_at,access_hash,access_expires_at,created_at,last_seen,revoked_at,mod_version)VALUES(?,?,?,0,?,?,?,?,?,?,?,?)',hash(access).slice(0,32),owner,uuid,hash('refresh:'+access),authNow+86400000,hash(access),expires,authNow,authNow,revoked,'synthetic-test');
  }
- for(const [uuid,count]of[[firstPlayer,2],[siblingPlayer,1]])for(let i=0;i<count;i++)await authSql.exec('INSERT INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(500+reportId++).toString(16).padStart(32,'0'),owner,uuid,'rng','rng_drops',1,'drops',authNow-1000,authNow-1000,'client-observation','unverified',1,0);
+ for(const [uuid,count]of[[firstPlayer,2],[siblingPlayer,1]])for(let i=0;i<count;i++)await authSql.exec('INSERT INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)',(500+reportId++).toString(16).padStart(32,'0'),owner,uuid,'rng','rng_drops',1,'drops',authNow-1000,authNow-1000,'client-observation','unverified',1,0);
  const getComparison=async(token=firstToken,query='')=>{const response=await mf.dispatchFetch('https://fixture.example/community/journal-comparison'+query,{headers:token?{Authorization:'Bearer '+token}:{}});return{status:response.status,cache:response.headers.get('Cache-Control'),body:await response.json()}};
  const actual=await getComparison();assert.equal(actual.status,200);assert.equal(actual.cache,'no-store');assert.equal(actual.body.participantCount,2);assert.equal(actual.body.totalDrops,3);assert.equal(actual.body.meanPerIdentity,1.5);assert.equal(actual.body.ownSharedCount,2);
  assert.equal((await getComparison(siblingToken)).body.ownSharedCount,1,'Multiple MC identities on one Discord account remain distinct');
@@ -305,7 +317,7 @@ try {
   const r=await recovery('budget-'+existing),accepted=r.acceptedAt+10000;
   await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_rng_sources SELECT ?,printf('%032x',1000+x),printf('%032x',2000+x),? FROM n",r.uuid,accepted);
   await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_rng_delivery SELECT printf('%032x',2000+x),?,json_set(?,'$.id',printf('%032x',2000+x),'$.occurredAt',?),?,0,0,NULL,0,?,'96000000000000002',0 FROM n",r.uuid,JSON.stringify(r.event),accepted-1000,accepted,channel);
-  if(existing)await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_contributions SELECT printf('%032x',1000+x),?,?,'rng','rng_drops',1,'drops',?,?, 'client-observation','unverified',1,0 FROM n",r.owner,r.uuid,accepted-1000,accepted);
+  if(existing)await r.sql.exec("WITH RECURSIVE n(x) AS(SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO community_contributions SELECT printf('%032x',1000+x),?,?,'rng','rng_drops',1,'drops',?,?, 'client-observation','unverified',1,0,NULL FROM n",r.owner,r.uuid,accepted-1000,accepted);
   const unchanged=await r.retained();await r.query();
   assert.equal(await r.count(),existing?101:100,existing?'Already-counted newer reports do not starve the older missing row':'Each read repairs at most 100 missing rows');
   assert.equal((await r.sql.exec('SELECT id FROM community_contributions WHERE uuid=? AND id=?',r.uuid,r.sourceId)).length,existing?1:0,'The bounded repair visits newest missing rows first');

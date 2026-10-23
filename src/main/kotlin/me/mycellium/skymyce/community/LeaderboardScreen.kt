@@ -9,6 +9,7 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.MAX_DUNGEON_RUN_
 import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
+import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -48,8 +49,9 @@ internal fun leaderboardCategoryMetrics(category: String) = when (category) {
 }
 internal val leaderboardPeriods = linkedMapOf("all-time" to "All time", "weekly" to "This week • UTC", "monthly" to "This month • UTC")
 
-internal fun leaderboardRequestPath(category: String, metric: String, period: String, page: Int, query: String): String =
-    "/community/leaderboard?category=$category&metric=$metric&period=$period&page=$page&limit=10&search=${URLEncoder.encode(query, StandardCharsets.UTF_8)}"
+internal fun leaderboardRequestPath(category: String, metric: String, period: String, page: Int, query: String, floor: String? = null): String =
+    "/community/leaderboard?category=$category&metric=$metric&period=$period&page=$page&limit=10&search=${URLEncoder.encode(query, StandardCharsets.UTF_8)}" +
+        (floor?.let { "&floor=$it" } ?: "")
 
 internal fun formatLeaderboardValue(value: Double, unit: String): String {
     if (unit != "milliseconds") return "${java.text.NumberFormat.getNumberInstance(java.util.Locale.ROOT).format(value)} $unit"
@@ -66,6 +68,7 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
     private var metric = initialMetric.takeIf { it in metrics } ?: "dungeon_runs"
     private var category = listOf("dungeons", "rng", "other").first { metric in leaderboardCategoryMetrics(it) }
     private var period = "all-time"
+    private var floor: String? = null
     private var page = 1
     private var query = ""
     private var nextQuery = 0L
@@ -78,10 +81,13 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
     private lateinit var rows: FlowLayout
     private lateinit var metricButton: MenuButton
     private lateinit var periodButton: MenuButton
+    private lateinit var floorButton: MenuButton
+    private lateinit var controls: FlowLayout
     private companion object {
         val worker = LatestCommunityRequestWorker(Executors.newSingleThreadExecutor {
             Thread(it, "Sky-Myce leaderboards").apply { isDaemon = true }
         })
+        val utcFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC)
     }
     override fun init() { closed = false; super.init() }
     override fun buildContent(root: FlowLayout) {
@@ -93,10 +99,13 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
                 child(button(title) { category = id; metric = leaderboardCategoryMetrics(category).first(); page = 1; updateControls(); request() }.apply { horizontalSizing(Sizing.fill(32)); selected = { category == id } })
             }
         })
-        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply {
+        controls = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content())
+        root.child(controls.apply {
             gap(6)
             metricButton = button(metrics[metric]!!) { openMenuDropdown(metricButton) { popup -> leaderboardCategoryMetrics(category).forEach { id -> popup.button(Component.literal(metrics[id]!!)) { metric = id; page = 1; updateControls(); request() } } } }.apply { horizontalSizing(Sizing.fill(35)) }; child(metricButton)
             periodButton = button(leaderboardPeriods.getValue(period)) { openMenuDropdown(periodButton) { popup -> leaderboardPeriods.forEach { (id, title) -> popup.button(Component.literal(title)) { period = id; periodButton.message = Component.literal(title); page = 1; request() } } } }.apply { horizontalSizing(Sizing.fill(35)) }; child(periodButton)
+            floorButton = button("All floors") { openMenuDropdown(floorButton) { popup -> (listOf<String?>(null) + DungeonFloor.entries.map { it.name }).forEach { id -> popup.button(Component.literal(id ?: "All floors")) { floor = id; page = 1; updateControls(); request() } } } }
+                .apply { horizontalSizing(Sizing.fill(18)); tooltip(Component.literal("Average Run Time floor")) }
             child(button("Refresh") { request() }.horizontalSizing(Sizing.fixed(85)))
         })
         updateControls()
@@ -120,6 +129,11 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
         metricButton.message = Component.literal(metrics.getValue(metric))
         periodButton.message = Component.literal(leaderboardPeriods.getValue(period))
         periodButton.tooltip(Component.literal("Calendar periods use UTC"))
+        // Only the average run time board is split by floor; the others keep the wider two-dropdown row.
+        val timed = metric == "dungeon_run_time"
+        metricButton.horizontalSizing(Sizing.fill(if (timed) 26 else 35)); periodButton.horizontalSizing(Sizing.fill(if (timed) 26 else 35))
+        floorButton.message = Component.literal(floor ?: "All floors")
+        if (timed && floorButton.parent() == null) controls.child(2, floorButton) else if (!timed && floorButton.parent() != null) controls.removeChild(floorButton)
     }
     override fun tick() {
         super.tick(); if (menuClosing) return
@@ -139,8 +153,10 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
             status = "Reconnect the selected Minecraft account to view its community rankings."; paint(); return
         }
         val current = ++epoch; val ownerGeneration = CommunityClient.sessionGeneration
-        val path = leaderboardRequestPath(category, metric, period, page, query)
-        busy = true; result = null; status = "Loading ${metrics[metric]}…"; paint()
+        val selectedFloor = floor.takeIf { metric == "dungeon_run_time" }
+        val path = leaderboardRequestPath(category, metric, period, page, query, selectedFloor)
+        val floorSuffix = selectedFloor?.let { " • $it" } ?: ""
+        busy = true; result = null; status = "Loading ${metrics[metric]}$floorSuffix…"; paint()
         fun currentOwner() = !closed && CommunityClient.connected && current == epoch && token == CommunityClient.sessionToken &&
             minecraftOwner == MC.instance.user.profileId.toString().replace("-", "") &&
             ownerGeneration == CommunityClient.sessionGeneration && identity == CommunityClient.identity
@@ -148,7 +164,7 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
             MC.instance.execute {
                 if (!currentOwner() || menuClosing) return@execute
                 busy = false
-                loaded.fold({ result = it; status = "${it.label} • page $page • ${it.total} participants" }, { status = "Rankings unavailable. Refresh after reconnecting; local features keep working." })
+                loaded.fold({ result = it; status = "${it.label}$floorSuffix • page $page • ${it.total} participants" }, { status = "Rankings unavailable. Refresh after reconnecting; local features keep working." })
                 paint()
             }
         }
@@ -169,7 +185,7 @@ class LeaderboardScreen @JvmOverloads constructor(initialMetric: String = "dunge
         }); rows.child(label("${entry.samples} samples • ${utc(entry.updatedAt)}", MenuTheme.MUTED)) }
         rows.child(label("Source: ${data.source}", MenuTheme.MUTED)); rows.child(label(data.coverage, MenuTheme.MUTED))
     }
-    private fun utc(time: Long) = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC).format(Instant.ofEpochMilli(time))
+    private fun utc(time: Long) = utcFormat.format(Instant.ofEpochMilli(time))
     override fun removed() { closed = true; epoch++; worker.cancel(this); busy = false; nextQuery = 0; super.removed() }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
     private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }

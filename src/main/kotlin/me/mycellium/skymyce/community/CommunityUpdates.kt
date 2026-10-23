@@ -25,11 +25,9 @@ object CommunityUpdates {
     var autoUpdate = false; private set
     var status = "Updates are checked without interrupting gameplay"; private set
     val releaseNotes get() = available?.notes ?: ""
-    val availableVersion get() = available?.version
     val canCheck get() = !busy && plan == null
     val canInstall get() = available != null && !busy && plan == null
     val canDefer get() = available != null && !restarting
-    val staged get() = plan != null
     val canRestart get() = !busy && !restarting && runCatching { FabricLauncherBase.getLauncher().classPath.isNotEmpty() }.getOrDefault(false)
     val canChangePreferences get() = !restarting
     private var available: CommunityRelease? = null

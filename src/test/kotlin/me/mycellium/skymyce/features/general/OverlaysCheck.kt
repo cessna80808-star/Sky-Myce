@@ -23,6 +23,8 @@ private fun checkLayout() {
     // Health and mana share the row above the hotbar: together exactly the hotbar's 182 pixels with a gap.
     check(health.x == W / 2 - 91 && health.y == mana.y && mana.right == W / 2 + 91 && mana.x == health.right + BAR_GAP) { "$health $mana" }
     check(health.bottom == H - 35) { "Rows stack up from above the experience bar" }
+    val experience = rects.getValue(BarType.EXPERIENCE)
+    check(experience.x == health.x && experience.width == 182 && experience.bottom == health.y - BAR_GAP) { "Experience spans the row above: $experience" }
     // Defense and speed stack right of the hotbar, vitality and respiration left of it, bottom up.
     val defense = rects.getValue(BarType.DEFENSE); val speed = rects.getValue(BarType.SPEED)
     check(defense.x == W / 2 + 95 && speed.x == defense.x && speed.bottom == defense.y - BAR_GAP)
@@ -31,7 +33,7 @@ private fun checkLayout() {
 
     // Inserting beside health splits the target row in three, still 12 units.
     val three = layout.detach(BarType.SPEED).insert(BarType.SPEED, BarAnchor.HOTBAR_TOP, 0, 1, newRow = false)
-    val row = three.bars.filter { it.anchor == BarAnchor.HOTBAR_TOP.id }.sortedBy { it.slot }
+    val row = three.bars.filter { it.anchor == BarAnchor.HOTBAR_TOP.id && it.row == 0 }.sortedBy { it.slot }
     check(row.map { it.type } == listOf("health", "speed", "mana") && row.sumOf { it.size } == 12) { row.toString() }
     check(three.bar(BarType.DEFENSE).row == 0) { "Speed's old row closes up" }
     // A new row above health pushes nothing below it; a new row at 0 pushes the old row up.
@@ -89,12 +91,26 @@ private fun checkReadings() {
     check(speedMax(300) == 400 && speedMax(450) == 500 && defenseFill(100) == 0.5 && defenseFill(-5) == 0.0)
     check(parsePair("§c1,200/1,500♨") == 1200 to 1500 && parsePair("nothing") == null)
     check(effectiveHealth(1000, 100) == 2000.0 && statusNumber(1_234_567) == "1,234,567")
+    // Every combination of maximum, split extra and separators.
+    val formats = mapOf(
+        BarFormat() to "4,800", BarFormat(showMax = true) to "4,800/4,800",
+        BarFormat(split = true) to "4,425 +375", BarFormat(showMax = true, split = true) to "4,425/4,425 +375",
+        BarFormat(commas = false) to "4800", BarFormat(showMax = true, commas = false) to "4800/4800",
+        BarFormat(split = true, commas = false) to "4425 +375", BarFormat(showMax = true, split = true, commas = false) to "4425/4425 +375",
+    )
+    for ((format, expected) in formats) check(format.numbers(4425, 4425, 375) == expected) { "$format: ${format.numbers(4425, 4425, 375)}" }
+    check(BarFormat(showMax = true, split = true).numbers(900, 1000, 0) == "900/1,000" && BarFormat(showMax = true).numbers(900, null, 50) == "950") { "No extra, no maximum" }
     val health = StatusBarLayout.defaultBar(BarType.HEALTH)
-    check(barLabel(BarType.HEALTH, health, 1834, 2140, 220) == "1,834 +220" && barLabel(BarType.HEALTH, health.copy(showMax = true), 1834, 2140, 220) == "1,834/2,140 +220")
-    check(barLabel(BarType.HEALTH, health.copy(showMax = false, showOverflow = false), 1834, 2140, 220) == "1,834")
+    check(barLabel(BarType.HEALTH, health, BarFormat(), 1834, 2140, 220) == "2,054" && barLabel(BarType.HEALTH, health, BarFormat(split = true), 1834, 2140, 220) == "1,834 +220")
+    check(barLabel(BarType.HEALTH, health.copy(showOverflow = false), BarFormat(showMax = true, split = true), 1834, 2140, 220) == "1,834/2,140") { "Absorption off: no extra" }
+    check(barLabel(BarType.SPEED, StatusBarLayout.defaultBar(BarType.SPEED), BarFormat(showMax = true, commas = false), 312, 400, 0) == "312/400")
     val defense = StatusBarLayout.defaultBar(BarType.DEFENSE)
-    check(barLabel(BarType.DEFENSE, defense, 612, 0, 0, 1000) == "612" && barLabel(BarType.DEFENSE, defense.copy(extra = true), 100, 0, 0, 1000).endsWith("EHP"))
-    check(barLabel(BarType.RESPIRATION, StatusBarLayout.defaultBar(BarType.RESPIRATION), 150, 300, 0) == "50%")
+    check(barLabel(BarType.DEFENSE, defense, BarFormat(showMax = true), 612, 0, 0, 1000) == "612" && barLabel(BarType.DEFENSE, defense.copy(extra = true), BarFormat(), 100, 0, 0, 1000).endsWith("EHP"))
+    check(barLabel(BarType.DEFENSE, defense, BarFormat(commas = false), 1612, 0, 0) == "1612")
+    check(barLabel(BarType.RESPIRATION, StatusBarLayout.defaultBar(BarType.RESPIRATION), BarFormat(), 150, 300, 0) == "50%")
+    // Experience shows the level alone: never a maximum or an extra.
+    val experience = StatusBarLayout.defaultBar(BarType.EXPERIENCE)
+    check(barLabel(BarType.EXPERIENCE, experience, BarFormat(showMax = true, split = true), 662, 0, 40) == "662" && barLabel(BarType.EXPERIENCE, experience, BarFormat(), 0, 0, 0) == "0")
 }
 
 private fun checkMotion() {

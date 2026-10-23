@@ -77,7 +77,6 @@ public final class SecondaryWorldCamera {
     private SecondaryWorldCamera() { }
 
     public static Status status() { return crush.status(); }
-    public static CameraDiagnostics.Snapshot diagnostics() { return crush.diagnostics(); }
 
     /** Four reusable, independently owned low-resolution POVs; their worlds and immutable assets are shared. */
     public static Feed createFeed() {
@@ -155,16 +154,19 @@ public final class SecondaryWorldCamera {
         crush.requested = false;
         scheduledFeed = null;
         long now = System.nanoTime();
+        int requested = 0;
         for (int offset = 0; offset < feeds.size(); offset++) {
             int index = (nextFeed + offset) % feeds.size();
             Feed feed = feeds.get(index);
-            if (scheduledFeed == null && feed.requested && now >= feed.nextFrame && now >= feed.retryAfter) {
+            if (!feed.requested) continue;
+            requested++;
+            feed.requested = false;
+            if (scheduledFeed == null && now >= feed.nextFrame && now >= feed.retryAfter) {
                 scheduledFeed = feed;
                 nextFeed = (index + 1) % feeds.size();
             }
         }
-        activeFeeds = Math.max(1, (int) feeds.stream().filter(feed -> feed.requested).count());
-        feeds.forEach(feed -> feed.requested = false);
+        activeFeeds = Math.max(1, requested);
     }
 
     public static void extract(GuiGraphicsExtractor graphics, View view, int x, int y, int width, int height, float opacity) {
@@ -179,9 +181,6 @@ public final class SecondaryWorldCamera {
         int[] size = CameraMath.targetSize(width, height, guiScale);
         crush.prewarm(view, size[0], size[1]);
     }
-
-    /** Whether the crush pipeline is built (warm or in use). */
-    public static boolean warm() { return crush.pipeline != null; }
 
     /** How long an unused pipeline is kept for reuse (leaps come every few seconds in a boss). */
     static final long IDLE_RETIRE_NANOS = 20_000_000_000L;

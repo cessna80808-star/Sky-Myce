@@ -1,9 +1,7 @@
 package me.mycellium.skymyce.hud
 
 import io.wispforest.owo.ui.component.ButtonComponent
-import io.wispforest.owo.ui.component.SliderComponent
 import io.wispforest.owo.ui.core.Surface
-import io.wispforest.owo.ui.core.Sizing
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import net.minecraft.client.gui.GuiGraphicsExtractor
 
@@ -30,7 +28,6 @@ object HudTheme {
     val SHADOW get() = base.shadow
     val BORDERS get() = base.borders
     val STYLE get() = base.style
-    val PURPLE get() = SECONDARY
 
     fun alpha(rgb: Int, percent: Int = OPACITY) = (percent.coerceIn(0, 100) * 255 / 100 shl 24) or (rgb and 0xFFFFFF)
     fun blend(a: Int, b: Int, weight: Int): Int {
@@ -76,22 +73,11 @@ object HudTheme {
             }
         }
     }
-    fun tintedPanel(color: () -> Int): Surface = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(color())) }
-    val backdrop = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(blend(PANEL, 0, 35), 55)) }
     val buttonRenderer = ButtonComponent.Renderer { g, b, _ ->
         val hover = b.isHovered || b.isFocused
         rounded(g, b.x, b.y, b.width, b.height, alpha(blend(CARD, if (b.isFocused) SECONDARY else ACCENT,
             if (!b.active) 2 else if (hover) STYLE.hoverWeight else 5)))
         if (b.isFocused) g.outline(b.x, b.y, b.width, b.height, alpha(ACCENT, 100))
-    }
-}
-
-/** The existing slider retains keyboard/mouse behavior; only its background and thumb change. */
-class ThemeSlider : SliderComponent(Sizing.fill()) {
-    override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
-        HudTheme.rounded(g, x, y, width, height, HudTheme.alpha(HudTheme.CARD))
-        val thumb = (x + value() * (width - 8)).toInt()
-        HudTheme.rounded(g, thumb, y + 2, 8, height - 4, HudTheme.alpha(HudTheme.ACCENT))
     }
 }
 

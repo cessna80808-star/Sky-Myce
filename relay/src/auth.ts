@@ -8,11 +8,13 @@ function decode(value: unknown, max: number): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(value), c => c.charCodeAt(0));
 }
 
+const trustRoots = new Map<string, Promise<CryptoKey>>(); // Bounded by the bundled key set.
 async function signedBy(keys: { publicKey: string }[], signature: Uint8Array, data: Uint8Array): Promise<boolean> {
   for (const entry of keys) {
-    const key = await crypto.subtle.importKey("spki", decode(entry.publicKey, 4096),
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-1" }, false, ["verify"]);
-    if (await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, data)) return true;
+    let key = trustRoots.get(entry.publicKey);
+    if (!key) trustRoots.set(entry.publicKey, key = crypto.subtle.importKey("spki", decode(entry.publicKey, 4096),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-1" }, false, ["verify"]));
+    if (await crypto.subtle.verify("RSASSA-PKCS1-v1_5", await key, signature, data)) return true;
   }
   return false;
 }

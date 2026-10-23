@@ -45,14 +45,11 @@ object LoaderClient {
     private val generation get() = authorization.generation
     private var showAuthorization = true
     private var checkedPayload = false
-    private var lastAllowed = false
-    private val observers = mutableListOf<(Boolean) -> Unit>()
     var status = "Checking your Sky-Myce installation…"
         private set
     val localAllowed get() = checkedPayload && authorization.localAllowed
     val onlineAllowed get() = checkedPayload && authorization.onlineAllowed
     val hasPayload get() = FabricLoader.getInstance().isModLoaded("skymyce")
-    fun observe(handler: (Boolean) -> Unit) { observers += handler; handler(localAllowed) }
     fun initialize() {
         if (initialized) return
         initialized = true
@@ -83,8 +80,6 @@ object LoaderClient {
         val minecraft = Minecraft.getInstance()
         val current = compactProfile.of(minecraft.user.profileId)
         if (uuid != current) { busy = false; uuid = current; authorization.deny(); checkedPayload = false; nextAttempt = 0; showAuthorization = true }
-        val allowed = localAllowed
-        if (lastAllowed != allowed) { lastAllowed = allowed; observers.toList().forEach { it(allowed) } }
         if (showAuthorization && minecraft.screen is TitleScreen && !busy && !localAllowed) { showAuthorization = false; minecraft.setScreen(AuthorizationScreen()) }
         if (localAllowed) showAuthorization = false
         if (!busy && ::installation.isInitialized && System.nanoTime() >= nextAttempt) renew()
@@ -155,17 +150,11 @@ object LoaderClient {
             if (!checkedPayload && downloadedVersion != version) downloadUpdate()
         }
     }
-    fun relayAuthorization(nonce: String): Map<String, String> {
-        check(onlineAllowed)
-        val lease = authorization.lease ?: error("Authorization required")
-        return mapOf("lease" to lease, "installationSignature" to installation.sign("Sky-Myce relay v3\n$nonce\n$lease"))
-    }
     fun deny(revoked: Boolean = false, code: String? = null) {
         busy = false
         authorization.deny()
         nextAttempt = Long.MAX_VALUE
         status = code?.let(::accountAccessError) ?: ((if (revoked) "Your Sky-Myce license has been revoked. " else "") + "Sky-Myce has been disabled. Please contact the Sky-Myce owners if you believe this was a mistake.")
-        observers.toList().forEach { it(false) }; lastAllowed = false
         val minecraft = Minecraft.getInstance()
         minecraft.setScreen(AuthorizationScreen())
     }

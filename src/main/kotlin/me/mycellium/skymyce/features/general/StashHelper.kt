@@ -6,7 +6,6 @@ import me.mycellium.skymyce.config.misc.StashHelperConfig
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.inventory.Slot
-import org.lwjgl.glfw.GLFW
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEvent
 import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerCloseEvent
@@ -34,9 +33,9 @@ object StashHelper : SkyMyceModule() {
 
         worthlessItems = mutableSetOf()
         for (slot in event.containerSlots) {
-            if (slot.container is Inventory) return
-            val id = slot.item.getSkyBlockId() ?: return
-            val count = materialRegex.find(slot.item.hoverName.stripped)?.groupValues[2]?.toInt() ?: 1
+            if (slot.container is Inventory) continue
+            val id = slot.item.getSkyBlockId() ?: continue
+            val count = materialRegex.find(slot.item.hoverName.stripped)?.groupValues[2]?.toIntOrNull() ?: 1
             val value = Pricing.getPrice(id.bazaarId)
             if ((value * count) < (StashHelperConfig.stashValueThreshold * 1_000_000)) {
                 worthlessItems?.add(slot)

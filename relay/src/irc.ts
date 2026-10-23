@@ -1,7 +1,7 @@
 import type { AccountStore } from "./accounts";
 import type { RelayRoom } from "./index";
 import { IrcLifecycle, IRC_MANAGEMENT_MS, ircMedia, ircMediaKey, ircMentionNames, ircOperation, ircPlainText, ircPreview, ircTextDigest,
-  type IrcMedia, type IrcPublicSender, type IrcReply, type IrcRecord, type IrcOperation, type IrcUpdate } from "./irc-model";
+  type IrcMedia, type IrcPublicSender, type IrcReply, type IrcRecord, type IrcUpdate } from "./irc-model";
 
 export type IrcConfig = {
   ACCOUNT_STORE: DurableObjectNamespace<AccountStore>;
@@ -77,8 +77,6 @@ const bounded = (value: string | undefined, fallback: number, minimum: number, m
   return value !== undefined && Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
 };
 const unsafeText = /[\x00-\x09\x0b-\x1f\x7f-\x9f\u00a7\u202a-\u202e\u2066-\u2069]/;
-const validGlobalText = (value: unknown, maximum: number): value is string => typeof value === "string" &&
-  value.trim().length > 0 && value.length <= maximum && value.isWellFormed() && !unsafeText.test(value);
 const unicodeSlice = (value: string, maximum: number): string => {
   const sliced = value.toWellFormed().slice(0, maximum);
   return sliced.isWellFormed() ? sliced : sliced.slice(0, -1);
@@ -343,7 +341,7 @@ export class RoomIrc {
     if (!session.partySubscribed || !session.partyId || (session.partyConsentExpiresAt ?? 0) <= Date.now()) { result({ ok: false, error: "not_subscribed" }); return; }
     if (data.room !== session.partyId) { result({ ok: false, error: "invalid_route" }); return; }
     if (data.type === "irc_send") {
-      if (!validGlobalText(data.text, 1024) || data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result({ ok: false, error: "invalid_message" }); return; }
+      if (!ircPlainText(data.text, 1024) || data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result({ ok: false, error: "invalid_message" }); return; }
       result(await coordinator.partyChatMinecraft(this.partyIdentity(session), session.partyId, { id: data.id, text: data.text,
         ...(data.replyTo ? { replyTo: data.replyTo as string } : {}) }));
     } else if (data.type === "irc_operation") result(await coordinator.partyChatOperation(this.partyIdentity(session), session.partyId, data));
@@ -380,7 +378,7 @@ export class RoomIrc {
       sender.uuid, sender.room, sender.connectionId, partyId, sender.revision, Date.now()).toArray().length === 1;
   }
   async partyMinecraft(sender: PartyChatIdentity, partyId: string, input: GlobalChatSend): Promise<GlobalChatResult> {
-    if (!packetId.test(input.id) || !validGlobalText(input.text, 1024) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
+    if (!packetId.test(input.id) || !ircPlainText(input.text, 1024) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
     if (!await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
     const identity = await this.publicSender(sender), bodyDigest = await ircTextDigest(input.text);
     if (!await this.partyAuthorized(sender, partyId)) return { ok: false, error: "not_authorized" };
@@ -429,10 +427,9 @@ export class RoomIrc {
   /** Binding-only coordinator RPC; the original authenticated socket supplies this identity. */
   async globalMinecraft(sender: GlobalChatSender, input: GlobalChatSend): Promise<GlobalChatResult> {
     if (!this.coordinator() || !globalChatChannel(this.env)) return { ok: false, error: "not_configured" };
-    if (!packetId.test(input.id) || !validGlobalText(input.text, this.textLimit(false)) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
+    if (!packetId.test(input.id) || !ircPlainText(input.text, this.textLimit(false)) || input.replyTo !== undefined && !packetId.test(input.replyTo)) return { ok: false, error: "invalid_message" };
     if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
-    const identity = await this.publicSender(sender);
-    const mentions = await this.env.ACCOUNT_STORE.getByName("global").resolveIrcMentions(input.text);
+    const [identity, mentions] = await Promise.all([this.publicSender(sender), this.env.ACCOUNT_STORE.getByName("global").resolveIrcMentions(input.text)]);
     if (!await this.validSender(sender)) return { ok: false, error: "not_authorized" };
     return this.enqueue(`mc:${sender.accountId}`, input.id, { source: "minecraft", from: sender.name!, text: input.text,
       discordId: sender.discordId!, uuid: sender.uuid, mentions, sender, identity, media: ircMedia(input.text)!,
@@ -450,7 +447,7 @@ export class RoomIrc {
       if (data.type === "discord_operation_result") { this.failedOperation(data); return; }
       if (data.type === "discord_operation") { const outcome = await this.operation(session, data, "global"); result(outcome.error); return; }
       if (data.type !== "discord_message" || data.source !== "discord" || typeof data.id !== "string" || !snowflake.test(data.id) || data.message_id !== data.id ||
-          typeof data.discordId !== "string" || !snowflake.test(data.discordId) || !validGlobalText(data.text, this.textLimit(true))) { result("invalid_message"); return; }
+          typeof data.discordId !== "string" || !snowflake.test(data.discordId) || !ircPlainText(data.text, this.textLimit(true))) { result("invalid_message"); return; }
       if (data.part !== undefined && data.part !== "embeds") { result("invalid_part"); return; }
       const media = ircMedia(data.text, data.media);
       if (!media) { result("invalid_media"); return; }
@@ -496,7 +493,7 @@ export class RoomIrc {
         const receipt = this.ctx.storage.sql.exec<{ from_name: string }>("SELECT from_name FROM global_chat_receipts WHERE message_id=? AND expires>?", candidate.message_id, Date.now()).toArray()[0];
         const canonical = this.lifecycle.fromDiscord(candidate.message_id);
         reply = canonical ? { ...this.lifecycle.reply(canonical.id), message_id: candidate.message_id }
-          : { ...this.discordReply(candidate)!, message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
+          : { discordMessageId: candidate.message_id, message_id: candidate.message_id, from: receipt?.from_name ?? displayName(candidate.from), text: typeof candidate.text === "string" ? candidate.text : "" };
       }
       const outcome = await this.enqueue(`dc:${data.discordId}`, data.id, { source: "discord", from: displayName(data.from), text: data.text,
         discordId: data.discordId, identity: { name: displayName(data.from), discordId: data.discordId }, media,
@@ -512,7 +509,7 @@ export class RoomIrc {
       const outcome = await this.env.RELAY_ROOMS.getByName(GLOBAL_CHAT_ROOM).globalChatOperation(this.sender(session), data);
       result(outcome.error); return;
     }
-    if (data.type !== "irc_send" || !validGlobalText(data.text, this.textLimit(false))) { result("invalid_message"); return; }
+    if (data.type !== "irc_send" || !ircPlainText(data.text, this.textLimit(false))) { result("invalid_message"); return; }
     if (!session.globalChatSubscribed) { result("not_subscribed"); return; }
     if (data.replyTo !== undefined && (typeof data.replyTo !== "string" || !packetId.test(data.replyTo))) { result("invalid_reply"); return; }
     const outcome = await this.env.RELAY_ROOMS.getByName(GLOBAL_CHAT_ROOM).globalChatMinecraft(this.sender(session), { id: data.id, text: data.text, ...(data.replyTo ? { replyTo: data.replyTo as string } : {}) });
@@ -530,8 +527,7 @@ export class RoomIrc {
   }
 
   private async enqueue(actor: string, sourceId: string, input: Omit<GlobalChatMessage, "id" | "timestamp" | "expiresAt">): Promise<GlobalChatResult> {
-    const bodyDigest = await ircTextDigest(input.text);
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(input.text.trim().replace(/\s+/g, " "))))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    const [bodyDigest, digest] = await Promise.all([ircTextDigest(input.text), ircTextDigest(input.text.trim().replace(/\s+/g, " "))]);
     const now = Date.now(), sql = this.ctx.storage.sql;
     const outcome = this.ctx.storage.transactionSync((): GlobalChatResult => {
       this.prune(now);
@@ -705,11 +701,6 @@ export class RoomIrc {
         ...(input.operation === "reaction" ? { emoji: input.emoji, active: this.lifecycle.minecraftReacted(latest.id, input.emoji!) } : {}),
         timestamp: now, expiresAt: now + 120_000, authorization: this.sender(session) };
       this.ctx.storage.sql.exec("INSERT INTO irc_operation_outbox VALUES(?,?,?,0,?)", input.id, JSON.stringify(packet), now, now + 120_000);
-      // An edit before initial delivery updates its existing transient outbox, rather than publishing an outdated body.
-      if (scope === "global" && input.operation === "edit") {
-        const queued = this.ctx.storage.sql.exec<{ packet: string }>("SELECT packet FROM global_chat_messages WHERE id=?", latest.id).toArray()[0];
-        if (queued) this.ctx.storage.sql.exec("UPDATE global_chat_messages SET packet=? WHERE id=?", JSON.stringify({ ...JSON.parse(queued.packet), text: input.text, media: input.media, revision: latest.revision }), latest.id);
-      }
     });
     if (outcome.error) return { ok: false, error: outcome.error };
     if (outcome.update) {
@@ -728,6 +719,7 @@ export class RoomIrc {
       return;
     }
     if (update.operation !== "edit") return;
+    // An edit before initial delivery updates its existing transient outbox, rather than publishing an outdated body.
     const queued = this.ctx.storage.sql.exec<{ packet: string }>("SELECT packet FROM global_chat_messages WHERE id=?", record.id).toArray()[0];
     if (queued) this.ctx.storage.sql.exec("UPDATE global_chat_messages SET packet=? WHERE id=?",
       JSON.stringify({ ...JSON.parse(queued.packet), ...(update.text !== undefined ? { text: update.text, mentions: [] } : {}), media: record.media, revision: record.revision }), record.id);

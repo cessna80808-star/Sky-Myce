@@ -163,9 +163,9 @@ object StarredClearRouting : SkyMyceModule() {
     override fun init() {
         reload()
         RoomTemplateRecorder.init()
-        ClientTickEvents.END_CLIENT_TICK.register { me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.ROUTING_TICK) { guardedTick() } }
-        ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, false) } }
-        ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, true) } }
+        ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.ROUTING_TICK) { guardedTick() } }
+        ClientChunkEvents.CHUNK_LOAD.register { world, chunk -> RuntimeProfiler.measure(RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, false) } }
+        ClientChunkEvents.CHUNK_UNLOAD.register { world, chunk -> RuntimeProfiler.measure(RuntimeProfiler.Area.CHUNK_EVENTS) { chunkChanged(world, chunk.pos.x, chunk.pos.z, true) } }
     }
 
     override fun onDisable() { MC.instance.execute { RoomTemplateRecorder.cancel(); pauseRoom() } }
@@ -208,11 +208,12 @@ object StarredClearRouting : SkyMyceModule() {
             }
             MC.instance.execute {
                 if (revision == catalogRevision) {
-                    catalog = parsed.getOrNull()
+                    val loaded = parsed.getOrNull()
+                    catalog = loaded
                     catalogStatus = when {
                         parsed.isFailure -> "Invalid custom room catalog; using automatic discovery"
-                        catalog == null -> "Automatic discovery (no custom room templates)"
-                        else -> "${catalog!!.rooms.size} room templates loaded"
+                        loaded == null -> "Automatic discovery (no custom room templates)"
+                        else -> "${loaded.rooms.size} room templates loaded"
                     }
                     if (parsed.isFailure) SkyMyce.logger.warn("Dungeon room catalog rejected: {}", parsed.exceptionOrNull()?.message)
                     nextRecognition = 0L
@@ -481,7 +482,7 @@ object StarredClearRouting : SkyMyceModule() {
             return
         }
         if (room == null) {
-            val seed = GridCell(floor(position.x).toInt(), ceil(position.y - 0.00001).toInt(), floor(position.z).toInt())
+            val seed = routeFeetCell(position)
             room = liveDetected(context, setOf(seed), mapOf(seed to emptySet()), emptyMap(), seed)
             updates.updateContext(RoomRoutingContext(epoch, run, context.key), now)
             rebuildMarkers()
@@ -519,7 +520,7 @@ object StarredClearRouting : SkyMyceModule() {
             }
             if (liveBuilder != null) status = "${context.name}: scanning loaded room geometry; ${liveTargets.size} observed starred mobs"
         }
-        val currentCell = GridCell(floor(position.x).toInt(), ceil(position.y - 0.00001).toInt(), floor(position.z).toInt())
+        val currentCell = routeFeetCell(position)
         if (liveBuilder != null && liveSeed?.let { liveFeet(it).distanceToSqr(position) >= 64.0 } == true &&
             currentCell !in liveGeometry?.cells.orEmpty() && MC.instance.player?.onGround() == true) {
             dirtyLiveGeometry(now)
@@ -548,9 +549,8 @@ object StarredClearRouting : SkyMyceModule() {
         }
         val scan = liveBuilder
         if (scan != null) {
-            val missing = liveTargets.values.filter { routesTarget(it) && it.state == RoomTargetState.ACTIVE }.map {
-                GridCell(floor(it.position.x).toInt(), ceil(it.position.y - 0.00001).toInt(), floor(it.position.z).toInt())
-            }.filter { it !in liveGeometry?.cells.orEmpty() }
+            val missing = liveTargets.values.filter { routesTarget(it) && it.state == RoomTargetState.ACTIVE }.map { routeFeetCell(it.position) }
+                .filter { it !in liveGeometry?.cells.orEmpty() }
             val start = listOf(currentCell).filter { it != liveSeed && it !in liveGeometry?.cells.orEmpty() &&
                 RoomWorldGeometry.standingPoint(world, it) != null }
             val destinations = missing.ifEmpty { listOfNotNull(context.exit?.approach).filter { it !in liveGeometry?.cells.orEmpty() } }
@@ -1372,7 +1372,7 @@ object StarredClearRouting : SkyMyceModule() {
             val target = required.firstOrNull { it.id == route?.targetOrder?.firstOrNull() }
                 ?: required.minByOrNull { position?.distanceToSqr(it.position) ?: 0.0 }
             val exitApproach = if (complete) hint?.doors?.firstOrNull()?.takeIf { !it.closed }?.departure ?: hint?.approach else hint?.approach
-            val goal = target?.position?.let { GridCell(floor(it.x).toInt(), ceil(it.y - .00001).toInt(), floor(it.z).toInt()) }
+            val goal = target?.position?.let(::routeFeetCell)
                 ?: exitApproach
             if (sightExitHint != hint || sightTarget != target?.id || sightGoal != goal) {
                 sightExitHint = hint
@@ -1415,7 +1415,7 @@ object StarredClearRouting : SkyMyceModule() {
                 sightProbeRevision = liveGeometryRevision
             }
             val actual = position?.let { RoomPoint(it.x, it.y, it.z) }
-            val points = if (actual != null && visibleEndpoint != null) listOf(actual, visibleEndpoint!!)
+            val points = if (actual != null && visibleEndpoint != null) listOf(actual, visibleEndpoint)
                 else if (target == null) actual?.let { continuation.checkedCurrentPath(it, display = true) } else null
             // The projected player join moves every sample; only the standing-node suffix is cached.
             val tail = points?.drop(2).orEmpty()
@@ -1495,7 +1495,7 @@ object StarredClearRouting : SkyMyceModule() {
             }
         }
         if (DungeonAPI.bloodOpened) return
-        if (!active || complete && continuationLines.isEmpty() && handoffLines.isEmpty() || !isEnabled() || !Settings.enabled || room == null ||
+        if (!active || complete && continuationLines.isEmpty() && handoffLines.isEmpty() || room == null ||
             !dungeonRouteVisible(observedRoom, DungeonAPI.bloodOpened)) return
         if (observedRoom?.containsPositionXZ(player.x, player.z) != true) return
         val thickness = Settings.thickness.toFloat() + 1.5f
@@ -1585,6 +1585,9 @@ object StarredClearRouting : SkyMyceModule() {
 }
 
 internal const val ROOM_ROUTE_HEIGHT = 1.2
+
+/** Slabs/stairs use the next integer candidate height, checked against live collision/support. */
+internal fun routeFeetCell(point: Vec3) = GridCell(floor(point.x).toInt(), ceil(point.y - 0.00001).toInt(), floor(point.z).toInt())
 
 internal fun roomRouteLineOffset(height: Double) = (height.takeIf { it.isFinite() }?.coerceIn(0.0, 4.0)
     ?: ROOM_ROUTE_HEIGHT) - ROOM_ROUTE_HEIGHT

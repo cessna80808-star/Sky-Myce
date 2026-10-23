@@ -53,7 +53,7 @@ object CommunitySharing {
 
     /** New observed measurements only. Bounded best-effort submission never replays saved history after reconnect. */
     fun contribute(id: String, metric: String, value: Double, observedAt: Long, category: SharingCategory,
-                   source: String = "client-observation", verification: String = "unverified") {
+                   source: String = "client-observation", verification: String = "unverified", floor: String? = null) {
         if (!canShare(category) || !canShare(SharingCategory.LEADERBOARDS) || !value.isFinite() || contributionJobs >= 4 ||
             observedAt !in System.currentTimeMillis() - 300000..System.currentTimeMillis() + 60000) return
         val token = generation
@@ -64,6 +64,7 @@ object CommunitySharing {
             add("contribution", JsonObject().apply {
                 addProperty("id", id); addProperty("metric", metric); addProperty("value", value); addProperty("observedAt", observedAt)
                 addProperty("complete", true); addProperty("source", source); addProperty("verification", verification)
+                floor?.let { addProperty("floor", it) }
             })
         }
         contributionJobs++

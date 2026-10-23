@@ -1,6 +1,5 @@
 package me.mycellium.skymyce.utils
 
-import me.mycellium.skymyce.SkyMyce
 import net.minecraft.client.Minecraft
 
 object MC {

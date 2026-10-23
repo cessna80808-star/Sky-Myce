@@ -38,7 +38,11 @@ const flowReference = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[
 const FLOW_TTL = 10 * 60_000, ACCESS_TTL = 15 * 60_000, REFRESH_TTL = 90 * 86400_000;
 const digestEncoder = new TextEncoder();
 const sameDigest = (left: string, right: string) => crypto.subtle.timingSafeEqual(digestEncoder.encode(left), digestEncoder.encode(right));
-const failure = (error: unknown): CommunityResult => ({ ok: false, error: error instanceof AuthorizationError ? error.code : "community_unavailable" });
+const failure = (error: unknown): CommunityResult => {
+  if (error instanceof AuthorizationError) return { ok: false, error: error.code };
+  console.error({ event: "community_unavailable", error: error instanceof Error ? error.name : typeof error });
+  return { ok: false, error: "community_unavailable" };
+};
 const cleanName = (value: unknown) => typeof value === "string" && value.length <= 100 && !/[\x00-\x1f\x7f]/.test(value) ? value : "Discord user";
 function device(raw: unknown): Device | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -200,13 +204,13 @@ export class CommunityAccounts {
   }
   private async flowTokens(flowId: string, pollSecret: string): Promise<{ accessToken: string; refreshToken: string }> {
     // Separate random polling secret permits idempotent delivery without storing recoverable credentials.
-    const derive = async (kind: string) => encode64(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`Sky-Myce community ${kind}\n${flowId}\n${pollSecret}`))));
+    const derive = async (kind: string) => encode64(new Uint8Array(await crypto.subtle.digest("SHA-256", digestEncoder.encode(`Sky-Myce community ${kind}\n${flowId}\n${pollSecret}`))));
     const [accessToken, refreshToken] = await Promise.all([derive("access"), derive("refresh")]); return { accessToken, refreshToken };
   }
   async poll(raw: Record<string, unknown>): Promise<CommunityResult> {
     try {
       if (typeof raw.pollSecret !== "string" || !token.test(raw.pollSecret)) deny("invalid_request");
-      const flowId = String(raw.flowId), pollHash = await sha256(raw.pollSecret), tokens = await this.flowTokens(flowId, raw.pollSecret);
+      const flowId = String(raw.flowId), [pollHash, tokens] = await Promise.all([sha256(raw.pollSecret), this.flowTokens(flowId, raw.pollSecret)]);
       const [accessHash, refreshHash] = await Promise.all([sha256(tokens.accessToken), sha256(tokens.refreshToken)]);
       return this.transaction(() => {
         const flow = this.sql.exec<Flow>("SELECT * FROM community_connect_flows WHERE flow_id=?", flowId).toArray()[0];
@@ -330,10 +334,7 @@ export class CommunityAccounts {
     } catch (error) { return failure(error); }
   }
   markOffline(sessionId: string, connectionId: string): void { this.sql.exec("UPDATE community_sessions SET connected_at=NULL,connection_id=NULL WHERE session_id=? AND connection_id=?", sessionId, connectionId); }
-  user(actor: DeveloperActor, action: string, options: Record<string, unknown> = {}): Promise<CommunityResult> {
-    return this.userAsync(actor, action, options);
-  }
-  private async userAsync(actor: DeveloperActor, action: string, options: Record<string, unknown>): Promise<CommunityResult> {
+  async user(actor: DeveloperActor, action: string, options: Record<string, unknown> = {}): Promise<CommunityResult> {
     try {
       this.hooks.interaction(actor); this.hooks.limit(`community-user:${actor.id}`, 20);
       if (action === "connect") {
@@ -387,7 +388,7 @@ export class CommunityAccounts {
       if (action === "sessions") return { ok: true, identity: this.identity(account.account_id), sessions: this.sql.exec<SqlRow>("SELECT session_id AS sessionId,uuid AS minecraftUuid,created_at AS issuedAt,last_seen AS lastSeen,connected_at AS connectedAt,access_expires_at AS expiresAt,refresh_expires_at AS refreshExpiresAt,revoked_at AS revokedAt,mod_version AS modVersion FROM community_sessions WHERE account_id=? ORDER BY last_seen DESC LIMIT ? OFFSET ?", account.account_id, limit, offset).toArray() };
       if (action === "audit") return { ok: true, identity: this.identity(account.account_id), events: this.sql.exec<SqlRow & { metadata: string }>("SELECT id,at,actor,action,severity,metadata FROM account_audit WHERE account_id=? ORDER BY id DESC LIMIT ? OFFSET ?", account.account_id, limit, offset).toArray() };
       if (action !== "devices") deny("invalid_action");
-      const rows = this.sql.exec<{ identifier: string; source: string; platform: string; firstSeen: number; lastSeen: number }>("SELECT identifier,source,platform,MIN(first_seen) firstSeen,MAX(last_seen) lastSeen FROM community_device_observations WHERE account_id=? GROUP BY identifier,source ORDER BY lastSeen DESC LIMIT ? OFFSET ?", account.account_id, limit, (page - 1) * limit).toArray();
+      const rows = this.sql.exec<{ identifier: string; source: string; platform: string; firstSeen: number; lastSeen: number }>("SELECT identifier,source,platform,MIN(first_seen) firstSeen,MAX(last_seen) lastSeen FROM community_device_observations WHERE account_id=? GROUP BY identifier,source ORDER BY lastSeen DESC LIMIT ? OFFSET ?", account.account_id, limit, offset).toArray();
       return { ok: true, identity: this.identity(account.account_id), devices: rows.map(row => ({ ...row,
         minecraft: this.sql.exec<{ uuid: string; name: string }>("SELECT DISTINCT d.uuid,COALESCE(m.name,'Minecraft account') name FROM community_device_observations d LEFT JOIN minecraft_accounts m ON m.uuid=d.uuid WHERE d.account_id=? AND d.identifier=?", account.account_id, row.identifier).toArray(),
         relatedAccounts: this.sql.exec<{ discordId: string; username: string | null; displayName: string | null }>("SELECT DISTINCT a.discord_id AS discordId,n.username,n.display_name AS displayName FROM community_device_observations d JOIN sky_accounts a ON a.account_id=d.account_id LEFT JOIN account_discord_names n ON n.discord_id=a.discord_id WHERE d.identifier=? LIMIT 25", row.identifier).toArray() })) };
@@ -475,8 +476,8 @@ export class CommunityAccounts {
           else this.sql.exec("UPDATE sky_accounts SET is_admin=1 WHERE account_id=?", account.account_id);
           accounts.push(account.account_id); this.hooks.audit(actor.id, account.account_id, action);
         }
-        return { ok: true, invalidatedAccounts: accounts, invalidatedMinecraft: players,
-          ...(id.test(target) && this.sql.exec<Account>("SELECT * FROM sky_accounts WHERE discord_id=?", target).toArray()[0] ? { identity: this.identity(this.sql.exec<Account>("SELECT * FROM sky_accounts WHERE discord_id=?", target).one().account_id) } : {}) };
+        const owner = id.test(target) ? this.sql.exec<Account>("SELECT * FROM sky_accounts WHERE discord_id=?", target).toArray()[0] : undefined;
+        return { ok: true, invalidatedAccounts: accounts, invalidatedMinecraft: players, ...(owner ? { identity: this.identity(owner.account_id) } : {}) };
       });
     } catch (error) { return failure(error); }
   }
@@ -500,10 +501,10 @@ function html(content: string, status = 200, extra: Record<string, string> = {})
 }
 export async function handleCommunityRequest(request: Request, env: CommunityConfig & { ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; ROOMS: string; RELAY_ROOMS: DurableObjectNamespace<import("./index").RelayRoom> }): Promise<Response | null> {
   const url = new URL(request.url), store = env.ACCOUNT_STORE.getByName("global");
+  const credential = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
   const json = (result: CommunityResult) => Response.json(result, { status: result.ok ? 200 : result.error === "identity_blacklisted" ? 403 : ["rate_limited", "traffic_cooldown"].includes(result.error ?? "") ? 429 : result.error === "service_busy" ? 503 : 400,
     headers: { "Cache-Control": "no-store", ...(result.retryAt ? { "Retry-After": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : {}) } });
   if (url.pathname === "/community/sharing") {
-    const credential = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
     if (request.method === "GET") return json(await store.communityGetSharing(credential));
     if (request.method !== "POST" || !request.headers.get("Content-Type")?.startsWith("application/json")) return json({ ok: false, error: "invalid_request" });
     let raw: Record<string, unknown>; try { raw = await boundedJson(request, 4096); } catch { return json({ ok: false, error: "invalid_request" }); }
@@ -517,7 +518,7 @@ export async function handleCommunityRequest(request: Request, env: CommunityCon
     "/community/challenge": raw => store.communityChallenge(raw), "/community/connect/start": raw => store.communityConnectStart(raw),
     "/community/connect/poll": raw => store.communityConnectPoll(raw), "/community/connect/cancel": raw => store.communityConnectCancel(raw), "/community/session/refresh": raw => store.communityRefresh(raw),
     "/community/session/disconnect": raw => store.communityDisconnect(raw),
-    "/community/contributions": raw => store.communityContribute(request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "", raw),
+    "/community/contributions": raw => store.communityContribute(credential, raw),
   };
   if (routes[url.pathname]) {
     if (request.method !== "POST" || !request.headers.get("Content-Type")?.startsWith("application/json")) return json({ ok: false, error: "invalid_request" });

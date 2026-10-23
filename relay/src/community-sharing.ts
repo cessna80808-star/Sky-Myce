@@ -1,7 +1,7 @@
 /** Community statistics consent is independent of chat, cosmetics, device metadata and service access. */
 // Current clients express one of three modes (On, On (anon), Off) through this unchanged seven-key policy, so older
 // clients keep working: On is every key true, On (anon) the default, Off enabled=false.
-export const sharingCategories = ["dungeons", "economy", "rng", "activity", "leaderboards"] as const;
+const sharingCategories = ["dungeons", "economy", "rng", "activity", "leaderboards"] as const;
 export type SharingCategory = typeof sharingCategories[number];
 export type SharingPolicy = { version: 1; enabled: boolean; dungeons: boolean; economy: boolean; rng: boolean;
   activity: boolean; leaderboards: boolean; publicName: boolean };
@@ -17,11 +17,12 @@ export type SharingHooks = {
 };
 type PolicyRow = { owner: string; policy: string; revision: number; updated_at: number; cutoffs: string };
 const uuidPattern = /^[a-f0-9]{32}$/;
+export const dungeonFloors = ["E", ...[1, 2, 3, 4, 5, 6, 7].flatMap(floor => [`F${floor}`, `M${floor}`])];
 const policyKeys = ["version", "enabled", ...sharingCategories, "publicName"];
 export const defaultSharingPolicy = (): SharingPolicy => ({ version: 1, enabled: true, dungeons: true, economy: true,
   rng: true, activity: true, leaderboards: true, publicName: false });
 const cutoffs = (): Record<SharingCategory, number> => ({ dungeons: 0, economy: 0, rng: 0, activity: 0, leaderboards: 0 });
-export function parseSharingPolicy(raw: unknown): SharingPolicy | null {
+function parseSharingPolicy(raw: unknown): SharingPolicy | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const policy = raw as Record<string, unknown>;
   if (Object.keys(policy).length !== policyKeys.length || Object.keys(policy).some(key => !policyKeys.includes(key)) ||
@@ -43,6 +44,9 @@ export class CommunitySharingStore {
       CREATE INDEX IF NOT EXISTS community_contributions_subject ON community_contributions(uuid, category);
       CREATE INDEX IF NOT EXISTS community_contributions_owner ON community_contributions(owner, category);
       CREATE INDEX IF NOT EXISTS community_contributions_age ON community_contributions(received_at)`);
+    // Rows recorded before per-floor timing keep NULL and appear only on the all-floors average.
+    if (!sql.exec<{ name: string }>("PRAGMA table_info(community_contributions)").toArray().some(column => column.name === "floor"))
+      sql.exec("ALTER TABLE community_contributions ADD COLUMN floor TEXT");
   }
   private owner(uuid: string): string { return this.hooks.owner(uuid)?.accountId ?? `uuid:${uuid}`; }
   private state(owner: string): SharingState {
@@ -146,7 +150,8 @@ export class CommunitySharingStore {
   recordContribution(uuid: string, raw: unknown, name: string): { ok: boolean; error?: string } {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "invalid_contribution" };
     const value = raw as Record<string, unknown>, metric = typeof value.metric === "string" && Object.hasOwn(contributionMetrics, value.metric) ? contributionMetrics[value.metric] : undefined;
-    if (!metric || Object.keys(value).some(key => !["id", "metric", "value", "observedAt", "complete", "source", "verification"].includes(key)) ||
+    if (!metric || Object.keys(value).some(key => !["id", "metric", "value", "observedAt", "complete", "source", "verification", "floor"].includes(key)) ||
+      value.floor !== undefined && (value.metric !== "dungeon_run_time" || typeof value.floor !== "string" || !dungeonFloors.includes(value.floor)) ||
       typeof value.id !== "string" || !/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value.id) || typeof value.value !== "number" || !Number.isFinite(value.value) ||
       Math.abs(value.value) > Number.MAX_SAFE_INTEGER || value.value < 0 && !metric.negative || value.complete !== true ||
       metric.integer && !Number.isSafeInteger(value.value) ||
@@ -159,14 +164,14 @@ export class CommunitySharingStore {
     if (this.sql.exec("SELECT 1 FROM community_contributions WHERE uuid=? AND id=?", uuid, value.id).toArray().length) return { ok: true };
     // All-time means retained observations, not a silently rolling month. Preserve old rows when bounded storage fills.
     if (this.sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM community_contributions").one().total >= 100000) return { ok: false, error: "contribution_capacity_reached" };
-    this.sql.exec("INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", value.id, this.owner(uuid), uuid, metric.category,
-      value.metric as string, value.value, metric.unit, value.observedAt as number, Date.now(), value.source as string, value.verification as string, 1, policy.revision);
+    this.sql.exec("INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", value.id, this.owner(uuid), uuid, metric.category,
+      value.metric as string, value.value, metric.unit, value.observedAt as number, Date.now(), value.source as string, value.verification as string, 1, policy.revision, (value.floor as string | undefined) ?? null);
     return { ok: true };
   }
 }
 
 /** New metrics declare their privacy category and units. Client observations never become verified leaderboard scores. */
-export const contributionMetrics: Record<string, { category: SharingCategory; unit: string; negative?: boolean; integer?: boolean }> = {
+const contributionMetrics: Record<string, { category: SharingCategory; unit: string; negative?: boolean; integer?: boolean }> = {
   dungeon_runs: { category: "dungeons", unit: "runs", integer: true }, dungeon_profit: { category: "dungeons", unit: "coins", negative: true },
   dungeon_run_time: { category: "dungeons", unit: "milliseconds", integer: true },
   networth: { category: "economy", unit: "coins" }, purse: { category: "economy", unit: "coins" }, bank: { category: "economy", unit: "coins" },

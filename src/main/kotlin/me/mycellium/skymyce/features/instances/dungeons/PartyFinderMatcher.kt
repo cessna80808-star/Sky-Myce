@@ -4,15 +4,18 @@ import me.mycellium.skymyce.config.instances.dungeons.PartyListing
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 
 /** Whole time tokens only: minutes, m:ss, compact mss/mmss, or minutes with m/min. */
-val PARTY_PB_PATTERN = Regex("""(?<![\w:./+\-])(?:([0-9]{1,2}):([0-5][0-9])|([0-9]{1,2})([0-5][0-9])|([0-9]{1,2})\s*(?:min|m)|([0-9]{1,2}))(?![\w:./+\-])""", RegexOption.IGNORE_CASE)
+private val PARTY_PB_PATTERN = Regex("""(?<![\w:./+\-])(?:([0-9]{1,2}):([0-5][0-9])|([0-9]{1,2})([0-5][0-9])|([0-9]{1,2})\s*(?:min|m)|([0-9]{1,2}))(?![\w:./+\-])""", RegexOption.IGNORE_CASE)
 private val NON_TIME_BEFORE = Regex("""(?:cata(?:combs)?|class|level|lvl|floor|f|m|mp|secrets|runs)\s*[:=]?\s*$""", RegexOption.IGNORE_CASE)
 private val NON_TIME_AFTER = Regex("""^\s*(?:cata|level|lvl|mp|secrets|runs|comps|players|tanks?|healers?|mages?|archers?|berserks?|berserkers?)\b""", RegexOption.IGNORE_CASE)
 private val TIME_LABEL = Regex("""\b(?:sub|pb)\s*[:<=>]?\s*$""", RegexOption.IGNORE_CASE)
+private val TOUCHING_LABEL = Regex("""\b(sub|pb)(?=\d)""", RegexOption.IGNORE_CASE)
+private val FORMATTING = Regex("§.")
+private val OPEN_CLASSES_HEADER = Regex("""^(?:Open|Available|Needed) Classes?:""", RegexOption.IGNORE_CASE)
 
 fun parsePartyPbSeconds(note: String?): Int? {
-    val text = note?.take(500)?.replace(Regex("§."), "") ?: return null
+    val text = note?.take(500)?.replace(FORMATTING, "") ?: return null
     // A labelled prefix can touch its number, e.g. "sub5" or "pb510".
-    val normalized = text.replace(Regex("""\b(sub|pb)(?=\d)""", RegexOption.IGNORE_CASE), "$1 ")
+    val normalized = text.replace(TOUCHING_LABEL, "$1 ")
     return PARTY_PB_PATTERN.findAll(normalized).mapNotNull { match ->
         val before = normalized.take(match.range.first)
         if (NON_TIME_BEFORE.containsMatchIn(before) ||
@@ -30,10 +33,8 @@ fun parsePartyPbSeconds(note: String?): Int? {
 
 /** Null means the lore did not establish class availability. Empty means explicitly no slots. */
 fun partyOpenClasses(lines: List<String>, occupied: Collection<DungeonClass>): Set<DungeonClass>? {
-    val clean = lines.map { it.replace(Regex("§."), "").trim() }
-    val explicitIndex = clean.indexOfFirst {
-        Regex("""^(?:Open|Available|Needed) Classes?:""", RegexOption.IGNORE_CASE).containsMatchIn(it)
-    }
+    val clean = lines.map { it.replace(FORMATTING, "").trim() }
+    val explicitIndex = clean.indexOfFirst { OPEN_CLASSES_HEADER.containsMatchIn(it) }
     if (explicitIndex >= 0) {
         val value = clean[explicitIndex].substringAfter(':').trim().ifEmpty {
             clean.drop(explicitIndex + 1).takeWhile { it.isNotEmpty() && ':' !in it }.take(5).joinToString(" ")

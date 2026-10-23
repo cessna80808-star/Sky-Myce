@@ -1,8 +1,6 @@
 package me.mycellium.skymyce.utils
 
-import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket
 import net.minecraft.network.protocol.ping.ClientboundPongResponsePacket
 import net.minecraft.network.protocol.ping.ServerboundPingRequestPacket
@@ -21,9 +19,6 @@ object ServerUtils : SkyMyceModule() {
 
     var averagePing = 0L
         private set
-
-    val serverTime: Long
-        get() = System.currentTimeMillis() - currentPing
 
     private var lastTimePacket = 0L
     private var pingStartTime = 0L

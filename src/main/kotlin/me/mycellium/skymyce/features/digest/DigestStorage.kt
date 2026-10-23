@@ -66,7 +66,7 @@ class DigestStateStore(private val file: Path) {
 
     private fun validate(state: DigestSavedState) {
         require(state.version == 1 && requireNotNull(state.lastOpened).size <= 64 && requireNotNull(state.profiles).size <= 64)
-        state.lastOpened.forEach { (account, date) -> require(account.matches(Regex("[a-f0-9-]{32,36}"))); LocalDate.parse(date) }
+        state.lastOpened.forEach { (account, date) -> require(account.matches(digestAccount)); LocalDate.parse(date) }
         state.profiles.forEach { (key, profile) ->
             require(key.length in 1..128 && key.none(Char::isISOControl))
             require(requireNotNull(profile.tasks).size <= 6 && requireNotNull(profile.history).size <= 530)
@@ -101,9 +101,16 @@ class DigestStateStore(private val file: Path) {
     }
 }
 
+// Compiled once: validation runs per history entry on every add, restore and save.
+internal val digestRngId = Regex("[a-f0-9]{32}")
+private val digestRngPlayer = Regex("[A-Za-z0-9_]{1,16}")
+private val digestRngActivities = setOf("dungeon", "slayer", "kuudra", "fishing")
+private val digestRngFloor = Regex("E|[FM][1-7]")
+private val digestAccount = Regex("[a-f0-9-]{32,36}")
+
 internal fun validDigestRng(entry: DigestRngEntry, now: Long): Boolean = runCatching {
-    entry.id.matches(Regex("[a-f0-9]{32}")) && entry.item.length in 1..80 && entry.activity in setOf("dungeon", "slayer", "kuudra", "fishing") &&
-        entry.occurredAt in 1..now + 60000 && entry.player.matches(Regex("[A-Za-z0-9_]{1,16}")) &&
+    entry.id.matches(digestRngId) && entry.item.length in 1..80 && entry.activity in digestRngActivities &&
+        entry.occurredAt in 1..now + 60000 && entry.player.matches(digestRngPlayer) &&
         DigestRngCatalog.valid(entry.item, entry.activity)
 }.getOrDefault(false)
 
@@ -176,14 +183,14 @@ class DigestStateWriter(private val store: DigestStateStore, private val schedul
 
 internal fun digestRngSubmission(drop: DetectedRng, sharing: Boolean, showName: Boolean, now: Long,
     acquisition: AcquisitionEvent? = null, context: AcquisitionContext? = null): Map<String, Any>? {
-    if (!sharing || !drop.id.matches(Regex("[a-f0-9]{32}")) || !DigestRngCatalog.public(drop.item, drop.activity) ||
+    if (!sharing || !drop.id.matches(digestRngId) || !DigestRngCatalog.public(drop.item, drop.activity) ||
         drop.occurredAt <= 0 || drop.occurredAt <= now - 300000 || drop.occurredAt > now + 60000) return null
     // Only this live receipt can supply context. Old history and another profile's matching item are not metadata sources.
     val confirmed = acquisition?.takeIf { it.id == drop.id && it.item == drop.item && it.activity == drop.activity &&
         it.origin == "confirmed" && context?.matches(it.context) == true &&
         kotlin.math.abs(it.occurredAt - drop.occurredAt) <= 15000 }
     val metadata = observedItemMetadata(confirmed?.rarity ?: drop.rarity, confirmed?.displayName ?: drop.displayName)
-    val floor = confirmed?.floor?.takeIf { drop.activity == "dungeon" && it.matches(Regex("E|[FM][1-7]")) }
+    val floor = confirmed?.floor?.takeIf { drop.activity == "dungeon" && it.matches(digestRngFloor) }
     val event = buildMap<String, Any> {
         put("id", drop.id); put("item", drop.item); put("activity", drop.activity); put("occurredAt", drop.occurredAt)
         metadata?.rarity?.let { put("rarity", it) }
@@ -201,7 +208,7 @@ internal fun parseDigestCommunityEvent(json: com.google.gson.JsonObject, now: Lo
     }
     require(validObservedItemMetadata(optionalText("rarity"), optionalText("displayName")))
     val floor = optionalText("floor")
-    require(floor == null || json["activity"]?.asString == "dungeon" && floor.matches(Regex("E|[FM][1-7]")))
+    require(floor == null || json["activity"]?.asString == "dungeon" && floor.matches(digestRngFloor))
     DigestRngEntry(json.get("id").asString, json.get("item").asString, json.get("activity").asString,
         json.get("occurredAt").asLong, json.get("player").asString, true).also {
         require(it.occurredAt >= now - 7 * 86400000L && validDigestRng(it, now))

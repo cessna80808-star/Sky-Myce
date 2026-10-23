@@ -188,7 +188,7 @@ class RoomNavigation private constructor(
         val optimalCost = routeCost(optimal, fromStart) ?: return null
         val retainPrevious = previous != null && previousCost != null &&
             previousCost.toLong() - optimalCost <= minimumImprovement.toLong() * costScale
-        val order = if (retainPrevious) previous!! else optimal
+        val order = if (retainPrevious) previous else optimal
         val path = arrayListOf(cells[startNode])
         var source = startNode
         var searched = fromStart
@@ -199,7 +199,7 @@ class RoomNavigation private constructor(
             source = destination
             if (index < destinations.lastIndex) searched = fixedSearches.getValue(destination)
         }
-        return RoomRoute(immutable(order), immutable(path), if (retainPrevious) previousCost!! else optimalCost)
+        return RoomRoute(immutable(order), immutable(path), if (retainPrevious) previousCost else optimalCost)
     }
 
     private fun optimalOrder(ids: List<String>, fromStart: Search): List<String>? {

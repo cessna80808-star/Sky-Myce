@@ -329,7 +329,7 @@ export class PromptJobs {
       if (responseId !== undefined && (!pending?.response || pending.response.id !== responseId || pending.response.screening !== "required")) deny("stale_request");
       if (responseId === undefined && (job.status !== "screening" || job.screening)) deny("screening_already_recorded");
       if (!["allow", "reject", "review"].includes(String(input.verdict)) || !textValid(input.reason, 1500)) deny("invalid_screening");
-      if (this.executionBlock(control)) deny(this.executionBlock(control)!);
+      const block = this.executionBlock(control); if (block) deny(block);
       const usage = object(input.lunaUsage);
       const measuredInput = usage?.input_tokens ?? usage?.inputTokens, measuredOutput = usage?.output_tokens ?? usage?.outputTokens;
       if (usage && [measuredInput, measuredOutput].every(value => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000_000)) {
@@ -470,7 +470,8 @@ export class PromptJobs {
           if (row && JSON.parse(row.payload).revision === revision) this.storage.sql.exec("DELETE FROM prompt_deliveries WHERE id=?", delivery.id);
           else this.storage.sql.exec("UPDATE prompt_deliveries SET lease_until=0 WHERE id=?", delivery.id);
         });
-      } catch {
+      } catch (error) {
+        console.warn({ event: "prompt_delivery_retry", attempts: delivery.attempts + 1, error: error instanceof Error ? error.name : typeof error });
         this.storage.sql.exec("UPDATE prompt_deliveries SET attempts=attempts+1,next_at=?,lease_until=0 WHERE id=?", Date.now() + Math.min(300_000, 1000 * 2 ** Math.min(delivery.attempts + 1, 9)), delivery.id);
       }
     }

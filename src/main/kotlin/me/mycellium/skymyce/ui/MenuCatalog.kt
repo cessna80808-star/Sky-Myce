@@ -90,7 +90,7 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("dungeon-chests", "Dungeon Chests", "Estimated chest profit, valuable loot and purchase/reroll protection", MenuCategory.DUNGEONS, "Rewards", listOf("profit", "kismet", "reroll", "bazaar", "prices", "chest")),
             MenuFeature("dungeon-chat", "Dungeon Chat Filter", "Choose which dungeon messages remain visible", MenuCategory.DUNGEONS, "Information", listOf("chat", "messages", "filter")),
             MenuFeature("dungeon-summary", "Dungeon Win Screen", "Show a summary overlay after a completed dungeon", MenuCategory.DUNGEONS, "Runs", listOf("overlay", "hud", "win"), enabledPath = "Dungeons/dungeonWinScreen"),
-            MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality and respiration bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
+            MenuFeature("status-bars", "Status Bars", "Separate animated health, mana, defense, speed, vitality, respiration and experience bars you can arrange around the hotbar", MenuCategory.COMBAT, "Player", listOf("health", "mana", "defense", "ehp", "hearts", "bar", "skyblocker", "hud", "absorption", "overflow", "speed", "vitality", "respiration", "air", "experience", "xp", "level", "fancy bars"), tool = "status-bars", enabledPath = "General/Status Bars/enabled"),
             MenuFeature("ability-cooldowns", "Ability Cooldowns", "Held-item ability timers and ready notifications", MenuCategory.COMBAT, "Timers", listOf("cooldown", "timer", "ability", "hud", "notification"), enabledPath = "General/displayAbilityCooldown"),
             MenuFeature("loadouts", "Loadout Keybinds", "Swap equipment loadouts with configured keys and menu safeguards", MenuCategory.COMBAT, "Gear", listOf("equipment", "keybind", "keyboard", "armor"), enabledPath = "General/Loadout Keybinds/enabled"),
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
@@ -179,12 +179,10 @@ class MenuCatalog(rows: List<SettingRow>) {
     }
 }
 
-fun menuSettingLocation(path: String) = MenuCatalog.settingLocation(path)
-
-/** Small metadata aliases supplement real titles/descriptions; all query words must match. */
-fun searchMenuEntries(entries: List<MenuSearchEntry>, query: String) = MenuSearchIndex(entries).search(query)
-
-/** The inventory is immutable; normalize and sort it once instead of rebuilding every setting on each keystroke. */
+/**
+ * Small metadata aliases supplement real titles/descriptions; all query words must match.
+ * The inventory is immutable; normalize and sort it once instead of rebuilding every setting on each keystroke.
+ */
 internal class MenuSearchIndex(entries: List<MenuSearchEntry>) {
     private val ordered = entries.sortedWith(compareBy<MenuSearchEntry> { it.category.ordinal }.thenBy { it.subcategory }
         .thenBy { it.settingPath != null }.thenBy { it.title.lowercase(Locale.ROOT) }.thenBy { it.id })

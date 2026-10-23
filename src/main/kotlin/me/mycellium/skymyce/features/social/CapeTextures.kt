@@ -9,9 +9,12 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.minecraft.client.renderer.texture.DynamicTexture
 import net.minecraft.client.renderer.entity.state.AvatarRenderState
 import net.minecraft.core.ClientAsset
+import net.minecraft.core.component.DataComponents
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.player.PlayerSkin
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.equipment.EquipmentAssets
+import net.minecraft.world.item.equipment.Equippable
 import java.net.URI
 import java.net.http.*
 import java.security.MessageDigest
@@ -215,9 +218,12 @@ internal fun cosmeticCapeShown(original: PlayerSkin, applied: PlayerSkin) = appl
 internal fun prepareCosmeticPreview(state: AvatarRenderState) {
     state.isInvisible = false
     state.showCape = true
-    state.chestEquipment = ItemStack.EMPTY
+    if (previewHidesChest(state.chestEquipment.get(DataComponents.EQUIPPABLE))) state.chestEquipment = ItemStack.EMPTY
     state.capeFlap = 0f; state.capeLean = 0f; state.capeLean2 = 0f
 }
+
+/** Vanilla CapeLayer hides the cape only for wings; a chestplate stays visible and the cape is offset over it. */
+internal fun previewHidesChest(equippable: Equippable?) = equippable?.assetId()?.orElse(null) == EquipmentAssets.ELYTRA
 
 internal fun validateCapeDownload(bytes: ByteArray, asset: CapeAsset) {
     require(bytes.size == asset.size && bytes.size <= 262144)

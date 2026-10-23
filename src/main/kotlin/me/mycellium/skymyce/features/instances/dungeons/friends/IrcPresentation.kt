@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 
 private val ircGrapheme = Regex("\\X")
 private val customIrcEmoji = Regex("<a?:([A-Za-z0-9_]{1,32}):([0-9]{17,20})>")
+private val discordAttachmentPath = Regex("/attachments/[0-9]{1,20}/[0-9]{1,20}/[^/]+")
 internal val IRC_REACTION_NAMES = listOf("Like", "Love", "Laugh", "Celebrate", "Eyes", "Fire")
 internal data class IrcReadableText(val text: String, val original: String? = null, val emoji: Boolean = false)
 
@@ -67,7 +68,7 @@ internal fun ircMediaIdentity(uri: URI): String {
     val port = if (uri.port == -1 || scheme == "https" && uri.port == 443 || scheme == "http" && uri.port == 80) "" else ":${uri.port}"
     val path = uri.rawPath.orEmpty().ifEmpty { "/" }
     if (scheme != "https" || host !in setOf("cdn.discordapp.com", "media.discordapp.net") || port.isNotEmpty() ||
-        !path.matches(Regex("/attachments/[0-9]{1,20}/[0-9]{1,20}/[^/]+")))
+        !path.matches(discordAttachmentPath))
         return "$scheme://$host$port$path" + (uri.rawQuery?.let { "?$it" } ?: "") + (uri.rawFragment?.let { "#$it" } ?: "")
     val query = uri.rawQuery?.split('&')?.filterNot { it.substringBefore('=') in setOf("ex", "is", "hm") }?.joinToString("&")?.takeIf { it.isNotEmpty() }
     return "https://cdn.discordapp.com$path" + (query?.let { "?$it" } ?: "") + (uri.rawFragment?.let { "#$it" } ?: "")

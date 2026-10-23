@@ -33,7 +33,6 @@ public final class CameraMath {
         return targetSize(width, height, Math.min(guiScale, Math.min(320.0 / width, 180.0 / height)));
     }
 
-    /** Leap previews may together use at most half of the frame time; each gets an equal share. */
     /** Previews use at most a quarter of frame time between them. */
     static final int PREVIEW_BUDGET_DIVISOR = 4;
 

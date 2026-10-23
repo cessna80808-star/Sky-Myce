@@ -11,6 +11,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.security.MessageDigest
 
+internal val TRACKED_FLOOR = Regex("[FM][1-7]|E|ENTRANCE")
+internal val TRACKED_ITEM_ID = Regex("[A-Z0-9_:;-]{1,100}")
+private val ACCOUNT_ID = Regex("[a-f0-9-]{32,36}")
+private val RECEIPT_ID = Regex("[a-f0-9]{32}")
+
 data class AcquisitionContext(val account: String, val profileId: String? = null, val profileName: String? = null, val server: String = "main") {
     val key get() = "$account/$server/${profileId ?: profileName?.lowercase() ?: "unknown"}"
     fun matches(other: AcquisitionContext?) = other != null && account == other.account && server == other.server &&
@@ -54,7 +59,7 @@ fun cutoverAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?, now:
     val profit = if (tracker != null) {
         require(tracker.isJsonObject && tracker.asJsonObject.size() <= 15)
         tracker.asJsonObject.entrySet().associate { (floor, data) ->
-            require(floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && data.isJsonObject)
+            require(floor.matches(TRACKED_FLOOR) && data.isJsonObject)
             val chests = data.asJsonObject.getAsJsonObject("chests")
             require(chests == null || chests.size() <= 6)
             fun amount(value: JsonElement?): Double = value?.asDouble?.also { require(it.isFinite() && it in 0.0..1e16) } ?: 0.0
@@ -96,7 +101,7 @@ fun importLegacyAcquisitions(archive: AcquisitionArchive, tracker: JsonElement?,
     }
     if ("digest-v1" !in archive.imports) digest?.profiles?.forEach { (scope, profile) ->
         val parts = scope.split('/', limit = 3)
-        val context = if (parts.size == 3 && parts[0].matches(Regex("[a-f0-9-]{32,36}")))
+        val context = if (parts.size == 3 && parts[0].matches(ACCOUNT_ID))
             AcquisitionContext(parts[0], profileName = parts[2], server = parts[1]) else null
         profile.history.filter { !it.community }.forEachIndexed { index, event -> additions += AcquisitionEvent(
             acquisitionId("digest-v1/$scope/${event.id}/$index"), event.item, event.occurredAt, event.activity,
@@ -131,9 +136,9 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     require(requireNotNull(state.pins).size <= 2048 && requireNotNull(state.imports).size <= 16)
     fun text(value: String?, max: Int) { require(value == null || value.length <= max && value.none(Char::isISOControl)) }
     fun money(value: Double?) { require(value == null || value.isFinite() && value >= 0 && value <= 1e16) }
-    fun context(value: AcquisitionContext?) { value?.let { require(it.account.matches(Regex("[a-f0-9-]{32,36}"))); text(it.profileId, 36); text(it.profileName, 64); require(it.server in setOf("main", "alpha")) } }
+    fun context(value: AcquisitionContext?) { value?.let { require(it.account.matches(ACCOUNT_ID)); text(it.profileId, 36); text(it.profileName, 64); require(it.server in setOf("main", "alpha")) } }
     state.events.forEach {
-        require(it.id.matches(Regex("[a-f0-9]{32}")) && it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.occurredAt > 0 && it.quantity in 1..100000)
+        require(it.id.matches(RECEIPT_ID) && it.item.matches(TRACKED_ITEM_ID) && it.occurredAt > 0 && it.quantity in 1..100000)
         require(it.origin in setOf("confirmed", "legacy-confirmed", "legacy-tracker", "legacy-digest")); text(it.activity, 30); text(it.floor, 8); text(it.chest, 16); text(it.run, 40); text(it.player, 16)
         money(it.value); money(it.chestCost); money(it.rerollCost); context(it.context)
         require(it.valuationAt == null || it.valuationAt > 0 && it.value != null)
@@ -150,7 +155,7 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
             text(receipt.id, 40); text(receipt.chest, 16); require(receipt.time > 0); money(receipt.cost)
             require(receipt.loot.size <= 64)
             receipt.loot.forEach {
-                require(it.item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && it.count in 1..100000); money(it.value)
+                require(it.item.matches(TRACKED_ITEM_ID) && it.count in 1..100000); money(it.value)
                 require(me.mycellium.skymyce.utils.validObservedItemMetadata(it.rarity, it.displayName))
             }
         }
@@ -158,14 +163,14 @@ fun parseAcquisitionArchive(json: JsonElement?): AcquisitionArchive {
     state.pins.forEach { text(it, 220) }
     val inherited = if (state.version == 1) emptyMap() else requireNotNull(state.legacyProfit)
     require(inherited.size <= 15 && (state.cutoverAt == null || state.cutoverAt > 0))
-    inherited.forEach { (floor, profit) -> require(floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && profit.isFinite() && kotlin.math.abs(profit) <= 1e16) }
+    inherited.forEach { (floor, profit) -> require(floor.matches(TRACKED_FLOOR) && profit.isFinite() && kotlin.math.abs(profit) <= 1e16) }
     val samples = requireNotNull(state.personalRateSamples)
     require(samples.size <= 15 && samples.map { it.floor }.distinct().size == samples.size)
     samples.forEach { sample ->
-        require(sample.floor.matches(Regex("[FM][1-7]|E|ENTRANCE")) && sample.from > 0 && sample.until > sample.from)
+        require(sample.floor.matches(TRACKED_FLOOR) && sample.from > 0 && sample.until > sample.from)
         require(sample.completedRuns in 1..1_000_000 && requireNotNull(sample.itemCounts).size <= 1000)
         sample.itemCounts.forEach { (item, count) ->
-            require(item.matches(Regex("[A-Z0-9_:;-]{1,100}")) && count in 0..1_000_000)
+            require(item.matches(TRACKED_ITEM_ID) && count in 0..1_000_000)
         }
     }
     return state.copy(events = state.events.distinctBy { it.id }, runs = state.runs.distinctBy { it.id }.map { if (state.version == 1) it.copy(trackingVersion = 1) else it }, legacyProfit = inherited)

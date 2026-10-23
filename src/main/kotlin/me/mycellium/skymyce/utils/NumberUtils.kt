@@ -4,7 +4,7 @@ import java.text.NumberFormat
 import java.util.*
 
 object NumberUtils {
-    val formatter: NumberFormat = NumberFormat.getCompactNumberInstance(Locale.US, NumberFormat.Style.SHORT)
+    private val formatter: NumberFormat = NumberFormat.getCompactNumberInstance(Locale.US, NumberFormat.Style.SHORT)
     init {
         formatter.maximumFractionDigits = 2
     }

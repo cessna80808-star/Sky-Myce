@@ -100,6 +100,27 @@ fun checkGlobalChat() {
     check(!subscription.complete(confirmedSubscribe, null, 6_000_000_001L) && subscription.confirmed)
     subscription.reset(); check(!subscription.confirmed)
 
+    // The first message after /sm irc waits for the subscription receipt, then is released exactly once.
+    val held = IrcHeldSend()
+    val ready = GlobalChatSubscription()
+    val beforeReady = requireNotNull(ready.take(true, 0L)); ready.queued(beforeReady, true)
+    check(!ready.confirmed && held.hold("global", "hello", 0L))
+    check(!held.hold("global", "second", 1L)) // One bounded slot.
+    check(!ready.complete(beforeReady, null, 2L) && ready.confirmed)
+    val first = requireNotNull(held.take("global"))
+    check(first.text == "hello" && !first.retried && held.held == null)
+    // The relay lost the confirmed subscription and rejected the send before enqueueing it: resubscribe, resend once.
+    ready.reset()
+    check(held.rejected("global", first.text, "not_subscribed", first.retried, 3L))
+    val resubscribe = requireNotNull(ready.take(true, 4L)); ready.queued(resubscribe, true)
+    check(held.take("party") == null && !ready.complete(resubscribe, null, 5L) && ready.confirmed)
+    val resend = requireNotNull(held.take("global"))
+    check(resend.text == "hello" && resend.retried)
+    check(!held.rejected("global", resend.text, "not_subscribed", resend.retried, 6L)) // At most one resend.
+    check(!held.rejected("global", "x", "receipt_timeout", false, 6L) && held.held == null) // Uncertain sends are never resent.
+    check(held.hold("global", "late", 7L) && held.expired(12_000_000_006L) == null)
+    check(held.expired(12_000_000_007L)?.text == "late" && held.held == null) // Then the reconnecting error shows.
+
     val history = IrcChatStore()
     val historyBoundary = ircHistoryBoundary(account, endpoint)
     check(history.boundary(historyBoundary) && history.accept(message, 1000))

@@ -206,7 +206,7 @@ private fun decodeIrcGifNow(bytes: ByteArray, deadlineNanos: Long, thumbnail: Bo
                         val height = descriptor.attribute("imageHeight").toInt()
                         val control = metadata.child("GraphicControlExtension")
                         val transparent = control?.attribute("transparentColorFlag") == "TRUE"
-                        val background = if (transparent && control?.attribute("transparentColorIndex")?.toInt() == layout.backgroundIndex) 0 else layout.background
+                        val background = if (transparent && control.attribute("transparentColorIndex").toInt() == layout.backgroundIndex) 0 else layout.background
                         if (index == 0) {
                             graphics.composite = AlphaComposite.Src
                             graphics.color = Color(background, true)

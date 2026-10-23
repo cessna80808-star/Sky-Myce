@@ -4,7 +4,6 @@ import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
-import io.wispforest.owo.ui.component.UIComponents
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
@@ -12,7 +11,6 @@ import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.api.AuctionAPI
 import me.mycellium.skymyce.features.general.auction.AuctionPreferences
 import me.mycellium.skymyce.features.general.auction.AuctionSearch
-import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.utils.MC

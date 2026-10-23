@@ -3,6 +3,7 @@ import type { RelayRoom } from "./index";
 import type { CommunityIdentity as Identity, CommunityResult } from "./community";
 import { auditReason } from "./discord-notifications";
 import { discordLeaderboardMessage } from "./leaderboards";
+import type { DeveloperActor as Actor } from "./licensing";
 
 export type DiscordAccountsConfig = AccountsConfig & {
   ACCOUNT_STORE: DurableObjectNamespace<AccountStore>;
@@ -13,7 +14,6 @@ export type DiscordAccountsConfig = AccountsConfig & {
   DISCORD_LOADER_DELIVERY_ENABLED?: string; DISCORD_AUDIT_CHANNEL_ID?: string; DISCORD_SECURITY_CHANNEL_ID?: string; DISCORD_LICENSE_CHANNEL_ID?: string;
   ROOMS: string; RELAY_ROOMS: DurableObjectNamespace<RelayRoom>;
 };
-type Actor = { id: string; guildId: string; roles: string[]; interactionId: string };
 type ParsedCommand = { actor: Actor; action: string; target: string; options: Record<string, unknown>; identity?: Record<string, unknown> };
 type Message = { content?: string; embeds?: Record<string, unknown>[]; components?: Record<string, unknown>[] };
 const object = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -97,7 +97,10 @@ async function discordRequest(path: string, body: unknown): Promise<void> {
 }
 export function deferInteraction(data: Record<string, unknown>, ctx: ExecutionContext, operation: () => Promise<string | Message>): Response {
   if (typeof data.token !== "string" || !/^[A-Za-z0-9._-]{20,512}$/.test(data.token) || !snowflake(data.application_id)) return ephemeral("Invalid Sky-Myce interaction. Run the command again.");
-  ctx.waitUntil(operation().catch(() => "This Sky-Myce service is currently unavailable.").then(async content => {
+  ctx.waitUntil(operation().catch(error => {
+    console.error({ event: "discord_interaction_unavailable", error: error instanceof Error ? error.name : typeof error });
+    return "This Sky-Myce service is currently unavailable.";
+  }).then(async content => {
     await discordRequest(`/webhooks/${data.application_id}/${data.token}/messages/@original`, {
       ...(typeof content === "string" ? { content: content.slice(0, 1900), embeds: [], components: [] } : { ...content, content: content.content?.slice(0, 1900), components: content.components ?? [] }),
       allowed_mentions: { parse: [] } });
@@ -168,8 +171,8 @@ function reportMessage(command: ParsedCommand, result: CommunityResult): Message
     `Identifier: \`${textName(device.identifier)}\`\nSource: ${textName(device.source)} · Platform: ${textName(device.platform)}\nFirst seen: ${discordTime(device.firstSeen)}\nLast seen: ${discordTime(device.lastSeen)}\nMinecraft: ${device.minecraft.map(mc => `${textName(mc.name)} (${mc.uuid})`).join(", ") || "None"}\nAlso observed with: ${device.relatedAccounts.map(owner => `${textName(owner.displayName ?? owner.username)} · <@${owner.discordId}>`).join(", ") || "No other Discord associations observed"}`));
   else if (command.action === "sessions") fields = (result.sessions ?? []).slice(0, 8).map((session, index) => field(`Community connection ${index + 1 + (page - 1) * 8}`,
     `${textName(session.minecraftName ?? result.identity?.uuids.find(mc => mc.uuid === session.minecraftUuid)?.name)} · \`${textName(session.minecraftUuid)}\`\nStarted: ${discordTime(session.connectedAt ?? session.issuedAt)}\nLast activity: ${discordTime(session.lastSeen)}\nAccess expires: ${discordTime(session.expiresAt)}\nState: ${sessionState(session)}`));
-  else if (command.action === "audit") fields = (result.events ?? []).slice(0, 8).map(event => field(`${textName(event.action ?? event.kind)} · ${discordTime(event.at ?? event.createdAt)}`,
-    `By ${snowflake(event.actor) ? `<@${event.actor}>` : "System"}${auditMetadata(event.metadata).reason ? `\nReason: ${auditReason(auditMetadata(event.metadata).reason, 500)}` : ""}`));
+  else if (command.action === "audit") fields = (result.events ?? []).slice(0, 8).map(event => { const reason = auditMetadata(event.metadata).reason; return field(`${textName(event.action ?? event.kind)} · ${discordTime(event.at ?? event.createdAt)}`,
+    `By ${snowflake(event.actor) ? `<@${event.actor}>` : "System"}${reason ? `\nReason: ${auditReason(reason, 500)}` : ""}`); });
   else if (command.action === "blacklist") fields = (result.entries ?? []).slice(0, 8).map(entry => field(`${textName(entry.kind)} · ${textName(entry.identity)}`,
     `Status: ${entry.active === false || entry.removedAt ? "Removed" : "Restricted"}\nReason: ${auditReason(entry.reason, 500)}\nChanged: ${discordTime(entry.updatedAt ?? entry.createdAt)}`));
   else if (command.action === "search") fields = (result.identities ?? []).slice(0, 8).map(identity => field(textName(identity.displayName ?? identity.username),

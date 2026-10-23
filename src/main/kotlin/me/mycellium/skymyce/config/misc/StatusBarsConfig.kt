@@ -6,7 +6,7 @@ import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 object StatusBarsConfig : CategoryKt("Status Bars") {
     val enabled by boolean(false) {
         name = TranslatableValue.literal("Enabled")
-        description = TranslatableValue.literal("Show health, mana, defense, speed, vitality and respiration as separate animated bars. Arrange, resize, recolour or hide each one with /sm bars or Open on this feature")
+        description = TranslatableValue.literal("Show health, mana, defense, speed, vitality, respiration and experience as separate animated bars. Arrange, resize, recolour or hide each one with /sm bars or Open on this feature")
     }
     val useHearts by boolean(true) {
         name = TranslatableValue.literal("Read Vanilla Hearts")
@@ -14,7 +14,7 @@ object StatusBarsConfig : CategoryKt("Status Bars") {
     }
     val hideVanilla by boolean(true) {
         name = TranslatableValue.literal("Hide Vanilla Hearts")
-        description = TranslatableValue.literal("Hide the vanilla hearts, armor and hunger rows on SkyBlock while the bars show, and the air bubbles while the respiration bar is on. They return everywhere else")
+        description = TranslatableValue.literal("Hide the vanilla hearts, armor and hunger rows on SkyBlock while the bars show, the air bubbles while the respiration bar is on and the experience bar and level while the experience bar is on. They return everywhere else")
     }
     val hideActionBar by boolean(true) {
         name = TranslatableValue.literal("Hide Action Bar Stats")
@@ -23,6 +23,18 @@ object StatusBarsConfig : CategoryKt("Status Bars") {
     val animate by boolean(true) {
         name = TranslatableValue.literal("Animate")
         description = TranslatableValue.literal("Spring the bars to new values, trail and flash damage, sweep heals, roll numbers and beat at low health. Off draws exact values instantly")
+    }
+    val showMaximum by boolean(false) {
+        name = TranslatableValue.literal("Show Maximum")
+        description = TranslatableValue.literal("Write the maximum after the value, as 4,800/4,800. Off shows the value alone")
+    }
+    val splitExtra by boolean(false) {
+        name = TranslatableValue.literal("Split Extra")
+        description = TranslatableValue.literal("Show absorption and overflow mana after the value, as 4,425 +375. Off adds them into the value, as 4,800")
+    }
+    val thousandsSeparators by boolean(true) {
+        name = TranslatableValue.literal("Thousands Separators")
+        description = TranslatableValue.literal("Write numbers as 4,800. Off writes 4800")
     }
 
     /** Before 2.7.27 the bars were one panel; these seed the per-bar layout once. */

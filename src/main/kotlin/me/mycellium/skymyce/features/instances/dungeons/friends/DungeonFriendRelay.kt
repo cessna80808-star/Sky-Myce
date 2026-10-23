@@ -146,6 +146,8 @@ class RelayDeliveries {
 object DungeonFriendRelay {
     data class PartyPolicy(val uuid: String, val policy: DungeonJoinPolicy)
     private val gson = Gson()
+    private val RELAY_ID = Regex("[a-f0-9]{32}")
+    private val RELAY_NAME = Regex("[a-z0-9_]{1,16}")
     private val client by lazy { HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build() }
     private val deliveries = RelayDeliveries()
     private val statsRequests = mutableMapOf<String, Pair<Long, CompletableFuture<JsonObject?>>>()
@@ -162,8 +164,6 @@ object DungeonFriendRelay {
     var rngFeedAvailable = false
         private set
     var userMessagesAvailable = false
-        private set
-    var ircAvailable = false
         private set
     var globalChatAvailable = false
         private set
@@ -296,7 +296,7 @@ object DungeonFriendRelay {
                                     "challenge" -> {
                                         check(!authenticating && !connected && json.get("protocol")?.asInt == 3)
                                         val serverId = json.get("serverId").asString
-                                        check(serverId.matches(Regex("[a-f0-9]{32}")))
+                                        check(serverId.matches(RELAY_ID))
                                         authenticating = true
                                         stage = "account_proof"
                                         status = "Verifying Minecraft account..."
@@ -325,7 +325,7 @@ object DungeonFriendRelay {
                                                 "publicKey" to base64.encodeToString(certificate.key().encoded),
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
                                                 "proof" to base64.encodeToString(proof),
-                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + CommunityClient.relayAuthorization(serverId)
+                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + CommunityClient.relayAuthorization()
                                         }.whenComplete { proof, error -> MC.instance.execute {
                                             if (token == generation) {
                                                 if (error != null) {
@@ -357,7 +357,6 @@ object DungeonFriendRelay {
                                         userMessagesAvailable = json.get("userMessages")?.asBoolean == true
                                         cosmeticsAvailable = json.get("cosmetics")?.asBoolean == true
                                         cosmeticsNamesAvailable = cosmeticsAvailable && json.get("cosmeticsNames")?.asBoolean == true
-                                        ircAvailable = json.get("irc")?.asBoolean == true
                                         globalChatAvailable = json.get("globalChat")?.asBoolean == true
                                         richChatAvailable = richIrcCapability(json)
                                         partyChatAvailable = partyIrcCapability(json)
@@ -409,7 +408,7 @@ object DungeonFriendRelay {
                                         val id = json.get("id").asString
                                         val from = json.get("from").asString
                                         val uuid = json.get("uuid").asString
-                                        check(id.matches(Regex("[a-f0-9]{32}")) && from.matches(Regex("[A-Za-z0-9_]{1,16}")) && uuid.matches(Regex("[a-f0-9]{32}")))
+                                        check(id.matches(RELAY_ID) && from.matches(Regex("[A-Za-z0-9_]{1,16}")) && uuid.matches(RELAY_ID))
                                         me.mycellium.skymyce.features.social.CosmeticsClient.observe(from,
                                             UUID.fromString("${uuid.take(8)}-${uuid.substring(8, 12)}-${uuid.substring(12, 16)}-${uuid.substring(16, 20)}-${uuid.substring(20)}"))
                                         if (json.get("type").asString == "ack") deliveries.acknowledge(id, from)
@@ -434,7 +433,7 @@ object DungeonFriendRelay {
                                     "rng_removed" -> { check(connected); runCatching { onDigestEvent?.invoke(json) } }
                                     "stats_removed" -> {
                                         check(connected)
-                                        val ids = json.getAsJsonArray("uuids")?.map { it.asString }?.take(256)?.filter { it.matches(Regex("[a-f0-9]{32}")) }?.toSet().orEmpty()
+                                        val ids = json.getAsJsonArray("uuids")?.map { it.asString }?.take(256)?.filter { it.matches(RELAY_ID) }?.toSet().orEmpty()
                                         DungeonFriendStatsCache.removeSharedSubjects(ids)
                                     }
                                     "cosmetics_result" -> { check(connected && cosmeticsAvailable); cosmeticsRequests.remove(json.get("id").asString)?.second?.complete(json) }
@@ -453,7 +452,7 @@ object DungeonFriendRelay {
                                     "party_update" -> {
                                         check(connected)
                                         val name = json.get("name").asString.lowercase()
-                                        check(name.matches(Regex("[a-z0-9_]{1,16}")))
+                                        check(name.matches(RELAY_NAME))
                                         cachePolicy(name, json)
                                     }
                                     "party_result" -> {
@@ -519,8 +518,6 @@ object DungeonFriendRelay {
     fun send(name: String, text: String, received: () -> Unit = {}, failed: () -> Unit = {}): Boolean {
         return sendDelivery("message", name, text, received) { failed() }
     }
-
-    fun globalPacket(type: String, fields: Map<String, Any>, result: (String?) -> Unit): Boolean = ircPacket("global", type, fields, result)
 
     internal fun ircPacket(scope: String, type: String, fields: Map<String, Any>, result: (String?) -> Unit,
         receipt: (JsonObject) -> Unit = {}): Boolean {
@@ -645,7 +642,7 @@ object DungeonFriendRelay {
             val uuid = it.get("uuid").asString
             val floor = tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.valueOf(it.get("floor").asString)
             val limit = it.get("maxPbMillis")?.takeUnless { it.isJsonNull }?.asLong
-            check(uuid.matches(Regex("[a-f0-9]{32}")) && floor in FRIEND_FLOORS && (limit == null || limit in 1..59999999))
+            check(uuid.matches(RELAY_ID) && floor in FRIEND_FLOORS && (limit == null || limit in 1..59999999))
             it.get("selectedClass")?.takeUnless { value -> value.isJsonNull }?.asString?.let { clazz ->
                 DungeonFriends.onClassChange(name, uuid, DungeonClass.valueOf(clazz))
             }
@@ -658,7 +655,7 @@ object DungeonFriendRelay {
         val now = DungeonFriends.now()
         if (!policiesAvailable || !connected || policyRequest != null || now < nextPolicyRequest) return
         val missing = names.map { it.lowercase() }.distinct().filter {
-            it.matches(Regex("[a-z0-9_]{1,16}")) && (partyPolicies[it]?.first ?: 0L) <= now
+            it.matches(RELAY_NAME) && (partyPolicies[it]?.first ?: 0L) <= now
         }.take(32)
         if (missing.isEmpty()) return
         val id = UUID.randomUUID().toString().replace("-", "")
@@ -706,7 +703,6 @@ object DungeonFriendRelay {
         digestNewsAvailable = false
         rngFeedAvailable = false
         userMessagesAvailable = false
-        ircAvailable = false
         globalChatAvailable = false
         richChatAvailable = false
         partyChatAvailable = false

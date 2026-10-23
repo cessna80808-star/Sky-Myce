@@ -1,5 +1,6 @@
 /** Public rendering data is deliberately separate from private ownership and audit tables. */
 import { cosmeticText, type CosmeticText } from "./cosmetic-style";
+import { sha256 } from "./drm";
 export type CosmeticProfile = { uuid: string; name: string | null; scale: number; revision: number; updatedAt: number;
   nameStyle: CosmeticText | null; scaleX: number; scaleY: number; scaleZ: number; nametagScale: number; capePreset: string | null; capeAsset: CapeAsset | null };
 export type CapeAsset = { id: string; sha256: string; size: number; width: number; height: number };
@@ -34,9 +35,7 @@ export function nametagScale(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0.5 || value > 2) message("Nametag scale must be between 0.5 and 2.0.");
   return Math.round(value * 1000) / 1000;
 }
-export async function codeHash(code: string): Promise<string> {
-  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(code)))].map(it => it.toString(16).padStart(2, "0")).join("");
-}
+export const codeHash = (code: string): Promise<string> => sha256(code);
 function publicRow(row: CosmeticRow): CosmeticProfile {
   return { uuid: row.uuid, name: row.display_name, scale: row.scale_y ?? row.scale, revision: row.revision, updatedAt: row.updated_at,
     nameStyle: row.name_json ? JSON.parse(row.name_json) : row.display_name ? { text: row.display_name } : null,
@@ -169,8 +168,7 @@ export class PlayerCosmetics {
           this.audit(challenge.uuid, command.actor, "link", this.get(challenge.uuid).revision, now);
           return { response: ephemeral("Minecraft account linked. Any previous Discord owner of this Minecraft account has lost access. Use /cosmetics set to customize your cosmetics.") };
         }
-        const linked = authority?.uuid ?? sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
-        const target = linked;
+        const target = authority?.uuid ?? sql.exec<{ uuid: string }>("SELECT uuid FROM cosmetics_links WHERE discord = ?", command.actor).toArray()[0]?.uuid;
         if (!target) message("Link your Minecraft account first with /sm cosmetics link, then /cosmetics link.");
         const allowed = command.action === "set" ? ["name", "x", "y", "z"] : command.action === "unlink" ? ["confirm"] : [];
         if (Object.keys(command.options).some(it => !allowed.includes(it))) message("Unsupported cosmetic option.");

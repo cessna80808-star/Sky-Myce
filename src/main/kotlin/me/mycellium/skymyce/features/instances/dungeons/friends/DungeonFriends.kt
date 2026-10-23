@@ -401,7 +401,7 @@ object DungeonFriends : SkyMyceModule() {
         loadFriends()
         val message = event.text
         val normalized = message.lines().joinToString("\n") { line ->
-            val nickname = Regex("^(\\S+)\\* is ").find(line.trim())?.groupValues?.get(1)
+            val nickname = NICKNAME.find(line.trim())?.groupValues?.get(1)
             val friend = nickname?.let { nick -> FriendsAPI.friends.firstOrNull { it.nickname == nick } }
             if (friend != null) line.replaceFirst("$nickname*", friend.name) else line
         }
@@ -647,7 +647,7 @@ object DungeonFriends : SkyMyceModule() {
     fun relayReply(name: String, text: String): Boolean {
         if (!LocationAPI.isOnSkyBlock || !isFriend(name) || text.length !in 1..220 || text.any { it < ' ' || it == '§' || it == '\u007f' }) return false
         val offer = receivedOffers[name.lowercase()]?.takeIf { it.expires > now() }
-        val buttonReply = Regex("^(yes|no) ([a-f0-9]{16})$").matchEntire(text)
+        val buttonReply = lfgButtonAction.matchEntire(text)
         if (buttonReply != null && buttonReply.groupValues[2] != offer?.request?.token) { notify("That request has expired", name); return true }
         val reply = buttonReply?.groupValues?.get(1) ?: text
         if (offer != null && classifyLfgReply(reply) == LfgReplyStatus.ACCEPTED) {
@@ -745,9 +745,10 @@ object DungeonFriends : SkyMyceModule() {
         if (scannerAccount == account) return
         saveFriends(true)
         scannerAccount = account
-        scannerStore = FriendListStore(SkyMyce.configPath.resolve("friend_lists/$account.json"))
+        val store = FriendListStore(SkyMyce.configPath.resolve("friend_lists/$account.json"))
+        scannerStore = store
         scanner = try {
-            FriendListScanner(scannerStore!!.load(), scannerStore!!.loadAll()).also {
+            FriendListScanner(store.load(), store.loadAll()).also {
                 if (!it.hasScannedAll) it.refresh(now(), full = true)
             }
         } catch (_: Exception) {
@@ -785,7 +786,6 @@ object DungeonFriends : SkyMyceModule() {
     private var friendWriter: me.mycellium.skymyce.utils.StateWriter<Pair<List<OnlineDungeonFriend>, List<OnlineDungeonFriend>?>>? = null
 
     fun now(): Long = System.nanoTime() / 1000000
-    fun friendUuid(name: String): UUID? = friendUuids[name.lowercase()]
     fun diagnostics(): Map<String, Long> = mapOf("friends.cached" to scanner.all.size.toLong(), "friends.online" to scanner.online.size.toLong(),
         "friends.scan" to if (scanner.scanning) 1L else 0L, "friends.join_work" to joining.pendingCount.toLong(),
         "friends.fallback" to fallbackMessages.size.toLong(), "friends.offers" to (sentOffers.size + receivedOffers.size).toLong(),
@@ -793,4 +793,5 @@ object DungeonFriends : SkyMyceModule() {
 
     private const val PLAYER = "(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16})"
     private val FRIEND_NOTICE = Regex("^Friend > $PLAYER (joined|left)(?:\\.| the (?:server|network)[!.]?)?$")
+    private val NICKNAME = Regex("^(\\S+)\\* is ")
 }

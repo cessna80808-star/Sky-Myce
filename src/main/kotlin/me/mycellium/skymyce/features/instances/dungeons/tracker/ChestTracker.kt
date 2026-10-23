@@ -2,9 +2,6 @@ package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import com.mojang.serialization.Codec
 import com.mojang.serialization.codecs.RecordCodecBuilder
-import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
-import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
-import me.mycellium.skymyce.utils.ItemUtils.getPrice
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 
 data class ChestTracker(
@@ -20,21 +17,6 @@ data class ChestTracker(
 
     val netProfit: Double
         get() = grossProfit - chestCost - rerollCost
-
-    fun trackChest(items: Map<SkyBlockId, Int>, cost: Long) {
-        val now = System.currentTimeMillis()
-        chestCount++
-        chestCost += cost
-        items.forEach { (id, count) ->
-            val value = (id.getPrice(DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType)) * count
-
-            if (value >= (DungeonsConfig.valuableItemThreshold * 1_000_000)) valuables.getOrPut(id) { mutableListOf() }.add(now)
-
-            val tracked = trackedItems.getOrPut(id) { TrackedItem() }
-            tracked.value += value
-            tracked.count += count
-        }
-    }
 
     companion object {
         val CODEC: Codec<ChestTracker> = RecordCodecBuilder.create { instance ->

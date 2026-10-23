@@ -20,17 +20,17 @@ import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSky
 
 
 object DungeonChestOverlay : SkyMyceModule() {
-    val rerollThreshold
+    private val rerollThreshold
         get() = DungeonsConfig.safeRerollThreshold * 1_000_000
-    
-    data class ChestOverlayItem(val value: Double, val count: Int) {
+
+    private data class ChestOverlayItem(val value: Double, val count: Int) {
         val totalValue = value * count
         val valuable = (totalValue >= (DungeonsConfig.valuableItemThreshold * 1_000_000))
         val text = if (valuable) "§b${NumberUtils.condense(totalValue)}" else "§a${NumberUtils.condense(totalValue)}"
     }
 
-    var items: Map<Slot, ChestOverlayItem>? = emptyMap()
-    var clickedTimestamp = 0L
+    private var items: Map<Slot, ChestOverlayItem>? = emptyMap()
+    private var clickedTimestamp = 0L
     @Subscription(ContainerCloseEvent::class, ServerDisconnectEvent::class)
     fun clearContainer() { items = null; clickedTimestamp = 0L }
     override fun onDisable() { clearContainer() }

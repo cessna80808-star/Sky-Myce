@@ -329,6 +329,9 @@ val dungeonFriendsCheck by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsCheckKt"
+    // The cosmetic checks start Minecraft logging, which writes logs/ into the working directory.
+    workingDir = layout.buildDirectory.dir("dungeon-friends-check").get().asFile
+    doFirst { workingDir.mkdirs() }
 }
 
 val dungeonChestProfitCheck by tasks.registering(JavaExec::class) {

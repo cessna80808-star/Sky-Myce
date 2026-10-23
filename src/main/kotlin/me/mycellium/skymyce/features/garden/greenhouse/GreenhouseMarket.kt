@@ -81,6 +81,7 @@ internal class BazaarTransport {
 internal class BazaarMarketFailure(val rateLimited: Boolean, val retryAt: Long? = null) : Exception()
 
 private const val DEPTH_LEVELS = 5
+private val PRODUCT_ID = Regex("[A-Z0-9_:;-]{1,100}")
 
 /** Full public order books exceed the community DTO reader's deliberate 256 KiB ceiling. */
 internal fun readBazaarMarketBody(body: InputStream): JsonObject = withCommunityBodyDeadline(body, Duration.ofSeconds(15)) { input ->
@@ -128,7 +129,7 @@ internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean 
     }
     val seen = hashSetOf<String>()
     val products = entries.map { (id, product) ->
-        require(seen.add(id) && id.matches(Regex("[A-Z0-9_:;-]{1,100}")))
+        require(seen.add(id) && id.matches(PRODUCT_ID))
         if (!normalized) require(product.text("product_id", 100) == id)
         val quick = if (normalized) product else product.getAsJsonObject("quick_status") ?: JsonObject()
         // Both sources describe depth as the best five price levels.

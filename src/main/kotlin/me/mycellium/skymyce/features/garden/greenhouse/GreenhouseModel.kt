@@ -48,7 +48,6 @@ data class Plant(
     /** Another stage passing at its last starts it again from stage 1 (Glasscorn). */
     val restarts: Boolean = false,
 ) {
-    val mutation get() = rarity != Rarity.RAW
     val solvable get() = special == null && requires.isNotEmpty()
 }
 
@@ -94,9 +93,11 @@ data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceM
 /** The Garden level a mutation needs: the highest unlock level among the base crops it spreads from. */
 fun gardenLevelFor(catalog: PlantCatalog, plant: Plant) = plant.requires.keys.maxOfOrNull { catalog[it]?.gardenLevel ?: 0 } ?: 0
 
+private val GARDEN_LEVEL = Regex("""\bGarden Level:?\s+([IVX]{1,5}|\d{1,2})\b""")
+
 /** The Garden level from a tab list line such as "Garden Level: XII" or "Garden Level 12"; null for anything else. */
 fun parseGardenLevel(line: String): Int? {
-    val value = Regex("""\bGarden Level:?\s+([IVX]{1,5}|\d{1,2})\b""").find(line)?.groupValues?.get(1) ?: return null
+    val value = GARDEN_LEVEL.find(line)?.groupValues?.get(1) ?: return null
     val level = value.toIntOrNull() ?: value.map { mapOf('I' to 1, 'V' to 5, 'X' to 10).getValue(it) }
         .let { digits -> digits.indices.sumOf { i -> if (i + 1 < digits.size && digits[i] < digits[i + 1]) -digits[i] else digits[i] } }
     return level.takeIf { it in 1..15 }
@@ -232,7 +233,7 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
     val pause = plant?.pauses?.firstOrNull { it in reading.stage until stages && (it > reading.stage || !reading.awake) }
     val paused = pause != null && raw >= pause
     val stage = when {
-        paused -> pause!!.toDouble()
+        paused -> pause.toDouble()
         plant?.restarts == true && raw >= stages + 1 -> 1 + (raw - stages - 1) % stages
         else -> raw.coerceAtMost(stages.toDouble())
     }

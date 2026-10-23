@@ -27,14 +27,7 @@ internal data class GlobalChatSpan(val text: String, val url: URI? = null)
 
 private val globalMessageId = Regex("[a-f0-9]{32}")
 private val globalUrl = Regex("(?i)https?://[^\\s<>]+")
-private fun safeGlobalText(text: String, maximum: Int, multiline: Boolean) = text.length in 1..maximum &&
-    !text.isBlank() && text.none { it == '§' || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' ||
-        it.isISOControl() && !(multiline && it == '\n') } &&
-    text.indices.all { index -> when {
-        text[index].isHighSurrogate() -> index + 1 < text.length && text[index + 1].isLowSurrogate()
-        text[index].isLowSurrogate() -> index > 0 && text[index - 1].isHighSurrogate()
-        else -> true
-    } }
+private fun safeGlobalText(text: String, maximum: Int, multiline: Boolean) = !text.isBlank() && ircText(text, maximum, multiline)
 
 internal fun globalMessageError(text: String): String? = when {
     text.isBlank() || text.length > 1024 -> "Global messages must contain 1–1024 characters."
@@ -129,6 +122,25 @@ internal class GlobalChatSubscription {
         lastError = reason
         return notify
     }
+}
+
+/**
+ * One IRC message waiting for a subscription receipt, released once confirmed or reported after 12 s.
+ * A send the relay rejected as not_subscribed was never enqueued, so it may wait for one resubscription.
+ */
+internal class IrcHeldSend {
+    class Held(val scope: String, val text: String, val expiresAt: Long, val retried: Boolean)
+    var held: Held? = null
+        private set
+    fun hold(scope: String, text: String, now: Long, retried: Boolean = false): Boolean {
+        if (held != null) return false
+        held = Held(scope, text, now + 12_000_000_000L, retried); return true
+    }
+    fun rejected(scope: String, text: String, reason: String?, retried: Boolean, now: Long) =
+        reason == "not_subscribed" && !retried && hold(scope, text, now, true)
+    fun take(scope: String): Held? = held?.takeIf { it.scope == scope }?.also { held = null }
+    fun expired(now: Long): Held? = held?.takeIf { now >= it.expiresAt }?.also { held = null }
+    fun clear() { held = null }
 }
 
 /** Bounded word wrapping; never cuts an extended grapheme or floods chat with empty lines. */

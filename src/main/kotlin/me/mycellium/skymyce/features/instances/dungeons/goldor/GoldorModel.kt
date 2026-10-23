@@ -81,18 +81,22 @@ enum class PuzzleType(val code: Char, val title: String) {
     PANES('p', "Panes");
 
     companion object {
+        private val colourCode = Regex("§.")
+        private val startsWithTitle = Regex("^What starts with: '.'\\?$")
+        private val selectAllTitle = Regex("^Select all the [A-Z0-9 _]{1,24} items!$")
+
         fun ofCode(code: Char) = entries.firstOrNull { it.code == code }
 
         /** The puzzle a terminal window shows, from its title; null for any other window. */
         fun ofTitle(rawTitle: String): PuzzleType? {
-            val title = rawTitle.replace(Regex("§."), "").trim()
+            val title = rawTitle.replace(colourCode, "").trim()
             return when {
                 title == "Click the button on time!" -> MELODY
                 title == "Click in order!" -> NUMBERS
                 title == "Change all to same color!" -> RUBIKS
                 title == "Correct all the panes!" -> PANES
-                title.matches(Regex("^What starts with: '.'\\?$")) -> STARTS_WITH
-                title.matches(Regex("^Select all the [A-Z0-9 _]{1,24} items!$")) -> SELECT_ALL
+                title.matches(startsWithTitle) -> STARTS_WITH
+                title.matches(selectAllTitle) -> SELECT_ALL
                 else -> null
             }
         }

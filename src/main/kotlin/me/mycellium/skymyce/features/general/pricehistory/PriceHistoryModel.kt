@@ -69,9 +69,11 @@ fun priceHistoryUrl(tag: String, market: PriceMarket, range: PriceRange, now: Lo
     }
 }
 
+private val utcOffset = Regex("[+-]\\d{2}:\\d{2}$")
+
 /** Coflnet times are UTC; most carry no offset. Null when unreadable. */
 fun parseCoflnetTime(text: String): Long? = runCatching {
-    if (text.endsWith("Z") || Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(text)) OffsetDateTime.parse(text).toInstant().toEpochMilli()
+    if (text.endsWith("Z") || utcOffset.containsMatchIn(text)) OffsetDateTime.parse(text).toInstant().toEpochMilli()
     else LocalDateTime.parse(text).toInstant(ZoneOffset.UTC).toEpochMilli()
 }.getOrNull()
 

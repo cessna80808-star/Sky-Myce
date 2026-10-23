@@ -96,10 +96,12 @@ export class CosmeticAssets {
   }); }
   cleanupKeys(): string[] {
     return this.storage.transactionSync(() => {
-      this.storage.sql.exec("INSERT OR IGNORE INTO cosmetic_asset_cleanup SELECT id FROM cosmetic_assets WHERE status IN ('reserved','writing') AND expires_at<=?", Date.now());
-      this.storage.sql.exec("UPDATE cosmetic_assets SET status='deleted' WHERE status IN ('reserved','writing') AND expires_at<=?", Date.now());
-      this.storage.sql.exec("DELETE FROM cosmetic_asset_grants WHERE expires_at<=?", Date.now());
-      this.storage.sql.exec("DELETE FROM cosmetic_assets WHERE status='deleted' AND created_at<? AND id NOT IN (SELECT id FROM cosmetic_asset_cleanup)", Date.now() - 30 * 86400000);
+      // One cutoff: every row marked deleted must also be queued for R2 cleanup.
+      const now = Date.now();
+      this.storage.sql.exec("INSERT OR IGNORE INTO cosmetic_asset_cleanup SELECT id FROM cosmetic_assets WHERE status IN ('reserved','writing') AND expires_at<=?", now);
+      this.storage.sql.exec("UPDATE cosmetic_assets SET status='deleted' WHERE status IN ('reserved','writing') AND expires_at<=?", now);
+      this.storage.sql.exec("DELETE FROM cosmetic_asset_grants WHERE expires_at<=?", now);
+      this.storage.sql.exec("DELETE FROM cosmetic_assets WHERE status='deleted' AND created_at<? AND id NOT IN (SELECT id FROM cosmetic_asset_cleanup)", now - 30 * 86400000);
       return this.storage.sql.exec<{id: string}>("SELECT id FROM cosmetic_asset_cleanup LIMIT 128").toArray().map(row => `capes/${row.id}.png`);
     });
   }
@@ -136,7 +138,7 @@ export class CosmeticAssets {
 }
 
 /** Validate actual PNG structure, CRCs and a bounded zlib stream; keep only trusted structural chunks. */
-export async function validateCapePng(bytes: Uint8Array): Promise<Uint8Array> {
+export async function validateCapePng(bytes: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
   const signature = [137,80,78,71,13,10,26,10];
   if (bytes.length < 57 || bytes.length > CAPE_QUOTA.maxUploadBytes || signature.some((byte, index) => bytes[index] !== byte)) deny("invalid_png");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), decoder = new TextDecoder();
@@ -164,21 +166,31 @@ export async function validateCapePng(bytes: Uint8Array): Promise<Uint8Array> {
   if (inflated.length !== expected || Array.from({ length: 32 }, (_, row) => inflated[row * (1 + 64 * channels)]).some(filter => filter > 4)) deny("invalid_png");
   return join([new Uint8Array(signature), canonical[0], pngChunk("IDAT", zip), canonical[1]]);
 }
-function join(chunks: Uint8Array[]): Uint8Array { const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0)); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; } return result; }
-export function crc32(bytes: Uint8Array): number { let crc = 0xffffffff; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); } return (crc ^ 0xffffffff) >>> 0; }
+function join(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> { const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0)); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; } return result; }
+const crcTable = Uint32Array.from({ length: 256 }, (_, n) => { for (let bit = 0; bit < 8; bit++) n = (n >>> 1) ^ ((n & 1) ? 0xedb88320 : 0); return n; });
+export function crc32(bytes: Uint8Array): number { let crc = 0xffffffff; for (const byte of bytes) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8); return (crc ^ 0xffffffff) >>> 0; }
 function pngChunk(type: string, bytes: Uint8Array): Uint8Array { const result = new Uint8Array(bytes.length + 12), view = new DataView(result.buffer); view.setUint32(0, bytes.length); result.set(new TextEncoder().encode(type), 4); result.set(bytes, 8); view.setUint32(bytes.length + 8, crc32(result.subarray(4, bytes.length + 8))); return result; }
-export async function boundedBytes(readable: ReadableStream<Uint8Array>, maximum: number): Promise<Uint8Array> {
+export async function boundedBytes(readable: ReadableStream<Uint8Array>, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
   const reader = readable.getReader(), chunks: Uint8Array[] = []; let size = 0;
   try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > maximum) { await reader.cancel(); deny("upload_too_large"); } chunks.push(next.value); } } finally { reader.releaseLock(); }
   return join(chunks);
 }
-async function digest(bytes: Uint8Array): Promise<string> { return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2,"0")).join(""); }
 
 export async function handleCosmeticAssets(request: Request, env: { ACCOUNT_STORE: DurableObjectNamespace<AccountStore>; RELAY_ROOMS: DurableObjectNamespace<import("./index").RelayRoom>; ROOMS: string; COSMETIC_ASSETS?: R2Bucket }): Promise<Response | null> {
   const url = new URL(request.url); if (!url.pathname.startsWith("/community/cosmetics")) return null;
   const store = env.ACCOUNT_STORE.getByName("global"), token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
   const json = (result: AssetResult | object, status?: number) => Response.json(result, { status: status ?? ((result as AssetResult).ok ? 200 : 400), headers: { "Cache-Control": "no-store" } });
   const notify = async (profiles: CosmeticProfile[]) => { for (let offset = 0; offset < profiles.length; offset += 128) await Promise.allSettled(env.ROOMS.split(",").map(room => env.RELAY_ROOMS.getByName(room).cosmeticChanged(profiles.slice(offset, offset + 128)))); };
+  const serve = async (bucket: R2Bucket, allowed: AssetResult, recheck: () => Promise<AssetResult>, cacheControl: string) => {
+    const object = await bucket.get(allowed.key!);
+    if (!object || object.size !== allowed.asset!.size || object.size > CAPE_QUOTA.maxUploadBytes) return json({ ok: false, error: "asset_unavailable" }, 404);
+    const bytes = await boundedBytes(object.body, CAPE_QUOTA.maxUploadBytes);
+    if (await sha256(bytes) !== allowed.asset!.sha256) return json({ ok: false, error: "asset_corrupt" }, 503);
+    await validateCapePng(bytes);
+    const current = await recheck();
+    if (!current.ok || current.asset!.sha256 !== allowed.asset!.sha256 || current.asset!.size !== allowed.asset!.size) return json({ ok: false, error: "asset_unavailable" }, 404);
+    return new Response(bytes, { headers: { "Content-Type": "image/png", "Content-Length": String(bytes.length), "Cache-Control": cacheControl, "ETag": `"${allowed.asset!.sha256}"`, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" } });
+  };
   try {
     if (url.pathname === "/community/cosmetics" && request.method === "GET") return json(await store.communityCosmeticOverview(token));
     const previewId = url.pathname.match(/^\/community\/cosmetics\/preview\/([a-f0-9]{32})$/)?.[1];
@@ -188,24 +200,13 @@ export async function handleCosmeticAssets(request: Request, env: { ACCOUNT_STOR
       const player = url.searchParams.get("uuid")!;
       const allowed = await store.communityCosmeticPreviewAsset(token, previewId, player);
       if (!allowed.ok) return json(allowed, allowed.error === "asset_unavailable" ? 404 : allowed.error === "session_identity_changed" ? 400 : 401);
-      const object = await env.COSMETIC_ASSETS.get(allowed.key!);
-      if (!object || object.size !== allowed.asset!.size || object.size > CAPE_QUOTA.maxUploadBytes) return json({ ok: false, error: "asset_unavailable" }, 404);
-      const bytes = await boundedBytes(object.body, CAPE_QUOTA.maxUploadBytes);
-      if (await digest(bytes) !== allowed.asset!.sha256) return json({ ok: false, error: "asset_corrupt" }, 503);
-      await validateCapePng(bytes);
-      const current = await store.communityCosmeticPreviewAsset(token, previewId, player);
-      if (!current.ok || current.asset!.sha256 !== allowed.asset!.sha256 || current.asset!.size !== allowed.asset!.size) return json({ ok: false, error: "asset_unavailable" }, 404);
-      return new Response(bytes, { headers: { "Content-Type": "image/png", "Content-Length": String(bytes.length), "Cache-Control": "private, no-store", "ETag": `"${allowed.asset!.sha256}"`, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" } });
+      return await serve(env.COSMETIC_ASSETS, allowed, () => store.communityCosmeticPreviewAsset(token, previewId, player), "private, no-store");
     }
     const assetId = url.pathname.match(/^\/community\/cosmetics\/assets\/([a-f0-9]{32})$/)?.[1];
     if (assetId && request.method === "GET") {
       if (!env.COSMETIC_ASSETS) return json({ ok: false, error: "assets_unavailable" }, 503);
-      const allowed = await store.communityCosmeticActiveAsset(assetId, url.searchParams.get("uuid") ?? ""); if (!allowed.ok) return json({ ok: false, error: "asset_unavailable" }, 404);
-      const object = await env.COSMETIC_ASSETS.get(allowed.key!); if (!object || object.size !== allowed.asset!.size || object.size > CAPE_QUOTA.maxUploadBytes) return json({ ok: false, error: "asset_unavailable" }, 404);
-      const bytes = await boundedBytes(object.body, CAPE_QUOTA.maxUploadBytes); if (await digest(bytes) !== allowed.asset!.sha256) return json({ ok: false, error: "asset_corrupt" }, 503);
-      await validateCapePng(bytes);
-      const current = await store.communityCosmeticActiveAsset(assetId, url.searchParams.get("uuid") ?? ""); if (!current.ok) return json({ ok: false, error: "asset_unavailable" }, 404);
-      return new Response(bytes, { headers: { "Content-Type": "image/png", "Content-Length": String(bytes.length), "Cache-Control": "private, max-age=60", "ETag": `"${allowed.asset!.sha256}"`, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" } });
+      const player = url.searchParams.get("uuid") ?? "", allowed = await store.communityCosmeticActiveAsset(assetId, player); if (!allowed.ok) return json({ ok: false, error: "asset_unavailable" }, 404);
+      return await serve(env.COSMETIC_ASSETS, allowed, () => store.communityCosmeticActiveAsset(assetId, player), "private, max-age=60");
     }
     if (url.pathname === "/community/cosmetics/upload" && request.method === "PUT") {
       if (!env.COSMETIC_ASSETS) return json({ ok: false, error: "assets_unavailable" }, 503);
@@ -213,7 +214,7 @@ export async function handleCosmeticAssets(request: Request, env: { ACCOUNT_STOR
       const claim = await store.communityCosmeticClaim(token, request.headers.get("X-SkyMyce-Upload-Grant") ?? ""); if (!claim.ok) return json(claim);
       try {
         if (Number(request.headers.get("Content-Length") ?? 0) > CAPE_QUOTA.maxUploadBytes) deny("upload_too_large");
-        const bytes = await validateCapePng(await boundedBytes(request.body, CAPE_QUOTA.maxUploadBytes)), hash = await digest(bytes);
+        const bytes = await validateCapePng(await boundedBytes(request.body, CAPE_QUOTA.maxUploadBytes)), hash = await sha256(bytes);
         await env.COSMETIC_ASSETS.put(claim.key!, bytes, { httpMetadata: { contentType: "image/png", cacheControl: "private, max-age=60" }, customMetadata: { sha256: hash } });
         const result = await store.communityCosmeticFinish(token, claim.assetId!, hash, bytes.length);
         if (!result.ok) { await env.COSMETIC_ASSETS.delete(claim.key!); await store.communityCosmeticFail(claim.assetId!); }

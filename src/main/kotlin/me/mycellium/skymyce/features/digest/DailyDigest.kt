@@ -28,7 +28,6 @@ object DailyDigest : SkyMyceModule() {
     private val gate = DigestDailyGate()
     private val profiles = linkedMapOf<String, DigestProfileState>()
     private val history = DigestRngHistory()
-    private var store: DigestStateStore? = null
     private var loaded = false
     private var storageStatus = "Loading local cache…"
     private var profileKey: String? = null
@@ -54,8 +53,8 @@ object DailyDigest : SkyMyceModule() {
     )
 
     override fun init() {
-        store = DigestStateStore(SkyMyce.configPath.resolve("daily_digest.json"))
-        writer = DigestStateWriter(store!!, { write -> Scheduling.schedule(500.milliseconds) {
+        val store = DigestStateStore(SkyMyce.configPath.resolve("daily_digest.json"))
+        writer = DigestStateWriter(store, { write -> Scheduling.schedule(500.milliseconds) {
             check(!MC.instance.isSameThread)
             write()
         } }, { error ->
@@ -75,7 +74,7 @@ object DailyDigest : SkyMyceModule() {
         DungeonFriendRelay.onDigestEvent = { json ->
             if (json.get("type")?.asString == "rng_removed") {
                 val ids = json.getAsJsonArray("ids")?.mapNotNull { it.takeIf { value -> value.isJsonPrimitive }?.asString }
-                    ?.filter { it.matches(Regex("[a-f0-9]{32}")) }?.take(256)?.toSet().orEmpty()
+                    ?.filter { it.matches(digestRngId) }?.take(256)?.toSet().orEmpty()
                 removeCommunityReports(ids)
             } else if (DailyDigestConfig.receiveRng && contextReady() && subscribed)
                 receiveEvents(listOfNotNull(json.get("event")?.takeIf { it.isJsonObject }?.asJsonObject))
@@ -100,7 +99,7 @@ object DailyDigest : SkyMyceModule() {
         }
         Scheduling.schedule(0.seconds) {
             check(!MC.instance.isSameThread)
-            val saved = store!!.load()
+            val saved = store.load()
             MC.instance.execute {
                 saved.lastOpened.forEach { (account, date) -> gate.opened(account, java.time.LocalDate.parse(date)) }
                 // Community history is revalidated by the authoritative feed on each connection; personal history stays local.
@@ -109,7 +108,7 @@ object DailyDigest : SkyMyceModule() {
                 savedGlobal = saved.global
                 saved.global?.let(DigestActivities::restoreGlobal)
                 loaded = true
-                storageStatus = if (store!!.recovered) "Recovered damaged local cache; original will be preserved" else ""
+                storageStatus = if (store.recovered) "Recovered damaged local cache; original will be preserved" else ""
                 synchronizeContext()
                 changed()
                 if (LocationAPI.isOnSkyBlock) scheduleWake(300)

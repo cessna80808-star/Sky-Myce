@@ -99,7 +99,7 @@ internal fun parseJournalFilter(json: JsonElement?): JournalFilter {
     val filter = Gson().fromJson(json, JournalFilter::class.java)
     require(filter.period in JournalPeriod.entries && filter.scope in TrackerScope.entries && filter.query.length <= 100)
     require(filter.activity == null || filter.activity in listOf("dungeon", "slayer"))
-    require(filter.floor?.matches(Regex("[FM][1-7]|E|ENTRANCE")) != false)
+    require(filter.floor?.matches(TRACKED_FLOOR) != false)
     if (filter.from.isNotEmpty()) LocalDate.parse(filter.from)
     if (filter.until.isNotEmpty()) LocalDate.parse(filter.until)
     require(filter.from.isEmpty() || filter.until.isEmpty() || filter.from <= filter.until)

@@ -12,7 +12,6 @@ object DungeonFriendProfileProvider {
     private val viewerRequests = ProfileLookupCooldown()
     private val skyblockerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblocker") }
     internal val viewerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblockpv") }
-    val nextViewerRequest: Long get() = viewerRequests.nextRequest
     val available: Boolean get() = skyblockerAvailable || viewerAvailable
 
     fun fetch(name: String, uuid: UUID): DungeonFriendStats? {

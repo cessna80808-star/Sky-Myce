@@ -81,10 +81,10 @@ function videoUrl(value: string, id: string, thumbnail = false): string | undefi
   } catch { return; }
 }
 
+const namedEntities: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
 function xmlText(value: string): string {
   return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, entity => {
-    const named: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
-    if (named[entity]) return named[entity];
+    if (namedEntities[entity]) return namedEntities[entity];
     const code = Number.parseInt(entity.slice(entity[2] === "x" ? 3 : 2, -1), entity[2] === "x" ? 16 : 10);
     return Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "";
   });
@@ -278,8 +278,7 @@ export function rngPayload(event: PublicRngEvent, metadataVersion?: number): Pub
 }
 
 export type RngSubmission = RngMetadata & { id: string; item: string; activity: string; occurredAt: number };
-/** The normal report parser is also used by the isolated administrator tester. */
-export function parsedRngSubmission(data: Record<string, unknown>, now: number): RngSubmission | null {
+function parsedRngSubmission(data: Record<string, unknown>, now: number): RngSubmission | null {
   const event = record(data.event), metadata = event && rngMetadata(event);
   if (data.type !== "rng_publish" || Object.keys(data).some(key => !["type", "id", "event", "showName"].includes(key)) || typeof data.showName !== "boolean" || !event ||
       !metadata || Object.keys(event).some(key => !rngEventKeys.includes(key)) ||
@@ -290,7 +289,7 @@ export function parsedRngSubmission(data: Record<string, unknown>, now: number):
   return { id: event.id, item: event.item, activity: event.activity, occurredAt: event.occurredAt, ...metadata };
 }
 
-export function rngAcquisitionDecision(id: string, reports: { id: string; time: number }[], persisted: boolean, now: number): "accepted" | "duplicate" | "rate_limited" {
+function rngAcquisitionDecision(id: string, reports: { id: string; time: number }[], persisted: boolean, now: number): "accepted" | "duplicate" | "rate_limited" {
   if (persisted || reports.some(report => report.time > now - 360_000 && report.id === id)) return "duplicate";
   return reports.filter(report => report.time > now - 60_000).length >= 3 ? "rate_limited" : "accepted";
 }
@@ -305,10 +304,6 @@ export class DigestRng {
     sql.exec("CREATE INDEX IF NOT EXISTS digest_rng_limits_time ON digest_rng_limits(updated)");
   }
 
-  recent(now: number): PublicRngEvent[] {
-    return this.recentRecords(now).map(row => row.event);
-  }
-
   /** Keep author identifiers internal so the relay can enforce persisted consent before returning public projections. */
   recentRecords(now: number): { author: string; event: PublicRngEvent; receivedAt: number }[] {
     this.sql.exec("DELETE FROM digest_rng WHERE received_at <= ?", now - 604_800_000);
@@ -320,9 +315,8 @@ export class DigestRng {
   deleteAuthors(uuids: string[]): string[] {
     const ids: string[] = [];
     for (const uuid of uuids) {
-      this.sql.exec<{ event: string }>("SELECT event FROM digest_rng WHERE author=?", uuid).toArray()
+      this.sql.exec<{ event: string }>("DELETE FROM digest_rng WHERE author=? RETURNING event", uuid).toArray()
         .forEach(row => ids.push((JSON.parse(row.event) as PublicRngEvent).id));
-      this.sql.exec("DELETE FROM digest_rng WHERE author=?", uuid);
       // Retain the short rate-limit window. Privacy changes must not make repeated reports eligible again.
     }
     return ids;

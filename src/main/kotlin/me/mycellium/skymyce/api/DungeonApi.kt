@@ -2,7 +2,6 @@ package me.mycellium.skymyce.api
 
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
-import me.mycellium.skymyce.api.events.DungeonChestInitializedEvent
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
 import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
@@ -36,20 +35,6 @@ import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import java.util.UUID
 object DungeonApi : SkyMyceModule() {
-    val secretDrops = setOf(
-        "ARCHITECT_FIRST_DRAFT",
-        "CANDYCOMB",
-        "DEFUSE_KIT",
-        "DUNGEON_CHEST_KEY",
-        "DUNGEON_DECOY",
-        "DUNGEON_TRAP",
-        "DYE_SECRET",
-        "INFLATABLE_JERRY",
-        "REVIVE_STONE",
-        "TRAINING_WEIGHTS",
-        "TREASURE_TALISMAN"
-    )
-
     val chestNames = mapOf(
         "Catacombs - Floor I" to DungeonFloor.F1,
         "Catacombs - Floor II" to DungeonFloor.F2,
@@ -115,15 +100,8 @@ object DungeonApi : SkyMyceModule() {
             clearChest(); chestScreen = event.screen
         }
         chestType = type
-        if (chestType != null) {
-            refreshRewards(event.containerSlots)
-            displayDevMessage { "Dungeon chest preview: floor=${chestFloor?.name ?: "unknown"}, tier=${chestType?.name}, rewardKinds=${chestContents.size}" }
-            DungeonChestInitializedEvent(
-                chestFloor ?: return,
-                chestType ?: return,
-                chestContents
-            ).post(SkyBlockAPI.eventBus)
-        }
+        refreshRewards(event.containerSlots)
+        displayDevMessage { "Dungeon chest preview: floor=${chestFloor?.name ?: "unknown"}, tier=${type.name}, rewardKinds=${chestContents.size}" }
     }
 
     @Subscription
@@ -214,7 +192,6 @@ enum class DungeonChest(val label: String, val color: ChatFormatting) {
     BEDROCK("Bedrock", ChatFormatting.DARK_GRAY);
 
     companion object {
-        fun DungeonChest.formatted() = "§${this.color.char}${this.label}"
         fun fromName(name: String) = normalizeChestText(name)?.let { normalized -> entries.firstOrNull { normalized == it.label || normalized == "${it.label} Chest" } }
     }
 }

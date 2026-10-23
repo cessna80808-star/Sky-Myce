@@ -7,21 +7,22 @@ import org.lwjgl.glfw.GLFW
 private val leapNamePattern = Regex("^(?:\\[[^]]+]\\s*)*([A-Za-z0-9_]{1,16})$")
 private val leapHeadPattern = Regex("^(?:\\[[^]]+]\\s*)*([A-Za-z0-9_]{1,16})(?:\\s+\\((?:DEAD|Archer|Berserk(?:er)?|Healer|Mage|Tank)(?:\\s+[IVXLCDM0-9]+)?\\))?$", RegexOption.IGNORE_CASE)
 private val leapScoreboardPattern = Regex("^\\[([ABHMT])]\\s+([A-Za-z0-9_]{1,16})\\s+(?:[0-9][0-9,.]*[kmb]?\\s*[❤♥]|DEAD)$", RegexOption.IGNORE_CASE)
+private val leapFormatting = Regex("§.")
 
-fun isLeapMenuTitle(value: String): Boolean = value.replace(Regex("§."), "").trim().lowercase(Locale.ROOT)
+fun isLeapMenuTitle(value: String): Boolean = value.replace(leapFormatting, "").trim().lowercase(Locale.ROOT)
     .let { it == "spirit leap" || it == "teleport to player" }
 
-fun normalizedLeapName(value: String): String? = leapNamePattern.matchEntire(value.replace(Regex("§."), "").trim())
+fun normalizedLeapName(value: String): String? = leapNamePattern.matchEntire(value.replace(leapFormatting, "").trim())
     ?.groupValues?.get(1)?.lowercase(Locale.ROOT)
 
-fun leapHeadName(value: String): String? = leapHeadPattern.matchEntire(value.replace(Regex("§."), "").trim())
+fun leapHeadName(value: String): String? = leapHeadPattern.matchEntire(value.replace(leapFormatting, "").trim())
     ?.groupValues?.get(1)?.lowercase(Locale.ROOT)
 
-fun leapHeadIsDead(value: String): Boolean = value.replace(Regex("§."), "").trim().endsWith("(DEAD)", ignoreCase = true)
+fun leapHeadIsDead(value: String): Boolean = value.replace(leapFormatting, "").trim().endsWith("(DEAD)", ignoreCase = true)
 
 fun leapScoreboardClass(name: String, lines: List<String>): String? {
     val key = normalizedLeapName(name) ?: return null
-    val match = lines.mapNotNull { leapScoreboardPattern.matchEntire(it.replace(Regex("§."), "").trim()) }
+    val match = lines.mapNotNull { leapScoreboardPattern.matchEntire(it.replace(leapFormatting, "").trim()) }
         .filter { it.groupValues[2].lowercase(Locale.ROOT) == key }.singleOrNull() ?: return null
     return when (match.groupValues[1].uppercase(Locale.ROOT)) {
         "A" -> "Archer"

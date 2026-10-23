@@ -26,6 +26,7 @@ object DungeonFriendStatsCache {
     private val sharedSuppressedAt = mutableMapOf<String, Long>()
     private val pending = linkedMapOf<String, Request>()
     private val sharedLookups = mutableMapOf<String, SharedLookup>()
+    private val PLAYER_NAME = Regex("[A-Za-z0-9_]{1,16}")
     private var relayCredits = 20.0 // Leave room below the relay's 30-message burst limit for uploads.
     private var relayUpdated = 0L
     private var store: DungeonFriendStatsStore? = null
@@ -111,7 +112,7 @@ object DungeonFriendStatsCache {
         liveClasses[name]?.takeIf { it.first == record.uuid }?.let { record.copy(stats = record.stats.copy(selectedClass = it.second)) } ?: record
 
     fun request(name: String, uuid: UUID? = null, force: Boolean = false, priority: Boolean = false, bypassShared: Boolean = false, refreshExpired: Boolean = false) {
-        if (!name.matches(Regex("[A-Za-z0-9_]{1,16}"))) return
+        if (!name.matches(PLAYER_NAME)) return
         val key = name.lowercase()
         val existing = cache[key]
         val changedPlayer = uuid != null && existing?.uuid != null && existing.uuid != uuid.toString().replace("-", "")

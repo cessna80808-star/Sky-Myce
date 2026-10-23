@@ -1,8 +1,6 @@
 package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import com.google.gson.Gson
-import com.google.gson.JsonPrimitive
-import com.mojang.serialization.JsonOps
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.features.digest.DetectedRng
@@ -11,7 +9,6 @@ import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.StateWriter
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.observedItemMetadata
-import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
@@ -20,7 +17,6 @@ import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
-import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
@@ -61,7 +57,10 @@ object AcquisitionRepository : SkyMyceModule() {
         journalWriter = StateWriter({ journalFile.write(Gson().toJsonTree(it)) }, { work -> Scheduling.schedule(500.milliseconds) { work() } })
         Scheduling.schedule(0.milliseconds) {
             var storageError = false
-            var saved = runCatching { parseAcquisitionArchive(file.read()) }.getOrElse { storageError = true; AcquisitionArchive() }
+            var saved = runCatching { parseAcquisitionArchive(file.read()) }.getOrElse {
+                SkyMyce.logger.warn("Could not read personal acquisition archive; recording paused, original retained", it)
+                storageError = true; AcquisitionArchive()
+            }
             // A corrupt/future archive is read-only: never silently replace permanent history.
             storageError = storageError || file.damaged
             val original = saved
@@ -84,7 +83,10 @@ object AcquisitionRepository : SkyMyceModule() {
                     }
                     parseAcquisitionArchive(Gson().toJsonTree(saved))
                     if (saved != original) { file.preserveOriginal(if (cutover) "before-v2-cutover" else "before-migration"); file.write(Gson().toJsonTree(saved)) }
-                }.onFailure { saved = original; migrationError = true }
+                }.onFailure {
+                    SkyMyce.logger.warn("Legacy acquisition migration failed; recording paused, originals preserved", it)
+                    saved = original; migrationError = true
+                }
             }
             var migratedPreferences = false
             val restoredView = runCatching {
@@ -130,11 +132,7 @@ object AcquisitionRepository : SkyMyceModule() {
         val prices = buildMap<String, Double?> {
             repeat(minOf(64, missing.size)) { offset ->
                 val item = missing[(valuationCursor + offset) % missing.size]
-                val id = runCatching {
-                    if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(java.util.Locale.ROOT)))
-                        .result().orElse(null) else SkyBlockId.item(item)
-                }.getOrNull()
-                put(item, id?.getPriceOrNull(DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType))
+                put(item, cachedLootUnitPrice(item, DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType))
             }
         }
         valuationCursor = (valuationCursor + prices.size) % missing.size
@@ -183,7 +181,7 @@ internal fun parseTrackerPreferences(json: com.google.gson.JsonElement?): Tracke
     require(overviewVersion == null || overviewVersion.isJsonPrimitive && overviewVersion.asJsonPrimitive.isNumber && overviewVersion.asString in listOf("1", "2"))
     val filter = Gson().fromJson(json, TrackerFilter::class.java)
     require(filter.page in TrackerPage.entries && filter.sort in LootOrder.entries && filter.scope in TrackerScope.entries)
-    require(filter.query.length <= 100 && filter.floor?.matches(Regex("[FM][1-7]|E|ENTRANCE")) != false && filter.mode in listOf(null, "F", "M"))
+    require(filter.query.length <= 100 && filter.floor?.matches(TRACKED_FLOOR) != false && filter.mode in listOf(null, "F", "M"))
     if (filter.from.isNotEmpty()) java.time.LocalDate.parse(filter.from)
     if (filter.until.isNotEmpty()) java.time.LocalDate.parse(filter.until)
     require(filter.chest?.length?.let { it <= 16 } != false && filter.session?.length?.let { it <= 40 } != false && filter.activity?.length?.let { it <= 30 } != false)

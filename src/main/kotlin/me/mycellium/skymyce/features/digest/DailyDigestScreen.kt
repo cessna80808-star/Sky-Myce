@@ -2,21 +2,17 @@ package me.mycellium.skymyce.features.digest
 
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.hud.themed
-import io.wispforest.owo.ui.component.DropdownComponent
 import net.minecraft.client.gui.screens.ChatScreen
 import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.ButtonComponent
 import io.wispforest.owo.ui.component.LabelComponent
-import io.wispforest.owo.ui.component.UIComponents
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
-import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
 import me.mycellium.skymyce.features.browser.BrowserLinks
 import me.mycellium.skymyce.features.browser.InGameBrowser
-import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.network.chat.Component
 import java.net.URI

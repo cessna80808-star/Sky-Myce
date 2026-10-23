@@ -1,15 +1,10 @@
 package me.mycellium.skymyce.features.instances.dungeons.goldor
 
-/** What one player is expected to do now, and how far along they are. */
+/** What one player is expected to do now. */
 data class PlayerPlan(
     val name: String,
-    val role: GoldorRole,
     /** The next open objective in their plan, or null when they have none left in this section. */
     val objective: ObjectiveId?,
-    val stackWith: String?,
-    val eta: Estimate?,
-    val positionKnown: Boolean,
-    val note: String?,
 )
 
 /** The leap the local player should make, with the reason and (for timed leaps) the plan. */
@@ -54,7 +49,7 @@ object GoldorEngine {
     fun advise(state: GoldorRunState, self: SelfContext, now: Long): GoldorAdvice {
         val profile = state.profile
         val section = state.section
-        val plans = state.players.values.mapNotNull { player -> player.role?.let { plan(state, player, it, now) } }
+        val plans = state.players.values.mapNotNull { player -> player.role?.let { plan(state, player, it) } }
         val selfRole = state.player(self.name)?.role
         val recommendation = selfRole?.let { recommend(state, self, it, now) }
         val routes = profile.routes.mapValues { (route, role) -> routeText(state, route, role, now) }
@@ -83,13 +78,8 @@ object GoldorEngine {
         info.status != ObjectiveStatus.COMPLETE && !(objective in plan.backup && info.status == ObjectiveStatus.ACTIVE && !info.by.equals(name, true))
     }
 
-    private fun plan(state: GoldorRunState, player: GoldorPlayer, role: GoldorRole, now: Long): PlayerPlan {
-        val rolePlan = effectivePlan(state, state.section, role)
-        val next = nextObjective(state, rolePlan, player.name)
-        val partner = rolePlan.stackWith?.let { state.playerWith(it)?.name }
-        val eta = next?.let { objectiveEta(state, it, player.name, now) }
-        return PlayerPlan(player.name, role, next, partner, eta, state.position(player.name, now) != null, rolePlan.note)
-    }
+    private fun plan(state: GoldorRunState, player: GoldorPlayer, role: GoldorRole) =
+        PlayerPlan(player.name, nextObjective(state, effectivePlan(state, state.section, role), player.name))
 
     /** Time until [objective] is done by [by]: remaining work plus walking there if they are not on it yet. */
     fun objectiveEta(state: GoldorRunState, objective: ObjectiveId, by: String?, now: Long): Estimate {
@@ -284,7 +274,7 @@ object GoldorEngine {
         val leapt = self.leaptAt != null && state.sectionDoneAt == null && self.leaptAt >= (state.gateOpenedAt ?: state.startedAt ?: 0L)
         val plan = planPreLeap(now, remaining, state.tick(), timing, travel, leapt = leapt, arrived = arrived, reactionMillis = self.reactionMillis)
         val name = target?.name ?: rule.target?.title ?: "?"
-        val routeNote = routeState?.let { if (it.state == RouteState.IN) "${profile.routeTitle(rule.route!!)} in" else if (target != null && targetPosition == null) "position unknown" else null }
+        val routeNote = routeState?.let { if (it.state == RouteState.IN) "${profile.routeTitle(rule.route)} in" else if (target != null && targetPosition == null) "position unknown" else null }
         val headline = when (plan.phase) {
             LeapPhase.LEAP, LeapPhase.MISSED -> "LEAP to $name"
             LeapPhase.ARRIVED -> "Ready at ${goal?.let { "next terminal" } ?: "target"}"

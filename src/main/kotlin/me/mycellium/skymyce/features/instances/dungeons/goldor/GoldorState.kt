@@ -27,9 +27,6 @@ data class GoldorPlayer(
     val position: BossPoint? = null,
     val seenAt: Long? = null,
     val alive: Boolean = true,
-    /** Section the player's SM client reported, if any. */
-    val reportedSection: GoldorSection? = null,
-    val lastMessageAt: Long? = null,
 )
 
 /** An early-enter route's progress: the state, where it came from, and when it last changed. */
@@ -43,8 +40,6 @@ data class RouteObservation(val state: RouteState = RouteState.PENDING, val sour
 class GoldorRunState(var profile: StrategyProfile) {
     companion object {
         const val POSITION_TTL = 3_000L
-        /** Shared state from a client that has been silent this long no longer counts as fresh. */
-        const val SHARED_TTL = 60_000L
         /** How long a gate line seen before n/n still counts for that section. */
         const val GATE_EARLY_MILLIS = 3_000L
     }
@@ -68,8 +63,6 @@ class GoldorRunState(var profile: StrategyProfile) {
     val counters = HashMap<GoldorSection, Int>()
     var tickOrigin: Long? = null
         private set
-    var tickObserved = false
-        private set
     var revision = 0L
         private set
     /** Conditions the player confirmed (`/sm goldor if`), for this run only. */
@@ -91,9 +84,9 @@ class GoldorRunState(var profile: StrategyProfile) {
 
     fun reset() {
         active = false; section = GoldorSection.S1; startedAt = null; sectionDoneAt = null; gateOpenedAt = null
-        objectives.clear(); routes.clear(); counters.clear(); tickOrigin = null; tickObserved = false
+        objectives.clear(); routes.clear(); counters.clear(); tickOrigin = null
         confirmations.clear(); ssResetAt = null; pendingGateAt = null
-        players.replaceAll { _, p -> p.copy(sm = false, reportedSection = null, lastMessageAt = null) }
+        players.replaceAll { _, p -> p.copy(sm = false) }
         changed()
     }
 
@@ -101,14 +94,12 @@ class GoldorRunState(var profile: StrategyProfile) {
     fun start(now: Long) {
         if (active) return
         active = true; section = GoldorSection.S1; startedAt = now; gateOpenedAt = now
-        tickOrigin = now + profile.tick.firstAfterStartMillis; tickObserved = false
+        tickOrigin = now + profile.tick.firstAfterStartMillis
         changed()
     }
 
-    /** Re-anchors the tick to an observed tick time (e.g. a death-barrier hit or a reliable timer line). */
-    fun observeTick(at: Long) { tickOrigin = at; tickObserved = true; changed() }
-
-    fun tick() = GoldorTick(tickOrigin, profile.tick.periodMillis, tickObserved)
+    /** The tick is only ever predicted from Goldor's opening line, never observed. */
+    fun tick() = GoldorTick(tickOrigin, profile.tick.periodMillis, false)
 
     fun state(objective: ObjectiveId) = objectives[objective] ?: ObjectiveState()
 

@@ -77,9 +77,8 @@ object RelayMessages {
     private val reactionRequests = IrcReactionRequests()
     private var globalAccount: java.util.UUID? = null
     private var globalNextSend = 0L
-    private class HeldIrcSend(val scope: String, val text: String, val expiresAt: Long)
-    // One message typed before the subscription receipt; sent once confirmed, never retried after a send.
-    private var heldSend: HeldIrcSend? = null
+    // One message typed before the subscription receipt; sent once confirmed, never retried after an uncertain send.
+    private val heldSend = IrcHeldSend()
     private var nextIrcDiagnostic = Long.MIN_VALUE
     private val conversations = RelayConversation()
     private val quiet = ThreadLocal.withInitial { false }
@@ -125,7 +124,7 @@ object RelayMessages {
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
             conversations.clear(); nextSend = 0; irc.selected = false; globalSubscription.reset(); partySubscription.reset()
-            heldSend = null; verifiedParty = null; verifiedPartyAt = 0; activeParty = ""; partySubscribedId = ""; partySubscribedUntil = 0
+            heldSend.clear(); verifiedParty = null; verifiedPartyAt = 0; activeParty = ""; partySubscribedId = ""; partySubscribedUntil = 0
             clearRichHistory(""); richSessionBoundary = ""
         }
     }
@@ -266,12 +265,12 @@ object RelayMessages {
         if (partySeenBoundary != seenBoundary) { partySeenBoundary = seenBoundary; partySeen.clear() }
         if (globalAccount != account) {
             irc.account(account); globalAccount = account; global.account(account.toString())
-            globalNextSend = 0L; globalSubscription.reset(); partySubscription.reset(); heldSend = null
+            globalNextSend = 0L; globalSubscription.reset(); partySubscription.reset(); heldSend.clear()
             verifiedParty = null; verifiedPartyAt = 0; refreshPartyBoundary()
         }
         chatStore.expire(System.currentTimeMillis())
         IrcChatRendering.tick()
-        heldSend?.takeIf { System.nanoTime() >= it.expiresAt }?.let { heldSend = null; ircError(it.scope, "not_subscribed", "held send") }
+        heldSend.expired(System.nanoTime())?.let { ircError(it.scope, "not_subscribed", "held send") }
         if (!DungeonFriendRelay.connected) return
         for (scope in listOf("global", "party")) {
             if (!(if (scope == "global") DungeonFriendRelay.globalChatAvailable else DungeonFriendRelay.partyChatAvailable)) continue
@@ -293,12 +292,12 @@ object RelayMessages {
                         nextPartySubscribe = System.nanoTime() + ircPartyRefreshMillis(grantMillis) * 1_000_000L
                     } else { partySubscribedId = ""; partySubscribedUntil = 0 }
                 }
-                val held = heldSend?.takeIf { it.scope == scope && subscription.current(revision) }
+                val current = subscription.current(revision)
                 val notified = subscription.complete(revision, reason, System.nanoTime())
                 if (notified) ircError(scope, reason, "subscription receipt")
-                if (held != null && (reason != null || subscription.confirmed)) {
-                    heldSend = null
-                    MC.instance.execute { if (reason == null) sendIrc(scope, held.text) else if (!notified) ircError(scope, reason, "held send") }
+                val held = if (current && (reason != null || subscription.confirmed)) heldSend.take(scope) else null
+                if (held != null) {
+                    MC.instance.execute { if (reason == null) sendIrc(scope, held.text, held.retried) else if (!notified) ircError(scope, reason, "held send") }
                 }
             }, receipt = { response -> grantMillis = ircPartyGrantMillis(response, roster?.id, System.currentTimeMillis()) ?: 0L })) {
                 subscription.queued(revision, enabled)
@@ -347,7 +346,7 @@ object RelayMessages {
     private fun globalSelected() { globalTick(); notice("Global chat selected. /sm chat returns to normal chat.") }
 
     fun sendGlobal(text: String) = sendIrc("global", text)
-    private fun sendIrc(scope: String, text: String) {
+    private fun sendIrc(scope: String, text: String, retried: Boolean = false) {
         if (suppressChatLog() || IrcChatRendering.addingMessage()) return
         val problem = ircClientMessageError(scope, text)
         if (problem != null) { notice(problem, true); return }
@@ -366,10 +365,10 @@ object RelayMessages {
         if (scope == "party" && livePartyRoster() == null) {
             DungeonFriends.requestIrcPartyInfo(); notice(partyRosterError(), true); return
         }
-        if (!subscription.enabled) { ircError(scope, "not_subscribed", "subscription pending"); return }
+        // Wait for the subscription receipt (or its 12 s timeout) instead of rejecting a send typed before it.
         if (!subscription.confirmed) {
-            if (heldSend != null) { notice("Wait a moment before sending another IRC message.", true); return }
-            heldSend = HeldIrcSend(scope, text, now + 12_000_000_000L); return
+            if (!heldSend.hold(scope, text, now, retried)) notice("Wait a moment before sending another IRC message.", true)
+            return
         }
         if (scope == "party" && !currentIrcChannel(IrcKey("party", partyId.orEmpty(), ""))) {
             notice("Party IRC needs a complete current Hypixel roster and a confirmed subscription. Wait for party info, then retry.", true); return
@@ -384,7 +383,9 @@ object RelayMessages {
             if (scope == "party" && partyId != sendPartyId) return@currentGlobalResult
             if (reason != null) {
                 if (reason == "not_subscribed") subscription.reset()
-                ircError(scope, reason, "send receipt")
+                // The relay can lose a confirmed subscription; resubscribe and send this rejected (never enqueued) text once.
+                if (heldSend.rejected(scope, text, reason, retried, System.nanoTime())) { globalNextSend = 0L; if (replyDraft == null) replyDraft = draft }
+                else ircError(scope, reason, "send receipt")
             }
         })) { globalNextSend = now + 500_000_000; replyDraft = null }
         else ircError(scope, null, "send queue")
@@ -402,7 +403,6 @@ object RelayMessages {
         }
         notice(globalDeliveryError(reason).replace("Global chat", if (scope == "party") "Party IRC" else "Global chat"), true)
     }
-    fun globalError(reason: String?) = ircError("global", reason)
     internal fun currentIrcChannel(key: IrcKey): Boolean = DungeonFriendRelay.currentGlobalSession() &&
         MC.instance.player != null && MC.connection != null && if (key.scope == "global") {
             key.room == "global-chat" && GlobalChatConfig.enabled && DungeonFriendRelay.globalChatAvailable && globalSubscription.enabled

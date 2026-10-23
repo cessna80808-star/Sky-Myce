@@ -49,7 +49,7 @@ object DungeonCleanChat : SkyMyceModule() {
         ),
         PUZZLES(
             Regex("^PUZZLE SOLVED! (.+)$"),
-            Regex("^[STATUE] Oruo the Omniscient: (.+)$"),
+            Regex("^\\[STATUE] Oruo the Omniscient: (.+)$"),
             Regex("^Question #(\\d+)$"),
             Regex("^\\s*(ⓐ|ⓑ|ⓒ) (.+)$"),
         ),

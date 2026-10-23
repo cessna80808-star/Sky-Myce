@@ -2,6 +2,8 @@ package me.mycellium.skymyce.features.general.auction
 
 import me.mycellium.skymyce.api.AuctionAPI
 
+private val nameStyle = Regex("§.")
+
 val AUCTION_RARITIES = listOf("COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "DIVINE", "ULTIMATE", "SPECIAL", "VERY_SPECIAL", "ADMIN")
 
 /** The screen's query state and result selection, kept separate from UI code. */
@@ -41,7 +43,7 @@ data class AuctionSearch(
         ENDING_SOON("Ending soon", compareBy { it.end }),
         RARITY("Rarity", compareBy { AUCTION_RARITIES.indexOf(it.rarity).takeIf { rank -> rank >= 0 } ?: Int.MAX_VALUE }),
         NEWEST("Newest", compareByDescending { it.start }),
-        NAME("Item name", compareBy { it.name.replace(Regex("§."), "").lowercase() }),
+        NAME("Item name", compareBy { it.name.replace(nameStyle, "").lowercase() }),
     }
 
     enum class ListingType(val label: String) {

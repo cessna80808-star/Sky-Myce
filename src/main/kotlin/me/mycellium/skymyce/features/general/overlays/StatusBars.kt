@@ -5,6 +5,8 @@ import com.google.gson.GsonBuilder
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.StatusBarsConfig as Settings
+import me.mycellium.skymyce.features.general.overlays.bars.BarConfig
+import me.mycellium.skymyce.features.general.overlays.bars.BarFormat
 import me.mycellium.skymyce.features.general.overlays.bars.BarMotion
 import me.mycellium.skymyce.features.general.overlays.bars.BarRect
 import me.mycellium.skymyce.features.general.overlays.bars.BarReading
@@ -40,7 +42,7 @@ import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 
 /**
- * Health, mana, defense, speed, vitality and respiration as separate bars that can sit on anchors around the hotbar
+ * Health, mana, defense, speed, vitality, respiration and experience as separate bars that can sit on anchors around the hotbar
  * and screen or float anywhere (`/sm bars` arranges them). Health reads the vanilla hearts every tick for speed and
  * the action bar for the maximum and absorption. The action bar's own readouts and the vanilla rows the bars replace
  * are hidden while the bars show.
@@ -54,12 +56,19 @@ object StatusBars : SkyMyceModule() {
     private var heartsRatio: Double? = null
     private var speed = 0
     private var air = 300; private var maxAir = 300; private var underwater = false
+    private var level = 0; private var levelProgress = 0.0
     private var known = false
 
     private val gson: Gson = GsonBuilder().create()
     private val file by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("status-bars.json"), 32768) }
     private var loaded: StatusBarLayout? = null
     private val motions = BarType.entries.associateWith { BarMotion() }
+    private var rects: Map<BarType, BarRect> = emptyMap()
+    private var rectsFor: StatusBarLayout? = null; private var rectsWidth = 0; private var rectsHeight = 0
+
+    /** Each bar's last labels: [barLabel] formats numbers, too costly to repeat every frame for an unchanged reading. */
+    private class Labels(val config: BarConfig, val format: BarFormat, val value: Int, val max: Int, val extra: Int, val health: Int?, val label: String, val short: String)
+    private val labels = arrayOfNulls<Labels>(BarType.entries.size)
 
     var layout: StatusBarLayout
         get() = loaded ?: load().also { loaded = it }
@@ -74,6 +83,11 @@ object StatusBars : SkyMyceModule() {
         HudElementRegistry.replaceElement(VanillaHudElements.ARMOR_BAR) { original -> hide(original) { true } }
         HudElementRegistry.replaceElement(VanillaHudElements.FOOD_BAR) { original -> hide(original) { true } }
         HudElementRegistry.replaceElement(VanillaHudElements.AIR_BAR) { original -> hide(original) { barOn(BarType.RESPIRATION) } }
+        // The info bar is the experience bar unless a jumping mount or the locator bar takes its place, as vanilla picks.
+        HudElementRegistry.replaceElement(VanillaHudElements.INFO_BAR) { original -> hide(original) {
+            barOn(BarType.EXPERIENCE) && MC.instance.player.let { it != null && it.jumpableVehicle() == null && !it.connection.waypointManager.hasWaypoints() }
+        } }
+        HudElementRegistry.replaceElement(VanillaHudElements.EXPERIENCE_LEVEL) { original -> hide(original) { barOn(BarType.EXPERIENCE) } }
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.fromNamespaceAndPath(SkyMyce.MOD_ID, "status_bars")) { graphics, _ ->
             if (showing && MC.screen !is StatusBarsEditorScreen) me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.STATUS_BARS) { render(graphics) }
         }
@@ -83,10 +97,10 @@ object StatusBars : SkyMyceModule() {
         if (!(showing && Settings.hideVanilla && also())) original.extractRenderState(graphics, ticks)
     }
 
+    @Suppress("SENSELESS_COMPARISON") // Gson can leave a missing list null.
     private fun load(): StatusBarLayout {
         val saved = runCatching { file.read()?.let { gson.fromJson(it, StatusBarLayout::class.java) } }
             .onFailure { SkyMyce.logger.warn("Could not read status bar layout; using the default", it) }.getOrNull()
-        @Suppress("SENSELESS_COMPARISON") // Gson can leave a missing list null.
         if (saved != null && saved.version == StatusBarLayout.VERSION && saved.bars != null) return saved.normalized()
         // Version 1 had pale label colours that read badly over the bars; keep the arrangement, take the new colours.
         if (saved != null && saved.version == 1 && saved.bars != null)
@@ -130,6 +144,7 @@ object StatusBars : SkyMyceModule() {
         heartsRatio = if (Settings.useHearts && player.isAlive && player.maxHealth > 0) (player.health / player.maxHealth).toDouble() else null
         speed = speedValue(player.speed.toDouble(), player.isSprinting)
         air = player.airSupply.coerceIn(0, player.maxAirSupply); maxAir = player.maxAirSupply; underwater = player.isUnderWater
+        level = player.experienceLevel; levelProgress = player.experienceProgress.toDouble()
     }
 
     @Subscription
@@ -156,10 +171,15 @@ object StatusBars : SkyMyceModule() {
     /** What [type] shows now, and whether it should be on screen. [preview] uses fixed example values. */
     fun reading(type: BarType, preview: Boolean): Pair<BarReading, Boolean> {
         val config = layout.bar(type)
+        val format = format()
         val now = System.currentTimeMillis()
-        fun of(value: Int, max: Int, extra: Int = 0, fill: Double? = null, health: Int? = null) =
-            BarReading(value.toDouble(), max.toDouble(), extra.toDouble(), barLabel(type, config, value, max, extra, health), fill ?: if (max > 0) value.toDouble() / max else 0.0,
-                short = barLabel(type, config.copy(showMax = false, showOverflow = false, extra = false), value, max, 0))
+        fun of(value: Int, max: Int, extra: Int = 0, fill: Double? = null, health: Int? = null): BarReading {
+            val text = labels[type.ordinal]?.takeIf { it.config == config && it.format == format && it.value == value && it.max == max && it.extra == extra && it.health == health }
+                ?: Labels(config, format, value, max, extra, health, barLabel(type, config, format, value, max, extra, health),
+                    barLabel(type, config.copy(extra = false), format.short(), value, max, extra)).also { labels[type.ordinal] = it }
+            return BarReading(value.toDouble(), max.toDouble(), extra.toDouble(), text.label, fill ?: if (max > 0) value.toDouble() / max else 0.0,
+                short = text.short)
+        }
         if (preview) return when (type) {
             BarType.HEALTH -> of(1834, 2140, 220)
             BarType.MANA -> of(640, 900, 120)
@@ -167,6 +187,7 @@ object StatusBars : SkyMyceModule() {
             BarType.SPEED -> of(312, 400)
             BarType.VITALITY -> of(860, 1000)
             BarType.RESPIRATION -> of(180, 300)
+            BarType.EXPERIENCE -> of(662, 0, fill = 0.42)
         } to true
         return when (type) {
             BarType.HEALTH -> of(health(), maxHealth, absorption) to known
@@ -175,11 +196,16 @@ object StatusBars : SkyMyceModule() {
             BarType.SPEED -> of(speed, speedMax(speed)) to true
             BarType.VITALITY -> of(vitality, maxVitality) to (now - vitalitySeen < 10_000 && maxVitality > 0)
             BarType.RESPIRATION -> of(air, maxAir) to (underwater || air < maxAir)
+            BarType.EXPERIENCE -> of(level, 0, fill = levelProgress) to true
         }
     }
 
     private fun render(graphics: GuiGraphicsExtractor) {
-        val rects = layoutRects(layout, graphics.guiWidth(), graphics.guiHeight())
+        val layout = layout; val width = graphics.guiWidth(); val height = graphics.guiHeight()
+        // The layout is immutable: recompute its rectangles only when it or the GUI size changes, not every frame.
+        if (layout !== rectsFor || width != rectsWidth || height != rectsHeight) {
+            rects = layoutRects(layout, width, height); rectsFor = layout; rectsWidth = width; rectsHeight = height
+        }
         drawBars(graphics, rects, preview = false)
     }
 
@@ -187,6 +213,7 @@ object StatusBars : SkyMyceModule() {
     fun drawBars(graphics: GuiGraphicsExtractor, rects: Map<BarType, BarRect>, preview: Boolean, opacity: (BarType) -> Double = { 1.0 }) {
         val now = System.currentTimeMillis()
         val animate = Settings.animate
+        val format = format()
         for ((type, rect) in rects) {
             val (reading, visible) = reading(type, preview)
             val motion = motions.getValue(type)
@@ -194,11 +221,13 @@ object StatusBars : SkyMyceModule() {
             val config = layout.bar(type)
             // Counted values roll to their new number; the final number is always exact.
             val shown = if (animate && type in ROLLING && !motion.number.isNaN() && motion.number != reading.value)
-                kotlin.math.round(motion.number).toInt().let { n -> reading.copy(label = barLabel(type, config, n, reading.max.toInt(), reading.overflow.toInt()),
-                    short = barLabel(type, config.copy(showMax = false, showOverflow = false), n, reading.max.toInt(), 0)) } else reading
+                kotlin.math.round(motion.number).toInt().let { n -> reading.copy(label = barLabel(type, config, format, n, reading.max.toInt(), reading.overflow.toInt()),
+                    short = barLabel(type, config, format.short(), n, reading.max.toInt(), reading.overflow.toInt())) } else reading
             StatusBarRenderer.draw(graphics, type, config, rect, shown, motion, now, animate, opacity(type))
         }
     }
+
+    private fun format() = BarFormat(Settings.showMaximum, Settings.splitExtra, Settings.thousandsSeparators)
 
     /** Live readings exist for the editor to preview only once the action bar has been seen. */
     val hasLiveReadings get() = known && LocationAPI.isOnSkyBlock

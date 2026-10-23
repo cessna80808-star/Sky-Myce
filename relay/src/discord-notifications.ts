@@ -2,7 +2,7 @@ import type { AccountAlert } from "./accounts";
 import { sha256 } from "./drm";
 
 export type AccountAlertConfig = { BACKEND_BOT_TOKEN?: string; DISCORD_BACKEND_BOT_TOKEN?: string };
-const recipients = ["978376257534328883", "1250627753191931914"];
+export const ADMIN_ALERT_IDS = ["978376257534328883", "1250627753191931914"];
 const snowflake = (value: unknown): value is string => typeof value === "string" && /^\d{17,20}$/.test(value);
 const playerUuid = (value: unknown): string | null => typeof value === "string" && /^[a-f0-9]{32}$/i.test(value.replaceAll("-", "")) ? value.replaceAll("-", "") : null;
 const playerName = (value: unknown): string | null => typeof value === "string" && /^[A-Za-z0-9_]{1,16}$/.test(value) ? value : null;
@@ -86,7 +86,7 @@ async function discordPost(path: string, token: string, body: unknown): Promise<
 export async function deliverAccountAlert(env: AccountAlertConfig, alert: AccountAlert): Promise<boolean> {
   try {
     const token = env.BACKEND_BOT_TOKEN ?? env.DISCORD_BACKEND_BOT_TOKEN;
-    if (!token || !recipients.includes(alert.recipientId) || !Number.isSafeInteger(alert.auditId) || alert.auditId < 1 ||
+    if (!token || !ADMIN_ALERT_IDS.includes(alert.recipientId) || !Number.isSafeInteger(alert.auditId) || alert.auditId < 1 ||
         alert.event.id !== alert.auditId || !Number.isSafeInteger(alert.event.at) || alert.event.at <= 0) return false;
     const response = await discordPost("/users/@me/channels", token, { recipient_id: alert.recipientId });
     if (!response.ok) { await response.body?.cancel(); return false; }

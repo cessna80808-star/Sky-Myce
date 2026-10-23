@@ -19,6 +19,8 @@ fun leaderboardChecks() {
     check(leaderboardPeriods["weekly"] == "This week • UTC" && leaderboardPeriods["monthly"] == "This month • UTC")
     check(leaderboardRequestPath("dungeons", "dungeon_runs", "weekly", 2, "carrot & coins") ==
         "/community/leaderboard?category=dungeons&metric=dungeon_runs&period=weekly&page=2&limit=10&search=carrot+%26+coins")
+    check(leaderboardRequestPath("dungeons", "dungeon_run_time", "all-time", 1, "", "M7") ==
+        "/community/leaderboard?category=dungeons&metric=dungeon_run_time&period=all-time&page=1&limit=10&search=&floor=M7")
     check(formatLeaderboardValue(300001.5, "milliseconds") == "5:00.002")
     check(formatLeaderboardValue(999.5, "milliseconds") == "0:01.000")
     check(formatLeaderboardValue(3599999.5, "milliseconds") == "1:00:00.000")

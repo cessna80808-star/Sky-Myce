@@ -228,11 +228,12 @@ internal class MenuNavigation(private val layout: MenuLayout, private val active
         child(utility("Home", 0, 30, { home }) { action(null) })
         menuSectionTitles.forEachIndexed { index, title ->
             val rect = geometry.rect(index)
+            val revealKey = "navigation/$index"
             child(object : MenuButton(Component.literal(title), { action(index) }) {
                 override fun interactionPose(hover: Double, press: Double) = menuNavigationPose(geometry.rect(index), hover, press, ThemeConfig.animationMode)
                 override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
                     val mode = revealMode()
-                    val reveal = menuReveals.progress("navigation/$index", revealReady(), mode, index * mode.profile.staggerMillis)
+                    val reveal = menuReveals.progress(revealKey, revealReady(), mode, index * mode.profile.staggerMillis)
                     revealsSettled = revealsSettled && reveal >= 1.0
                     graphics.layer(alpha = reveal) {
                         paintMenuNavigationTile(graphics.canvas, geometry.rect(index), index, hover, chosen, isFocused)

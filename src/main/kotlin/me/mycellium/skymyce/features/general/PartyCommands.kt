@@ -26,7 +26,7 @@ object PartyCommands : SkyMyceModule() {
     private val commandRegex = Regex("^!(?<command>\\w+)\\s*(?<arguments>.*)$")
     private var cooldownTimestamp = 0.seconds
 
-    val queueMap = mutableMapOf(
+    val queueMap = mapOf(
         "fe" to "CATACOMBS_ENTRANCE",
         "f1" to "CATACOMBS_FLOOR_ONE",
         "f2" to "CATACOMBS_FLOOR_TWO",

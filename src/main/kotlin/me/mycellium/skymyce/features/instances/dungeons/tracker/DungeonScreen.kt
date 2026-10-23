@@ -1,7 +1,5 @@
 package me.mycellium.skymyce.features.instances.dungeons.tracker
 
-import com.google.gson.JsonPrimitive
-import com.mojang.serialization.JsonOps
 import me.mycellium.skymyce.ui.*
 import io.wispforest.owo.ui.component.*
 import io.wispforest.owo.ui.container.*
@@ -15,9 +13,7 @@ import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
 import net.minecraft.network.chat.Component
-import net.minecraft.world.item.Items
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
-import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.time.Instant
 import java.time.LocalDate

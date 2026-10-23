@@ -1,13 +1,13 @@
 import type { AccountStore } from "./accounts";
 import type { DeveloperActor } from "./licensing";
-import type { SharingCategory, SharingDecision } from "./community-sharing";
+import { dungeonFloors, type SharingCategory, type SharingDecision } from "./community-sharing";
 import { validatedPublicRngEvent, type PublicRngEvent } from "./digest";
 import { randomToken } from "./drm";
 
-export type LeaderboardQuery = { category?: unknown; metric?: unknown; period?: unknown; page?: unknown; limit?: unknown; search?: unknown; identity?: unknown };
+export type LeaderboardQuery = { category?: unknown; metric?: unknown; period?: unknown; page?: unknown; limit?: unknown; search?: unknown; identity?: unknown; floor?: unknown };
 type Category = "economy" | "dungeons" | "rng" | "other";
 type Metric = { category: Category; privacy: SharingCategory; label: string; description: string; unit: string; aggregation: "latest-snapshot" | "event-sum" | "event-average"; available?: false; reason?: string };
-export const leaderboardMetrics: Record<string, Metric> = {
+const leaderboardMetrics: Record<string, Metric> = {
   bazaar_profit: { category: "economy", privacy: "economy", label: "Observed realized Bazaar profit", description: "Actual net sale proceeds less allocated observed acquisition cost; includes supported partial sales and losses.", unit: "coins", aggregation: "event-sum" },
   networth: { category: "economy", privacy: "economy", label: "Estimated net worth", description: "Latest complete shared valuation observed in this period; not net-worth gain.", unit: "coins", aggregation: "latest-snapshot" },
   purse: { category: "economy", privacy: "economy", label: "Purse balance", description: "Latest complete shared purse snapshot observed in this period; not income.", unit: "coins", aggregation: "latest-snapshot" },
@@ -25,7 +25,7 @@ export function utcPeriodStart(period: string, now: number): number | null {
   const midnight = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
   return midnight - ((date.getUTCDay() + 6) % 7) * 86400000;
 }
-export type LeaderboardResult = { ok: boolean; error?: string; version?: 1; category?: string; metric?: string; period?: string; identity?: string; startAt?: number | null;
+export type LeaderboardResult = { ok: boolean; error?: string; version?: 1; category?: string; metric?: string; period?: string; identity?: string; floor?: string; startAt?: number | null;
   endAt?: number; metricLabel?: string; description?: string; unit?: string; aggregation?: string; source?: string; coverage?: string;
   available?: boolean; reason?: string; updatedAt?: number; total?: number; page?: number; limit?: number; search?: string; hasNext?: boolean;
   entries?: { rank: number; player: string; value: number; sampleSize: number; updatedAt: number; source: string; verification: string }[] };
@@ -94,13 +94,16 @@ export class CommunityLeaderboards {
       if (!rng.allowed || !this.hooks.check(author, "rng", row.received_at).allowed ||
         !this.hooks.check(author, "leaderboards", event.occurredAt).allowed ||
         !this.hooks.check(author, "leaderboards", row.received_at).allowed) continue;
-      this.sql.exec("INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", row.source_id, row.account_id,
+      this.sql.exec("INSERT OR IGNORE INTO community_contributions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)", row.source_id, row.account_id,
         author, "rng", "rng_drops", 1, "drops", event.occurredAt, row.received_at, "client-observation", "unverified", 1, rng.revision);
       remaining--; restored++;
     }
     return restored;
   }
   query(raw: LeaderboardQuery, now = Date.now()): LeaderboardResult {
+    // Only the average run time board is split by floor; omitting floor keeps the all-floors response.
+    if (raw.floor !== undefined && (raw.metric !== "dungeon_run_time" || typeof raw.floor !== "string" || !dungeonFloors.includes(raw.floor))) return { ok: false, error: "invalid_leaderboard" };
+    const floor = raw.floor as string | undefined;
     if (raw.metric === "bazaar_profit") return raw.category !== undefined && raw.category !== "economy" ? { ok: false, error: "invalid_leaderboard" } : this.hooks.bazaar?.(raw, now) ?? { ok: false, error: "bazaar_unavailable" };
     if (raw.identity !== undefined) return { ok: false, error: "invalid_leaderboard" };
     const category = typeof raw.category === "string" ? raw.category : "economy";
@@ -110,17 +113,21 @@ export class CommunityLeaderboards {
     if (!metric || metric.category !== category || !["all-time", "weekly", "monthly"].includes(String(period)) || !Number.isSafeInteger(page) || page < 1 || page > 100 ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > 25 || typeof search !== "string" || search.length > 100 || /[\x00-\x1f\x7f]/.test(search)) return { ok: false, error: "invalid_leaderboard" };
     const startAt = utcPeriodStart(String(period), now), base: LeaderboardResult = { ok: true, version: 1, category, metric: metricId, period: String(period), startAt, endAt: now,
-      metricLabel: metric.label, description: metric.description, unit: metric.unit, aggregation: metric.aggregation, available: metric.available !== false,
+      ...(floor ? { floor } : {}), metricLabel: metric.label,
+      description: floor ? `Average newly completed timed ${floor} runs. Unknown start times and historical totals are excluded. Faster times rank first.` : metric.description, unit: metric.unit, aggregation: metric.aggregation, available: metric.available !== false,
       source: sourceDescription, coverage: coverageDescription,
       page, limit, search, updatedAt: 0, total: 0, hasNext: false, entries: [], ...(metric.reason ? { reason: metric.reason } : {}) };
     if (metric.available === false) return base;
-    const ranked = this.rankedDataset(metric);
-    const parameters = [metricId, startAt ?? 0, now, search.toLowerCase()];
+    const ranked = this.rankedDataset(metric, floor !== undefined);
+    const parameters = [metricId, startAt ?? 0, now, ...(floor ? [floor] : []), search.toLowerCase()];
     const totals = this.sql.exec<{ total: number; updatedAt: number | null }>(`${ranked}SELECT COUNT(*) total,MAX(updatedAt) updatedAt FROM ranked WHERE INSTR(LOWER(player),?)>0`, ...parameters).one();
     const entries = this.sql.exec<{ uuid: string; rank: number; player: string; value: number; sampleSize: number; updatedAt: number; source: string; verification: string }>(
       `${ranked}SELECT * FROM ranked WHERE INSTR(LOWER(player),?)>0 ORDER BY value ${metric.aggregation === "event-average" ? "ASC" : "DESC"},uuid ASC LIMIT ? OFFSET ?`, ...parameters, limit, (page - 1) * limit).toArray();
-    const visible = entries.filter(entry => this.hooks.check(entry.uuid, metric.privacy, entry.updatedAt).allowed && this.hooks.check(entry.uuid, "leaderboards", entry.updatedAt).allowed)
-      .map(({ uuid: playerId, ...entry }) => ({ ...entry, player: this.hooks.check(playerId, metric.privacy).publicName ? entry.player : "Anonymous player" }));
+    // publicName does not depend on the recorded time, so the first decision also decides the displayed name.
+    const visible = entries.flatMap(({ uuid: playerId, ...entry }) => {
+      const decision = this.hooks.check(playerId, metric.privacy, entry.updatedAt);
+      return decision.allowed && this.hooks.check(playerId, "leaderboards", entry.updatedAt).allowed ? [{ ...entry, player: decision.publicName ? entry.player : "Anonymous player" }] : [];
+    });
     return { ...base, total: totals.total, updatedAt: totals.updatedAt ?? 0, entries: visible, hasNext: page * limit < totals.total };
   }
   /** Aggregates exactly the ranking dataset, never client-supplied identities or private journal records. */
@@ -140,7 +147,7 @@ export class CommunityLeaderboards {
       ...(ownAvailable ? {} : { ownUnavailableReason: "sharing_disabled" as const }), updatedAt: values.updatedAt ?? 0,
       source: sourceDescription, coverage: coverageDescription };
   }
-  private rankedDataset(metric: Metric): string {
+  private rankedDataset(metric: Metric, byFloor = false): string {
     // Policy is checked inside this same SQLite turn, before grouping/ranking. Anonymous names are never searchable by private username.
     const rngValidation = metric === leaderboardMetrics.rng_drops ? `AND c.category='rng' AND c.unit='drops' AND c.value>=0 AND c.value<=9007199254740991
       AND c.value=CAST(c.value AS INTEGER) AND c.source IN ('client-observation','public-api-client') AND c.verification IN ('unverified','estimated')` : "";
@@ -150,7 +157,7 @@ export class CommunityLeaderboards {
       CASE WHEN COALESCE(json_extract(s.policy,'$.publicName'),0)=1 AND COALESCE(json_extract(p.policy,'$.publicName'),0)=1 THEN 1 ELSE 0 END public_name
       FROM community_contributions c LEFT JOIN community_sharing s ON s.owner=c.owner LEFT JOIN minecraft_accounts m ON m.uuid=c.uuid
       LEFT JOIN community_sharing p ON p.owner=COALESCE(m.account_id,'uuid:'||c.uuid)
-      WHERE c.metric=? AND c.observed_at>=? AND c.observed_at<=? AND c.complete=1 ${rngValidation} ${timeValidation}
+      WHERE c.metric=? AND c.observed_at>=? AND c.observed_at<=? ${byFloor ? "AND c.floor=?" : ""} AND c.complete=1 ${rngValidation} ${timeValidation}
       AND COALESCE(json_extract(s.policy,'$.enabled'),1)=1 AND COALESCE(json_extract(s.policy,'$.leaderboards'),1)=1
       AND COALESCE(json_extract(s.policy,'$.${metric.privacy}'),1)=1
       AND c.observed_at>COALESCE(json_extract(s.cutoffs,'$.${metric.privacy}'),0) AND c.observed_at>COALESCE(json_extract(s.cutoffs,'$.leaderboards'),0)
@@ -274,7 +281,7 @@ export async function handleLeaderboardsRequest(request: Request, env: Config): 
     const result = await env.ACCOUNT_STORE.getByName("global").communityJournalComparison(token, Object.fromEntries(url.searchParams));
     return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_journal_comparison" ? 400 : result.error === "comparison_unavailable" ? 503 : result.error === "rate_limited" ? 429 : 401, headers: { "Cache-Control": "no-store" } });
   }
-  if ([...url.searchParams.keys()].some(key => !["category", "metric", "period", "page", "limit", "search", "identity"].includes(key))) return Response.json({ ok: false, error: "invalid_leaderboard" }, { status: 400 });
+  if ([...url.searchParams.keys()].some(key => !["category", "metric", "period", "page", "limit", "search", "identity", "floor"].includes(key))) return Response.json({ ok: false, error: "invalid_leaderboard" }, { status: 400 });
   const result = await env.ACCOUNT_STORE.getByName("global").communityLeaderboard(token, Object.fromEntries(url.searchParams));
   return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_leaderboard" ? 400 : 401, headers: { "Cache-Control": "no-store" } });
 }
@@ -310,8 +317,9 @@ export async function handleCommunityFeed(request: Request, env: Config): Promis
 export function discordLeaderboardMessage(result: LeaderboardResult): { content: string; embeds?: Record<string, unknown>[]; components?: Record<string, unknown>[] } {
   const escape = (value: string) => value.replace(/[\\`*_~|<>]/g, "\\$&");
   if (!result.ok) return { content: result.error === "invalid_leaderboard" ? "Choose a metric from the selected leaderboard category, a valid period and a page from 1 to 100." : "Leaderboard unavailable. Retry later; your local mod remains available." };
+  const numbers = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
   const format = (value: number): string => {
-    if (result.unit !== "milliseconds") return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${result.unit}`;
+    if (result.unit !== "milliseconds") return `${numbers.format(value)} ${result.unit}`;
     const millis = Math.round(value), minutes = Math.floor(millis / 60000);
     const prefix = millis < 3600000 ? String(minutes) : `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
     return `${prefix}:${String(Math.floor(millis / 1000) % 60).padStart(2, "0")}.${String(millis % 1000).padStart(3, "0")}`;

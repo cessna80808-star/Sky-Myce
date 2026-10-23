@@ -7,6 +7,16 @@ export const BAZAAR_SOURCE = "Hypixel public Bazaar";
 export const bazaarProductId = (raw: unknown): raw is string => typeof raw === "string" && /^[A-Z0-9_:;.\-]{1,100}$/.test(raw);
 const number = (raw: unknown): raw is number => typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1e15;
 const object = (raw: unknown): raw is Record<string, unknown> => !!raw && typeof raw === "object" && !Array.isArray(raw);
+function depth(raw: unknown) {
+  if (!Array.isArray(raw) || raw.length > 1000) return null;
+  const result: { price: number; amount: number; orders: number }[] = [];
+  for (const entry of raw.slice(0, 5)) {
+    if (!object(entry) || !number(entry.pricePerUnit) || !Number.isSafeInteger(entry.amount) || Number(entry.amount) < 0 ||
+      !Number.isSafeInteger(entry.orders) || Number(entry.orders) < 0) return null;
+    result.push({ price: entry.pricePerUnit, amount: Number(entry.amount), orders: Number(entry.orders) });
+  }
+  return result;
+}
 export function normalizeBazaar(raw: unknown, now = Date.now()): BazaarSnapshot | null {
   if (!object(raw) || raw.success !== true || !Number.isSafeInteger(raw.lastUpdated) || Number(raw.lastUpdated) > now + 60000 ||
     Number(raw.lastUpdated) < now - 86400000 || !object(raw.products) || Object.keys(raw.products).length > 3000) return null;
@@ -14,16 +24,6 @@ export function normalizeBazaar(raw: unknown, now = Date.now()): BazaarSnapshot 
   for (const [id, value] of Object.entries(raw.products)) {
     if (!bazaarProductId(id) || seen.has(id) || !object(value) || value.product_id !== id || !object(value.quick_status)) return null;
     seen.add(id);
-    const depth = (raw: unknown) => {
-      if (!Array.isArray(raw) || raw.length > 1000) return null;
-      const result: { price: number; amount: number; orders: number }[] = [];
-      for (const entry of raw.slice(0, 5)) {
-        if (!object(entry) || !number(entry.pricePerUnit) || !Number.isSafeInteger(entry.amount) || Number(entry.amount) < 0 ||
-          !Number.isSafeInteger(entry.orders) || Number(entry.orders) < 0) return null;
-        result.push({ price: entry.pricePerUnit, amount: Number(entry.amount), orders: Number(entry.orders) });
-      }
-      return result;
-    };
     // Hypixel names books by the instant action: sell_summary contains bids; buy_summary contains asks.
     const buyDepth = depth(value.sell_summary), sellDepth = depth(value.buy_summary), q = value.quick_status;
     if (!buyDepth || !sellDepth || ![q.buyVolume, q.sellVolume, q.buyMovingWeek, q.sellMovingWeek, q.buyOrders, q.sellOrders].every(number)) return null;

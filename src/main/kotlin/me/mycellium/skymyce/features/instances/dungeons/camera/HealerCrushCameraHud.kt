@@ -95,12 +95,11 @@ object HealerCrushCameraHud : SkyMyceModule() {
                 graphics.fill(x() + width() - 1, y(), x() + width(), y() + height(), color)
             }
             if (header > 0) graphics.text(MC.font, "${stage.replaceFirstChar { it.uppercase() }} · ${if (previewing || editor) "preview" else "Crush"}", x() + 4, y() + 3, -0x1000000 or tint, false)
-            val saved = CameraViewpoints.get(stage)
-            if (saved == null || MC.instance.level == null) {
+            val view = crushView(stage)
+            if (view == null || MC.instance.level == null) {
                 graphics.text(MC.font, "Set a viewpoint: /sm crush-camera", x() + 4, y() + header + 8, -0x1000000 or tint, false)
                 return
             }
-            val view = crushView(stage) ?: return
             me.mycellium.skymyce.features.dev.RuntimeProfiler.measure(me.mycellium.skymyce.features.dev.RuntimeProfiler.Area.CAMERA_EXTRACT) { SecondaryWorldCamera.extract(graphics, view, x() + 4, y() + header + 4, width() - 8, height() - header - 8, Settings.opacity / 100f) }
             if (SecondaryWorldCamera.status() != SecondaryWorldCamera.Status.LIVE)
                 graphics.text(MC.font, SecondaryWorldCamera.status().name.replace('_', ' ').lowercase(), x() + 5, y() + header + 6, -1, false)

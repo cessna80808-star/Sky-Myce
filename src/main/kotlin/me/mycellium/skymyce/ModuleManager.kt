@@ -1,11 +1,11 @@
 package me.mycellium.skymyce
 
-import com.google.common.reflect.Reflection
 import java.lang.ref.WeakReference
 
 object ModuleManager {
     val instances = mutableListOf<WeakReference<SkyMyceModule>>()
 
+    // Referencing each module object runs its initializer, which registers it in [instances].
     fun loadModules(vararg modules: SkyMyceModule) {
     }
 
@@ -14,7 +14,4 @@ object ModuleManager {
             instances.removeIf { it.get() == null }
             return instances.mapNotNull { it.get() }
         }
-
-    val enabledModules: List<SkyMyceModule>
-        get() = modules.filter { it.isEnabled() }
 }

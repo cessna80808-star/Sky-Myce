@@ -64,3 +64,6 @@ node_modules/
 /artifacts/leap-clip-20261015-134214/
 /artifacts/leap-no-sharing-research/
 /artifacts/leap-pov-research/
+
+# Minecraft logs written by checks or runs from the repository root
+/logs/

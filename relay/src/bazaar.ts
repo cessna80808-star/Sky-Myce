@@ -1,6 +1,7 @@
 import type { SharingCategory, SharingDecision } from "./community-sharing";
 import type { LeaderboardQuery, LeaderboardResult } from "./leaderboards";
 import { bazaarProductId } from "./bazaar-market";
+import { randomToken } from "./drm";
 
 const object = (raw: unknown): raw is Record<string, unknown> => !!raw && typeof raw === "object" && !Array.isArray(raw);
 const fields = (raw: Record<string, unknown>, allowed: string[]) => Object.keys(raw).every(key => allowed.includes(key));
@@ -264,8 +265,7 @@ export class CommunityBazaar {
     if (!replay) return { ok: false, error: "invalid_replay" };
     this.pruneReplays(identity.accountId);
     if (this.sql.exec<{ n: number }>("SELECT COUNT(*) n FROM community_bazaar_replays WHERE owner=? AND revoked_at IS NULL", identity.accountId).one().n >= 10) return { ok: false, error: "replay_capacity_reached" };
-    const id = crypto.randomUUID().replaceAll("-", ""), bytes = crypto.getRandomValues(new Uint8Array(32));
-    const token = btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    const id = crypto.randomUUID().replaceAll("-", ""), token = randomToken();
     this.sql.exec("INSERT INTO community_bazaar_replays VALUES(?,?,?,?,?,?,?,NULL)", id, token, identity.accountId, identity.uuid, JSON.stringify(replay), replay.visibility === "community" ? 1 : 0, now);
     return { ok: true, version: 1, id, token, path: `/community/bazaar/replays/${token}`, visibility: replay.visibility };
   }
@@ -280,24 +280,23 @@ export class CommunityBazaar {
     this.sql.exec(`DELETE FROM community_bazaar_replays WHERE owner=? AND revoked_at IS NOT NULL AND id NOT IN
       (SELECT id FROM community_bazaar_replays WHERE owner=? AND revoked_at IS NOT NULL ORDER BY revoked_at DESC,id DESC LIMIT 10)`, owner, owner);
   }
-  replay(token: string) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return { ok: false, error: "replay_unavailable" };
-    const row = this.sql.exec<{ data: string; uuid: string; named: number; currentOwner: string | null; owner: string }>(`SELECT r.data,r.uuid,r.owner,m.account_id currentOwner,
+  private replays(where: string, ...bindings: SqlStorageValue[]) {
+    return this.sql.exec<{ token: string; data: string; named: number; currentOwner: string | null; owner: string }>(`SELECT r.token,r.data,r.owner,m.account_id currentOwner,
       COALESCE(json_extract(s.policy,'$.publicName'),0) named FROM community_bazaar_replays r LEFT JOIN community_sharing s ON s.owner=r.owner
-      LEFT JOIN minecraft_accounts m ON m.uuid=r.uuid WHERE r.token=? AND r.revoked_at IS NULL`, token).toArray()[0];
-    if (!row) return { ok: false, error: "replay_unavailable" };
-    const replay = JSON.parse(row.data) as Replay;
-    // Name visibility can be withdrawn independently of publication. Do not resurrect a stored public name.
-    if (!row.named || row.currentOwner !== row.owner) delete replay.identity;
-    return { ok: true, version: 1, replay };
+      LEFT JOIN minecraft_accounts m ON m.uuid=r.uuid WHERE r.revoked_at IS NULL AND ${where}`, ...bindings).toArray().map(row => {
+      const replay = JSON.parse(row.data) as Replay;
+      // Name visibility can be withdrawn independently of publication. Do not resurrect a stored public name.
+      if (!row.named || row.currentOwner !== row.owner) delete replay.identity;
+      return { token: row.token, replay };
+    });
+  }
+  replay(token: string) {
+    const row = /^[A-Za-z0-9_-]{43}$/.test(token) ? this.replays("r.token=?", token)[0] : undefined;
+    return row ? { ok: true, version: 1, replay: row.replay } : { ok: false, error: "replay_unavailable" };
   }
   gallery() {
-    return { ok: true, version: 1, entries: this.sql.exec<{ token: string; data: string; uuid: string; named: number; currentOwner: string | null; owner: string }>(`SELECT r.token,r.data,r.uuid,r.owner,m.account_id currentOwner,
-      COALESCE(json_extract(s.policy,'$.publicName'),0) named FROM community_bazaar_replays r LEFT JOIN community_sharing s ON s.owner=r.owner
-      LEFT JOIN minecraft_accounts m ON m.uuid=r.uuid WHERE r.listed=1 AND r.revoked_at IS NULL ORDER BY r.created_at DESC LIMIT 25`).toArray().map(row => {
-      const replay = JSON.parse(row.data) as Replay; if (!row.named || row.currentOwner !== row.owner) delete replay.identity;
-      return { path: `/community/bazaar/replays/${row.token}`, durationMs: replay.durationMs, completedFlips: replay.completedFlips, ...replay.identity ? { identity: replay.identity } : {},
-        ...replay.realizedProfit !== undefined ? { realizedProfit: replay.realizedProfit } : {} };
-    }) };
+    return { ok: true, version: 1, entries: this.replays("r.listed=1 ORDER BY r.created_at DESC LIMIT 25").map(({ token, replay }) => ({
+      path: `/community/bazaar/replays/${token}`, durationMs: replay.durationMs, completedFlips: replay.completedFlips, ...replay.identity ? { identity: replay.identity } : {},
+      ...replay.realizedProfit !== undefined ? { realizedProfit: replay.realizedProfit } : {} })) };
   }
 }

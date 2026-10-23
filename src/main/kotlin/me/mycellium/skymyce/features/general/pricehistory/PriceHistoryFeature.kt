@@ -47,7 +47,9 @@ object PriceHistoryFeature : SkyMyceModule() {
         val market = if (BazaarAPI.getProduct(id.bazaarId) != null) PriceMarket.BAZAAR else PriceMarket.AUCTION
         val tag = coflnetTag(id.bazaarId, id.isPet) ?: return
         event.cancel()
-        navigateMenu(PriceHistoryScreen(screen, tag, stack.hoverName.string, market, Settings.defaultRange))
+        // History covers every reforge and star level, so title it with the base item rather than the hovered variant.
+        val name = if (id.isPet) stack.hoverName.string else id.toItem().takeUnless { it.isEmpty }?.hoverName?.string ?: stack.hoverName.string
+        navigateMenu(PriceHistoryScreen(screen, tag, name, market, Settings.defaultRange))
     }
 
     /** Cached history, or null while it loads; [ready] runs on the client thread once a fetch finishes. */

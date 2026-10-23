@@ -163,6 +163,16 @@ for (const target of ['sender', 'recipient']) {
   f.manager.preserve(f.alice, stale);
   assert.equal(f.alice.state.leapPov.server, 'new-instance', 'Delayed feature writes cannot undo a roster or instance change');
 }
+{
+  const f = fixture(); f.ready();
+  const stale = { ...f.alice.deserializeAttachment(), party: { floor: 'F7', open: false } }; // party_set awaiting sharing permissions
+  Object.assign(f.alice.state, { globalChatSubscribed: true, richChatVersion: 1, partySubscribed: true, partyId: 'a'.repeat(32) });
+  f.manager.preserve(f.alice, stale);
+  assert.equal(f.alice.state.globalChatSubscribed, true, 'A delayed feature write cannot drop a confirmed Global subscription');
+  assert.equal(f.alice.state.richChatVersion, 1);
+  assert.equal(f.alice.state.partyId, 'a'.repeat(32), 'A delayed feature write cannot drop a confirmed Party subscription');
+  assert.equal(f.alice.state.party.floor, 'F7', 'The other feature still writes its own state');
+}
 
 // Exercise the production WebSocket dispatcher and signed Minecraft authentication in Miniflare.
 const rsa = () => generateKeyPairSync('rsa', { modulusLength: 2048 });

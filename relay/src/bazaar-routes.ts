@@ -1,12 +1,13 @@
 import type { AccountStore } from "./accounts";
 import { boundedJson } from "./community";
-import { bazaarFreshness } from "./bazaar-market";
+import { bazaarFreshness, bazaarProductId } from "./bazaar-market";
 
 const prefix = "/community/bazaar";
 /** Public market/replay reads need no Discord account; every personal write uses the existing bound session. */
 export async function handleBazaarRequest(request: Request, env: { ACCOUNT_STORE: DurableObjectNamespace<AccountStore> }, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url); if (!url.pathname.startsWith(prefix + "/")) return null;
   const store = env.ACCOUNT_STORE.getByName("global"), path = url.pathname.slice(prefix.length);
+  const credential = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
   const json = (result: { ok: boolean; error?: string }) => Response.json(result, { status: result.ok ? 200 : result.error === "replay_unavailable" ? 404 : result.error === "rate_limited" ? 429 :
     ["session_expired", "not_authorized"].includes(result.error ?? "") ? 401 : result.error === "sharing_disabled" || result.error === "identity_blacklisted" ? 403 : 400,
     headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" } });
@@ -24,7 +25,7 @@ export async function handleBazaarRequest(request: Request, env: { ACCOUNT_STORE
     if (path === "/history") {
       if ([...url.searchParams].some(([key, value]) => !["product", "daily"].includes(key) || key === "daily" && !["true", "false"].includes(value))) return json({ ok: false, error: "invalid_request" });
       const product = url.searchParams.get("product") ?? "", daily = url.searchParams.get("daily") === "true", cache = ctx ? caches.default : undefined;
-      if (!/^[A-Z0-9_:;.\-]{1,100}$/.test(product)) return json({ ok: false, error: "invalid_product" });
+      if (!bazaarProductId(product)) return json({ ok: false, error: "invalid_product" });
       const key = new URL(`${prefix}/cache/history/${encodeURIComponent(product)}/${daily ? "day" : "hour"}`, url.origin).toString(), cached = await cache?.match(key);
       if (cached) return cached;
       const result = await store.communityBazaarHistory(product, daily), response = json(result);
@@ -38,16 +39,14 @@ export async function handleBazaarRequest(request: Request, env: { ACCOUNT_STORE
       if (!result.ok || request.headers.get("Accept")?.includes("application/json")) return json(result);
       return replayViewer(result);
     }
-    const credential = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1] ?? "";
     if (path === "/stats") return json(await store.communityBazaar(credential, "stats", Object.fromEntries(url.searchParams)));
     if (path === "/settings" && !url.search) return json(await store.communityBazaar(credential, "settings-get", {}));
     return json({ ok: false, error: "invalid_request" });
   }
   const actions: Record<string, string> = { "/contributions": "contributions", "/contributions/remove": "contributions-remove", "/session-summary": "summary", "/settings": "settings", "/replays/publish": "publish", "/replays/revoke": "revoke", "/replays/delete": "delete" };
   if (request.method !== "POST" || !actions[path] || url.search || !/^application\/json(?:\s*;|$)/i.test(request.headers.get("Content-Type") ?? "")) return json({ ok: false, error: "invalid_request" });
-  const token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
-  if (!token) return json({ ok: false, error: "not_authorized" });
-  try { return json(await store.communityBazaar(token, actions[path], await boundedJson(request, 65536))); }
+  if (!credential) return json({ ok: false, error: "not_authorized" });
+  try { return json(await store.communityBazaar(credential, actions[path], await boundedJson(request, 65536))); }
   catch { return json({ ok: false, error: "invalid_request" }); }
 }
 function replayViewer(result: unknown) {

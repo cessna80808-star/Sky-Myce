@@ -2,7 +2,7 @@ import type { AccountStore } from "./accounts";
 import { boundedJson } from "./community";
 import { currentIrcSession, type IrcSession } from "./irc";
 import { sha256 } from "./drm";
-import { BAZAAR_FRESH_MILLIS } from "./bazaar-market";
+import { BAZAAR_FRESH_MILLIS, bazaarProductId } from "./bazaar-market";
 
 export type BazaarSession = { epoch: string; active: boolean; dmEnabled: boolean; revision: number };
 type Session = IrcSession & { bazaar?: BazaarSession };
@@ -10,7 +10,7 @@ const id = /^[a-f0-9]{32}$/;
 export function validBazaarAlert(raw: Record<string, unknown>, now = Date.now()) {
   return Object.keys(raw).every(key => ["type", "id", "epoch", "product", "netProfit", "roi", "confidence", "capital", "availableCapital", "observedAt", "reason"].includes(key)) &&
     typeof raw.id === "string" && id.test(raw.id) && typeof raw.epoch === "string" && id.test(raw.epoch) &&
-    typeof raw.product === "string" && /^[A-Z0-9_:;.\-]{1,100}$/.test(raw.product) &&
+    bazaarProductId(raw.product) &&
     [raw.netProfit, raw.roi, raw.confidence, raw.capital, raw.availableCapital].every(value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e12) &&
     Number(raw.netProfit) > 0 && Number(raw.roi) >= .01 && Number(raw.roi) <= 10 && Number(raw.confidence) >= .65 && Number(raw.confidence) <= 1 &&
     Number(raw.capital) > 0 && Number(raw.capital) <= Number(raw.availableCapital) &&

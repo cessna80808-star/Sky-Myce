@@ -169,18 +169,11 @@ object CosmeticsClient : SkyMyceModule() {
     private var nextTick = 0L
     private var identity: UUID? = null
     private var enabled = false
-    private var forceOwn = false
     /** A chat re-wrap is owed (names changed); done at most every 2 s, outside the tick, because it re-wraps all history. */
     private var rescalePending = false
     private var nextRescale = 0L
     private var nextOffHypixelNames = 0L
     var revision = 0L
-        private set
-    var status = "Waiting for Hypixel"
-        private set
-    var linkCode: String? = null
-        private set
-    var linkExpires = 0L
         private set
 
     override fun init() { CapeTextures.initialize(); LocalCosmetics.initialize(); ClientTickEvents.END_CLIENT_TICK.register { RuntimeProfiler.measure(RuntimeProfiler.Area.COSMETIC_TICK) { tick() } } }
@@ -202,23 +195,21 @@ object CosmeticsClient : SkyMyceModule() {
             if (identity != null || enabled) clear()
             // Local cosmetics only change on their own events; once a second is plenty here.
             if (now >= nextOffHypixelNames) { nextOffHypixelNames = now + 1_000; updateNames(now) }
-            status = "Local cosmetics work here • join Hypixel to synchronize community cosmetics"; return
+            return
         }
         identity = MC.instance.user.profileId
         val wanted = CosmeticsConfig.names || CosmeticsConfig.scaling
         if (CosmeticNames.enabled != CosmeticsConfig.names) { CosmeticNames.enabled = CosmeticsConfig.names; requestRescale() }
         if (enabled && !wanted) {
             DungeonFriendRelay.disableCosmetics()
-            clear(); identity = MC.instance.user.profileId; status = "Cosmetic rendering disabled"
+            clear(); identity = MC.instance.user.profileId
         }
         enabled = wanted
         if (now < nextTick) return
         nextTick = now + 1000
         if (cache.expire(now)) revision++
-        if (linkCode != null && now >= linkExpires) { linkCode = null; revision++ }
-        // Owner refresh/link UI remains usable with rendering disabled. Background
-        // discovery has no consumers when both visual options are off.
-        if (!wanted && !forceOwn) return
+        // Background discovery has no consumers when both visual options are off.
+        if (!wanted) return
         // Reuse cached social identities without issuing friend scans or Mojang requests.
         val roster = MC.connection?.onlinePlayers.orEmpty().asSequence().take(256).toList()
         FriendsAPI.friends.asSequence().take(512).forEach { identities.observe(it.name, it.uuid, now) }
@@ -232,13 +223,11 @@ object CosmeticsClient : SkyMyceModule() {
         identities.expire(now)
         checked.keys.retainAll(identities.resolved().keys)
         updateNames(now)
-        if (!DungeonFriendRelay.connected || !DungeonFriendRelay.cosmeticsAvailable) {
-            status = if (DungeonFriendRelay.connected) "Relay does not support cosmetics" else "Relay offline • cached cosmetics expire after 10 minutes"; return
-        }
+        if (!DungeonFriendRelay.connected || !DungeonFriendRelay.cosmeticsAvailable) return
         if (lookup != null) return
         // Retained social identities continue refreshing even after a player leaves the tab roster.
-        val visible = (listOf(MC.instance.user.profileId) + if (wanted) identities.uuids() else emptyList()).distinct()
-        val pendingNames = if (wanted && DungeonFriendRelay.cosmeticsNamesAvailable) identities.names(now) else emptyList()
+        val visible = (listOf(MC.instance.user.profileId) + identities.uuids()).distinct()
+        val pendingNames = if (DungeonFriendRelay.cosmeticsNamesAvailable) identities.names(now) else emptyList()
         val ids = visible.filter { cache.get(it, now) == null || (checked[it] ?: 0) + 300000 <= now }.take(16 - minOf(8, pendingNames.size))
         val names = pendingNames.take(16 - ids.size)
         if (ids.isEmpty() && names.isEmpty()) return
@@ -248,20 +237,19 @@ object CosmeticsClient : SkyMyceModule() {
         if (names.isNotEmpty()) fields["names"] = names
         val request = DungeonFriendRelay.cosmeticsRequest("cosmetics_get", fields) ?: return
         ids.forEach { checked.putIfAbsent(it, 0) } // Accept a newer live update while this lookup is still pending.
-        forceOwn = false
         lookup = request
         request.whenComplete { result, _ -> MC.instance.execute {
             if (!cosmeticLookupCurrent(generation, token, identity, owner, MC.instance.user.profileId, LocationAPI.onHypixel)) return@execute
             lookup = null
             val parsed = parseCosmeticsLookup(result, ids, names)
             if (parsed == null) {
-                status = "Cosmetics unavailable • retrying in 10 seconds"; nextTick = System.currentTimeMillis() + 10000
+                nextTick = System.currentTimeMillis() + 10000
             } else {
                 val received = System.currentTimeMillis()
                 identities.complete(names, parsed.identities, received)
                 parsed.records.forEach { cache.apply(it, received); checked[it.uuid] = received }
                 while (checked.size > 512) checked.remove(checked.keys.first())
-                status = "Cosmetics synchronized • visual only"; revision++
+                revision++
                 updateNames(received)
             }
             if (!enabled) DungeonFriendRelay.disableCosmetics()
@@ -274,12 +262,12 @@ object CosmeticsClient : SkyMyceModule() {
         identities.observe(name, uuid, System.currentTimeMillis(), priority = true)
     }
     fun ready() { generation++; lookup?.cancel(false); lookup = null; checked.clear(); identities.reconnect(); nextTick = 0; revision++ }
-    fun closed() { generation++; lookup?.cancel(false); lookup = null; linkCode = null; revision++ }
+    fun closed() { generation++; lookup?.cancel(false); lookup = null; revision++ }
     fun clear() {
         closed(); cache.clear(); checked.clear(); identities.clear()
         // An empty name map already turns the text hook off; flipping the enabled flag here caused a second re-wrap.
         if (CosmeticNames.update(emptyMap())) requestRescale()
-        identity = null; enabled = false; forceOwn = false; nextTick = 0
+        identity = null; enabled = false; nextTick = 0
     }
     override fun onDisable() { DungeonFriendRelay.disableCosmetics(); clear() }
     fun event(json: JsonObject) {
@@ -289,31 +277,9 @@ object CosmeticsClient : SkyMyceModule() {
         if (record.uuid !in checked) return
         if (cache.apply(record, System.currentTimeMillis())) { revision++; updateNames(System.currentTimeMillis()) }
     }
-    fun own() = LocalCosmetics.equipped() ?: cache.get(MC.instance.user.profileId, System.currentTimeMillis())
     fun acceptOwn(profile: CosmeticProfile) {
         if (profile.uuid != MC.instance.user.profileId) return
         if (cache.apply(profile, System.currentTimeMillis())) { checked[profile.uuid] = System.currentTimeMillis(); revision++; updateNames(System.currentTimeMillis()) }
-    }
-    fun refreshOwn() { checked.remove(MC.instance.user.profileId); forceOwn = true; nextTick = 0 }
-    fun requestLink() {
-        linkCode = null
-        if (!LocationAPI.onHypixel || !DungeonFriendRelay.cosmeticsAvailable) { status = "An authenticated cosmetics-enabled relay connection is required"; revision++; return }
-        val request = DungeonFriendRelay.cosmeticsRequest("cosmetics_link") ?: run { status = "Relay busy • retry shortly"; revision++; return }
-        val token = generation
-        request.whenComplete { result, _ -> MC.instance.execute {
-            if (token != generation) return@execute
-            val code = runCatching { result?.get("code")?.asString?.takeIf { it.matches(Regex("[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){2}|[a-f0-9]{32}")) } }.getOrNull()
-            val expires = runCatching { result?.get("expiresAt")?.asLong }.getOrNull()
-            val now = System.currentTimeMillis()
-            if (code != null && expires != null && expires in now + 1..now + 360000) {
-                linkCode = code; linkExpires = expires; status = "Use /cosmetics link in bot-commands (1552057526969835612) within five minutes"
-            } else status = when (result?.get("error")?.asString) {
-                "not_configured" -> "The relay operator has not configured Discord interactions"
-                "rate_limited" -> "Wait a minute before requesting another link code"
-                else -> "Could not issue a link code • reconnect and retry"
-            }
-            revision++
-        } }
     }
     private fun updateNames(now: Long) {
         val known = identities.resolved().mapNotNull { (uuid, real) -> cache.get(uuid, now)?.nameStyle?.let { real to it } }.toMap().toMutableMap()

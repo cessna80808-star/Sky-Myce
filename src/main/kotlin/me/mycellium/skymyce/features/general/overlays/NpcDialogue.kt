@@ -11,6 +11,7 @@ import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
+import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
@@ -41,6 +42,7 @@ internal data class DialogueOption(val label: String, val click: ClickEvent?)
 private val npcLine = Regex("^\\[NPC] ([^:\\[\\]]{1,40}): (.+)$")
 private val formatting = Regex("§.")
 private val optionsLine = Regex("(?s).*(?:Select|Click) an option: (.+)$")
+private val whitespace = Regex("\\s+")
 
 internal fun parseNpcLine(stripped: String): NpcLine? = npcLine.matchEntire(stripped.trim())?.let { NpcLine(it.groupValues[1].trim(), it.groupValues[2].trim()) }
 
@@ -54,7 +56,7 @@ internal fun optionsFrom(segments: List<Pair<String, ClickEvent?>>): List<Dialog
     val options = ArrayList<DialogueOption>()
     var text = StringBuilder(); var click: ClickEvent? = null
     fun flush() {
-        val label = text.toString().replace(Regex("§."), "").trim().removePrefix("[").removeSuffix("]").trim()
+        val label = text.toString().replace(formatting, "").trim().removePrefix("[").removeSuffix("]").trim()
         if (click != null && label.isNotEmpty()) options += DialogueOption(label, click)
         text = StringBuilder(); click = null
     }
@@ -68,7 +70,7 @@ internal fun optionsFrom(segments: List<Pair<String, ClickEvent?>>): List<Dialog
 
 /** How long a line stays: its words at the reading speed, never less than the minimum. */
 internal fun dialogueDuration(message: String, wordsPerMinute: Int, minimumMillis: Long): Long {
-    val words = message.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
+    val words = message.trim().split(whitespace).count { it.isNotEmpty() }
     return (words * 60_000L / wordsPerMinute.coerceAtLeast(1)).coerceAtLeast(minimumMillis)
 }
 
@@ -93,6 +95,9 @@ object NpcDialogue : SkyMyceModule() {
     private var portrait: LivingEntity? = null
     private var openedAt = 0L
     private var keysDown = BooleanArray(9)
+    private var wrappedMessage: String? = null
+    private var wrappedWidth = 0
+    private var wrapped: List<String> = emptyList()
 
     private fun active() = isEnabled() && Settings.enabled && LocationAPI.isOnSkyBlock
 
@@ -191,6 +196,17 @@ object NpcDialogue : SkyMyceModule() {
         draw(graphics, 8, graphics.guiHeight() / 2, centred = false, maxWidth = room)
     }
 
+    /** [message] wrapped to [width] as plain lines, kept until either changes rather than re-split every frame. */
+    private fun wrappedLines(font: Font, message: String, width: Int): List<String> {
+        if (message != wrappedMessage || width != wrappedWidth) {
+            wrapped = font.split(Component.literal(message), width).map { seq ->
+                StringBuilder().also { raw -> seq.accept { _, _, cp -> raw.appendCodePoint(cp); true } }.toString()
+            }
+            wrappedMessage = message; wrappedWidth = width
+        }
+        return wrapped
+    }
+
     /** The box: name tab, optional portrait, the typed line, and the numbered options above it. */
     private fun draw(graphics: GuiGraphicsExtractor, anchorX: Int, anchorY: Int, centred: Boolean, maxWidth: Int) {
         val line = current
@@ -208,7 +224,7 @@ object NpcDialogue : SkyMyceModule() {
         val wrap = width - textLeftPad - 10
         val message = line?.message.orEmpty()
         val revealed = if (animate && line != null) revealedChars(message.length, now - shownAt, until - shownAt) else message.length
-        val lines = if (line != null) font.split(Component.literal(message), wrap) else emptyList()
+        val lines = if (line != null) wrappedLines(font, message, wrap) else emptyList()
         val height = (lines.size * 10 + 18).coerceAtLeast(if (hasPortrait) 52 else 30)
         val left = if (centred) anchorX - width / 2 else anchorX
         val top = (if (centred) anchorY - height else anchorY - height / 2) + ((1 - eased) * 6).roundToInt()
@@ -219,9 +235,8 @@ object NpcDialogue : SkyMyceModule() {
             graphics.fill(left, top, left + width, top + 1, a(accent, 0.9))
             // Typed text: whole lines until the reveal point, then the partial line.
             var remaining = revealed
-            lines.forEachIndexed { i, seq ->
-                val raw = StringBuilder(); seq.accept { _, _, cp -> raw.appendCodePoint(cp); true }
-                val shown = raw.toString().take(remaining.coerceAtLeast(0))
+            lines.forEachIndexed { i, raw ->
+                val shown = raw.take(remaining.coerceAtLeast(0))
                 remaining -= raw.length + 1
                 if (shown.isNotEmpty()) graphics.text(font, shown, left + textLeftPad, top + 12 + i * 10, a(text, 1.0), true)
             }

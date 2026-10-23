@@ -8,7 +8,6 @@ import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
-import me.mycellium.skymyce.config.SettingsTab
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.digest.DailyDigestScreen
@@ -27,7 +26,6 @@ import net.minecraft.client.input.CharacterEvent
 import net.minecraft.client.input.PreeditEvent
 import org.lwjgl.glfw.GLFW
 
-/** Menu density is independent of Minecraft's GUI scale. */
 /** Whether the vanilla world blur may run behind Sky-Myce menus at this quality. */
 internal fun menuBlurAllowed(quality: GuiQuality) = quality != GuiQuality.EXTREMELY_LIGHT && quality != GuiQuality.LIGHT
 
@@ -41,8 +39,6 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
     }
     protected val menuWidth get() = menuLayout.contentWidth
     protected val menuHeight get() = menuLayout.height.coerceAtLeast(260)
-    protected open val settingsCategory: SettingsTab? get() = null
-    protected open fun selectSettings(tab: SettingsTab) {}
     protected open val menuParent: net.minecraft.client.gui.screens.Screen?
         get() = if (modal) null else menuBackScreen(menuBackTarget(menuCategory, home = home, openedFromHome = openedFromHome))
     private var openedFromHome = false
@@ -478,7 +474,7 @@ abstract class MenuScreen(title: Component, private val page: MenuPage? = null) 
         val handled = super.keyPressed(event)
         val handler = uiAdapter?.rootComponent?.focusHandler()
         val focused = handler?.focused()
-        if (focused != null && focused !== previous && handler?.lastFocusSource() == UIComponent.FocusSource.KEYBOARD_CYCLE)
+        if (focused != null && focused !== previous && handler.lastFocusSource() == UIComponent.FocusSource.KEYBOARD_CYCLE)
             revealMenuKeyboardFocus(focused)
         return handled
     }

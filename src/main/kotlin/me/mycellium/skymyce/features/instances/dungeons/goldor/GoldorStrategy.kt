@@ -80,7 +80,7 @@ data class LeapRule(
 )
 
 /** What Tank does in S2, decided by Berserker's T4 (first) and T3 (second) puzzle speeds. */
-enum class TankS2Action(val title: String) { STACK_T3("Stack T3 with Berserker"), PRE_LEAP("Prepare pre-leap"), HOLD("Hold — waiting for T4 type") }
+enum class TankS2Action { STACK_T3, PRE_LEAP, HOLD }
 
 /**
  * One row of the S2 decision table. In [reason], `{1}` and `{2}` stand for Berserker's first and second terminal

@@ -159,9 +159,8 @@ export class IrcLifecycle {
     return record && !record.deleted ? { messageId: record.id, ...(record.discordMessageId ? { discordMessageId: record.discordMessageId } : {}), from: record.from, text: record.preview } :
       { messageId, from: "Unavailable message", text: "The original message is no longer available." };
   }
-  reactions(messageId: string, actor?: string): IrcReaction[] {
-    return this.storage.sql.exec<{ emoji: string; count: number }>("SELECT emoji,COUNT(*) AS count FROM irc_reactions WHERE message_id=? GROUP BY emoji ORDER BY emoji", messageId).toArray()
-      .map(row => ({ ...row, ...(actor ? { mine: !!this.storage.sql.exec("SELECT 1 FROM irc_reactions WHERE message_id=? AND emoji=? AND actor=?", messageId, row.emoji, actor).toArray().length } : {}) }));
+  reactions(messageId: string): IrcReaction[] {
+    return this.storage.sql.exec<{ emoji: string; count: number }>("SELECT emoji,COUNT(*) AS count FROM irc_reactions WHERE message_id=? GROUP BY emoji ORDER BY emoji", messageId).toArray();
   }
   minecraftReacted(messageId: string, emoji: string): boolean {
     return !!this.storage.sql.exec("SELECT 1 FROM irc_reactions WHERE message_id=? AND emoji=? AND actor LIKE 'mc:%' LIMIT 1", messageId, emoji).toArray().length;

@@ -50,15 +50,7 @@ data class GoldorTick(val originMillis: Long?, val periodMillis: Long, val obser
     }
 }
 
-enum class LeapPhase(val title: String) {
-    WAITING_TICK("waiting for Goldor tick"),
-    PREPARE("prepare to leap"),
-    LEAP("LEAP"),
-    TRAVELLING("travelling"),
-    ARRIVED("ready"),
-    MISSED("missed — go now"),
-    UNCERTAIN("timing uncertain"),
-}
+enum class LeapPhase { WAITING_TICK, PREPARE, LEAP, TRAVELLING, ARRIVED, MISSED, UNCERTAIN }
 
 /**
  * One pre-leap sequence: the intended Goldor tick kill, the leap after it, the travel to the next terminal and arrival

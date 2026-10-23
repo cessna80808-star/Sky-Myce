@@ -44,10 +44,17 @@ fun parsePbLimit(text: String): Long? {
 }
 
 private const val NAME = "(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16})"
-fun partyInviter(message: String): String? = Regex("^$NAME has invited you to join (?:their|his|her) party![^\\n]*$")
-    .matchEntire(message.replace(Regex("§."), "").trim())?.groupValues?.get(1)
-fun joinedPartyLeader(message: String): String? = Regex("^You have joined $NAME's? party!$")
-    .matchEntire(message.replace(Regex("§."), "").trim())?.groupValues?.get(1)
+// Compiled once: these run for every received chat line.
+private val PARTY_INVITER = Regex("^$NAME has invited you to join (?:their|his|her) party![^\\n]*$")
+private val JOINED_PARTY_LEADER = Regex("^You have joined $NAME's? party!$")
+private val PARTY_BORDER = Regex("[-▬─]{5,}")
+private val PARTY_JOINED = Regex("^(?:\\[Party] )?$NAME joined the party\\.$")
+private val OWN_INVITE = Regex("^You (?:have )?invited $NAME to (?:your|the) party!(?: They have 60 seconds to accept\\.)?$")
+private val NAMED_INVITE = Regex("^$NAME invited $NAME to the party!(?: They have 60 seconds to accept\\.)?$")
+fun partyInviter(message: String): String? = PARTY_INVITER
+    .matchEntire(message.replace(LEGACY_FORMAT, "").trim())?.groupValues?.get(1)
+fun joinedPartyLeader(message: String): String? = JOINED_PARTY_LEADER
+    .matchEntire(message.replace(LEGACY_FORMAT, "").trim())?.groupValues?.get(1)
 
 fun serverPartyInviter(component: Component): String? {
     val name = component.string.lines().firstNotNullOfOrNull(::partyInviter) ?: return null
@@ -128,20 +135,20 @@ class DungeonPartyNotices {
     fun compact(message: String, self: String, now: Long): String? {
         player = ""
         prune(now)
-        val lines = message.replace(Regex("§."), "").lines().map(String::trim)
-            .filter { it.isNotEmpty() && !it.matches(Regex("[-▬─]{5,}")) }
+        val lines = message.replace(LEGACY_FORMAT, "").lines().map(String::trim)
+            .filter { it.isNotEmpty() && !it.matches(PARTY_BORDER) }
         if (lines.size != 1) return null // Never hide unrelated lines in a mixed chat packet.
         val line = lines.single()
         joinedPartyLeader(line)?.let { leader ->
             if (accepted?.first.equals(leader, true)) { accepted = null; player = leader; return "You joined $leader's party" }
             return null
         }
-        Regex("^(?:\\[Party] )?$NAME joined the party\\.$").matchEntire(line)?.let {
+        PARTY_JOINED.matchEntire(line)?.let {
             val name = it.groupValues[1]
             return if (invited.remove(name.lowercase())?.confirmed == true) { player = name; "$name joined" } else null
         }
-        val own = Regex("^You (?:have )?invited $NAME to (?:your|the) party!(?: They have 60 seconds to accept\\.)?$").matchEntire(line)
-        val named = Regex("^$NAME invited $NAME to the party!(?: They have 60 seconds to accept\\.)?$").matchEntire(line)
+        val own = OWN_INVITE.matchEntire(line)
+        val named = NAMED_INVITE.matchEntire(line)
             ?.takeIf { it.groupValues[1].equals(self, true) }
         val name = own?.groupValues?.get(1) ?: named?.groupValues?.get(2) ?: return null
         val pending = invited[name.lowercase()] ?: return null
@@ -180,7 +187,7 @@ data class JoinPartyContext(
 class DungeonPartyBorders {
     private var held: Pair<Component, Long>? = null
     private var trailingUntil = 0L
-    private fun separator(text: String) = text.replace(Regex("§."), "").trim().matches(Regex("[-▬─]{5,}"))
+    private fun separator(text: String) = text.replace(LEGACY_FORMAT, "").trim().matches(PARTY_BORDER)
 
     fun filter(component: Component, pending: Boolean, compacted: Boolean, now: Long, restore: (Component) -> Unit): Boolean {
         val previous = held

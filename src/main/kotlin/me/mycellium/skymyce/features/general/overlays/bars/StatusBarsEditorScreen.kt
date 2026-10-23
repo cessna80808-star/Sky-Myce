@@ -8,7 +8,6 @@ import io.wispforest.owo.ui.core.Insets
 import io.wispforest.owo.ui.core.OwoUIAdapter
 import io.wispforest.owo.ui.core.Positioning
 import io.wispforest.owo.ui.core.Sizing
-import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.config.parseThemeHex
 import me.mycellium.skymyce.features.general.overlays.StatusBars
 import me.mycellium.skymyce.hud.themed
@@ -155,7 +154,6 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
             child(MenuLabel(Component.literal(type.title).withColor(MenuTheme.TEXT)))
             child(button("Icon: ${bar.icon.title}", w - 12, "Where the icon sits") { change { it.copy(icon = next(it.icon, IconPosition.entries.toTypedArray())) } })
             child(button("Text: ${bar.text.title}", w - 12, "Where the value sits on the bar") { change { it.copy(text = next(it.text, TextPosition.entries.toTypedArray())) } })
-            if (type.hasMax && type != BarType.RESPIRATION) child(button("Show max: ${onOff(bar.showMax)}", w - 12, "Show the value as value/max") { change { it.copy(showMax = !it.showMax) } })
             if (type.hasOverflow) child(button("Show ${if (type == BarType.HEALTH) "absorption" else "overflow"}: ${onOff(bar.showOverflow)}", w - 12,
                 "Draw the extra layer and add it to the label") { change { it.copy(showOverflow = !it.showOverflow) } })
             type.extra?.let { title -> child(button("$title: ${onOff(bar.extra)}", w - 12, "Health × (1 + defense ÷ 100), beside the defense") { change { it.copy(extra = !it.extra) } }) }
@@ -164,7 +162,7 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
             colorRow(this, "text", "Text colour", bar.textColor, w - 12)
             child(button("Reset this bar", w - 12, "Default colours and options; the position stays") {
                 val d = StatusBarLayout.defaultBar(type)
-                change { it.copy(icon = d.icon, text = d.text, showMax = d.showMax, showOverflow = d.showOverflow, extra = d.extra, fill = d.fill, overflow = d.overflow, textColor = d.textColor) }
+                change { it.copy(icon = d.icon, text = d.text, showOverflow = d.showOverflow, extra = d.extra, fill = d.fill, overflow = d.overflow, textColor = d.textColor) }
             })
             child(button("Hide bar", w - 12, "Remove it from the HUD. Hidden bars are listed at the top to bring back", MenuButtonIntent.DESTRUCTIVE) {
                 commit(layout.hide(type)); options = null; rebuildWidgets()

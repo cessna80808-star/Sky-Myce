@@ -2,7 +2,6 @@ package me.mycellium.skymyce.commands
 
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import com.mojang.brigadier.arguments.StringArgumentType
-import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.ui.openMenu
 import me.mycellium.skymyce.config.Config
 import com.mojang.blaze3d.platform.InputConstants
@@ -10,7 +9,6 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
 import net.minecraft.client.KeyMapping
 import me.mycellium.skymyce.ModuleManager
-import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.features.general.AuctionHouseScreen
 import me.mycellium.skymyce.features.general.PersonalBestCommand
@@ -20,7 +18,6 @@ import me.mycellium.skymyce.features.dev.RuntimeProfiler
 import me.mycellium.skymyce.features.dev.profilingCommand
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonScreen
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsScreen
-import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriends
 import me.mycellium.skymyce.features.instances.dungeons.friends.RelayMessages
 import me.mycellium.skymyce.features.instances.dungeons.friends.FriendsSocialScreen
 import me.mycellium.skymyce.hud.widget.WidgetEditorScreen

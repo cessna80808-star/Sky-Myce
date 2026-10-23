@@ -87,11 +87,11 @@ export default {
     if (env.COMMUNITY_SERVICES_ENABLED === "false" && (url.pathname.startsWith("/community/") || ["/websocket", "/discord/bridge", "/discord/community-feed"].includes(url.pathname))) return limited(503);
     if (url.pathname === "/community/artifact" && !(await env.DOWNLOAD_LIMIT.limit({ key: ip })).success) return limited();
     if (url.pathname === "/prompt/runner") {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `prompt-runner:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      if (!(await env.CONNECT_LIMIT.limit({ key: `prompt-runner:${ip}` })).success) return new Response("Rate limited", { status: 429 });
       return await handlePromptRunner(request, env);
     }
     if (url.pathname.startsWith("/community/")) {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success)
+      if (!(await env.CONNECT_LIMIT.limit({ key: `community:${url.pathname}:${ip}` })).success)
         return url.pathname === "/community/news" ? limited() : new Response("Rate limited", { status: 429 });
       if (url.pathname === "/community/news") {
         if (request.method !== "GET") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET" } });
@@ -109,7 +109,7 @@ export default {
       return Response.json({ error: "loader_retired", message: "Install Sky-Myce normally with Fabric. Connect Discord from the mod." }, { status: 410 });
     }
     if (url.pathname === "/discord/community-feed") {
-      if (!(await env.CONNECT_LIMIT.limit({ key: `community-feed:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      if (!(await env.CONNECT_LIMIT.limit({ key: `community-feed:${ip}` })).success) return new Response("Rate limited", { status: 429 });
       try { return await handleCommunityFeed(request, env) ?? new Response("Not found", { status: 404 }); }
       catch { return Response.json({ ok: false, error: "feed_unavailable" }, { status: 503 }); }
     }
@@ -118,7 +118,7 @@ export default {
       const discordEnv = { ...env, DISCORD_PUBLIC_KEY: backend ? env.DISCORD_BACKEND_PUBLIC_KEY : (env.DISCORD_USER_PUBLIC_KEY ?? env.DISCORD_PUBLIC_KEY),
         DISCORD_APPLICATION_ID: backend ? env.DISCORD_BACKEND_APPLICATION_ID : (env.DISCORD_USER_APPLICATION_ID ?? env.DISCORD_APPLICATION_ID) };
       if (!discordEnv.DISCORD_PUBLIC_KEY || !discordEnv.DISCORD_APPLICATION_ID) return new Response("Interactions not configured", { status: 503 });
-      if (!(await env.CONNECT_LIMIT.limit({ key: `discord:${request.headers.get("CF-Connecting-IP") ?? "local"}` })).success) return new Response("Rate limited", { status: 429 });
+      if (!(await env.CONNECT_LIMIT.limit({ key: `discord:${ip}` })).success) return new Response("Rate limited", { status: 429 });
       const data = await verifiedInteraction(request, discordEnv);
       if (!data) return new Response("Invalid signature or interaction", { status: 401 });
       if (data.type === 1) return Response.json({ type: 1 });
@@ -153,7 +153,7 @@ export default {
       return new Response("Room not allowed", { status: 403 });
     }
     // Identity is not verified yet; bound attempts by the Cloudflare-provided IP.
-    if (!(await env.CONNECT_LIMIT.limit({ key: request.headers.get("CF-Connecting-IP") ?? "local" })).success) {
+    if (!(await env.CONNECT_LIMIT.limit({ key: ip })).success) {
       return new Response("Too many connection attempts", { status: 429 });
     }
     try { return await env.RELAY_ROOMS.getByName(room).fetch(request); }
@@ -645,7 +645,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
     const ordinary = data.type === "user_message";
     const receiptMessage = data.type === "ack" || data.type === "reject";
-    if ((data.type !== "message" && !ordinary && !receiptMessage) || typeof data.id !== "string" || !/^[a-f0-9]{32}$/.test(data.id) ||
+    if ((data.type !== "message" && !ordinary && !receiptMessage) || typeof data.id !== "string" || !uuid.test(data.id) ||
         (ordinary && !session.userMessages) || (data.type === "reject" && !session.userMessages) ||
         typeof data.to !== "string" || !username.test(data.to) || (!receiptMessage && (typeof data.text !== "string" ||
         data.text.length < 1 || data.text.length > 256 || /[\x00-\x1f\x7f§]/.test(data.text)))) {
@@ -904,8 +904,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
   }
   webSocketError(ws: WebSocket): void {
     this.leapPov.disconnect(ws);
-    this.recordDisconnect(ws.deserializeAttachment() as Session);
-    console.error({ event: "websocket_error", authenticated: !!(ws.deserializeAttachment() as Session).name });
+    const session = ws.deserializeAttachment() as Session;
+    this.recordDisconnect(session);
+    console.error({ event: "websocket_error", authenticated: !!session.name });
     ws.close(1011, "Connection error");
   }
   private recordDisconnect(session: Session): void {

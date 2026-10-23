@@ -193,17 +193,16 @@ internal fun commandCenterSettings(catalog: MenuCatalog, rows: List<SettingRow>,
 
 class SettingsScreen @JvmOverloads constructor(
     private val parent: Screen? = null,
-    private var tab: SettingsTab = SettingsTab.GENERAL,
+    tab: SettingsTab = SettingsTab.GENERAL,
     dungeonFriend: String? = null,
     featureId: String? = null,
     settingPath: String? = null,
     private val onPinSetting: (String) -> Unit = { MenuShortcuts.togglePin(it) },
 ) : MenuScreen(Component.literal("Sky-Myce Settings")) {
-    private var featureScoped = featureId != null || settingPath != null || dungeonFriend != null
-    private val rows by lazy { settingRows(SkyMyce.config) }
-    private val commandRows by lazy { commandCenterRows(SkyMyce.config) }
+    private val featureScoped = featureId != null || settingPath != null || dungeonFriend != null
+    private val rows by lazy { commandCenterRows(SkyMyce.config) }
     private val catalog by lazy { MenuCatalog(rows) }
-    private var featureId = featureId ?: legacySettingsFeature(tab)
+    private val featureId = featureId ?: legacySettingsFeature(tab)
     internal override val canonicalFeatureId get() = featureId
     private var pendingSetting = settingsFocusPath(settingPath, dungeonFriend)
     private val controls = mutableMapOf<String, UIComponent>()
@@ -217,18 +216,9 @@ class SettingsScreen @JvmOverloads constructor(
     private lateinit var summary: LabelComponent
     private lateinit var contentScroll: MenuScroll<FlowLayout>
     private lateinit var search: MenuTextBox
-    private var category = MenuCatalog.definitions.first { it.id == this.featureId }.category
+    private val category = MenuCatalog.definitions.first { it.id == this.featureId }.category
     public override val menuParent get() = parent ?: super.menuParent
     override val menuCategory get() = category
-    override val settingsCategory get() = tab
-    public override fun selectSettings(tab: SettingsTab) {
-        val destination = legacySettingsFeature(tab)
-        if (destination == featureId) return
-        val direction = if (tab.ordinal < this.tab.ordinal) -1 else 1
-        this.tab = tab; featureId = destination; featureScoped = true; category = catalog.findFeature(destination)!!.category; query = ""; editingDungeonFriend = null; friendDraft = null; availabilityDraft = null; keyCapture = null
-        pendingSetting = null
-        rebuildMenu(direction)
-    }
     private var editingDungeonFriend = dungeonFriend
     private var friendDraft: FriendPreferenceDraft? = null
     private var availabilityDraft: FriendPreferenceDraft? = null
@@ -279,7 +269,7 @@ class SettingsScreen @JvmOverloads constructor(
         heading.child(if (query.isBlank()) settingsBreadcrumb(category, catalog.findFeature(featureId).takeIf { featureScoped },
             detailWidth, { changed }, { section -> navigateMenu(MenuDirectoryScreen(category, section = section)) }, { openMenuFeature(it) })
         else label("Search results", MenuTheme.TEXT, 17f))
-        val matches = commandCenterSettings(catalog, commandRows, category, query, featureId.takeIf { featureScoped })
+        val matches = commandCenterSettings(catalog, rows, category, query, featureId.takeIf { featureScoped })
         val results = if (query.isBlank()) MenuCatalog.extraSettings.filter {
             if (featureScoped) it.featureId == featureId else it.category == category
         } else catalog.search(query)
@@ -288,8 +278,9 @@ class SettingsScreen @JvmOverloads constructor(
         summary.text(Component.literal(if (query.isBlank()) {
             "${count} settings • ${if (featureScoped) "Pin frequent controls to Quick Settings" else category.description}"
         } else "${count} matching controls across all categories"))
+        val locations = matches.associateWith { MenuCatalog.settingLocation(it.path) }
         catalog.features.forEach { owner ->
-            val settings = matches.filter { MenuCatalog.settingLocation(it.path).let { location ->
+            val settings = matches.filter { locations.getValue(it).let { location ->
                 location.featureId == owner.id || location.featureId == null && owner.category == MenuCategory.SETTINGS && location.subcategory == owner.subcategory
             } }
             val availability = owner.id == "party-finder" && "Dungeons/Dungeon Friends/availability" in extraPaths
@@ -560,7 +551,7 @@ class SettingsScreen @JvmOverloads constructor(
                         SkyMyce.config.save()
                         // Persist the native Controls mapping alongside the existing config key.
                         MC.instance.options.save()
-                    }.onFailure { SkyMyce.logger.warn("Could not save Sky-Hawk settings") }
+                    }.onFailure { SkyMyce.logger.warn("Could not save Sky-Hawk settings", it) }
                 }
             }
             notifySettingsChanged()
@@ -594,7 +585,7 @@ class SettingsScreen @JvmOverloads constructor(
             return SettingsScreen(parent, featureId = id, settingPath = path)
         }
     }
-    private fun currentValues() = commandRows.map { setting ->
+    private fun currentValues() = rows.map { setting ->
         if (setting.entry.isArray) setting.entry.array.toList() else setting.entry.get()
     }
 }

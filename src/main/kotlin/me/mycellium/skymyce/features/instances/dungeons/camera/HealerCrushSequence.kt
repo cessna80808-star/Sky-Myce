@@ -2,21 +2,6 @@ package me.mycellium.skymyce.features.instances.dungeons.camera
 
 enum class CrushStage { PURPLE, YELLOW }
 
-data class CrushPoint(val x: Double, val y: Double, val z: Double) {
-    fun valid() = x.isFinite() && y.isFinite() && z.isFinite() &&
-        x in -29_999_984.0..29_999_984.0 && z in -29_999_984.0..29_999_984.0 && y in -2048.0..2048.0
-    fun distanceSquared(other: CrushPoint) = (x - other.x) * (x - other.x) +
-        (y - other.y) * (y - other.y) + (z - other.z) * (z - other.z)
-}
-
-data class CrushBounds(val minX: Double, val minY: Double, val minZ: Double,
-                       val maxX: Double, val maxY: Double, val maxZ: Double) {
-    fun valid() = CrushPoint(minX, minY, minZ).valid() && CrushPoint(maxX, maxY, maxZ).valid() &&
-        minX < maxX && minY < maxY && minZ < maxZ
-    fun intersects(other: CrushBounds) = valid() && other.valid() && minX < other.maxX && maxX > other.minX &&
-        minY < other.maxY && maxY > other.minY && minZ < other.maxZ && maxZ > other.minZ
-}
-
 data class CrushEncounterContext(val world: Long, val enabled: Boolean, val floor: String?, val classEnabled: Boolean,
                                  val alive: Boolean, val inBoss: Boolean, val viewpointsReady: Boolean) {
     val eligible get() = enabled && floor in setOf("F7", "M7") && classEnabled && alive && inBoss

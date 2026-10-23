@@ -26,6 +26,7 @@ internal fun ircOperationError(reason: String): String = when (reason) {
 }
 private val ircId = Regex("[a-f0-9]{32}")
 private val ircRoom = Regex("[a-z0-9_-]{1,32}")
+private val ircDigits = Regex("[0-9]{1,16}")
 
 internal fun richIrcCapability(json: JsonObject): Boolean = json.get("richChatVersion")?.let {
     it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
@@ -82,7 +83,7 @@ private fun JsonObject.optionalString(key: String, maximum: Int): String? = get(
     ircString(key).also { value -> require(ircText(value, maximum) && value.isNotBlank()) }
 }
 private fun JsonObject.ircInteger(key: String, maximum: Long): Long {
-    val value = get(key); require(value != null && value.isJsonPrimitive && value.asJsonPrimitive.isNumber && value.asString.matches(Regex("[0-9]{1,16}")))
+    val value = get(key); require(value != null && value.isJsonPrimitive && value.asJsonPrimitive.isNumber && value.asString.matches(ircDigits))
     return value.asLong.also { require(it in 0..maximum) }
 }
 private fun JsonObject.optionalInteger(key: String, maximum: Long): Long? = get(key)?.takeUnless { it.isJsonNull }?.let { ircInteger(key, maximum) }
@@ -257,8 +258,8 @@ internal class IrcChatStore {
         if (update.operation != "delete" && !text && !media && !reactions) return null
         val revision = maxOf(previous.revision, update.revision)
         val next = if (update.operation == "delete") previous.copy(deleted = true, text = "Message deleted", media = emptyList(), reactions = emptyList(), revision = revision)
-        else previous.copy(text = if (text) update.text!! else previous.text, media = if (media) update.media!! else previous.media,
-            reactions = if (reactions) update.reactions!! else previous.reactions, revision = revision)
+        else previous.copy(text = if (text) update.text else previous.text, media = if (media) update.media else previous.media,
+            reactions = if (reactions) update.reactions else previous.reactions, revision = revision)
         messages[update.key] = entry.copy(message = next, textRevision = if (text) update.textRevision else entry.textRevision,
             mediaRevision = if (media) update.mediaRevision else entry.mediaRevision, reactionRevision = if (reactions) update.reactionRevision else entry.reactionRevision)
         mutations++

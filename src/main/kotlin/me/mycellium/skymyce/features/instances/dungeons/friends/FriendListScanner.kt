@@ -140,7 +140,7 @@ class FriendListScanner(cached: Collection<OnlineDungeonFriend>? = null, cachedA
 
     fun receive(message: String, now: Long, component: Component = Component.literal(message)): Boolean {
         if (!waiting || now >= deadline) return false
-        val lines = message.replace(Regex("§."), "").trim().replace(Regex("\\s+\\(x\\d+\\)$"), "")
+        val lines = message.replace(LEGACY_FORMAT, "").trim().replace(CHAT_REPEAT, "")
             .lines().map { it.trim() }
         // Never swallow a mixed packet containing unrelated chat.
         if (lines.any { !recognized(it) }) return false
@@ -166,7 +166,7 @@ class FriendListScanner(cached: Collection<OnlineDungeonFriend>? = null, cachedA
                 if (entry != null && headerSeen) {
                     val (name, location) = entry.destructured
                     val key = name.lowercase()
-                    val source = styledLines.firstOrNull { ENTRY.matchEntire(it.string.replace(Regex("§."), "").trim())?.groupValues?.get(1) == name }
+                    val source = styledLines.firstOrNull { ENTRY.matchEntire(it.string.replace(LEGACY_FORMAT, "").trim())?.groupValues?.get(1) == name }
                         ?: component
                     val style = dungeonPlayerNameStyle(source, name)
                     val color = style?.color?.value?.takeIf { it != dungeonPlayerNameStyle(source, location)?.color?.value }
@@ -223,9 +223,10 @@ class FriendListScanner(cached: Collection<OnlineDungeonFriend>? = null, cachedA
 
     private fun recognized(line: String) = line.isEmpty() || HEADER.containsMatchIn(line) ||
         ENTRY.matches(line) || SEPARATOR.matches(line) || EMPTY.matches(line) || ERROR.matches(line) ||
-        line.matches(Regex("(?:<<|>>|<-|->|Previous Page|Next Page|Click to view.*)(?:.*)"))
+        NAVIGATION.matches(line)
 
     companion object {
+        private val NAVIGATION = Regex("(?:<<|>>|<-|->|Previous Page|Next Page|Click to view.*)(?:.*)")
         private val HEADER = Regex("^(?:<<\\s*)?Friends \\(Page (\\d+) of (\\d+)\\)(?:.*)$")
         private val ENTRY = Regex("^(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) is (.+)$")
         private val SEPARATOR = Regex("^[-▬─]{5,}$")

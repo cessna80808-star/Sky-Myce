@@ -6,7 +6,7 @@ import { ACTIVATION_TTL, DEVICE_RESET_COOLDOWN, licenseDenial, type DeveloperAct
 import { AuthorizationError, bootstrapPurpose, createLease, decode64, deny, ensureSigningConfigured, installationKey, installationMessage, installationVersionDenial, randomToken,
   seconds, sha256, validateLaunchInput, validateLease, verifyInstallation, type AuthenticationPurpose, type ClientPlatform, type DrmConfig, type InstallationInput, type LeaseClaims } from "./drm";
 import { PromptJobs, type PromptActor, type PromptConfig } from "./prompts";
-import { deliverAccountAlert } from "./discord-notifications";
+import { ADMIN_ALERT_IDS, deliverAccountAlert } from "./discord-notifications";
 import { ircMentionNames, ircPlainText } from "./irc-model";
 import { CommunityAccounts, type CommunityConfig, type CommunitySessionCheck } from "./community";
 import { CommunitySharingStore, type SharingSession, type SharingCategory } from "./community-sharing";
@@ -44,9 +44,13 @@ type ManagementConfirmation = { token: string; actor_id: string; guild_id: strin
 type RuntimeRow = { installation_id: string; uuid: string; account_id: string; session_id: string; build_id: string; loader_version: string;
   generation: number; lease_issued_at: number; lease_expires_at: number; connected_at: number | null; last_heartbeat: number | null; connection_id: string | null };
 type SessionCheck = { accountId: string; uuid: string; installationId: string; generation: number; buildId?: string; loaderVersion?: string; connectionId?: string; heartbeat?: boolean; heartbeatAt?: number };
-const ADMIN_ALERT_IDS = ["978376257534328883", "1250627753191931914"];
 const snowflake = /^[0-9]{17,20}$/, uuid = /^[a-f0-9]{32}$/, hash = /^[a-f0-9]{64}$/;
-const failure = (error: unknown): { ok: false; error: string } => ({ ok: false, error: error instanceof AuthorizationError ? error.code : "authorization_unavailable" });
+function failure(error: unknown): { ok: false; error: string } {
+  if (error instanceof AuthorizationError) return { ok: false, error: error.code };
+  // Name only: messages can echo stored or client values.
+  console.error({ event: "account_store_unavailable", error: error instanceof Error ? error.name : typeof error });
+  return { ok: false, error: "authorization_unavailable" };
+}
 
 /** Identity uniqueness is one coordination atom, shared across all relay rooms.
  * ponytail: one SQL coordinator serializes global uniqueness; move to a global SQL service if identity throughput outgrows it. */
@@ -102,28 +106,19 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       CREATE TABLE IF NOT EXISTS account_migrations (room TEXT NOT NULL, uuid TEXT NOT NULL, PRIMARY KEY(room, uuid));
       CREATE TABLE IF NOT EXISTS account_admin_bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), discord_id TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(minecraft_links)").toArray().some(column => column.name === "discord_id")) {
-      ctx.storage.sql.exec("ALTER TABLE minecraft_links ADD COLUMN discord_id TEXT");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(sky_accounts)").toArray().some(column => column.name === "is_admin")) {
-      ctx.storage.sql.exec("ALTER TABLE sky_accounts ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(installations)").toArray().some(column => column.name === "platform")) {
-      ctx.storage.sql.exec("ALTER TABLE installations ADD COLUMN platform TEXT");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(installations)").toArray().some(column => column.name === "hardware_hash")) {
-      ctx.storage.sql.exec("ALTER TABLE installations ADD COLUMN hardware_hash TEXT");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(sky_accounts)").toArray().some(column => column.name === "hwid_bound_at")) {
-      ctx.storage.sql.exec("ALTER TABLE sky_accounts ADD COLUMN hwid_bound_at INTEGER");
+    const addColumn = (table: string, column: string, definition: string): boolean => {
+      if (ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().some(existing => existing.name === column)) return false;
+      ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); return true;
+    };
+    addColumn("minecraft_links", "discord_id", "TEXT");
+    addColumn("sky_accounts", "is_admin", "INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))");
+    addColumn("installations", "platform", "TEXT");
+    addColumn("installations", "hardware_hash", "TEXT");
+    if (addColumn("sky_accounts", "hwid_bound_at", "INTEGER")) {
       ctx.storage.sql.exec("UPDATE sky_accounts SET hwid_bound_at=COALESCE((SELECT registered_at FROM account_devices WHERE account_devices.device_hash=sky_accounts.device_hash),activated_at) WHERE device_hash IS NOT NULL");
     }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(sky_accounts)").toArray().some(column => column.name === "hardware_hash")) {
-      ctx.storage.sql.exec("ALTER TABLE sky_accounts ADD COLUMN hardware_hash TEXT");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(activation_keys)").toArray().some(column => column.name === "hardware_transfer")) {
-      ctx.storage.sql.exec("ALTER TABLE activation_keys ADD COLUMN hardware_transfer INTEGER NOT NULL DEFAULT 0 CHECK(hardware_transfer IN (0,1))");
-    }
+    addColumn("sky_accounts", "hardware_hash", "TEXT");
+    addColumn("activation_keys", "hardware_transfer", "INTEGER NOT NULL DEFAULT 0 CHECK(hardware_transfer IN (0,1))");
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS account_discord_names (discord_id TEXT PRIMARY KEY, username TEXT NOT NULL, display_name TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS account_runtime (installation_id TEXT NOT NULL, uuid TEXT NOT NULL, account_id TEXT NOT NULL,
@@ -144,15 +139,9 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       CREATE INDEX IF NOT EXISTS account_alert_due ON account_alerts(next_at);
       CREATE TABLE IF NOT EXISTS account_alert_dedup (id TEXT PRIMARY KEY,last_at INTEGER NOT NULL,audit_id INTEGER NOT NULL);
     `);
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_audit)").toArray().some(column => column.name === "severity")) {
-      ctx.storage.sql.exec("ALTER TABLE account_audit ADD COLUMN severity TEXT NOT NULL DEFAULT 'information'");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_runtime)").toArray().some(column => column.name === "connection_id")) {
-      ctx.storage.sql.exec("ALTER TABLE account_runtime ADD COLUMN connection_id TEXT");
-    }
-    if (!ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(account_management_confirmations)").toArray().some(column => column.name === "related_state")) {
-      ctx.storage.sql.exec("ALTER TABLE account_management_confirmations ADD COLUMN related_state TEXT NOT NULL DEFAULT ''");
-    }
+    addColumn("account_audit", "severity", "TEXT NOT NULL DEFAULT 'information'");
+    addColumn("account_runtime", "connection_id", "TEXT");
+    addColumn("account_management_confirmations", "related_state", "TEXT NOT NULL DEFAULT ''");
     if (env.ADMIN_BOOTSTRAP_USER_ID !== undefined) {
       if (typeof env.ADMIN_BOOTSTRAP_USER_ID !== "string" || !snowflake.test(env.ADMIN_BOOTSTRAP_USER_ID)) throw new Error("Invalid ADMIN_BOOTSTRAP_USER_ID");
       const bootstrapped = ctx.storage.transactionSync(() => {
@@ -578,9 +567,9 @@ export class AccountStore extends DurableObject<AccountsConfig> {
       const row = this.ctx.storage.sql.exec<ManagementConfirmation>("SELECT * FROM account_management_confirmations WHERE token=?", token).toArray()[0];
       if (!row || row.used_at !== null || row.expires_at <= Date.now() || row.actor_id !== actor.id || row.guild_id !== actor.guildId || row.kind !== kind || kind === "user" && row.target !== actor.id) deny("confirmation_expired");
       if (!confirm) { this.interaction(actor); this.ctx.storage.sql.exec("UPDATE account_management_confirmations SET used_at=? WHERE token=?", Date.now(), token); return { ok: true, action: "cancelled" }; }
-      const options = { ...JSON.parse(row.options), managementToken: token };
+      const stored = JSON.parse(row.options), options = { ...stored, managementToken: token };
       const result = kind === "backend" ? await this.developerCommand(actor, row.action, row.target, options) : await this.userCommand(actor, row.action, options);
-      return { ...result, action: row.action, target: row.target, options: JSON.parse(row.options) };
+      return { ...result, action: row.action, target: row.target, options: stored };
     } catch (error) { return failure(error); }
   }
   buildAllowed(kind: string, version: string): AccountResult {
@@ -939,9 +928,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=? AND uuid=?", account.account_id, options.uuid as string);
           }
           else {
-            auditMetadata = { ...auditMetadata, minecraftAccounts: this.summary(account).uuids };
+            const players = this.summary(account).uuids;
+            auditMetadata = { ...auditMetadata, minecraftAccounts: players };
             this.ctx.storage.sql.exec("INSERT OR IGNORE INTO account_migrations SELECT '*',uuid FROM minecraft_accounts WHERE account_id=?", account.account_id);
-            for (const player of this.summary(account).uuids) this.sharing.detachUuid(player.uuid, account.account_id);
+            for (const player of players) this.sharing.detachUuid(player.uuid, account.account_id);
             this.ctx.storage.sql.exec("DELETE FROM minecraft_accounts WHERE account_id=?", account.account_id);
             this.reset(account, actor.id, true);
             this.ctx.storage.sql.exec("UPDATE sky_accounts SET license_status='inactive',enrollment_blocked=1 WHERE account_id=?", account.account_id);

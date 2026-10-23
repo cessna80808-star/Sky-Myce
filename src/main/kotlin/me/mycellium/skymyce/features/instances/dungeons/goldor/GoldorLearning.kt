@@ -1,9 +1,11 @@
 package me.mycellium.skymyce.features.instances.dungeons.goldor
 
 import com.google.gson.Gson
-import com.google.gson.JsonObject
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.utils.AtomicJsonFile
+import me.mycellium.skymyce.utils.StateWriter
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import kotlin.time.Duration.Companion.milliseconds
 
 /** One finished section as seen: who (by class) completed which objective, in order. Only exact attributions count. */
 data class SectionObservation(val section: GoldorSection, val completions: List<Pair<GoldorRole, ObjectiveId>>, val roles: Set<GoldorRole>)
@@ -114,17 +116,28 @@ fun StrategyProfile.withLearned(learned: LearnedRoles): StrategyProfile {
 /** Learned roles on disk, one small JSON file. Malformed files are kept aside and learning starts over. */
 object GoldorLearning {
     private val file by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("goldor-learned.json"), 32768) }
-    var learned = LearnedRoles()
-        private set
+    /** Writes off the client thread; the last state is flushed on exit. */
+    private val writer by lazy {
+        StateWriter<LearnedRoles>({ file.write(Gson().toJsonTree(it)) }, { action -> Scheduling.schedule(100.milliseconds) { action() } },
+            { SkyMyce.logger.warn("Could not save learned Goldor roles", it) })
+            .also { created -> Runtime.getRuntime().addShutdownHook(Thread({ runCatching { created.flush() } }, "Sky-Myce-Goldor-Learned-Save")) }
+    }
+    private var learned = LearnedRoles()
     private var loaded = false
 
+    @Suppress("SENSELESS_COMPARISON")
     fun load(): LearnedRoles {
         if (loaded) return learned
         loaded = true
         learned = runCatching {
-            file.read()?.let { json -> Gson().fromJson(json, LearnedRoles::class.java) }
-                ?.takeIf { it.version == 1 && it.counts != null && it.orders != null && it.sections != null }
-        }.getOrNull() ?: LearnedRoles()
+            // Gson leaves missing fields null despite the Kotlin types.
+            file.read()?.let { json -> Gson().fromJson(json, LearnedRoles::class.java)
+                ?.takeIf { it.version == 1 && it.counts != null && it.orders != null && it.sections != null } ?: error("unsupported content") }
+        }.getOrElse {
+            SkyMyce.logger.warn("Could not read learned Goldor roles; keeping the file aside and starting over", it)
+            runCatching { file.preserveOriginal("corrupt-${System.currentTimeMillis()}") }
+            null
+        } ?: LearnedRoles()
         return learned
     }
 
@@ -137,8 +150,5 @@ object GoldorLearning {
 
     fun reset() { learned = LearnedRoles(); loaded = true; save() }
 
-    private fun save() {
-        runCatching { file.write(Gson().toJsonTree(learned) as JsonObject) }
-            .onFailure { SkyMyce.logger.warn("Could not save learned Goldor roles", it) }
-    }
+    private fun save() = writer.submit(learned)
 }

@@ -89,9 +89,9 @@ object DungeonFriendsSettings {
             titleNotifications = json.get("titleNotifications")?.asBoolean ?: false
             lastParty = savedParty
             relayUrl = relay.trim()
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
             error = "Could not read dungeon_friends.json. Repair or rename it before saving."
-            SkyMyce.logger.warn("Could not read dungeon friend preferences; original file preserved")
+            SkyMyce.logger.warn("Could not read dungeon friend preferences; original file preserved", failure)
         }
     }
 
@@ -132,8 +132,8 @@ object DungeonFriendsSettings {
             lastParty = savedParty
             relayUrl = relay.trim()
             return true
-        } catch (_: Exception) {
-            SkyMyce.logger.warn("Could not save dungeon friend preferences")
+        } catch (failure: Exception) {
+            SkyMyce.logger.warn("Could not save dungeon friend preferences", failure)
             return false
         }
     }

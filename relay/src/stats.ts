@@ -43,10 +43,7 @@ export class SharedStats {
 
   deleteSubjects(uuids: string[]): string[] {
     const removed = new Set<string>();
-    for (const uuid of uuids) {
-      this.sql.exec<{ uuid: string }>("SELECT uuid FROM player_stats WHERE uuid=? OR publisher=?", uuid, uuid).toArray().forEach(row => removed.add(row.uuid));
-      this.sql.exec("DELETE FROM player_stats WHERE uuid=? OR publisher=?", uuid, uuid);
-    }
+    for (const uuid of uuids) this.sql.exec<{ uuid: string }>("DELETE FROM player_stats WHERE uuid=? OR publisher=? RETURNING uuid", uuid, uuid).toArray().forEach(row => removed.add(row.uuid));
     return [...removed];
   }
 

@@ -5,6 +5,7 @@ private val chestSpaces = Regex("[\\s\\u00a0]+")
 private val chestCoins = Regex("(?:Cost: )?([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+) Coins")
 private val chestQuantity = Regex("[A-Za-z ]+ (?:Essence|Shard)(?: x([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+))?")
 private val chestEssence = Regex("(Wither|Undead|Dragon|Spider|Ice|Gold|Diamond|Crimson) Essence(?: x[0-9,]+)?")
+private val chestMaterial = Regex("[A-Za-z ]+ (?:Essence|Shard)(?: .*)?")
 
 /** Bounded aliases, rather than substring matching against unrelated inventories. */
 internal fun normalizeChestText(value: String): String? {
@@ -34,7 +35,7 @@ internal fun dungeonChestCost(lore: List<String>): Long? {
 internal fun dungeonRewardQuantity(name: String, stackCount: Int): Int? {
     val text = normalizeChestText(name) ?: return null
     val match = chestQuantity.matchEntire(text)
-    if (match == null && Regex("[A-Za-z ]+ (?:Essence|Shard)(?: .*)?").matches(text)) return null
+    if (match == null && chestMaterial.matches(text)) return null
     val quantity = if (match == null) stackCount else if (match.groupValues[1].isEmpty()) 1
         else match.groupValues[1].replace(",", "").toIntOrNull() ?: return null
     return quantity.takeIf { it in 1..100000 }

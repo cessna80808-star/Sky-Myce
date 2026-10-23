@@ -10,7 +10,8 @@ enum class IconPosition(val title: String) { LEFT("Left"), RIGHT("Right"), OFF("
 enum class TextPosition(val title: String) { LEFT("Left"), CENTER("Centre"), RIGHT("Right"), OFF("Off") }
 
 /**
- * The six bars. [icon] names a vanilla HUD sprite (drawn as is) or, for stats without one, a SkyBlock glyph.
+ * The bars. [sprite] names a vanilla HUD sprite (drawn as is) or, for stats without one, a SkyBlock [glyph] is drawn
+ * (experience draws a vanilla orb instead).
  * [hasMax] bars have a meaningful maximum; [hasOverflow] bars show a second layer (absorption, overflow mana).
  * [extra] names the type's own extra option, if it has one.
  */
@@ -25,7 +26,9 @@ enum class BarType(
     DEFENSE("defense", "Defense", "❈", "hud/armor_full", BarAnchor.HOTBAR_RIGHT, 0, 0x45C25F, 0, 0x55FF55, false, false, "Show effective health"),
     SPEED("speed", "Speed", "✦", null, BarAnchor.HOTBAR_RIGHT, 1, 0xE6E6E6, 0, 0xFFFFFF, true, false),
     VITALITY("vitality", "Vitality", "♨", null, BarAnchor.HOTBAR_LEFT, 0, 0xB8322C, 0, 0xE0504A, true, false),
-    RESPIRATION("respiration", "Respiration", "◌", "hud/air", BarAnchor.HOTBAR_LEFT, 1, 0x4AB4E6, 0, 0x6FD8EC, true, false);
+    RESPIRATION("respiration", "Respiration", "◌", "hud/air", BarAnchor.HOTBAR_LEFT, 1, 0x4AB4E6, 0, 0x6FD8EC, true, false),
+    /** The vanilla experience level over the progress to the next one. */
+    EXPERIENCE("experience", "Experience", "●", null, BarAnchor.HOTBAR_TOP, 1, 0x6BD62B, 0, 0x80FF20, false, false);
 
     companion object { fun of(id: String?) = entries.firstOrNull { it.id == id } }
 }
@@ -89,7 +92,6 @@ data class BarConfig(
     val width: Int = 100,
     val icon: IconPosition = IconPosition.LEFT,
     val text: TextPosition = TextPosition.CENTER,
-    val showMax: Boolean = false,
     val showOverflow: Boolean = true,
     val extra: Boolean = false,
     val fill: Int = 0,
@@ -146,11 +148,11 @@ data class StatusBarLayout(val version: Int = VERSION, val bars: List<BarConfig>
             type = type.id, anchor = type.defaultAnchor.id, row = type.defaultRow, slot = 0,
             size = if (type.defaultAnchor.rule.isTarget) 6 else 3,
             icon = IconPosition.LEFT, text = TextPosition.CENTER,
-            showMax = false, showOverflow = type.hasOverflow,
+            showOverflow = type.hasOverflow,
             extra = false, fill = type.fill, overflow = type.overflow, textColor = type.text,
         )
 
-        /** Health and mana share the row above the hotbar; defense and speed sit right of it, vitality and air left. */
+        /** Health and mana share the row above the hotbar with experience above them; defense and speed sit right of it, vitality and air left. */
         fun default() = StatusBarLayout(VERSION, BarType.entries.map { type ->
             defaultBar(type).let { if (type == BarType.MANA) it.copy(slot = 1) else it }
         }).normalized()

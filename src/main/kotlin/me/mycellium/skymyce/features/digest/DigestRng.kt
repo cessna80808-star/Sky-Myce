@@ -83,11 +83,12 @@ object DigestRngParser {
     )
     private val dungeon = Regex("RARE REWARD! (?:\\[[A-Z+]+] )?([A-Za-z0-9_]{1,16}) found an? (.{1,100}) in their (?:Obsidian|Bedrock) Chest!")
     private val dungeonDrop = Regex("RNG DROP! (?:\\[[A-Z+]+] )?([A-Za-z0-9_]{1,16}) just found an? (.{1,100})!")
+    private val playerName = Regex("[A-Za-z0-9_]{1,16}")
     private val slayer = Regex("(?:CRAZY RARE DROP!|INSANE DROP!|RNGesus INCARNATE DROP!)\\s+(?:\\(([^()]{1,100})\\)|([^()]{1,100}?))(?: \\(\\+[\\d,.]+%? [^\\r\\n]{0,8}Magic Find\\))?[! ]*")
 
     fun detect(text: String, player: String, location: String, now: Long): DetectedRng? {
         val normalized = normalizeRngText(text) ?: return null
-        if (!Regex("[A-Za-z0-9_]{1,16}").matches(player) || now <= 0) return null
+        if (!playerName.matches(player) || now <= 0) return null
         val dungeonMatch = dungeon.matchEntire(normalized) ?: dungeonDrop.matchEntire(normalized)
         val activity: String
         val name: String
@@ -108,12 +109,16 @@ object DigestRngParser {
     }
 }
 
+// Compiled once: normalization runs on every chat message.
+private val rngStyle = Regex("§[0-9a-fk-orx]", RegexOption.IGNORE_CASE)
+private val rngSpaces = Regex("[\\s\\u00a0\\u202f]+")
+
 /** Strip known Minecraft styling and equivalent spacing, without removing sender prefixes or combining lines. */
 internal fun normalizeRngText(text: String): String? {
     if (text.length !in 1..600 || text.any { it == '\n' || it == '\r' || it.isISOControl() && it != '\t' }) return null
-    val stripped = text.replace(Regex("§[0-9a-fk-orx]", RegexOption.IGNORE_CASE), "")
+    val stripped = text.replace(rngStyle, "")
     if ('§' in stripped) return null
-    return stripped.replace('’', '\'').replace('‘', '\'').replace(Regex("[\\s\\u00a0\\u202f]+"), " ").trim().takeIf { it.length in 1..300 }
+    return stripped.replace('’', '\'').replace('‘', '\'').replace(rngSpaces, " ").trim().takeIf { it.length in 1..300 }
 }
 
 /** Announcements alone may describe a preview. Require a matching aggregate inventory increase. */

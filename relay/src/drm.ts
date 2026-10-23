@@ -115,7 +115,7 @@ export async function validateLease(env: DrmConfig, token: unknown): Promise<Lea
       !/^[a-f0-9]{64}$/.test(claims.keyFingerprint) || typeof claims.accountId !== "string" || typeof claims.installationId !== "string" ||
       typeof claims.discordId !== "string" || typeof claims.jti !== "string" || typeof claims.challengeId !== "string" ||
       !/^[a-f0-9-]{36}$/.test(claims.challengeId) || typeof claims.clientNonce !== "string" ||
-      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(claims.clientNonce)) deny("invalid_lease");
+      !launchId.test(claims.clientNonce)) deny("invalid_lease");
     if ((claims.platform !== undefined || claims.launchSessionId !== undefined) &&
       (!platformValid(claims.platform) || typeof claims.launchSessionId !== "string" || !launchId.test(claims.launchSessionId))) deny("invalid_lease");
     if (claims.hardwareHash !== undefined && (typeof claims.hardwareHash !== "string" || !/^[a-f0-9]{64}$/.test(claims.hardwareHash))) deny("invalid_lease");

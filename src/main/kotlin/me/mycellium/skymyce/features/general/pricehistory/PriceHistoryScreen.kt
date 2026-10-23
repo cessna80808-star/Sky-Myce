@@ -17,6 +17,9 @@ import java.time.format.DateTimeFormatter
 
 private val hourFormat = DateTimeFormatter.ofPattern("MMM d, HH:mm")
 private val dayFormat = DateTimeFormatter.ofPattern("MMM d, yyyy")
+private val axisTimeFormat = DateTimeFormatter.ofPattern("HH:mm")
+private val axisDayFormat = DateTimeFormatter.ofPattern("MMM d")
+private val axisMonthFormat = DateTimeFormatter.ofPattern("MMM yyyy")
 
 /** One item's price graph over a chosen range; closing returns to the menu it was opened from. */
 class PriceHistoryScreen(private val parent: Screen, private val tag: String, private val itemName: String,
@@ -150,8 +153,7 @@ internal class PriceChart(private val market: PriceMarket) : BaseUIComponent() {
             canvas.text(listOf(run(formatCoins(value), MenuTheme.MUTED)), x() + 4.0, lineY - 4, 8.0)
         }
         // Date labels under the plot.
-        val dates = if (span <= 2 * 86_400_000L) DateTimeFormatter.ofPattern("HH:mm") else if (span <= 120 * 86_400_000L) DateTimeFormatter.ofPattern("MMM d")
-            else DateTimeFormatter.ofPattern("MMM yyyy")
+        val dates = if (span <= 2 * 86_400_000L) axisTimeFormat else if (span <= 120 * 86_400_000L) axisDayFormat else axisMonthFormat
         for (step in 0..4) {
             val at = start + span * step / 4
             val text = dates.format(Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault()))

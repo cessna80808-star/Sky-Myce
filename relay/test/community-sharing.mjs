@@ -74,6 +74,10 @@ export async function checkCommunitySharing() {
     for (const changes of [{ value: null }, { value: 0.5 }, { complete: false }, { metric: "__proto__" }, { verification: "verified" }, { source: "server" }]) {
       assert.equal((await store.contribute(alice, { ...contribution, ...changes })).error, "invalid_contribution");
     }
+    const timed = { ...contribution, id: "a".repeat(32), metric: "dungeon_run_time", value: 300000, floor: "M7" };
+    assert.equal((await store.contribute(alice, timed)).ok, true, "Run times may carry their floor");
+    for (const changes of [{ floor: "M8" }, { floor: "f7" }, { floor: 7 }, { floor: null }, { metric: "dungeon_runs", value: 1 }])
+      assert.equal((await store.contribute(alice, { ...timed, id: "b".repeat(32), ...changes })).error, "invalid_contribution");
     const disabledRng = await store.update(session(), 0, { ...defaults, rng: false });
     assert.equal(disabledRng.ok, true); assert.deepEqual(new Set(disabledRng.affectedUuids), new Set([alice, alt]));
     assert.equal((await store.decision(alt, "rng")).allowed, false, "Preferences cover every MC identity on the Discord account");

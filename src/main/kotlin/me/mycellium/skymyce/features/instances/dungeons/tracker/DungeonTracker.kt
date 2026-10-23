@@ -2,7 +2,6 @@ package me.mycellium.skymyce.features.instances.dungeons.tracker
 
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
-import me.mycellium.skymyce.api.DungeonChest
 import me.mycellium.skymyce.api.dungeonRewardHeader
 import me.mycellium.skymyce.api.dungeonStoredReward
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
@@ -52,7 +51,7 @@ internal fun dungeonCompletionFloor(text: String): DungeonFloor? {
 }
 
 object DungeonTracker : SkyMyceModule() {
-    val saveFile = SkyMyce.configPath.resolve("dungeon_tracker.json").toFile()
+    private val saveFile = SkyMyce.configPath.resolve("dungeon_tracker.json")
     /** Frozen historical reference; all post-cutover measurements live in acquisitions.json. */
     val profitData = mutableMapOf<DungeonFloor, FloorTracker>()
     var revision = 0L
@@ -61,9 +60,10 @@ object DungeonTracker : SkyMyceModule() {
         private set
 
     override fun init() {
-        val file = AtomicJsonFile(saveFile.toPath(), 16 * 1024 * 1024)
+        val file = AtomicJsonFile(saveFile, 16 * 1024 * 1024)
         Scheduling.schedule(0.milliseconds) {
             val parsed = runCatching { readDungeonTotals(file) }
+            parsed.exceptionOrNull()?.let { SkyMyce.logger.warn("Could not read historical dungeon totals; original preserved", it) }
             MC.instance.execute {
                 if (parsed.isSuccess && !file.damaged) profitData.putAll(parsed.getOrThrow())
                 storageStatus = if (parsed.isSuccess && !file.damaged) "Historical totals • frozen at cutover; no account or date" else "Historical totals unreadable • original preserved"
@@ -147,7 +147,7 @@ object DungeonTracker : SkyMyceModule() {
                 me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
             duration?.let {
                 me.mycellium.skymyce.community.CommunitySharing.contribute(acquisitionId("run-time/${active.id}"), "dungeon_run_time", it.toDouble(), now,
-                    me.mycellium.skymyce.community.SharingCategory.DUNGEONS)
+                    me.mycellium.skymyce.community.SharingCategory.DUNGEONS, floor = active.floor)
             }
         }
         xpRegex.matchEntire(event.text)?.let { match ->
@@ -182,7 +182,7 @@ object DungeonTracker : SkyMyceModule() {
         currentFloor = event.floor
         val record = receiptRun(event.floor, context)
         val contents = event.contents.mapKeys { canonicalItemId(it.key.id) }
-        if (contents.keys.any { !it.matches(Regex("[A-Z0-9_:;-]{1,100}")) }) return
+        if (contents.keys.any { !it.matches(TRACKED_ITEM_ID) }) return
         val stored = event.contents.keys.filter { dungeonStoredReward(it.id, event.metadata[it]?.displayName) }.mapTo(hashSetOf()) { canonicalItemId(it.id) }
         pendingChest = PendingChest(event, record, world, PendingChestObservation(event.observation, context,
             record.id, contents, DigestRng.inventoryCounts(), elapsedMillis(), stored = stored))

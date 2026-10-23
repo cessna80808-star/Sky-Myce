@@ -21,10 +21,6 @@ import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
 
 import java.util.UUID
 
-// Compiled once: these are checked every tick in the Catacombs.
-private val leapServerId = Regex("[A-Za-z0-9_-]{1,64}")
-private val leapFloorId = Regex("E|ENTRANCE|[FM][1-7]")
-
 /** Explicit party consent shares a short-lived camera pose, never images or stored history. */
 object LeapPovSharing : SkyMyceModule() {
     private data class Scope(

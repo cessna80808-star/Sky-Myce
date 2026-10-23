@@ -30,14 +30,14 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import kotlin.math.roundToInt
 
 object DungeonWinOverlay : SkyMyceModule() {
-    const val RANK_WIDTH = 96
-    const val RANK_HEIGHT = 48
+    private const val RANK_WIDTH = 96
+    private const val RANK_HEIGHT = 48
 
-    val SCORE_REGEX = Regex("^\\s*Team Score: (\\d+) \\((.+?)\\)( \\(NEW RECORD!\\))?$")
+    private val SCORE_REGEX = Regex("^\\s*Team Score: (\\d+) \\((.+?)\\)( \\(NEW RECORD!\\))?$")
 
-    var showOverlay = false
-    var currentRank = DungeonRank.UNKNOWN
-    var currentStats = mutableListOf<Component>()
+    private var showOverlay = false
+    private var currentRank = DungeonRank.UNKNOWN
+    private var currentStats = mutableListOf<Component>()
     /** The summary lines that follow the score arrive over the next few seconds. */
     private var summary = WinSummary()
     private var collectUntil = 0L
