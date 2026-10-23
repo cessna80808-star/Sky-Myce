@@ -1,4 +1,4 @@
-package me.mycellium.skymyce.features.bazaar
+package me.mycellium.skymyce.features.garden.greenhouse
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -16,13 +16,28 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
-/** Public market traffic has no player identity or credentials. The coordinator owns its single refresh job. */
+/**
+ * One product's top of book. [buyOrderPrice] is the best bid (what a new buy order competes with) and
+ * [sellOfferPrice] the best ask. Volumes are the summed amounts of the best five levels on each side.
+ */
+data class BazaarProduct(
+    val id: String,
+    val buyOrderPrice: Double?,
+    val sellOfferPrice: Double?,
+    val buyVolume: Double? = null,
+    val sellVolume: Double? = null,
+    val buyMovingWeek: Double? = null,
+    val sellMovingWeek: Double? = null,
+    val buyOrders: Int? = null,
+    val sellOrders: Int? = null,
+)
+
+data class BazaarSnapshot(val source: String, val observedAt: Long, val retrievedAt: Long, val products: List<BazaarProduct>)
+
+/** Public market traffic has no player identity or credentials. The planner owns its single refresh job. */
 internal class BazaarTransport {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build()
     private var backendRetryAt = 0L
-    private var mayorRetryAt = 0L
-    private var mayor: String? = null
-    private var mayorAt: Long? = null
     private val retryDeadlines = ConcurrentHashMap<String, Long>()
 
     fun fetch(now: Long): BazaarSnapshot {
@@ -34,33 +49,7 @@ internal class BazaarTransport {
             }
             backendRetryAt = now + 10 * 60_000
         }
-        val market = parseBazaarMarket(get(URI("https://api.hypixel.net/v2/skyblock/bazaar")), now)
-        if (now >= mayorRetryAt) {
-            mayorRetryAt = now + 60 * 60_000
-            runCatching {
-                val election = parseBazaarElection(get(URI("https://api.hypixel.net/v2/resources/skyblock/election")), now) ?: return@runCatching
-                mayor = election.context
-                mayorAt = election.observedAt
-            }
-        }
-        return market.copy(source = "Hypixel public Bazaar · direct fallback", mayor = mayor.takeIf { mayorAt?.let { it <= now && now - it <= 3_600_000 } == true }, mayorObservedAt = mayorAt)
-    }
-
-    fun history(product: String, now: Long): List<BazaarSample> {
-        require(product.matches(Regex("[A-Z0-9_:;-]{1,100}")))
-        val origin = URI(CommunityClient.configuration.getProperty("backend"))
-        require(origin.scheme == "https" && origin.userInfo == null && origin.rawQuery == null && origin.fragment == null)
-        val json = get(origin.resolve("/community/bazaar/history?product=${java.net.URLEncoder.encode(product, Charsets.UTF_8)}"))
-        require(json["ok"]?.asBoolean == true && json.number("version") == 1.0)
-        val points = json.getAsJsonArray("points") ?: return emptyList()
-        require(points.size() <= 512)
-        return points.map { value ->
-            val row = value.asJsonObject
-            val at = requireNotNull(row.number("at")).toLong()
-            val bid = requireNotNull(row.number("buyPrice")); val ask = requireNotNull(row.number("sellPrice"))
-            require(at > 0 && at <= now && bid > 0 && ask >= bid)
-            BazaarSample(at, bid, ask)
-        }.distinctBy { it.at }.sortedBy { it.at }
+        return parseBazaarMarket(get(URI("https://api.hypixel.net/v2/skyblock/bazaar")), now).copy(source = "Hypixel public Bazaar · direct fallback")
     }
 
     private fun get(uri: URI): JsonObject {
@@ -121,21 +110,6 @@ internal fun parseBazaarRetryAt(header: String?, now: Long): Long? {
         .getOrNull()?.takeIf { it >= now }
 }
 
-internal data class BazaarElection(val context: String, val observedAt: Long)
-
-/** Retrieval cannot renew cached political context; forecasts use its provider timestamp and one-hour cutoff. */
-internal fun parseBazaarElection(json: JsonObject, now: Long): BazaarElection? = runCatching {
-    require(now > 0 && json["success"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean == true)
-    val timestamp = requireNotNull(json["lastUpdated"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber })
-        .asBigDecimal.longValueExact()
-    require(timestamp > 0 && timestamp <= now && now - timestamp <= 3_600_000)
-    val elected = requireNotNull(json["mayor"]?.takeIf(JsonElement::isJsonObject)?.asJsonObject)
-    val name = requireNotNull(elected.text("name", 80))
-    val perks = elected.getAsJsonArray("perks")?.take(8)?.mapNotNull { it.takeIf(JsonElement::isJsonObject)?.asJsonObject?.text("name", 80) }.orEmpty()
-    val minister = elected["minister"]?.takeIf(JsonElement::isJsonObject)?.asJsonObject?.text("name", 80)
-    BazaarElection((listOf(name) + perks + listOfNotNull(minister?.let { "Minister: $it" })).joinToString(" · ").take(400), timestamp)
-}.getOrNull()
-
 /** Hypixel's names describe instant transactions: sell_summary is bids; buy_summary is asks. */
 internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean = false): BazaarSnapshot {
     require(now > 0 && (if (normalized) json["ok"]?.asBoolean else json["success"]?.asBoolean) == true)
@@ -157,7 +131,7 @@ internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean 
         require(seen.add(id) && id.matches(Regex("[A-Z0-9_:;-]{1,100}")))
         if (!normalized) require(product.text("product_id", 100) == id)
         val quick = if (normalized) product else product.getAsJsonObject("quick_status") ?: JsonObject()
-        // Both sources describe depth as the best five price levels, so suggested quantities do not depend on the source.
+        // Both sources describe depth as the best five price levels.
         fun depth(name: String, bids: Boolean): Pair<Double?, Double?> {
             val levels = product.get(name)?.takeIf(JsonElement::isJsonArray)?.asJsonArray ?: return null to null
             require(levels.size() <= 30)
@@ -174,7 +148,7 @@ internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean 
         }
         val bid = depth(if (normalized) "buyDepth" else "sell_summary", true)
         val ask = depth(if (normalized) "sellDepth" else "buy_summary", false)
-        BazaarProduct(id, bazaarFallbackName(id),
+        BazaarProduct(id,
             if (normalized) product.number("buyPrice") ?: bid.first else bid.first,
             if (normalized) product.number("sellPrice") ?: ask.first else ask.first,
             bid.second, ask.second,
@@ -183,12 +157,10 @@ internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean 
             quick.number(if (normalized) "buyOrders" else "sellOrders")?.toInt(),
             quick.number(if (normalized) "sellOrders" else "buyOrders")?.toInt())
     }
-    val mayor = json.text("mayor", 400)
-    return BazaarSnapshot(if (normalized) json.text("source", 160) ?: "Sky-Myce shared Bazaar" else "Hypixel public Bazaar",
-        observed, retrieved, products, mayor = mayor, mayorObservedAt = json.number("mayorObservedAt")?.toLong())
+    return BazaarSnapshot(if (normalized) json.text("source", 160) ?: "Sky-Myce shared Bazaar" else "Hypixel public Bazaar", observed, retrieved, products)
 }
 
-internal fun JsonObject.number(key: String): Double? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+private fun JsonObject.number(key: String): Double? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
     ?.asDouble?.takeIf { it.isFinite() && it in 0.0..1e15 }
-internal fun JsonObject.text(key: String, maximum: Int): String? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+private fun JsonObject.text(key: String, maximum: Int): String? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
     ?.asString?.takeIf { it.length in 1..maximum && it.none(Char::isISOControl) }

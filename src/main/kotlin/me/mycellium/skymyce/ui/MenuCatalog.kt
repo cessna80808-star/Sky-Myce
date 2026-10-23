@@ -8,7 +8,7 @@ import java.util.Locale
 enum class MenuCategory(val title: String, val description: String, val iconId: Int) {
     DUNGEONS("Dungeons", "Dungeon parties, routes, rewards and run history", 4),
     COMBAT("Combat", "Ability timers, equipment and instance helpers", 9),
-    ECONOMY("Economy", "Auctions, Bazaar trading and item values", 5),
+    ECONOMY("Economy", "Auctions, the Garden and item values", 5),
     COSMETICS("Cosmetics", "Player names, visual scaling and cosmetic selection", 6),
     UTILS("Utils", "Daily progress, social tools and general helpers", 1),
     SETTINGS("Settings", "Configure controls, graphics, HUD and appearance", 8),
@@ -96,7 +96,6 @@ class MenuCatalog(rows: List<SettingRow>) {
             MenuFeature("instance-helpers", "Instance Helpers", "Missing-player alerts and requeue behavior for dungeon and Kuudra parties", MenuCategory.COMBAT, "Instances", listOf("dungeons", "kuudra", "party", "requeue", "downtime")),
             MenuFeature("bal-notifier", "Bal Notifications", "Share Bal spawn and health milestones with your party", MenuCategory.COMBAT, "Enemies", listOf("bal", "boss", "mob", "mining", "health"), enabledPath = "Mining/balNotify"),
             MenuFeature("auction-browser", "Auction Browser", "Search cached auction listings, filters, bids and item lore", MenuCategory.ECONOMY, "Auctions", listOf("ah", "auction house", "market", "prices", "bin"), tool = "auction-browser"),
-            MenuFeature("bazaar-flipping", "Bazaar Trading", "Manual order flips, private realized-profit history, forecasts and session replays", MenuCategory.ECONOMY, "Bazaar", listOf("bazaar", "flip", "trading", "orders", "portfolio", "profit", "replay", "dashboard"), tool = "bazaar-flipping"),
             MenuFeature("price-history", "Price History", "Hover an item in a menu and press P for its Bazaar or auction price graph", MenuCategory.ECONOMY, "Item Values", listOf("price", "graph", "chart", "history", "neu", "bazaar", "auction", "bin", "coflnet"), enabledPath = "General/Price History/enabled"),
             MenuFeature("greenhouse-planner", "Greenhouse Planner", "Your greenhouses, profit-ranked mutations per plot, layouts, growth timers, harvest profit and ghost blocks. /sm greenhouse help", MenuCategory.ECONOMY, "Garden", listOf("garden", "greenhouse", "mutation", "crops", "farming", "skymutations", "layout", "ghost", "harvest", "profit history"), tool = "greenhouse-planner", enabledPath = "General/Greenhouse Planner/enabled"),
             MenuFeature("stash-helper", "Stash Value Filter", "Filter low-value stash items and prevent unwanted pickups", MenuCategory.ECONOMY, "Item Values", listOf("stash", "price", "coins", "value", "filter"), enabledPath = "General/Stash Helper/stashHelper"),
@@ -138,7 +137,6 @@ class MenuCatalog(rows: List<SettingRow>) {
         fun settingLocation(path: String): MenuSettingLocation {
             val key = path.substringAfterLast('/')
             val feature = when {
-                path.startsWith("Bazaar Flipping/") || path.startsWith("Bazaar Assistant/") -> "bazaar-flipping"
                 path.startsWith("Community Sharing/") -> "community"
                 path.startsWith("Party Finder/") || path.startsWith("Dungeons/Dungeon Friends/") -> "party-finder"
                 path.startsWith("Dungeons/Starred Clear Routing/") -> "starred-routes"

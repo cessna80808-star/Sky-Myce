@@ -7,8 +7,6 @@ import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
 import me.mycellium.skymyce.config.SettingsScreen
-import me.mycellium.skymyce.features.bazaar.BazaarBadge
-import me.mycellium.skymyce.features.bazaar.BazaarProgressBar
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.MC
@@ -109,7 +107,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
             child(row().apply {
                 gap(6)
                 child(label("§l${plot.name}").apply { fontSize = 12f })
-                if (plot === GreenhousePlanner.selected()) child(BazaarBadge("Nearest", MenuTheme.ACCENT))
+                if (plot === GreenhousePlanner.selected()) child(GreenhouseBadge("Nearest", MenuTheme.ACCENT))
                 child(label(anchorText, MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.expand()) })
                 child(label(if (layout == null) "No plan" else "$target ×${layout.targets.size}", if (layout == null) MUTED else MenuTheme.ACCENT).apply { fontSize = 12f })
             })
@@ -131,7 +129,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                     child(label("Not checked yet: visit the plot so the planner can see what is planted", MUTED).horizontalSizing(Sizing.expand()))
                 } else {
                     child(label("$percent% built", if (missing > 0) MenuTheme.YELLOW else TEXT))
-                    child(BazaarProgressBar(built.toLong(), used.toLong(), if (missing > 0) MenuTheme.YELLOW else GREEN).apply { horizontalSizing(Sizing.fill(if (compact) 25 else 45)) })
+                    child(GreenhouseProgressBar(built.toLong(), used.toLong(), if (missing > 0) MenuTheme.YELLOW else GREEN).apply { horizontalSizing(Sizing.fill(if (compact) 25 else 45)) })
                     val detail = (if (missing == 0) "nothing missing" else "missing ${plot.missingPlants.values.sum()} crops, ${plot.missingSoil.values.sum()} soil") +
                         (counts[CellStatus.WRONG_CROP.code]?.let { ", $it wrong crops" } ?: "") + ", checked ${GreenhousePlanner.age(now - plot.scannedAt)} ago"
                     child(label(detail, if (missing > 0) MenuTheme.YELLOW else MUTED).apply { fontSize = 8f; horizontalSizing(Sizing.expand()) })
@@ -454,3 +452,31 @@ internal class ProfitBars(private val values: DoubleArray) : BaseUIComponent() {
 
 /** The data cell index under a point inside the rotated grid: screen x runs along data rows, screen y along columns. */
 internal fun greenhouseCellAt(dx: Int, dy: Int, cell: Int) = dx / cell * GREENHOUSE_SIZE + dy / cell
+
+/** A small static pill such as "Nearest". */
+internal class GreenhouseBadge(private val text: String, private val color: Int) : BaseUIComponent() {
+    private val size = 7.0
+    init { sizing(Sizing.fixed(kotlin.math.ceil(MenuCanvas.textWidth(text, bold = true, size = size)).toInt() + 10), Sizing.fixed(MenuCanvas.lineHeight(size) + 3)) }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        val radius = height() / 2.0
+        g.roundedRect(x(), y(), width(), height(), radius, MenuTheme.alpha(color, 22))
+        g.roundedBorder(x(), y(), width(), height(), radius, 1.0, MenuTheme.alpha(color, 75))
+        g.styledText(listOf(MenuCanvas.Run(text, MenuTheme.alpha(color), bold = true)), x() + 5.0, y() + 1.5, size)
+    }
+}
+
+/** Progress as a static track; the numbers beside it carry the exact values. */
+internal class GreenhouseProgressBar(private val filled: Long, private val total: Long, private val color: Int) : BaseUIComponent() {
+    init { sizing(Sizing.fill(), Sizing.fixed(5)) }
+
+    override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        val g = graphics as MenuGraphics
+        val radius = height() / 2.0
+        g.roundedRect(x(), y(), width(), height(), radius, MenuTheme.alpha(MenuTheme.blend(MenuTheme.BORDER, MenuTheme.MUTED, 30), 70))
+        val fraction = if (total <= 0) 0.0 else (filled.toDouble() / total).coerceIn(0.0, 1.0)
+        val fill = (width() * fraction).toInt()
+        if (fill > 0) g.roundedRect(x(), y(), maxOf(fill, height()), height(), radius, MenuTheme.alpha(color, 90))
+    }
+}
