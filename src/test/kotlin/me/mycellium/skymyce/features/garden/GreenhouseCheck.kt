@@ -275,5 +275,39 @@ fun main() {
     check(days.size == 14 && days.sum() == 300.0 && days[13] == 100.0 && days[10] == 200.0) { "Daily ${days.toList()}" }
     check(history.all { harvestFromJson(it.toJson(), catalog) == it } && harvestFromJson(com.google.gson.JsonParser.parseString("""[1,"bad name!","GLASSCORN",1,1]"""), catalog) == null) { "Harvest json" }
 
-    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, plot persistence, import and harvest history")
+    checkMarket()
+    println("Greenhouse checks passed: catalog, site profit formula, timer, hash buckets, solver validity and parity, repricing, per-day profit, plot persistence, import and harvest history, Bazaar market parsing")
+}
+
+/** The Bazaar prices the planner fetches: Hypixel's raw bid/ask naming, the shared normalized form, retry deadlines and body limits. */
+private fun checkMarket() {
+    val now = 1_800_000_000_000L
+    fun near(actual: Double?, expected: Double) = check(actual != null && abs(actual - expected) < 1e-6) { "$actual != $expected" }
+    fun reject(action: () -> Unit) = check(runCatching(action).isFailure) { "Malformed market data accepted" }
+    fun product(id: String) = """{"product_id":"$id","sell_summary":[{"pricePerUnit":4.2,"amount":100},{"pricePerUnit":3.8,"amount":500}],"buy_summary":[{"pricePerUnit":4.8,"amount":300},{"pricePerUnit":5.0,"amount":700}],"quick_status":{"buyMovingWeek":999999,"sellMovingWeek":1111111,"buyOrders":7,"sellOrders":11}}"""
+    fun raw() = com.google.gson.JsonParser.parseString("""{"success":true,"lastUpdated":$now,"products":{"WHEAT":${product("WHEAT")},"DIAMOND":${product("DIAMOND")}}}""").asJsonObject
+    // Hypixel's sell_summary holds the bids (buy orders) and buy_summary the asks (sell offers).
+    val wheat = parseBazaarMarket(raw(), now).products.first { it.id == "WHEAT" }
+    near(wheat.buyOrderPrice, 4.2); near(wheat.sellOfferPrice, 4.8); near(wheat.buyVolume, 600.0); near(wheat.sellVolume, 1000.0)
+    check(wheat.buyOrders == 11 && wheat.sellOrders == 7) { "Order counts" }
+    reject { parseBazaarMarket(raw().apply { addProperty("lastUpdated", now + 10_001) }, now) }
+    reject { parseBazaarMarket(raw().apply { addProperty("success", false) }, now) }
+    reject { parseBazaarMarket(raw().apply { getAsJsonObject("products").getAsJsonObject("WHEAT").getAsJsonArray("sell_summary")[0].asJsonObject.addProperty("amount", -1) }, now) }
+    reject { parseBazaarMarket(raw().apply { getAsJsonObject("products").getAsJsonObject("WHEAT").addProperty("product_id", "DIAMOND") }, now) }
+    check(parseBazaarMarket(raw().apply { getAsJsonObject("products").getAsJsonObject("WHEAT").remove("sell_summary") }, now).products.first { it.id == "WHEAT" }.buyOrderPrice == null) { "Missing side" }
+    val normalized = com.google.gson.JsonParser.parseString("""{"ok":true,"version":1,"source":"Synthetic shared source","observedAt":$now,"retrievedAt":$now,"products":[{"id":"WHEAT","buyPrice":4.2,"sellPrice":4.8,"buyDepth":[{"price":4.2,"amount":1000}],"sellDepth":[{"price":4.8,"amount":1000}]}]}""").asJsonObject
+    near(parseBazaarMarket(normalized, now, normalized = true).products.single().buyOrderPrice, 4.2)
+    reject { parseBazaarMarket(normalized.deepCopy().apply { getAsJsonArray("products").add(getAsJsonArray("products")[0].deepCopy()) }, now, normalized = true) }
+    reject { parseBazaarMarket(normalized.deepCopy().apply { addProperty("version", 2) }, now, normalized = true) }
+    // Unmodified public Hypixel response captured 2026-10-16; compressed only to keep the fixture small.
+    val live = readBazaarMarketBody(java.util.zip.GZIPInputStream(Plant::class.java.getResourceAsStream("/greenhouse/hypixel-bazaar-2026-10-16.json.gz")!!))
+    val parsed = parseBazaarMarket(live, live["lastUpdated"].asLong + 15_000)
+    check(parsed.products.size == 2201 && parsed.products.any { it.id == "WHEAT" && it.buyOrderPrice != null && it.sellOfferPrice != null }) { "Live body" }
+    reject { readBazaarMarketBody(java.io.ByteArrayInputStream(ByteArray(8 * 1024 * 1024 + 1) { ' '.code.toByte() })) }
+    reject { readBazaarMarketBody(java.io.ByteArrayInputStream("[]".toByteArray())) }
+    check(parseBazaarRetryAt("900", now) == now + 900_000 && parseBazaarRetryAt("  900  ", now) == now + 900_000) { "Retry seconds" }
+    val date = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(java.time.Instant.ofEpochMilli(now + 900_000).atZone(java.time.ZoneOffset.UTC))
+    check(parseBazaarRetryAt(date, now) == now + 900_000) { "Retry date" }
+    for (invalid in listOf(null, "", "not a retry deadline", "-1", "1.5", "Thu, 1 Jan 1970 00:00:00 GMT")) check(parseBazaarRetryAt(invalid, now) == null) { "Retry $invalid" }
+    check(parseBazaarRetryAt("999999999999999999999999999999999999", now) == Long.MAX_VALUE && parseBazaarRetryAt("2", Long.MAX_VALUE - 1000) == Long.MAX_VALUE) { "Retry saturates" }
 }

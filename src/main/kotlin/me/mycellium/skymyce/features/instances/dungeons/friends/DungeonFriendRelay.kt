@@ -47,15 +47,6 @@ internal fun relayCloseRetryDelay(code: Int, reason: String) = when {
     code == 1008 || code == 1013 -> 5000L
     else -> 0L
 }
-internal fun relayBazaarCapability(json: JsonObject) = json.get("bazaarVersion")?.let {
-    it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
-} == true
-internal fun relayBazaarPacketAllowed(type: String, supported: Boolean, currentSession: Boolean) =
-    supported && currentSession && type in setOf("bazaar_session", "bazaar_alert")
-internal fun validRelayBazaarReceipt(json: JsonObject): Boolean = json.keySet() == setOf("type", "id", "active", "dmEnabled") &&
-    json.get("type")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString == "bazaar_session_result" } == true &&
-    json.get("id")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.matches(Regex("[a-f0-9]{32}")) } == true &&
-    listOf("active", "dmEnabled").all { json.get(it)?.let { value -> value.isJsonPrimitive && value.asJsonPrimitive.isBoolean } == true }
 
 internal fun retainCosmeticsDuringOutage(localAllowed: Boolean, active: Boolean, identity: String, requestedIdentity: String) =
     localAllowed && active && identity.isNotEmpty() && identity == requestedIdentity
@@ -181,8 +172,6 @@ object DungeonFriendRelay {
     var partyChatAvailable = false
         private set
     var leapPovAvailable = false
-        private set
-    var bazaarAvailable = false
         private set
     internal val sessionGeneration get() = generation
     internal val ircRoom get() = relayUri(DungeonFriendsSettings.relayUrl)?.rawQuery?.substringAfter("room=") ?: "friends"
@@ -375,7 +364,6 @@ object DungeonFriendRelay {
                                         leapPovAvailable = json.get("leapPovVersion")?.let {
                                             it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
                                         } == true
-                                        bazaarAvailable = relayBazaarCapability(json)
                                         retry.authenticated(DungeonFriends.now())
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -412,7 +400,6 @@ object DungeonFriendRelay {
                                         check(connected && leapPovAvailable)
                                         onLeapPovEvent?.invoke(json)
                                     }
-                                    "bazaar_session_result" -> { check(connected && bazaarAvailable && validRelayBazaarReceipt(json)) }
                                     "authorization_revoked" -> {
                                         val reason = json.get("reason")?.asString ?: "authorization_revoked"
                                         CommunityClient.onlineDenied(reason); disconnect()
@@ -564,12 +551,6 @@ object DungeonFriendRelay {
     internal fun currentGlobalSession() = connected && CommunityClient.connected &&
         globalRelaySessionCurrent(identity, activeLease, DungeonFriendsSettings.relayUrl, MC.instance.user.profileId,
             CommunityClient.sessionToken)
-
-    internal fun bazaarPacket(type: String, fields: Map<String, Any>, current: () -> Boolean): Boolean {
-        if (!relayBazaarPacketAllowed(type, bazaarAvailable, currentGlobalSession()) || !current()) return false
-        packet(fields + ("type" to type), current)
-        return true
-    }
 
     internal fun leapPovPacket(type: String, fields: Map<String, Any>, current: () -> Boolean, dropIfBusy: Boolean = false): Boolean {
         if (type !in setOf("leap_pov_subscribe", "leap_pov_pose") || !leapPovAvailable || !currentGlobalSession() ||
@@ -730,7 +711,6 @@ object DungeonFriendRelay {
         richChatAvailable = false
         partyChatAvailable = false
         leapPovAvailable = false
-        bazaarAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false

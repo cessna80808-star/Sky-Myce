@@ -95,7 +95,6 @@ class GuiVisualCheckClient : ClientModInitializer {
         var newsFixture: GuiVisualNewsFixture? = null
         var browserFixture: GuiVisualBrowserFixture? = null
         var journalFixture: GuiVisualJournalFixture? = null
-        var bazaarFixture: GuiVisualBazaarFixture? = null
         var splitsFixture: GuiVisualSplitsFixture? = null
         var rngArchiveSnapshot: AcquisitionArchive? = null
         var savedReceiveRng: Boolean? = null
@@ -108,14 +107,6 @@ class GuiVisualCheckClient : ClientModInitializer {
         }
         val allScenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
-            Scene("bazaar-terminal", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-positions", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-positions-scrolled", ThemePreset.DARK_GLASS, 1920, 1080, 1) { GuiVisualBazaarFixture("positions", scroll = 470.0).also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-history", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("history").also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-more", ThemePreset.SIGNATURE) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-narrow-more", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("more").also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-narrow", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture().also { bazaarFixture = it }.screen() },
-            Scene("bazaar-terminal-narrow-positions", ThemePreset.LIGHT, 640, 480, 2) { GuiVisualBazaarFixture("positions").also { bazaarFixture = it }.screen() },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
@@ -614,7 +605,6 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name.startsWith("browser-native") && browserFixture?.advance(client) != true) return@register
             if (current.name.startsWith("journal-") && journalFixture?.advance(client) != true) return@register
-            if (current.name.startsWith("bazaar-terminal") && bazaarFixture?.advance(client) != true) return@register
             if (ticks >= captureTick) {
                 pending = true
                 Screenshot.takeScreenshot(client.mainRenderTarget) { image ->
@@ -637,7 +627,6 @@ class GuiVisualCheckClient : ClientModInitializer {
                         if (current.name == "daily-news-video") { newsFixture?.restore(); newsFixture = null }
                         if (current.name.startsWith("browser-native")) { browserFixture?.close(client); browserFixture = null }
                         if (current.name.startsWith("journal-")) { journalFixture?.restore(); journalFixture = null }
-                        if (current.name.startsWith("bazaar-terminal")) { bazaarFixture?.close(); bazaarFixture = null }
                         if (current.name.startsWith("dungeon-splits-stats")) { splitsFixture?.restore(); splitsFixture = null }
                         scene++; ticks = 0; pending = false
                     }

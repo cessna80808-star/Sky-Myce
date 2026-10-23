@@ -10,7 +10,6 @@ import me.mycellium.mixin.BazaarAssistSignAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GreenhouseConfig
-import me.mycellium.skymyce.features.bazaar.BazaarTransport
 import me.mycellium.skymyce.features.general.pricehistory.formatCoins
 import me.mycellium.skymyce.features.instances.dungeons.friends.IrcChatRendering
 import me.mycellium.skymyce.hud.HudTheme
@@ -337,7 +336,7 @@ object GreenhousePlanner : SkyMyceModule() {
                     // Keep the last good prices; log the first failure of a streak only.
                     if (!priceFailureLogged) SkyMyce.logger.warn("Greenhouse Bazaar prices unavailable, keeping the last known prices", error)
                     priceFailureLogged = true
-                    (error as? me.mycellium.skymyce.features.bazaar.BazaarMarketFailure)?.retryAt?.let { nextPoll = maxOf(nextPoll, it) }
+                    (error as? BazaarMarketFailure)?.retryAt?.let { nextPoll = maxOf(nextPoll, it) }
                 }
             }
         }

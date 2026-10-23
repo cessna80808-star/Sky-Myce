@@ -167,8 +167,7 @@ object DungeonFriends : SkyMyceModule() {
 
     override fun tick() {
         val sharing = LeapMenuConfig.enabled && LeapMenuConfig.partyPovSharing
-        val global = GlobalChatConfig.enabled || GlobalChatConfig.partyEnabled || sharing ||
-            me.mycellium.skymyce.features.bazaar.BazaarTrading.needsRelay()
+        val global = GlobalChatConfig.enabled || GlobalChatConfig.partyEnabled || sharing
         DungeonFriendRelay.tick(relayActive(MC.instance.player != null && MC.connection != null,
             global, isEnabled() && LocationAPI.onHypixel, DungeonFriendRelay.connected))
         RelayMessages.globalTick()

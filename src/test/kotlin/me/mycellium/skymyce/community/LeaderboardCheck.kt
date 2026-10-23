@@ -15,28 +15,10 @@ fun leaderboardChecks() {
     val parsed = parseLeaderboard(result)
     check(parsed.entries.map { it.rank } == listOf(1, 1, 3) && parsed.entries.last().value == -4.0)
     check(parsed.unit == "coins" && parsed.start == null && parsed.entries.first().player == "Anonymous")
-    check(leaderboardCategoryMetrics("economy") == listOf("bazaar_profit"))
     check(leaderboardCategoryMetrics("dungeons") == listOf("dungeon_runs", "dungeon_profit", "dungeon_run_time"))
-    check(leaderboardPeriods("dungeon_runs")["weekly"] == "This week • UTC" && leaderboardPeriods("rng_drops")["monthly"] == "This month • UTC")
-    check(leaderboardPeriods("bazaar_profit")["weekly"] == "This week • local Sunday" && leaderboardPeriods("bazaar_profit")["monthly"] == "This month • local")
-    val ordinary = leaderboardRequestPath("dungeons", "dungeon_runs", "weekly", 2, "carrot & coins", "linked")
-    check(ordinary == "/community/leaderboard?category=dungeons&metric=dungeon_runs&period=weekly&page=2&limit=10&search=carrot+%26+coins") {
-        "Bazaar identity selection must not change ordinary leaderboard queries"
-    }
-    check(leaderboardRequestPath("economy", "bazaar_profit", "weekly", 2, "carrot & coins", "linked").endsWith("search=carrot+%26+coins&identity=linked"))
-    check(leaderboardRequestPath("economy", "bazaar_profit", "monthly", 1, "").endsWith("&identity=uuid"))
-    check(runCatching { leaderboardRequestPath("economy", "bazaar_profit", "all-time", 1, "", "unsupported") }.isFailure)
-    val bazaar = result.deepCopy().apply {
-        addProperty("identity", "linked")
-        getAsJsonArray("entries")[0].asJsonObject.apply {
-            addProperty("roi", .125); addProperty("profitPerHour", 750.0); addProperty("completedFlips", 2)
-        }
-    }
-    val bazaarResult = parseLeaderboard(bazaar)
-    check(bazaarResult.identity == "linked" && bazaarResult.entries.first().let { it.roi == .125 && it.profitPerHour == 750.0 && it.completedFlips == 2L })
-    check(parseLeaderboard(result).identity == null) { "Ordinary leaderboard responses must retain compatibility" }
-    check(runCatching { parseLeaderboard(bazaar.deepCopy().apply { addProperty("identity", "unsupported") }) }.isFailure)
-    check(runCatching { parseLeaderboard(bazaar.deepCopy().apply { getAsJsonArray("entries")[0].asJsonObject.addProperty("roi", "NaN") }) }.isFailure)
+    check(leaderboardPeriods["weekly"] == "This week • UTC" && leaderboardPeriods["monthly"] == "This month • UTC")
+    check(leaderboardRequestPath("dungeons", "dungeon_runs", "weekly", 2, "carrot & coins") ==
+        "/community/leaderboard?category=dungeons&metric=dungeon_runs&period=weekly&page=2&limit=10&search=carrot+%26+coins")
     check(formatLeaderboardValue(300001.5, "milliseconds") == "5:00.002")
     check(formatLeaderboardValue(999.5, "milliseconds") == "0:01.000")
     check(formatLeaderboardValue(3599999.5, "milliseconds") == "1:00:00.000")

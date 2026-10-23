@@ -80,21 +80,6 @@ fun main() {
         recovery.failed(100, false, relayCloseRetryDelay(code, reason))
         check(recovery.nextAttempt == 100 + minimum)
     }
-    val modernReady = JsonParser.parseString("""{"bazaarVersion":1}""").asJsonObject
-    for (legacy in listOf("{}", "{\"bazaarVersion\":0}", "{\"bazaarVersion\":2}", "{\"bazaarVersion\":\"1\"}", "{\"bazaarVersion\":true}")) {
-        val unsupported = JsonParser.parseString(legacy).asJsonObject
-        check(!relayBazaarCapability(unsupported))
-        repeat(1000) { check(!relayBazaarPacketAllowed("bazaar_session", relayBazaarCapability(unsupported), true)) }
-    }
-    check(relayBazaarCapability(modernReady))
-    check(relayBazaarPacketAllowed("bazaar_session", true, true))
-    check(relayBazaarPacketAllowed("bazaar_alert", true, true))
-    check(!relayBazaarPacketAllowed("bazaar_session", true, false) && !relayBazaarPacketAllowed("unknown", true, true))
-    val receipt = JsonParser.parseString("""{"type":"bazaar_session_result","id":"${"a".repeat(32)}","active":true,"dmEnabled":false}""").asJsonObject
-    check(validRelayBazaarReceipt(receipt))
-    check(!validRelayBazaarReceipt(receipt.deepCopy().apply { addProperty("active", "true") }))
-    check(!validRelayBazaarReceipt(receipt.deepCopy().apply { addProperty("id", "malformed") }))
-    check(!validRelayBazaarReceipt(receipt.deepCopy().apply { addProperty("private", "unexpected") }))
     val safeError = relayErrorDetail(java.util.concurrent.CompletionException(java.io.IOException("secret-token private-message 192.0.2.1")))
     check("java.io.IOException" in safeError && "secret" !in safeError && "192.0.2.1" !in safeError)
     checkRelayWrites()
