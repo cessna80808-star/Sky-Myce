@@ -18,7 +18,7 @@ import org.joml.Vector3f
 import java.util.UUID
 import kotlin.math.roundToInt
 
-/** Local equip persists independently; publishing is an explicit authenticated operation. */
+/** One Save equips locally and, when connected, publishes the same appearance to the community. */
 class CosmeticsScreen(private val link: Boolean = false, private val focusPath: String? = null) : MenuScreen(Component.literal("Cosmetics Studio"), MenuPage.COSMETICS) {
     override val menuCategory get() = MenuCategory.COSMETICS
     private val studio = CosmeticsStudio()
@@ -45,8 +45,6 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
     private lateinit var draftStatus: MenuLabel
     private lateinit var capeStatus: MenuLabel
     private lateinit var save: MenuButton
-    private lateinit var equip: MenuButton
-    private lateinit var refresh: MenuButton
     private lateinit var upload: MenuButton
     private lateinit var delete: MenuButton
     private lateinit var connect: MenuButton
@@ -64,7 +62,7 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         status = label(studio.status, MenuTheme.MUTED); root.child(status)
         LocalCosmetics.observeOwner()
         initializeDraftOwner()
-        draftStatus = label("Equip locally works without Discord", MenuTheme.SECONDARY); root.child(draftStatus)
+        draftStatus = label("Save works without Discord", MenuTheme.SECONDARY); root.child(draftStatus)
         val left = UIContainers.verticalFlow(Sizing.fill(), Sizing.content()).apply { gap(8) }
         preview = UIContainers.verticalFlow(Sizing.fill(), if (menuWidth < 500) Sizing.fixed(180) else Sizing.expand()).apply { surface(MenuTheme.panel()); padding(Insets.of(8)) }
         preview.child(label("LIVE PREVIEW", MenuTheme.SECONDARY))
@@ -143,11 +141,13 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
             LocalCosmetics.assets.forEach { asset -> popup.button(Component.literal("Local PNG ${asset.id.take(8)}")) { selectCape(null, asset, true) } }
             studio.assets.forEach { asset -> popup.button(Component.literal("Community PNG ${asset.id.take(8)}")) { selectCape(null, asset) } }
         } }; controls.child(cape)
-        controls.child(label("Preset / local PNG selection equips and saves here. None removes the cape.", MenuTheme.MUTED))
+        controls.child(label("Pick a cape to preview it; Save keeps it. None removes the cape.", MenuTheme.MUTED))
         controls.child(label("64 × 32 RGB/RGBA PNG • 256 KiB • 8 local capes", MenuTheme.MUTED))
-        val path = MenuTextBox(Sizing.fill()).apply { setMaxLength(2048); setHint(Component.literal("Local path to cape.png")) }; controls.child(path)
-        controls.child(button("Browse PNG…") { studio.chooseFile { path.text(it) } })
-        upload = button("Import PNG and equip locally") { localSubmitted = draft; LocalCosmetics.import(draft, path.value) }; controls.child(upload)
+        val path = MenuTextBox(Sizing.fill()).apply { setMaxLength(2048); setHint(Component.literal("Path to cape.png, or Browse")) }; controls.child(path)
+        upload = button("Browse PNG…") {
+            val typed = path.value.trim()
+            if (typed.isNotEmpty()) importCape(typed) else studio.chooseFile { path.text(it); importCape(it) }
+        }; controls.child(upload)
         delete = button("Delete selected PNG from library") {
             val asset = draft.capeAsset ?: return@button
             val key = "${draft.localCape}:${asset.id}"
@@ -158,14 +158,10 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         preference("Show cosmetic names", { CosmeticsConfig.names }) { CosmeticsConfig.names = !CosmeticsConfig.names }
         preference("Show body scaling", { CosmeticsConfig.scaling }) { CosmeticsConfig.scaling = !CosmeticsConfig.scaling }
         preference("Original tooltip names", { CosmeticsConfig.originalTooltips }) { CosmeticsConfig.originalTooltips = !CosmeticsConfig.originalTooltips }
-        equip = button("Equip and save locally") { inputError = null; localSubmitted = draft; LocalCosmetics.equip(draft) }.apply { intent = MenuButtonIntent.PRIMARY }; controls.child(equip)
+        save = button("Save") { saveAll() }.apply { intent = MenuButtonIntent.PRIMARY }; controls.child(save)
+        controls.child(label("Saves here and, when Discord is connected, shares it with other Sky-Myce users.", MenuTheme.MUTED))
         controls.child(button("Discard draft changes") { adopt(LocalCosmetics.equipped() ?: studio.profile ?: CosmeticProfile(MC.instance.user.profileId, null, 1f, 0, 0)); populate() })
-        controls.child(button("Use shared / Minecraft appearance") { if (!LocalCosmetics.busy && LocalCosmetics.ready) { LocalCosmetics.useShared(); edited.clear() } })
-        refresh = button("Reload local and community appearance") { inputError = null; LocalCosmetics.reload(); if (CommunityClient.connected) studio.refresh() }; controls.child(refresh)
-        controls.child(label("COMMUNITY SYNC", MenuTheme.SECONDARY))
-        controls.child(label("Optional. Publishing changes what other Sky-Myce users see; local preference stays equipped.", MenuTheme.MUTED))
-        save = button("Publish appearance to community") { publish() }.apply { intent = MenuButtonIntent.PRIMARY }; controls.child(save)
-        connect = button("Connect Discord for community sync") { navigateMenu(CommunityScreen(this@CosmeticsScreen)) }; controls.child(connect)
+        connect = button("Connect Discord to share") { navigateMenu(CommunityScreen(this@CosmeticsScreen)) }; controls.child(connect)
         updateCapeLabel()
         populating = false
     }
@@ -213,7 +209,11 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
     private fun selectCape(preset: String?, asset: CapeAsset?, local: Boolean = false) {
         draft = draft.copy(capePreset = preset, capeAsset = asset, localCape = local); mark(CosmeticDraftField.CAPE); confirmDelete = null
         updateCapeLabel(); face(0f)
-        if (asset == null || local) { localSubmitted = draft; LocalCosmetics.equip(draft) }
+    }
+    private fun importCape(path: String) { inputError = null; localSubmitted = draft; LocalCosmetics.import(draft, path) }
+    private fun saveAll() {
+        inputError = null; localSubmitted = draft; LocalCosmetics.equip(draft)
+        if (CommunityClient.connected && studio.profile != null && !studio.busy) publish()
     }
     private fun publish() {
         inputError = null
@@ -242,16 +242,15 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         if (initializeDraftOwner()) populate()
         if (studio.observeOwner()) { loadedRevision = -1; if (CommunityClient.connected) studio.refresh() }
         val online = CommunityClient.connected && !studio.busy
-        save.active = online && studio.profile != null && inputError == null
-        equip.active = LocalCosmetics.ready && !LocalCosmetics.busy && inputError == null
+        save.active = LocalCosmetics.ready && !LocalCosmetics.busy && !studio.busy && inputError == null
         cape.active = LocalCosmetics.ready && !LocalCosmetics.busy
-        refresh.active = !LocalCosmetics.busy && !studio.busy; upload.active = LocalCosmetics.ready && !LocalCosmetics.busy
+        upload.active = LocalCosmetics.ready && !LocalCosmetics.busy
         delete.active = draft.capeAsset != null && if (draft.localCape) !LocalCosmetics.busy else online
         connect.active = !CommunityClient.connected
         status.text(Component.literal(inputError ?: LocalCosmetics.status).withColor(if (inputError == null) MenuTheme.MUTED else MenuTheme.RED))
         draftStatus.text(Component.literal(when {
             studio.busy -> studio.status
-            edited.isNotEmpty() -> "Draft changes • Equip saves locally; Publish shares after connecting"
+            edited.isNotEmpty() -> "Unsaved changes • Save to keep them"
             LocalCosmetics.equipped() != null -> "Local appearance takes priority • ${studio.status}"
             else -> studio.status
         }).withColor(MenuTheme.SECONDARY))
@@ -260,7 +259,8 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
             val preferred = LocalCosmetics.equipped()
             if (preferred != null) {
                 val preserve = localSubmitted?.let { submitted -> CosmeticDraftField.entries.filter { !cosmeticFieldMatches(draft, submitted, it) }.toSet() } ?: edited.toSet()
-                val merged = mergeCosmeticDraft(preferred, draft, preserve); adopt(merged); edited += preserve; populate()
+                val merged = mergeCosmeticDraft(preferred, draft, preserve); val shown = sameCosmeticFields(merged, draft)
+                adopt(merged); edited += preserve; if (!shown) populate() else updateCapeLabel()
             } else if (edited.isEmpty() && LocalCosmetics.ready) { adopt(studio.profile ?: CosmeticProfile(minecraftOwner, null, 1f, 0, 0)); populate() }
             localSubmitted = null
         }
@@ -268,11 +268,12 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         seen = studio.revision
         studio.profile?.takeIf { it.revision != loadedRevision && LocalCosmetics.equipped() == null }?.let {
             edited.removeAll { field -> cosmeticFieldMatches(it, draft, field) }
-            draft = mergeCosmeticDraft(it, draft, edited); loadedRevision = it.revision
+            val merged = mergeCosmeticDraft(it, draft, edited); val shown = sameCosmeticFields(merged, draft)
+            draft = merged; loadedRevision = it.revision
             if (CosmeticDraftField.NAME !in edited) {
                 nameJson = it.nameStyle?.let(::cosmeticTextJson); color = it.nameStyle?.style?.color?.value; bold = it.nameStyle?.style?.isBold ?: false
             }
-            populate(); updateCapeLabel()
+            if (!shown) populate(); updateCapeLabel()
         }
     }
     override fun extractNativeContent(g: GuiGraphicsExtractor, sx: Float, sy: Float, partialTicks: Float) {
@@ -286,7 +287,7 @@ class CosmeticsScreen(private val link: Boolean = false, private val focusPath: 
         val state = MC.instance.entityRenderDispatcher.getPlayerRenderer(player).createRenderState(player, partialTicks)
         (state as CosmeticAvatarState).`skymyce$setCosmetics`(draft)
         state.`skymyce$setPreview`(true)
-        state.skin = CapeTextures.applyPreview(player.skin, draft); state.nameTag = null
+        state.skin = CapeTextures.applyPreview(CapeTextures.nativeSkin(player), draft); state.nameTag = null
         prepareCosmeticPreview(state)
         state.bodyRot = 0f; state.yRot = 0f; state.xRot = 0f; state.walkAnimationSpeed = 0f
         val scale = minOf((bottom - top) / 3.8f, (right - left) / 2.5f, (bottom - top - 15) / (player.bbHeight * draft.scaleY), (right - left) / (1.1f * draft.scaleX))
@@ -319,6 +320,9 @@ internal fun cosmeticsWorkspace(availableWidth: Int, preview: UIComponent, contr
         child(preview.sizing(Sizing.fixed((availableWidth * .34).toInt()), Sizing.fill()))
         child(menuScroll(Sizing.expand(), Sizing.fill(), controls).apply { scrollStep(20); scrollbarThiccness(2) })
     }
+
+/** Whether every editable field matches, so the controls already show [a] and need no rebuild. */
+internal fun sameCosmeticFields(a: CosmeticProfile, b: CosmeticProfile) = CosmeticDraftField.entries.all { cosmeticFieldMatches(a, b, it) }
 
 /** Responsive rebuilds retain drafts; only a first load or actual Minecraft owner change seeds them. */
 internal fun initialCosmeticDraft(initializedOwner: UUID?, currentOwner: UUID, equipped: CosmeticProfile?): CosmeticProfile? =

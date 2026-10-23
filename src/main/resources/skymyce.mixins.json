@@ -33,6 +33,7 @@
     "IrcChatAccessor",
     "IrcChatScreenAccessor",
     "AvatarCosmeticsMixin",
+    "AbstractClientPlayerCapeMixin",
     "AvatarCosmeticStateMixin",
     "CosmeticNametagMixin",
     "CosmeticFontMixin",

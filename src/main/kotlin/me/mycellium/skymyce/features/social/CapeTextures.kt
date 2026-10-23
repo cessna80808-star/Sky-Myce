@@ -85,6 +85,9 @@ object CapeTextures {
         }
         return null
     }
+    /** Render thread only: set while the studio reads the player's own skin without the entity-level Sky-Myce cape. */
+    @JvmField var readingNative = false
+    fun nativeSkin(player: net.minecraft.client.player.AbstractClientPlayer): PlayerSkin { readingNative = true; try { return player.skin } finally { readingNative = false } }
     @JvmStatic fun apply(skin: PlayerSkin, profile: CosmeticProfile): PlayerSkin {
         return applyCosmeticCape(skin, profile, if (profile.capePreset == "none") null else selected(profile))
     }

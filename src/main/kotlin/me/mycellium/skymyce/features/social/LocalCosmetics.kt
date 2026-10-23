@@ -130,11 +130,9 @@ object LocalCosmetics {
         work("Loading local appearance…", true) { _, repo -> repo.read() }
     }
     fun equipped() = state.profile.takeIf { ready && owner == MC.instance.user.profileId }
-    fun reload() { if (!busy) work("Loading local appearance…", true) { _, repo -> repo.read() } }
     fun equip(draft: CosmeticProfile) = work("Equipping locally…") { current, repo -> repo.equip(current, draft) }
     fun import(draft: CosmeticProfile, path: String) = work("Validating local cape…") { current, repo -> repo.import(current, draft, Path.of(path.trim()).toAbsolutePath().normalize()) }
     fun delete(asset: CapeAsset) = work("Deleting local cape…") { current, repo -> repo.delete(current, asset) }
-    fun useShared() = work("Using community appearance…") { current, repo -> repo.useShared(current) }
     internal fun localBytes(profile: CosmeticProfile): ByteArray {
         require(profile.localCape && profile.capeAsset != null)
         require(owner == profile.uuid && owner == MC.instance.user.profileId && profile.capeAsset in state.assets)

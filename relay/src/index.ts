@@ -322,6 +322,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.incomingBudgets.set(ws, session.incoming);
     const accepted = takeTrafficCredit(session.incoming, burst, session.bridge ? 25 : 125, incomingAt);
     this.leapPov.preserve(ws, session);
+    // The Gateway sleeps once its 60 s demand lease lapses; renew it from listener traffic rather than relying on alarms alone.
+    if (accepted && !session.bridge && session.globalChatSubscribed && (session.leaseExpiresAt ?? 0) > incomingAt) this.signalGateway();
     if (!accepted) {
       this.trafficDiagnostic("incoming_message_rate_exceeded");
       ws.close(1013, "Incoming message rate exceeded");
