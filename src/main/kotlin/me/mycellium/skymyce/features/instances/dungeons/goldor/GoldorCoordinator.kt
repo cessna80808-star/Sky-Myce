@@ -44,6 +44,20 @@ internal fun puzzleQuarters(puzzle: PuzzleType, itemIds: List<String>): Int? {
 }
 
 /**
+ * Another mod's Melody call in party chat ("Melody Terminal start!", "Melody 33%", "I ❤ Melody 2/3", "ou shii 66%"):
+ * the caller's progress in quarters, 0 at the start, or null for any other message. A bare percentage counts too, since
+ * some players rename the call; thirds need the word Melody, as blessing procs also say "(1/3)".
+ */
+internal fun melodyQuarters(message: String): Int? {
+    MELODY_PERCENT.find(message)?.let { return it.groupValues[1].toInt() * 4 / 100 }
+    if (!message.contains("melody", ignoreCase = true)) return null
+    return MELODY_THIRDS.find(message)?.let { it.groupValues[1].toInt() * 4 / 3 } ?: 0
+}
+
+private val MELODY_PERCENT = Regex("(?<![\\d.])(25|33|50|66|67|75) ?%")
+private val MELODY_THIRDS = Regex("(?<!\\d)([12])/3(?!\\d)")
+
+/**
  * Feeds the Goldor run state from what this client sees (chat, its own terminal windows, loaded player positions)
  * and from other Sky-Myce users' party chat, sends this player's own updates, and keeps the advice the HUD shows.
  * Party chat is the only transport; nothing here touches the Sky-Myce backend.
@@ -61,7 +75,8 @@ object GoldorCoordinator : SkyMyceModule() {
     private var ticks = 0
     private var lastSelf: BossPoint? = null
     private var leaptAt: Long? = null
-    private var alertedFor: Long? = null
+    private var alertedFor: String? = null
+    private var stackAlertedFor: String? = null
     private var syncAskedAt = 0L
     private val repliedTo = HashMap<String, Long>()
     private var openTerminal: ObjectiveId? = null
@@ -87,6 +102,7 @@ object GoldorCoordinator : SkyMyceModule() {
             val message = match.groups["message"]!!.value
             if (!GoldorProtocol.looksLikeProtocol(message)) {
                 if (inBoss() && ssReset.containsMatchIn(message)) state.ssReset(now())
+                if (inBoss()) melodyQuarters(message)?.let { melodyCall(match.groups["player"]!!.value, it) }
                 return@let
             }
             if (Settings.hideMessages) event.cancel()
@@ -139,6 +155,22 @@ object GoldorCoordinator : SkyMyceModule() {
             is GoldorEvent.Route -> state.setRoute(event.route, event.state, StateSource.SHARED, now)
             GoldorEvent.SyncRequest -> answerSync(sender, now)
         }
+    }
+
+    /**
+     * A teammate's Melody call: marks the terminal they are on as Melody with their progress, so plans and leap timing
+     * use it without their having Sky-Myce. Their terminal is the one already marked theirs, else the one they stand at,
+     * else the next terminal in their plan. Our own Melody is read from the terminal window instead.
+     */
+    private fun melodyCall(sender: String, quarters: Int) {
+        if (!state.active || sender.equals(selfName(), true)) return
+        val player = state.player(sender) ?: return
+        val now = now()
+        val terminal = state.objectives.entries.firstOrNull { (id, o) -> id.kind == ObjectiveKind.TERMINAL && o.status == ObjectiveStatus.ACTIVE && o.by.equals(sender, true) }?.key
+            ?: state.position(sender, now)?.let { p -> listOfNotNull(state.section, state.section.next).firstNotNullOfOrNull { GoldorLayout.nearest(it, ObjectiveKind.TERMINAL, p.x, p.y, p.z, emptySet()) }?.objective }
+            ?: player.role?.let { role -> GoldorEngine.nextObjective(state, GoldorEngine.effectivePlan(state, state.section, role), sender) }?.takeIf { it.kind == ObjectiveKind.TERMINAL }
+            ?: return
+        state.markActive(terminal, sender, PuzzleType.MELODY, quarters, StateSource.CHAT, now)
     }
 
     /** Our own state, once per requester per 10 s. Replies are never answered, so two clients cannot loop. */
@@ -195,7 +227,7 @@ object GoldorCoordinator : SkyMyceModule() {
     @Subscription(IslandChangeEvent::class, ServerDisconnectEvent::class)
     fun onLeave() {
         state.reset(); dedupe.clear(); outbox.clear(); repliedTo.clear()
-        advice = null; adviceRevision = -1; leaptAt = null; lastSelf = null; alertedFor = null
+        advice = null; adviceRevision = -1; leaptAt = null; lastSelf = null; alertedFor = null; stackAlertedFor = null
         openTerminal = null; openPuzzle = null; sentRole = false; learnFrom = GoldorSection.S1
     }
 
@@ -240,11 +272,23 @@ object GoldorCoordinator : SkyMyceModule() {
         }
     }
 
+    /** A title once per leap that is due now (a timed window opening, or a leap after an objective) and once per new stack. */
     private fun alert(self: Recommendation?) {
-        val plan = self?.leap?.plan ?: return
-        if (!Settings.leapAlert || plan.phase != LeapPhase.LEAP || plan.leapFrom == null || alertedFor == plan.leapFrom) return
-        alertedFor = plan.leapFrom
-        Utils.displayTitle("§c§lLEAP", "§f${self.leap.targetName ?: self.leap.targetRole?.title ?: ""} §7· ${self.leap.reason}")
+        val leap = self?.leap
+        if (leap != null && self.urgent) {
+            // One title per section, target and Goldor tick (a "leap now" plan's start moves with the clock).
+            val key = "${state.section}:${leap.targetName ?: leap.targetRole}:${leap.plan?.tickAt}"
+            if (Settings.leapAlert && key != alertedFor) {
+                alertedFor = key
+                Utils.displayTitle("§c§lLEAP", "§f${leap.targetName ?: leap.targetRole?.title ?: ""} §7· ${leap.reason}")
+            }
+            return
+        }
+        val stack = self?.stackWith?.let { "${self.objective?.label}:$it" }
+        if (stack != null && Settings.stackAlert && stack != stackAlertedFor) {
+            Utils.displayTitle("§e§lSTACK", "§f${self.objective?.label ?: ""} §7with §f${self.stackWith}")
+        }
+        stackAlertedFor = stack
     }
 
     /** Classes from Hypixel's dungeon party (or manual overrides), positions and life from loaded players. */

@@ -37,6 +37,11 @@ private fun checkModel() {
     check(GoldorLayout.station(ObjectiveId.lever(S4, LeverSide.RIGHT))!!.points.first().y > GoldorLayout.station(ObjectiveId.lever(S4, LeverSide.LEFT))!!.points.first().y) { "S4 right is the top lever" }
     check(puzzleQuarters(PuzzleType.NUMBERS, List(5) { "minecraft:lime_stained_glass_pane" } + List(5) { "minecraft:red_stained_glass_pane" }) == 2)
     check(puzzleQuarters(PuzzleType.MELODY, listOf("minecraft:lime_stained_glass_pane")) == null)
+    // Melody calls other mods put in party chat, as seen in game logs up to 2026-10-23.
+    check(melodyQuarters("Melody Terminal start!") == 0 && melodyQuarters("I ❤ Melody") == 0 && melodyQuarters("Melody 25%") == 1 &&
+        melodyQuarters("Melody 50%") == 2 && melodyQuarters("Melody 33%") == 1 && melodyQuarters("Melody 67%") == 2 && melodyQuarters("ou shii 66%") == 2 &&
+        melodyQuarters("I ❤ Melody 1/3") == 1 && melodyQuarters("I ❤ Melody 2/3 (x2)") == 2) { "Melody calls" }
+    check(melodyQuarters("Spirit Procced! (1/3)") == null && melodyQuarters("300 Score!") == null && melodyQuarters("at core!") == null) { "Not Melody calls" }
     // Every profile objective exists on the map, and every objective is assigned once per section.
     for (profile in GoldorProfiles.all) for ((section, plans) in profile.sections) {
         val ids = plans.values.flatMap { it.objectives }.filter { it.section == section }
@@ -80,7 +85,8 @@ private fun checkS1() {
     s.seen("Healz", s.station(ObjectiveId.device(S4)), T0 + 2_100)
     check(advise(s, "Bers", T0 + 2_100).self!!.leap?.targetName == "Tanky")
     // After the leap it stacks with Tank.
-    check(advise(s, "Bers", T0 + 3_000, leaptAt = T0 + 2_500).self!!.headline == "Stack with Tanky")
+    check(advise(s, "Bers", T0 + 3_000, leaptAt = T0 + 2_500).self!!.let { it.headline == "Stack with Tanky" && it.stackWith == "Tanky" && goldorAction(it, T0).first.startsWith("STACK") })
+    check(leap.urgent && goldorAction(leap, T0) == ("LEAP Tanky" to 0xFF5555)) { "A leap after an objective is due now" }
     // S2 follow-up: T4, then T3.
     check(P.plan(S2, GoldorRole.BERSERKER).objectives == listOf(t(S2, 4), t(S2, 3)) && P.berserkerS2Order == listOf(t(S2, 4), t(S2, 3)))
     check(GoldorProfiles.ADG_2026.plan(S2, GoldorRole.BERSERKER).objectives == listOf(t(S2, 3), t(S2, 5))) { "The ADG preset stays a separate profile" }

@@ -33,6 +33,24 @@ internal fun goldorHudLines(advice: GoldorAdvice, state: GoldorRunState, now: Lo
 }
 
 /**
+ * The one thing to do now, drawn big at the top of the HUD so it reads at a glance (from inside a terminal too): a
+ * leap due now is red, a leap counting down orange, a stack yellow, anything else green (grey when it is a guess).
+ */
+internal fun goldorAction(rec: Recommendation, now: Long): Pair<String, Int> {
+    val plan = rec.leap?.plan
+    val target = rec.leap?.let { it.targetName ?: it.targetRole?.title }.orEmpty()
+    return when {
+        rec.urgent && rec.leap != null -> "LEAP $target".trim() to 0xFF5555
+        plan?.leapFrom != null && plan.confidence != Confidence.LOW && (plan.phase == LeapPhase.WAITING_TICK || plan.phase == LeapPhase.PREPARE) ->
+            "LEAP IN ${seconds(plan.leapFrom - now)}" to 0xFFAA00
+        plan?.phase == LeapPhase.MISSED -> "GO NOW" to 0xFF5555
+        rec.stackWith != null -> "STACK ${rec.objective?.label.orEmpty()}".trim() to 0xFFFF55
+        rec.objective != null -> rec.objective.label.uppercase() to 0x55FF55
+        else -> rec.headline.uppercase() to if (rec.confidence == Confidence.LOW) 0xAAAAAA else 0x55FF55
+    }
+}
+
+/**
  * The guide's lines under the recommendation: how to do the current step (when it adds to the headline), a triggered
  * recovery, the next decision marked as conditional, and the section's safety reminder. At most four lines.
  */
@@ -128,6 +146,17 @@ object GoldorHud : SkyMyceModule() {
             }
             if (Settings.recommendations) {
                 var lineY = y() + 6
+                // The action, up to twice the text size and shrunk to fit the column.
+                advice.self?.let { rec ->
+                    val (text, colour) = goldorAction(rec, now)
+                    val scale = ((TEXT_WIDTH - 4f) / MC.font.width(text)).coerceIn(1f, 2f)
+                    graphics.pose().pushMatrix()
+                    graphics.pose().translate(textX.toFloat(), lineY.toFloat())
+                    graphics.pose().scale(scale, scale)
+                    graphics.text(MC.font, MC.font.plainSubstrByWidth(text, TEXT_WIDTH - 4), 0, 0, -0x1000000 or colour, true)
+                    graphics.pose().popMatrix()
+                    lineY += (MC.font.lineHeight * scale).toInt() + 3
+                }
                 // Wrapping is the costly part; redo it only when the text changes (the countdown changes ~10×/s, the rest rarely).
                 val lines = goldorHudLines(advice, state, now, true)
                 if (lines != wrappedFor) {

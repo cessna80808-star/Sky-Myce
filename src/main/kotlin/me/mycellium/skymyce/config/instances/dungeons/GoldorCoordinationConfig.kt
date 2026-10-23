@@ -64,6 +64,11 @@ object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
         description = TranslatableValue.literal("Show a title when your recommended leap window opens")
     }
 
+    val stackAlert by boolean(true) {
+        name = TranslatableValue.literal("Stack Alert")
+        description = TranslatableValue.literal("Show a title when your next job is stacking with a teammate")
+    }
+
     /**
      * Moves players on the previous default strategy to the gold standard, once. A fresh config already defaults to it.
      * Sky-Myce ADG stays available in the Strategy setting.

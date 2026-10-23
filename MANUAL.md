@@ -23,7 +23,7 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 ## Features to try
 
 - **Dungeons:** Party Finder Matcher, missing-player alerts, requeue, chest protection and profit estimates, routing (Blood routing only for Mage, Archer and Healer by default), and Healer Crush Camera controls.
-- **Goldor (F7/M7 phase 3):** a terminal map with each class's job, step-by-step guidance from the gold-standard strategy, and timed pre-leaps. Sky-Myce users share short `smt1:` updates in party chat. See [Goldor coordination](GOLDOR-COORDINATION.md).
+- **Goldor (F7/M7 phase 3):** a terminal map with each class's job, step-by-step guidance from the gold-standard strategy, and timed pre-leaps. Sky-Myce users share short `smt1:` updates in party chat. Your next action is shown big at the top of the HUD (red to leap now, orange counting down to a leap, yellow to stack), with a title when a leap is due or a stack starts. Melody calls from other mods ("Melody 33%", "I ❤ Melody 1/3") count as that player's Melody progress. See [Goldor coordination](GOLDOR-COORDINATION.md).
 - **Tracker:** review dungeon runs, loot, and personal RNG history; add the tracker widget to keep an overview visible. The widget can show your progress to the next Catacombs level. The **Levels** tab shows Catacombs and class progress toward a target, as runs, XP or a percentage.
 - **Status bars (off by default):** separate health, mana, defense, speed, vitality and respiration bars. Arrange them with `/sm bars`: anchors around the hotbar, snapping, sizes, colours and per-bar options.
 - **Overlays:** an NPC dialogue box with numbered options, a progress bar on the skill XP widget, and Enter to confirm Auction House, Bazaar and bank signs.

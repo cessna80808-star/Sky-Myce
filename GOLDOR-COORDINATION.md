@@ -70,8 +70,8 @@ The engine follows the profile's role plans and leap rules. Under the recommenda
 
 | Condition (`/sm goldor if <id>`) | Used by | How it is known |
 | --- | --- | --- |
-| `t3-taken`: someone is at S2 T3 and it is not Melody | Tank S2 | Seen when a Sky-Myce user shares the T3 puzzle, or when T3 is known to be complete. Otherwise it is unknown, and Tank leaps to Berserker by default. |
-| `archer-melody`: Archer has Melody | Berserker S2 | Seen from Archer's shared S2 puzzle; otherwise unknown. |
+| `t3-taken`: someone is at S2 T3 and it is not Melody | Tank S2 | Seen when a Sky-Myce user shares the T3 puzzle or the player at T3 sends another mod's Melody call ("Melody 33%"), or when T3 is known to be complete. Otherwise it is unknown, and Tank leaps to Berserker by default. |
+| `archer-melody`: Archer has Melody | Berserker S2 | Seen from Archer's shared S2 puzzle or Archer's Melody call in party chat; otherwise unknown. |
 | `i4-failed`: Berserker failed i4 | Tank S4 | Never assumed. A known i4 completion rules it out; otherwise only your confirmation sets it. |
 | `ss-reset`: SS failed or is late, or Melody is very slow | Mage S1 safespot, Healer S1 retry | Seen when a party member writes "SS reset", "SSRS" or "SS failed" in party chat. Sky-Myce never sends it. |
 | `slow-party` | Healer S2 right lever | You confirm. |

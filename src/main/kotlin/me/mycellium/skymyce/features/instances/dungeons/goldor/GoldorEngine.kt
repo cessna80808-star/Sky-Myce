@@ -17,7 +17,7 @@ data class LeapAdvice(val targetName: String?, val targetRole: GoldorRole?, val 
 
 /**
  * The local player's recommendation: a headline action, its reason, an optional leap and confidence. [urgent] is set
- * only while a leap window is open.
+ * only while a leap is due now; [stackWith] names the player to stack [objective] with.
  */
 data class Recommendation(
     val headline: String,
@@ -26,6 +26,7 @@ data class Recommendation(
     val objective: ObjectiveId? = null,
     val leap: LeapAdvice? = null,
     val urgent: Boolean = false,
+    val stackWith: String? = null,
 )
 
 /** S3 device arrival: who should get there first and by how much. */
@@ -148,7 +149,7 @@ object GoldorEngine {
                 val target = rule.target?.let { state.playerWith(it) }
                 val reason = listOfNotNull(rule.reason, i4Note(state, rule.afterObjective), rule.alternative).joinToString(" · ")
                 return Recommendation("Leap to ${target?.name ?: rule.target?.title}", reason, if (target == null) Confidence.MEDIUM else Confidence.HIGH,
-                    leap = LeapAdvice(target?.name, rule.target, rule.reason, null, rule.mandatory))
+                    leap = LeapAdvice(target?.name, rule.target, rule.reason, null, rule.mandatory), urgent = true)
             }
             // Leapt to a stack partner with nothing of our own left: stack while they still have work.
             val partnerRole = rolePlan.stackWith
@@ -156,7 +157,8 @@ object GoldorEngine {
                 val partner = state.playerWith(partnerRole)
                 val partnerNext = partner?.let { nextObjective(state, effectivePlan(state, section, partnerRole), it.name) }
                 if (partner != null && partnerNext != null)
-                    return Recommendation("Stack with ${partner.name}", "${role.title} stacks ${partnerRole.title} regardless of terminal type", Confidence.HIGH, partnerNext)
+                    return Recommendation("Stack with ${partner.name}", "${role.title} stacks ${partnerRole.title} regardless of terminal type", Confidence.HIGH, partnerNext,
+                        stackWith = partner.name)
             }
         }
         if (section == GoldorSection.S2 && role == GoldorRole.TANK && next == null && profile.tankS2Table.isNotEmpty()) return tankS2(state, self, now)
@@ -169,8 +171,9 @@ object GoldorEngine {
             val partnerRole = if (role == deviceStack.first) deviceStack.second else deviceStack.first
             val arrival = deviceArrival(state, now)
             val order = arrival?.let { if (it.first.equals(self.name, true)) "you first" else "${it.first} first" }
-            return Recommendation("Stack device with ${state.playerWith(partnerRole)?.name ?: partnerRole.title}",
-                listOfNotNull("S3 device stack", order).joinToString(" · "), arrival?.firstEta?.confidence ?: Confidence.LOW, next)
+            val partner = state.playerWith(partnerRole)?.name ?: partnerRole.title
+            return Recommendation("Stack device with $partner",
+                listOfNotNull("S3 device stack", order).joinToString(" · "), arrival?.firstEta?.confidence ?: Confidence.LOW, next, stackWith = partner)
         }
         if (next != null) {
             // A guided profile names the stack only on the objective both share; older profiles name it throughout.
@@ -180,7 +183,7 @@ object GoldorEngine {
             val owner = profile.assignee(next)?.takeIf { next in rolePlan.backup && it != role }
             val reason = branch?.reason ?: owner?.let { "${next.label} unless ${state.playerWith(it)?.name ?: it.title} has it or it is done" }
                 ?: rolePlan.note ?: "${role.title} ${section.title} assignment"
-            return Recommendation("${next.label}${stack?.let { " · stack $it" } ?: ""}", reason, Confidence.HIGH, next)
+            return Recommendation("${next.label}${stack?.let { " · stack $it" } ?: ""}", reason, Confidence.HIGH, next, stackWith = stack)
         }
         // Own work done. The early-enter runner is the leap target: they go to the spot instead of leaping to themselves.
         val leap = profile.sectionLeapRule(section, role)
@@ -240,7 +243,7 @@ object GoldorEngine {
         val reason = profile.tankS2Reason(row)
         val bers = state.playerWith(GoldorRole.BERSERKER)?.name ?: "Berserker"
         return when (row.action) {
-            TankS2Action.STACK_T3 -> Recommendation("Stack ${second.label} with $bers", reason, row.confidence, second)
+            TankS2Action.STACK_T3 -> Recommendation("Stack ${second.label} with $bers", reason, row.confidence, second, stackWith = bers)
             TankS2Action.HOLD -> Recommendation("Hold — help ${first.label}", reason, row.confidence, first)
             TankS2Action.PRE_LEAP -> {
                 val rule = profile.sectionLeapRule(GoldorSection.S2, GoldorRole.TANK) ?: return Recommendation("Pre-leap", reason, Confidence.LOW)
@@ -303,7 +306,7 @@ object GoldorEngine {
         val target = rule.target?.let { state.playerWith(it) }?.takeIf { it.alive }
         val name = target?.name ?: rule.target?.title ?: "?"
         val advice = LeapAdvice(target?.name, rule.target, rule.reason, null, rule.mandatory)
-        if (state.sectionDoneAt != null) return Recommendation("Leap to $name", "${state.section.title} done · ${rule.reason}", Confidence.HIGH, leap = advice)
+        if (state.sectionDoneAt != null) return Recommendation("Leap to $name", "${state.section.title} done · ${rule.reason}", Confidence.HIGH, leap = advice, urgent = true)
         val otherwise = rule.otherwise ?: "otherwise wait for the gate"
         return if (value == Tri.FALSE) Recommendation("Wait for ${state.section.title}, then leap $name", otherwise, Confidence.MEDIUM, leap = advice)
         else Recommendation("Leap to $name", "${condition.question.replaceFirstChar { it.uppercase() }}? Pre-leap now · $otherwise", Confidence.LOW, leap = advice)
