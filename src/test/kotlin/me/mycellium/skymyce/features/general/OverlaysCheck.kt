@@ -77,6 +77,10 @@ private fun checkSnapping() {
     val dragged = BarRect(0, 0, 60, BAR_HEIGHT)
     check(barDropAt(layout, rects, health.x - 3.0, health.y + 4.0, dragged, W, H, true) == BarDrop.Attach(BarAnchor.HOTBAR_TOP, 0, 0, false))
     check(barDropAt(layout, rects, health.x + 40.0, health.y - 3.0, dragged, W, H, true) == BarDrop.Attach(BarAnchor.HOTBAR_TOP, 1, 0, true)) { "Above: a new outer row" }
+    // Empty row space up to a bar width away joins the row instead of a neighbour's new-row zone.
+    for (y in listOf(health.y + 2.5, health.y + 4.0, health.bottom - 2.5)) check(barDropAt(layout, rects, health.x - health.width * 0.75, y, dragged, W, H, true) ==
+        BarDrop.Attach(BarAnchor.HOTBAR_TOP, 0, 0, false)) { "Left of the bar in its row at y=$y" }
+    check(barDropAt(layout, rects, health.right + health.width * 0.75, health.y + 4.0, dragged, W, H, true).let { it is BarDrop.Attach && !it.newRow }) { "Right of the bar in its row" }
     val left = BarAnchor.TOP_LEFT.hitbox(W, H)
     check(barDropAt(layout, rects, left.x + 5.0, left.y + 5.0, dragged, W, H, true) == BarDrop.Attach(BarAnchor.TOP_LEFT, 0, 0, true))
     check(barDropAt(layout, rects, health.x - 3.0, health.y + 4.0, dragged, W, H, false) is BarDrop.Float) { "Without snapping it floats" }

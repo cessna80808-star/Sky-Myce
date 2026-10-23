@@ -1,5 +1,6 @@
 package me.mycellium.skymyce.features.general.overlays.bars
 
+import com.mojang.blaze3d.platform.InputConstants
 import com.mojang.blaze3d.platform.cursor.CursorTypes
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.UIContainers
@@ -35,6 +36,7 @@ import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
+import org.lwjgl.glfw.GLFW
 import java.util.Optional
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -52,15 +54,22 @@ internal sealed interface BarDrop {
  */
 internal fun barDropAt(layout: StatusBarLayout, others: Map<BarType, BarRect>, px: Double, py: Double, dragged: BarRect, width: Int, height: Int, snap: Boolean): BarDrop {
     if (snap) {
+        // Beside wins over a new row: a pointer in a bar's row, up to a bar width past it, joins that row. Its top and bottom 2 px start a new row.
         for ((type, r) in others) {
             val bar = layout.bar(type); val anchor = bar.barAnchor ?: continue
-            val withinY = py >= r.y - 2 && py < r.bottom + 2
-            val withinX = px >= r.x && px < r.right
+            if (py < r.y + 2 || py > r.bottom - 2) continue
+            val middle = r.x + r.width / 2.0
             when {
-                withinY && px >= r.x - SIDE && px < r.x + EDGE -> return BarDrop.Attach(anchor, bar.row, if (anchor.right) bar.slot else bar.slot + 1, false)
-                withinY && px > r.right - EDGE && px <= r.right + SIDE -> return BarDrop.Attach(anchor, bar.row, if (anchor.right) bar.slot + 1 else bar.slot, false)
-                withinX && py >= r.y - SIDE && py < r.y + 3 -> return BarDrop.Attach(anchor, if (anchor.up) bar.row + 1 else bar.row, 0, true)
-                withinX && py > r.bottom - 3 && py <= r.bottom + SIDE -> return BarDrop.Attach(anchor, if (anchor.up) bar.row else bar.row + 1, 0, true)
+                px >= r.x - r.width && px < middle -> return BarDrop.Attach(anchor, bar.row, if (anchor.right) bar.slot else bar.slot + 1, false)
+                px >= middle && px <= r.right + r.width -> return BarDrop.Attach(anchor, bar.row, if (anchor.right) bar.slot + 1 else bar.slot, false)
+            }
+        }
+        for ((type, r) in others) {
+            val bar = layout.bar(type); val anchor = bar.barAnchor ?: continue
+            if (px < r.x || px >= r.right) continue
+            when {
+                py >= r.y - SIDE && py < r.y + 2 -> return BarDrop.Attach(anchor, if (anchor.up) bar.row + 1 else bar.row, 0, true)
+                py > r.bottom - 2 && py <= r.bottom + SIDE -> return BarDrop.Attach(anchor, if (anchor.up) bar.row else bar.row + 1, 0, true)
             }
         }
         for (anchor in BarAnchor.entries) {
@@ -74,7 +83,6 @@ internal fun barDropAt(layout: StatusBarLayout, others: Map<BarType, BarRect>, p
 }
 
 private const val SIDE = 8
-private const val EDGE = 6
 
 /**
  * Arranges the status bars like Skyblocker's: drag a bar beside or above another to join its anchor, onto an empty
@@ -96,7 +104,8 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
     private var placeOptions = openOptions != null
     private var colorKey: String? = null
     private var pointer = 0.0 to 0.0
-    private var altDown = false
+    // Polled: a lone Alt press does not always report itself as a held modifier.
+    private val altDown get() = MC.instance.window.let { InputConstants.isKeyDown(it, GLFW.GLFW_KEY_LEFT_ALT) || InputConstants.isKeyDown(it, GLFW.GLFW_KEY_RIGHT_ALT) }
 
     private var ui: OwoUIAdapter<FlowLayout>? = null
     private val canvas = MenuCanvas()
@@ -312,7 +321,7 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
         if (hit == null) return false
         val rect = rects.getValue(hit)
         dragging = hit; grabX = (button.x - rect.x).toInt(); grabY = (button.y - rect.y).toInt(); dragWidth = rect.width.coerceAtLeast(StatusBarLayout.MIN_FREE_WIDTH)
-        updateDrag(button.x, button.y, snap = true)
+        updateDrag(button.x, button.y, snap = !altDown)
         return true
     }
 
@@ -377,13 +386,11 @@ class StatusBarsEditorScreen(private val parent: Screen? = null, openOptions: Ba
             if (dragging != null) { dragging = null; drop = null; preview = null; return true }
             onClose(); return true
         }
-        altDown = input.hasAltDown()
         if (dragging != null) updateDrag(pointer.first, pointer.second, snap = !altDown)
         return super.keyPressed(input)
     }
 
     override fun keyReleased(input: KeyEvent): Boolean {
-        altDown = input.hasAltDown() && input.key != org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_ALT && input.key != org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_ALT
         if (dragging != null) updateDrag(pointer.first, pointer.second, snap = !altDown)
         return super.keyReleased(input)
     }
