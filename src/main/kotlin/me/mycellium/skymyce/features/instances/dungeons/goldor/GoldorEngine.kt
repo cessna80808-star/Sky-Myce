@@ -44,7 +44,7 @@ data class GoldorAdvice(
 )
 
 /** Local-player inputs the engine cannot read from the shared state. */
-data class SelfContext(val name: String, val leaptAt: Long? = null, val position: BossPoint? = null)
+data class SelfContext(val name: String, val leaptAt: Long? = null, val position: BossPoint? = null, val reactionMillis: Long = 0)
 
 /**
  * Turns the run state and a profile into plans and a recommendation. Deterministic: the same state, profile, self
@@ -282,7 +282,7 @@ object GoldorEngine {
         val timing = profile.leap.copy(safetyMarginMillis = profile.leap.safetyMarginMillis + extraDelay)
         val arrived = self.position != null && goal != null && self.position.distance(goal) <= 3.0
         val leapt = self.leaptAt != null && state.sectionDoneAt == null && self.leaptAt >= (state.gateOpenedAt ?: state.startedAt ?: 0L)
-        val plan = planPreLeap(now, remaining, state.tick(), timing, travel, leapt = leapt, arrived = arrived)
+        val plan = planPreLeap(now, remaining, state.tick(), timing, travel, leapt = leapt, arrived = arrived, reactionMillis = self.reactionMillis)
         val name = target?.name ?: rule.target?.title ?: "?"
         val routeNote = routeState?.let { if (it.state == RouteState.IN) "${profile.routeTitle(rule.route!!)} in" else if (target != null && targetPosition == null) "position unknown" else null }
         val headline = when (plan.phase) {

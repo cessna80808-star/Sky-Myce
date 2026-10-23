@@ -234,6 +234,10 @@ private fun checkTiming() {
     // Phases as time passes.
     check(planPreLeap(T0 + 5_000, Estimate(5_000, Confidence.HIGH), tick, timing, travel).phase == LeapPhase.PREPARE)
     check(planPreLeap(T0 + 6_200, Estimate(3_800, Confidence.HIGH), tick, timing, travel).phase == LeapPhase.LEAP)
+    // A second of reaction time: same tick, but the call comes a second earlier so the leap itself lands on time.
+    val reacting = planPreLeap(T0, Estimate(10_000, Confidence.HIGH), tick, timing, travel, reactionMillis = 1_000)
+    check(reacting.tickAt == plan.tickAt && reacting.leapFrom == plan.leapFrom!! - 1_000 && reacting.leapUntil!! <= plan.leapUntil!! - 1_000) { reacting }
+    check(planPreLeap(T0 + 5_300, Estimate(4_700, Confidence.HIGH), tick, timing, travel, reactionMillis = 1_000).phase == LeapPhase.LEAP) { "Called before the tick" }
     // An earlier tick than expected moves the window earlier; a later one later.
     val early = planPreLeap(T0, Estimate(10_000, Confidence.HIGH), GoldorTick(T0 - 1_000, 3_000, true), timing, travel)
     val late = planPreLeap(T0, Estimate(10_000, Confidence.HIGH), GoldorTick(T0 + 1_000, 3_000, true), timing, travel)

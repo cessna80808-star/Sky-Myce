@@ -257,7 +257,7 @@ object GoldorCoordinator : SkyMyceModule() {
         // Advice changes with state, and with time while a timed plan counts down.
         if (state.active && (state.revision != adviceRevision || now - adviceAt >= 200)) {
             adviceRevision = state.revision; adviceAt = now
-            val next = GoldorEngine.advise(state, SelfContext(selfName(), leaptAt, here), now)
+            val next = GoldorEngine.advise(state, SelfContext(selfName(), leaptAt, here, Settings.reactionTime.toLong()), now)
             advice = next
             alert(next.self)
         }

@@ -64,6 +64,12 @@ object GoldorCoordinationConfig : CategoryKt("Goldor Coordination") {
         description = TranslatableValue.literal("Show a title when your recommended leap window opens")
     }
 
+    val reactionTime by int(1000) {
+        name = TranslatableValue.literal("Reaction Time (ms)")
+        description = TranslatableValue.literal("How much earlier leap calls show, so you have time to see them and leap. 0 calls the exact moment")
+        range = 0..2000; slider = true
+    }
+
     val stackAlert by boolean(true) {
         name = TranslatableValue.literal("Stack Alert")
         description = TranslatableValue.literal("Show a title when your next job is stacking with a teammate")

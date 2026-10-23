@@ -88,6 +88,9 @@ data class LeapPlan(
  * - Low-confidence work estimate: the plan is computed but marked LOW so the HUD shows it as approximate.
  * - Not enough time left to leap and travel before the opening: [LeapPhase.MISSED].
  * - The fitting tick has passed: leap now only if no further tick lands before the opening, else [LeapPhase.MISSED].
+ *
+ * [reactionMillis] is how long the player takes to see the call and leap: every call ([LeapPlan.leapFrom], the prepare
+ * warning and the latest moment) comes that much earlier, so the leap itself lands on time.
  */
 fun planPreLeap(
     now: Long,
@@ -97,6 +100,7 @@ fun planPreLeap(
     travelMillis: Long?,
     leapt: Boolean = false,
     arrived: Boolean = false,
+    reactionMillis: Long = 0,
 ): LeapPlan {
     if (arrived) return LeapPlan(LeapPhase.ARRIVED, "at target", Confidence.HIGH)
     if (leapt) return LeapPlan(LeapPhase.TRAVELLING, "go to target", Confidence.HIGH)
@@ -104,13 +108,13 @@ fun planPreLeap(
     val travel = travelMillis ?: return LeapPlan(LeapPhase.UNCERTAIN, "target position unknown", Confidence.LOW)
     val opensAt = now + remaining.millis
     // The latest moment the leap still gets the player to the terminal with the safety margin to spare.
-    val latestLeap = opensAt - timing.leapCastMillis - travel - timing.safetyMarginMillis
+    val latestLeap = opensAt - timing.leapCastMillis - travel - timing.safetyMarginMillis - reactionMillis
     val confidence = weaker(remaining.confidence, if (tick.observed) Confidence.HIGH else Confidence.MEDIUM)
     if (latestLeap < now) return LeapPlan(LeapPhase.MISSED, "not enough time", weaker(confidence, Confidence.MEDIUM), opensAt = opensAt)
     if (tick.originMillis == null) return LeapPlan(LeapPhase.UNCERTAIN, "Goldor tick unknown", Confidence.LOW, leapUntil = latestLeap, opensAt = opensAt)
     // The intended tick kill: the last tick whose leap (tick + delay) still fits.
-    val intended = tick.lastAtOrBefore(latestLeap - timing.leapDelayAfterTickMillis)
-    val leapFrom = intended?.plus(timing.leapDelayAfterTickMillis)
+    val intended = tick.lastAtOrBefore(latestLeap + reactionMillis - timing.leapDelayAfterTickMillis)
+    val leapFrom = intended?.plus(timing.leapDelayAfterTickMillis - reactionMillis)
     if (intended == null || leapFrom == null || leapFrom < now - timing.leapWindowMillis) {
         // No tick-timed leap remains. Leaping now is only safe if no tick lands before the section opens.
         val next = tick.nextAfter(now)
@@ -120,7 +124,7 @@ fun planPreLeap(
     val until = minOf(latestLeap, leapFrom + timing.leapWindowMillis)
     val phase = when {
         now >= leapFrom -> LeapPhase.LEAP
-        now >= intended - timing.prepareLeadMillis -> LeapPhase.PREPARE
+        now >= intended - timing.prepareLeadMillis - reactionMillis -> LeapPhase.PREPARE
         else -> LeapPhase.WAITING_TICK
     }
     val reason = when (phase) {
