@@ -16,6 +16,7 @@ import { checkStrictCosmetics } from "./cosmetics-strict.mjs";
 import { checkCosmeticStudio } from "./cosmetic-studio.mjs";
 import { checkCommunityPrivacy } from "./community-privacy.mjs";
 import { checkDiscordUx } from "./discord-ux.mjs";
+import { checkAdminBootstrap } from "./accounts.mjs";
 
 // Replace public trust roots only in this in-memory test bundle. Production has no auth bypass.
 const rsa = () => generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -326,6 +327,7 @@ await checkIrc(script, proof);
 await checkGlobalChat(script, proof);
 await checkRichIrc(script, proof);
 await checkDiscordUx(script, proof);
+await checkAdminBootstrap(script);
 await checkBazaarProtocol();
 
 async function checkBazaarProtocol() {

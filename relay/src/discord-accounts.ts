@@ -11,7 +11,7 @@ export type DiscordAccountsConfig = AccountsConfig & {
   USER_BOT_TOKEN?: string; USER_BOT_APPLICATION_ID?: string; USER_BOT_PUBLIC_KEY?: string;
   BACKEND_BOT_TOKEN?: string; BACKEND_BOT_APPLICATION_ID?: string; BACKEND_BOT_PUBLIC_KEY?: string;
   DISCORD_BACKEND_APPLICATION_ID?: string; DISCORD_BACKEND_PUBLIC_KEY?: string; DISCORD_BACKEND_BOT_TOKEN?: string;
-  DISCORD_LOADER_DELIVERY_ENABLED?: string; DISCORD_AUDIT_CHANNEL_ID?: string; DISCORD_SECURITY_CHANNEL_ID?: string; DISCORD_LICENSE_CHANNEL_ID?: string;
+  DISCORD_AUDIT_CHANNEL_ID?: string; DISCORD_SECURITY_CHANNEL_ID?: string; DISCORD_LICENSE_CHANNEL_ID?: string;
   ROOMS: string; RELAY_ROOMS: DurableObjectNamespace<RelayRoom>;
 };
 type ParsedCommand = { actor: Actor; action: string; target: string; options: Record<string, unknown>; identity?: Record<string, unknown> };

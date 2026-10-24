@@ -13,7 +13,7 @@ internal fun communityRestartChecks(root: Path, helper: Path) {
     val classes = Files.createDirectories(root.resolve("classes"))
     val parentSource = root.resolve("Parent.java")
     Files.writeString(parentSource, """
-        import me.mycellium.skymyce.loader.LoaderRestart;
+        import me.mycellium.skymyce.community.update.GameRestart;
         import me.mycellium.skymyce.community.update.UpdateInstaller;
         import java.io.*;
         import java.nio.file.*;
@@ -50,20 +50,20 @@ internal fun communityRestartChecks(root: Path, helper: Path) {
                 Files.writeString(game.resolve("helper.pid"), Long.toString(child.pid()));
                 boolean failed = false;
                 try {
-                    LoaderRestart.request(child, game, List.of("-Xmx96m"), List.of(Path.of(args[2])),
+                    GameRestart.request(child, game, List.of("-Xmx96m"), List.of(Path.of(args[2])),
                         Map.of("org.lwjgl.librarypath", natives.toString(), "java.library.path", natives.toString()),
                         new String[]{game.toString(), token});
                 } catch (IOException failure) {
-                    if (!invalidNative || !LoaderRestart.failureStage(failure).equals("NATIVE_LIBRARIES")) throw failure;
+                    if (!invalidNative || !GameRestart.failureStage(failure).equals("NATIVE_LIBRARIES")) throw failure;
                     failed = true;
-                    Files.writeString(game.resolve("failure-stage"), LoaderRestart.failureStage(failure));
+                    Files.writeString(game.resolve("failure-stage"), GameRestart.failureStage(failure));
                 }
                 if (failed != invalidNative) throw new IllegalStateException("Unexpected preparation result");
                 if (failed && !child.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("Failed helper remained alive");
                 Files.writeString(game.resolve("prepared"), failed ? "failed" : "ready");
                 int action = System.in.read();
                 if (!failed) {
-                    if (action == 'C') LoaderRestart.commit(child); else child.getOutputStream().close();
+                    if (action == 'C') GameRestart.commit(child); else child.getOutputStream().close();
                 }
                 Files.writeString(game.resolve("armed"), "ready");
                 System.in.read();

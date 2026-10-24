@@ -86,6 +86,7 @@ fun main() {
     check(process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0)
     check(Files.readString(target) == "new verified version" && Files.readString(backup) == "working version" && !Files.exists(next))
     communityRestartChecks(root.resolve("restart"), helper)
+    checkRestartNatives(root.resolve("native-restart"))
     println("Community checks passed: authenticated releases, persistent private sessions, bounded HTTP body deadlines, device normalization and after-exit atomic update refusal/backup safety")
 }
 

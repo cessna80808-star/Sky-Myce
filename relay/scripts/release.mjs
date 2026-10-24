@@ -8,7 +8,6 @@ import { inflateRawSync } from "node:zlib";
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
 const fail = message => { throw new Error(message); };
-const version = value => /^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(value);
 const encode = value => Buffer.from(value).toString("base64url");
 function envelope(manifest, key, kid) {
   const bytes = Buffer.from(JSON.stringify(manifest));
@@ -59,31 +58,13 @@ try {
       issuedAt: now, expiresAt: now + 7 * 86400000, notes };
     await writeFile(output, JSON.stringify(envelope(manifest, key, kid)) + "\n", { flag: "wx" });
     console.log(`Signed normal Fabric manifest written. Upload ${manifest.artifact} first, then releases/community-current.json. No loader or license is required.`);
-  } else if (args[0] === "sign" || args[0] === "sign-loader") {
-    const loader = args[0] === "sign-loader";
-    const [, artifactPath, keyPath, kid, minecraft, modVersion] = args;
-    const loaderVersion = loader ? "0.0.0" : args[6], output = args[loader ? 6 : 7];
-    if (args.length !== (loader ? 7 : 8) || !/^[A-Za-z0-9_-]{1,48}$/.test(kid) || !/^\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$/.test(minecraft) || !version(modVersion) || !version(loaderVersion)) {
-      fail("Usage: node scripts/release.mjs sign <jar> <private.pem> <key-id> <minecraft> <mod-version> <minimum-loader> <manifest.json>");
-    }
-    const key = createPrivateKey(await readFile(keyPath));
-    if (key.asymmetricKeyType !== "ed25519") fail("An Ed25519 signing key is required.");
-    const artifact = await readFile(artifactPath), now = Date.now();
-    if (artifact.length < 4 || artifact[0] !== 0x50 || artifact[1] !== 0x4b) fail("The artifact must be a built JAR.");
-    if (loader && artifact.length > 64 * 1024 * 1024) fail("Loader exceeds the update limit.");
-    const manifest = loader ? { product: "sky-myce-loader", protocol: 1, minecraft, version: modVersion,
-      artifact: `loaders/Sky-Myce-Loader-${modVersion}.jar`, size: artifact.length, sha256: createHash("sha256").update(artifact).digest("hex"), issuedAt: now, expiresAt: now + 7 * 86400000 } :
-      { product: "sky-myce", protocol: 3, minecraft, version: modVersion, minimumLoaderVersion: loaderVersion,
-      artifact: `releases/Sky-Myce-${modVersion}.jar`, sha256: createHash("sha256").update(artifact).digest("hex"), issuedAt: now, expiresAt: now + 7 * 86400000 };
-    await writeFile(output, JSON.stringify(envelope(manifest, key, kid)) + "\n", { flag: "wx" });
-    console.log(`Signed manifest written. Upload the JAR privately as ${manifest.artifact}; publish this manifest only after the artifact.`);
   } else if (args[0] === "check") {
     const key = generateKeyPairSync("ed25519").privateKey, signed = envelope({ product: "sky-myce", sha256: "a".repeat(64) }, key, "test");
     const bytes = Buffer.from(signed.payload, "base64url"), signature = Buffer.from(signed.signature, "base64url");
     assert.ok(verify(null, bytes, createPublicKey(key), signature)); bytes[0] ^= 1;
     assert.equal(verify(null, bytes, createPublicKey(key), signature), false);
     console.log("Sky-Myce release signing check passed.");
-  } else fail("Commands: keygen, sign-community, sign (legacy), sign-loader (legacy), check.");
+  } else fail("Commands: keygen, sign-community, check.");
 } catch (error) {
   // Crypto/fs exceptions can contain local private-key paths. Never print key material or raw runtime errors.
   console.error(error instanceof assert.AssertionError ? "Release signing self-check failed." : "Sky-Myce release command failed. Check arguments, versions, file permissions, and existing output files.");

@@ -9,15 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
-import me.mycellium.skymyce.loader.LoaderRestart;
-import me.mycellium.skymyce.loader.RestartNatives;
 
 /** Optional JDK-only helper. It runs from its own tiny JAR, never from the JAR being replaced. */
 public final class UpdateInstaller {
     private UpdateInstaller() {}
     public static void writeHelper(Path destination) throws Exception {
-        var types = new ArrayList<>(List.of(UpdateInstaller.class, LoaderRestart.class, RestartNatives.class));
-        types.addAll(List.of(LoaderRestart.class.getDeclaredClasses()));
+        var types = new ArrayList<>(List.of(UpdateInstaller.class, GameRestart.class, RestartNatives.class));
+        types.addAll(List.of(GameRestart.class.getDeclaredClasses()));
         var resources = new ArrayList<>(types.stream().map(type -> type.getName().replace('.', '/') + ".class").toList());
         // Anonymous file-tree visitors are executable helper code, but getDeclaredClasses() omits them.
         for (var suffix : List.of("1", "2"))
@@ -69,7 +67,7 @@ public final class UpdateInstaller {
             if (planPath != null) try (InputStream input = Files.newInputStream(planPath)) { plan.load(input); }
             long parent = Long.parseLong(planPath == null ? args[1] : plan.getProperty("parent"));
             long started = Long.parseLong(planPath == null ? args[2] : plan.getProperty("parentStarted", "0"));
-            LoaderRestart.afterExit(parent, started, () -> {
+            GameRestart.afterExit(parent, started, () -> {
                 if (planPath != null) {
                     // Windows may briefly retain the mod's file handle after the process exits.
                     for (int attempt = 0; ; attempt++) {
@@ -81,7 +79,7 @@ public final class UpdateInstaller {
                 return null;
             });
         } catch (Throwable failure) {
-            LoaderRestart.reportFailure(failure);
+            GameRestart.reportFailure(failure);
             if (planPath != null) try { Files.writeString(planPath.resolveSibling("result.txt"), "Update/restart could not finish. Start Minecraft from your launcher; inspect mods and .sky-myce-updates.\n"); } catch (Exception ignored) {}
             System.exit(1);
         }

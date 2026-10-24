@@ -9,7 +9,6 @@ import { handleRngCarouselInteraction } from "./rng-carousel";
 import { RngForwardQueue } from "./rng-forwarding";
 import { verifiedInteraction, discordCommand } from "./discord";
 import { deferInteraction, handleAccountInteraction, handleAccountAutocomplete, type DiscordAccountsConfig } from "./discord-accounts";
-import type { DrmConfig } from "./drm";
 import { handleCommunityRequest } from "./community";
 import { handleBazaarRequest } from "./bazaar-routes";
 import { handleCommunityRelease } from "./community-release";
@@ -23,7 +22,7 @@ import { LeapPov, type LeapPovSession } from "./leap-pov";
 import { BazaarNotifications } from "./bazaar-notifications";
 export { AccountStore } from "./accounts";
 
-type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED" | "GLOBAL_CHAT_GATEWAY_CONTROL"> & DigestConfig & CosmeticsConfig & AccountsConfig & DrmConfig & IrcConfig & DiscordAccountsConfig & {
+type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED" | "GLOBAL_CHAT_GATEWAY_CONTROL"> & DigestConfig & CosmeticsConfig & AccountsConfig & IrcConfig & DiscordAccountsConfig & {
   SKYMYCE_ENVIRONMENT?: string; ALLOW_LEGACY_RELAY?: string; COSMETIC_ASSETS?: R2Bucket;
   COMMUNITY_SERVICES_ENABLED?: string;
   GLOBAL_CHAT_GATEWAY_CONTROL?: { wake(): Promise<void> };

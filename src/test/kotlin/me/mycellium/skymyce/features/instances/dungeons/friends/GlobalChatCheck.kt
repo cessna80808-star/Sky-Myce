@@ -235,6 +235,14 @@ fun checkGlobalChat() {
     check(shortenedLinks.size == 32 && "message shortened" in shortenedLinks.last().single().text)
     check(globalChatLines("https://tenor.com/view/example", 32).flatten().none { it.text == "[GIF]" })
 
+    val irc = IrcMode(); val stickySent = mutableListOf<String>()
+    check(irc.chat("public", stickySent::add)); check(stickySent.isEmpty())
+    check(!irc.command("chat irc")); check(irc.selected)
+    check(!irc.chat("private", stickySent::add)); check(stickySent == listOf("private"))
+    check(!irc.chat("offline") { }); check(irc.selected) // Never falls through to the server.
+    check(irc.command("sm msg Alice hello") && irc.selected)
+    check(irc.command("chat p") && !irc.selected && irc.chat("party", stickySent::add))
+    check(!irc.command(" CHAT   IRC ")); check(irc.command("chat a") && !irc.selected)
     val mode = IrcMode()
     for (exit in listOf("sm chat", "skymyce chat", "SM  CHAT")) check(relayChatExit.matches(exit))
     for (protected in listOf("sm chat Player", "sm irc", "sm help", "other chat", "sm chat text")) check(!relayChatExit.matches(protected))

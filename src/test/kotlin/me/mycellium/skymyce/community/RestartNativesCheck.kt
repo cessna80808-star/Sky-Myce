@@ -1,5 +1,6 @@
-package me.mycellium.skymyce.loader
+package me.mycellium.skymyce.community
 
+import me.mycellium.skymyce.community.update.RestartNatives
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path

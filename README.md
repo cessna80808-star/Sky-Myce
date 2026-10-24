@@ -8,8 +8,6 @@ Sky-Myce is a client-side Fabric mod for Hypixel SkyBlock. It adds dungeon tools
 
 Download the [latest release](https://github.com/cessna80808-star/Sky-Myce/releases/latest), close Minecraft, and put the standalone mod JAR in your Fabric instance's `mods` folder alongside its Fabric dependencies. Launch the game and open `/sm` to configure features.
 
-If you are migrating from the old Loader setup, remove the old Sky-Myce Loader and mod JAR first. Keep your other mods and settings.
-
 ## What’s included
 
 - Dungeon tools: Party Finder matching, missing-player alerts, chest safeguards, routing, and camera controls

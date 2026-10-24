@@ -1,4 +1,4 @@
-package me.mycellium.skymyce.loader;
+package me.mycellium.skymyce.community.update;
 
 import java.io.*;
 import java.nio.file.*;
@@ -8,12 +8,12 @@ import java.util.concurrent.*;
 import java.util.jar.*;
 
 /** Relaunches Fabric itself, without depending on the launcher that originally started it. */
-public final class LoaderRestart {
+public final class GameRestart {
     private static final int MAX_BYTES = 1024 * 1024;
     private static final int READY = 83;
     private static final List<String> STAGES = List.of("REQUEST", "RUNTIME_LIBRARIES", "NATIVE_LIBRARIES", "WRAPPER", "JVM_OPTIONS", "READY", "TIMEOUT");
     private static String preparationStage = "REQUEST";
-    private LoaderRestart() {}
+    private GameRestart() {}
 
     // This object contains session credentials. Never include its fields in diagnostic output.
     record Plan(Path directory, List<String> vmArguments, List<Path> classPath,
@@ -166,7 +166,7 @@ public final class LoaderRestart {
         try (var jar = new JarOutputStream(bytes)) {
             var metadata = new JarEntry("META-INF/MANIFEST.MF"); metadata.setTime(0);
             jar.putNextEntry(metadata); manifest.write(jar); jar.closeEntry();
-            for (var type : List.of(LoaderRestart.class, Plan.class)) {
+            for (var type : List.of(GameRestart.class, Plan.class)) {
                 var name = type.getName().replace('.', '/') + ".class";
                 var entry = new JarEntry(name); entry.setTime(0); jar.putNextEntry(entry);
                 try (var input = type.getResourceAsStream("/" + name)) {
@@ -274,7 +274,7 @@ public final class LoaderRestart {
             // of Windows' legacy Java command-line decoding. Set them before initializing Fabric.
             if (encoding.newEncoder().canEncode(value)) command.add("-D" + entry.getKey() + "=" + value);
         }
-        command.addAll(List.of("-cp", plan.directory().relativize(wrapper).toString(), LoaderRestart.class.getName()));
+        command.addAll(List.of("-cp", plan.directory().relativize(wrapper).toString(), GameRestart.class.getName()));
         for (var argument : command.subList(1, command.size())) if (!encoding.newEncoder().canEncode(argument)) throw new IOException("JVM option unavailable for restart");
         if (System.getProperty("os.name").startsWith("Windows") && command.stream().mapToInt(String::length).sum() > 30000)
             throw new IOException("JVM options too long for restart");

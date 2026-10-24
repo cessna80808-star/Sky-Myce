@@ -2,7 +2,7 @@ package me.mycellium.skymyce.community
 
 import com.google.gson.JsonParser
 import me.mycellium.skymyce.community.update.UpdateInstaller
-import me.mycellium.skymyce.loader.LoaderRestart
+import me.mycellium.skymyce.community.update.GameRestart
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.loader.api.FabricLoader
 import net.fabricmc.loader.impl.launch.FabricLauncherBase
@@ -67,7 +67,7 @@ object CommunityUpdates {
         val arguments = if (updatePlan != null) listOf(updatePlan.toString()) else listOf("--restart", current.pid().toString(), current.info().startInstant().orElseThrow().toEpochMilli().toString())
         val builder = ProcessBuilder(listOf(executable, "-cp", jar.toString(), UpdateInstaller::class.java.name) + arguments)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
-        LoaderRestart.clearInjectedOptions(builder)
+        GameRestart.clearInjectedOptions(builder)
         return builder.start()
     }
     fun restart() {
@@ -102,16 +102,16 @@ object CommunityUpdates {
                 Files.createDirectories(directory)
                 val jar = helper ?: directory.resolve("restart-helper.jar").also(UpdateInstaller::writeHelper)
                 process = startHelper(jar, updatePlan)
-                LoaderRestart.request(process, Path.of(System.getProperty("user.dir")), vmArguments, classPath, properties, arguments.toTypedArray())
+                GameRestart.request(process, Path.of(System.getProperty("user.dir")), vmArguments, classPath, properties, arguments.toTypedArray())
             }
             minecraft.execute {
                 val prepared = process
-                if (result.isSuccess && account == minecraft.user.profileId && plan == updatePlan && prepared != null && runCatching { LoaderRestart.commit(prepared) }.isSuccess) {
+                if (result.isSuccess && account == minecraft.user.profileId && plan == updatePlan && prepared != null && runCatching { GameRestart.commit(prepared) }.isSuccess) {
                     restartCommitted = true; minecraft.stop()
                 } else {
                     prepared?.destroyForcibly()
                     restarting = false; busy = false
-                    val stage = LoaderRestart.failureStage(result.exceptionOrNull())
+                    val stage = GameRestart.failureStage(result.exceptionOrNull())
                     val step = when (stage) {
                         "RUNTIME_LIBRARIES" -> "runtime libraries"
                         "NATIVE_LIBRARIES" -> "native libraries"

@@ -1,4 +1,4 @@
-package me.mycellium.skymyce.loader;
+package me.mycellium.skymyce.community.update;
 
 import java.io.*;
 import java.nio.ByteBuffer;

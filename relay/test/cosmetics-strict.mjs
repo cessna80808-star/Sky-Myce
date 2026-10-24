@@ -65,7 +65,6 @@ export async function checkStrictCosmetics(script, minecraftProof) {
   }
   try {
     const store = (await mf.getDurableObjectNamespace('ACCOUNT_STORE')).getByName('global');
-    const admin = action => store.developerCommand({ id: env.ADMIN_BOOTSTRAP_USER_ID, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, action, actor, {});
     const challenge = await post('/community/challenge', { purpose: 'connect', clientNonce: randomBytes(32).toString('base64url') });
     const pollSecret = 'x'.repeat(43), flow = await post('/community/connect/start', { challengeId: challenge.challengeId, minecraftProof: minecraftProof('Alice', challenge.nonce), pollSecret, modVersion: '0.1.0' });
     assert.equal((await store.communityUserCommand({ id: actor, guildId: env.DISCORD_GUILD_ID, roles: [], interactionId: nextId() }, 'connect', { code: flow.fallbackCode })).ok, true);
