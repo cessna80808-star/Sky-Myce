@@ -1,62 +1,33 @@
-# Cloudflare Workers
+# Relay and Cloudflare backend notes for agents
 
-STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Always retrieve current documentation before any Workers, KV, R2, D1, Durable Objects, Queues, Vectorize, AI, or Agents SDK task.
+Cloudflare Workers APIs and limits change; check the current docs at https://developers.cloudflare.com/workers/ before relying on a binding or limit.
 
-## Docs
+## Workers
 
-- https://developers.cloudflare.com/workers/
-- MCP: `https://docs.mcp.cloudflare.com/mcp`
+- `sky-myce-backend` is the production backend: the `backend` environment in `wrangler.jsonc`, served at `https://sky-myce-backend.skyblock-relay.workers.dev`.
+- The root Worker, `skyblock-relay`, is the separate production Discord Gateway. Its source of truth is `D:\Code\Cessna fork\relay`; do not deploy this checkout's root environment over it. The backend calls its `GatewayControl` service binding for global chat.
+- Production, staging and Gateway are separate Workers/bindings. Use staging for backend experiments.
 
-For all limits and quotas, retrieve from the product's `/platform/limits/` page. eg. `/workers/platform/limits`
+## Backend pieces
 
-## Commands
+- `src/index.ts` routes HTTP and WebSocket requests.
+- `RelayRoom` and `AccountStore` are Durable Objects for room/session and account state.
+- `PRIVATE_ARTIFACTS` is the private R2 bucket for signed release artifacts and manifests. `COSMETIC_ASSETS` stores public cosmetic files.
+- `COMMUNITY_RELEASE_MANIFEST_KEY` selects `releases/community-current.json`. `/community/release` returns its signed protocol-4 manifest; `/community/artifact?version=...` serves the matching artifact after validation.
 
-| Command | Purpose |
-|---------|---------|
-| `npx wrangler dev` | Local development |
-| `npx wrangler deploy` | Deploy to Cloudflare |
-| `npx wrangler types` | Generate TypeScript types |
+## Checks and deployment
 
-Run `wrangler types` after changing bindings in wrangler.jsonc.
+Run `npm run check` and `npm test`; run `npx wrangler types` after changing bindings. For a config/bundle preflight use `npx wrangler deploy --env backend --dry-run --keep-vars --strict`.
 
-## Local Explorer (Debugging & Inspection)
+Deploy the backend only with `npx wrangler deploy --env backend --keep-vars --strict`. `--keep-vars` preserves dashboard variables; `--strict` fails on conflicting remote changes. Never use bare `wrangler deploy` from this directory: it targets the root `skyblock-relay` Gateway.
 
-When running `npx wrangler dev`, a Local Explorer API is available for inspecting and debugging local Workers, bindings, and storage state. The API base URL is printed in the terminal when the dev server starts.
+## Mod release order
 
-Key endpoints (relative to the dev server URL):
+1. Build and check the mod with Java 25: `..\gradlew.bat --offline build check`.
+2. Sign the standalone Fabric JAR with `node scripts/release.mjs sign-community ...`. Keep the Ed25519 private key outside the repository; its key ID must match the production pinned public key.
+3. Upload `releases/Sky-Myce-<version>.jar` to the production `sky-myce-private-artifacts` bucket.
+4. Deploy `sky-myce-backend` if backend code changed.
+5. Only then upload the signed manifest to `releases/community-current.json` to activate it.
+6. Read back the current manifest and artifact. Verify the Ed25519 signature, version, size and SHA-256 against the JAR before calling the release complete.
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /cdn-cgi/local/explorer/api/local/workers` | List local Workers and their bindings |
-| `GET /cdn-cgi/local/explorer/api/storage/kv/namespaces` | List KV namespaces |
-| `GET /cdn-cgi/local/explorer/api/d1/database` | List D1 databases |
-| `GET /cdn-cgi/local/explorer/api/r2/buckets` | List R2 buckets |
-| `GET /cdn-cgi/local/explorer/api/workers/durable_objects/namespaces` | List Durable Object namespaces |
-| `GET /cdn-cgi/local/explorer/api/workflows` | List Workflows |
-| `POST /cdn-cgi/local/explorer/api/local/observability/query` | Run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: `spans`, `logs` (read attributes via `json(attributes)`). Example: `curl -X POST <base>/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'` |
-| `POST /cdn-cgi/local/explorer/api/local/observability/clear` | Clear all captured traces and logs |
-
-If the routes above don't cover what you need, fetch the full OpenAPI schema (large - use only as a last resort): `GET /cdn-cgi/local/explorer/api`
-
-Use the Local Explorer to debug issues by inspecting storage state (KV keys, D1 rows, R2 objects, DO storage), viewing Worker bindings, and querying request traces and logs captured during the dev session.
-
-## Node.js Compatibility
-
-https://developers.cloudflare.com/workers/runtime-apis/nodejs/
-
-## Errors
-
-- **Error 1102** (CPU/Memory exceeded): Retrieve limits from `/workers/platform/limits/`
-- **All errors**: https://developers.cloudflare.com/workers/observability/errors/
-
-## Product Docs
-
-Retrieve API references and limits from:
-`/kv/` · `/r2/` · `/d1/` · `/durable-objects/` · `/queues/` · `/vectorize/` · `/workers-ai/` · `/agents/`
-
-## Best Practices (conditional)
-
-If the application uses Durable Objects or Workflows, refer to the relevant best practices:
-
-- Durable Objects: https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
-- Workflows: https://developers.cloudflare.com/workflows/build/rules-of-workflows/
+Use a new version each time. Keep older JARs and historical Loader pointers. Do not publish signing keys, credentials, runtime data or user records. Do not print secrets or `.wrangler` auth files in logs.

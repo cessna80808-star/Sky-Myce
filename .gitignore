@@ -67,3 +67,10 @@ node_modules/
 
 # Minecraft logs written by checks or runs from the repository root
 /logs/
+
+# local tool output
+
+.wrangler/
+artifacts/
+dry-run-community/
+relay/.test-build-*/

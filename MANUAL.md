@@ -84,4 +84,4 @@ Automatic updates are **Off** by default. You can check for and stage a signed u
 - If a community feature is unavailable, confirm your connection in `/sm community`; local features do not depend on it.
 - If a feature is unclear or broken, include the mod version, Minecraft version, and relevant `logs/latest.log` details when reporting it. Remove account names, tokens, or other private information first.
 
-For programming and build instructions, see the [Developer Manual](DEV_MANUAL.md).
+For programming and build instructions, see the [developer guide](AGENTS.md).

@@ -2,7 +2,7 @@
 
 Sky-Myce is a client-side Fabric mod for Hypixel SkyBlock. It adds dungeon tools, useful HUD widgets, tracking, and optional community features.
 
-**Current release:** 2.5.15 · **Minecraft:** 26.1.2 · **Java:** 25
+**Minecraft:** 26.1.2 · **Java:** 25
 
 ## Install
 
@@ -28,5 +28,5 @@ Local features work without Discord or the optional community service. See the [
 ## Help and development
 
 - [Player Guide](MANUAL.md)
-- [Developer Manual](DEV_MANUAL.md)
+- [Developer guide](AGENTS.md)
 - [License](LICENSE)
