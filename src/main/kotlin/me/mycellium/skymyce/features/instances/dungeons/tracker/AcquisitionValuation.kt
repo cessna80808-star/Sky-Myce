@@ -37,7 +37,8 @@ private data class LootValuationKey(val run: String, val item: String, val count
 /** Evaluate existing confirmed receipts locally. Counts, provenance, costs and previously known values stay frozen. */
 internal fun repairAcquisitionValuations(archive: AcquisitionArchive, account: String, server: String,
     prices: Map<String, Double?>, now: Long): AcquisitionArchive {
-    if (archive.version != 2 || prices.isEmpty() || now <= 0) return archive
+    // Unpriced items stay unpriced: skip the full archive copy when no lookup produced a value.
+    if (archive.version != 2 || now <= 0 || prices.values.none { it != null && it.isFinite() && it > 0.0 && it <= 1e12 }) return archive
     val repaired = mutableMapOf<LootValuationKey, Pair<Double, AcquisitionContext>>()
     val receipts = mutableMapOf<LootValuationKey, Int>()
     val runs = archive.runs.map { run ->

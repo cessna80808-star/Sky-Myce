@@ -81,7 +81,7 @@ internal class DungeonRouteContinuation(
         }
 
     /** One bounded room scan per tick; completed legs survive movement and room transitions. */
-    fun step(nowMillis: Long, maxNanos: Long = 1_500_000) {
+    fun step(nowMillis: Long, maxNanos: Long = 1_000_000) {
         if (legs.isEmpty()) return
         val pending = legs.values.filter { !it.complete && !it.failed && nowMillis >= it.retryAt &&
             (it.key != currentLeg || it.builder != null || it.scanned) && (it.builder != null || it.planning == null) }

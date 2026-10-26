@@ -176,6 +176,7 @@ object IrcChatRendering {
     private var frame = 0L
     private var preferences = ""
     private var nextHistoryPrune = 0L
+    private var prunedRevision = -1
     private var mediaRevision = -1L
     private var initialized = false
     private val taggedMessage = ThreadLocal.withInitial { false }
@@ -297,9 +298,11 @@ object IrcChatRendering {
         val assetsChanged = currentMediaRevision != mediaRevision
         val chat = accessor()
         val now = System.nanoTime()
-        val historyPruned = now >= nextHistoryPrune
+        // An empty store that has not changed since the last pass has nothing to prune or rewrite; skip copying the history.
+        val store = RelayMessages.chatStore
+        val historyPruned = now >= nextHistoryPrune && !(store.isEmpty && store.revision == prunedRevision)
+        if (now >= nextHistoryPrune) nextHistoryPrune = now + 1_000_000_000L
         if (historyPruned) {
-            nextHistoryPrune = now + 1_000_000_000L
             val tags = ArrayList(chat.`skymyce$getMessages`()).mapNotNull { it.tag()?.logTag()?.takeIf { tag -> tag.startsWith("skymyce:irc:") } }.toSet()
             RelayMessages.chatStore.retain(tags, System.currentTimeMillis())
         }
@@ -326,6 +329,7 @@ object IrcChatRendering {
                 } else previous
             }
             if (modified) refresh(chat)
+            if (historyPruned) prunedRevision = store.revision
         }
         if (!GlobalChatConfig.mediaPreviews) { textures.values.forEach { it.texture.close() }; textures.clear() }
         textures.entries.removeIf { (_, entry) -> if (frame - entry.seen > 2) { entry.texture.close(); true } else false }

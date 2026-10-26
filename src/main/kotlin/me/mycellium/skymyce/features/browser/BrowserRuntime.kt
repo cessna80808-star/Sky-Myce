@@ -62,6 +62,12 @@ internal object BrowserRuntime {
                 if (stopping) throw CancellationException("Minecraft is stopping")
                 val sessions = gameDirectory.resolve("sky-myce-browser/sessions")
                 Files.createDirectories(sessions)
+                // Shutdown cleanup fails while Chromium still holds its files (~150 MB each); older sessions are unlocked now.
+                // The age check leaves a session that another running game sharing this directory may still be using.
+                val stale = System.currentTimeMillis() - 6 * 60 * 60 * 1000L
+                Files.newDirectoryStream(sessions.toRealPath(), "cef-*").use { old -> old.toList() }
+                    .filter { Files.isDirectory(it, NOFOLLOW_LINKS) && Files.getLastModifiedTime(it, NOFOLLOW_LINKS).toMillis() < stale }
+                    .forEach(::cleanupSession)
                 sessionRoot = Files.createTempDirectory(sessions.toRealPath(), "cef-")
             }
             stage = "Starting browser"

@@ -682,7 +682,7 @@ object StarredClearRouting : SkyMyceModule() {
 
     private fun updateLiveSnapshot(world: ClientLevel, context: LiveDungeonRoom, snapshot: RoomLiveGeometrySnapshot,
         position: Vec3, now: Long) {
-        val deadline = System.nanoTime() + 2_000_000
+        val deadline = System.nanoTime() + 1_000_000
         var checks = 0
         if (liveProbeOrderDirty) {
             liveProbeOrder = liveTargets.values.filter { routesTarget(it) && it.state != RoomTargetState.CLEARED }

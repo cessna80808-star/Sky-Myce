@@ -72,7 +72,7 @@ class RoomLiveGeometry(
     }
 
     /** Finished means READY or INCOMPLETE; a failed or capped flood never exposes a partial graph. */
-    fun step(maxCells: Int = 128, maxEdges: Int = 256, maxNanos: Long = 2_000_000): Boolean {
+    fun step(maxCells: Int = 128, maxEdges: Int = 256, maxNanos: Long = 1_000_000): Boolean {
         if (status != RoomGeometryStatus.BUILDING) return true
         if (maxCells <= 0 || maxEdges <= 0 || maxNanos <= 0) return incomplete("Invalid live geometry budget")
         val begin = System.nanoTime()

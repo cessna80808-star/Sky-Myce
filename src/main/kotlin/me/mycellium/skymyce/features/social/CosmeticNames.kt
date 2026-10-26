@@ -48,9 +48,9 @@ fun parseCosmeticText(json: JsonElement): Component {
 
 fun cosmeticTextJson(component: Component): JsonElement = ComponentSerialization.CODEC.encodeStart(JsonOps.INSTANCE, component).result().orElseThrow()
 
-/** A bounded least-recently-used map; reads refresh an entry, the oldest entry leaves when full. */
-private class LruMap<K, V>(private val capacity: Int) : LinkedHashMap<K, V>(capacity * 4 / 3 + 1, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?) = size > capacity
+/** A bounded cache that empties when full. Reads never reorder it, so the per-draw lookup stays a plain hash read. */
+private class BoundedCache<K, V>(private val capacity: Int) : HashMap<K, V>(capacity * 4 / 3 + 1) {
+    fun store(key: K, value: V) { if (size >= capacity) clear(); put(key, value) }
 }
 
 private val nameWord = Regex("[A-Za-z0-9_]+")
@@ -68,34 +68,21 @@ class CosmeticNameMap {
     private var names: Map<String, Component> = emptyMap()
     private var nameHashes = IntArray(0)
     private var shortest = Int.MAX_VALUE
-    private val cache = LruMap<FormattedCharSequence, FormattedCharSequence>(1024)
-    private val strings = LruMap<String, FormattedCharSequence>(1024)
+    private val cache = BoundedCache<FormattedCharSequence, FormattedCharSequence>(1024)
+    private val strings = BoundedCache<String, FormattedCharSequence>(1024)
+    private val texts = BoundedCache<FormattedCharSequence, FormattedText>(256)
     fun update(values: Map<String, Component>): Boolean {
         val normalized = values.mapKeys { it.key.lowercase() }
         if (normalized == names) return false
         names = normalized
         nameHashes = normalized.keys.map { it.hashCode() }.distinct().sorted().toIntArray()
         shortest = normalized.keys.minOfOrNull { it.length } ?: Int.MAX_VALUE
-        cache.clear(); strings.clear(); return true
+        cache.clear(); strings.clear(); texts.clear(); return true
     }
     val empty get() = names.isEmpty()
 
     /** True when some word of [source] may be a known name (a hash hit; the full match decides). */
-    internal fun mayContainName(source: FormattedCharSequence): Boolean {
-        var hash = 0; var length = 0; var found = false; var seen = 0
-        source.accept { _, _, code ->
-            if (++seen > 8192) return@accept false
-            if (isNameChar(code)) {
-                val lower = if (code in 'A'.code..'Z'.code) code + 32 else code
-                hash = 31 * hash + lower; length++
-                true
-            } else {
-                if (length >= shortest && nameHashes.binarySearch(hash) >= 0) { found = true; false }
-                else { hash = 0; length = 0; true }
-            }
-        }
-        return found || (length >= shortest && nameHashes.binarySearch(hash) >= 0)
-    }
+    internal fun mayContainName(source: FormattedCharSequence): Boolean = NameScan(nameHashes, shortest).run(source)
 
     fun sequence(source: FormattedCharSequence): FormattedCharSequence {
         if (source is DisplaySequence || source is OriginalSequence || names.isEmpty()) return source
@@ -130,15 +117,39 @@ class CosmeticNameMap {
             original(offset, text.length)
             DisplaySequence(source, FormattedCharSequence.composite(parts))
         }
-        cache[source] = result
+        cache.store(source, result)
         return result
     }
+    /** No-match results are marked original, so the sequence hook the caller goes through next does not scan again. */
     fun string(value: String): FormattedCharSequence {
         strings[value]?.let { return it }
         val raw = FormattedCharSequence { sink -> StringDecomposer.iterateFormatted(value, Style.EMPTY, sink) }
-        val result = sequence(raw)
-        strings[value] = result
+        if (value.length < shortest) return OriginalSequence(raw)
+        val result = sequence(raw).let { if (it === raw) OriginalSequence(raw) else it }
+        strings.store(value, result)
         return result
+    }
+
+    /** Component copy of a displayed sequence, kept so measuring the same text each frame does not rebuild it. */
+    internal fun text(displayed: FormattedCharSequence, build: () -> FormattedText): FormattedText =
+        texts[displayed] ?: build().also { texts.store(displayed, it) }
+}
+
+/** One object per scan instead of a lambda plus a boxed ref per local: this runs for every string any mod draws. */
+private class NameScan(private val hashes: IntArray, private val shortest: Int) : FormattedCharSink {
+    private var hash = 0; private var length = 0; private var found = false; private var seen = 0
+    fun run(source: FormattedCharSequence): Boolean {
+        source.accept(this)
+        return found || (length >= shortest && hashes.binarySearch(hash) >= 0)
+    }
+    override fun accept(index: Int, style: Style, code: Int): Boolean {
+        if (++seen > 8192) return false
+        if (isNameChar(code)) {
+            hash = 31 * hash + (if (code in 'A'.code..'Z'.code) code + 32 else code); length++
+            return true
+        }
+        if (length >= shortest && hashes.binarySearch(hash) >= 0) { found = true; return false }
+        hash = 0; length = 0; return true
     }
 }
 private class DisplaySequence(val source: FormattedCharSequence, val displayed: FormattedCharSequence) : FormattedCharSequence {
@@ -157,7 +168,7 @@ object CosmeticNames {
     private val suppressed = ThreadLocal.withInitial { 0 }
     @JvmStatic var enabled = false
     fun update(values: Map<String, Component>) = mapping.update(values)
-    @JvmStatic fun active() = enabled && suppressed.get() == 0 && !mapping.empty
+    @JvmStatic fun active() = enabled && !mapping.empty && suppressed.get() == 0
     @JvmStatic fun enterOriginal() { suppressed.set(suppressed.get() + 1) }
     @JvmStatic fun exitOriginal() { suppressed.set((suppressed.get() - 1).coerceAtLeast(0)) }
     @JvmStatic fun original(source: FormattedCharSequence): FormattedCharSequence = OriginalSequence(if (source is DisplaySequence) source.source else source)
@@ -178,8 +189,10 @@ object CosmeticNames {
         }
         val displayed = display(raw)
         if (displayed === raw) return value
-        val output = Component.empty()
-        displayed.accept { _, style, code -> output.append(Component.literal(String(Character.toChars(code))).withStyle(style)); true }
-        return decorated(output)
+        return mapping.text(displayed) {
+            val output = Component.empty()
+            displayed.accept { _, style, code -> output.append(Component.literal(String(Character.toChars(code))).withStyle(style)); true }
+            decorated(output)
+        }
     }
 }

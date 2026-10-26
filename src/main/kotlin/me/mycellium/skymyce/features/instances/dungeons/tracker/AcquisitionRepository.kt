@@ -109,16 +109,24 @@ object AcquisitionRepository : SkyMyceModule() {
         Runtime.getRuntime().addShutdownHook(Thread({ runCatching { writer.flush(); preferenceWriter.flush(); journalWriter.flush() } }, "Sky-Hawk-Acquisitions-Save"))
     }
 
+    private var contextTick = -1L
+    private var tickContext: AcquisitionContext? = null
+    private var tick = 0L
+    /** Memoized per client tick: widgets read it every frame and several features read it every tick. */
     fun currentContext(): AcquisitionContext? {
         if (!LocationAPI.isOnSkyBlock || MC.instance.player == null) return null
+        if (contextTick == tick) return tickContext
+        return computeContext().also { tickContext = it; contextTick = tick }
+    }
+    private fun computeContext(): AcquisitionContext? {
         val name = ProfileAPI.profileName?.takeIf { it.isNotBlank() } ?: return null
         val observed = AcquisitionContext(MC.instance.user.profileId.toString(), ProfileAPI.profileId?.toString(), name, if (LocationAPI.onAlpha) "alpha" else "main")
         // Dungeon transfers clear isLoaded even though their tab list omits the profile widget.
         return trackingContext(verifiedContext, observed, ProfileAPI.isLoaded, SkyBlockIsland.THE_CATACOMBS.inIsland())
             .also { if (ProfileAPI.isLoaded) verifiedContext = it }
     }
-    @Subscription(TickEvent::class) fun refreshContext() { if (ProfileAPI.isLoaded) currentContext() }
-    @Subscription(ProfileChangeEvent::class, ServerDisconnectEvent::class) fun clearContext() { verifiedContext = null }
+    @Subscription(TickEvent::class) fun refreshContext() { tick++; if (ProfileAPI.isLoaded) currentContext() }
+    @Subscription(ProfileChangeEvent::class, ServerDisconnectEvent::class) fun clearContext() { verifiedContext = null; contextTick = -1 }
     @Subscription(TickEvent::class) fun retryValuations() {
         if (!loaded || !writable || !LocationAPI.isOnSkyBlock || MC.instance.player == null) return
         val now = System.nanoTime()

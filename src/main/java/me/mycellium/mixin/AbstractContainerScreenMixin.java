@@ -9,11 +9,14 @@ import net.minecraft.world.inventory.Slot;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import tech.thatgravyboat.skyblockapi.api.SkyBlockAPI;
+import tech.thatgravyboat.skyblockapi.api.location.LocationAPI;
 
 @Mixin(AbstractContainerScreen.class)
 public class AbstractContainerScreenMixin {
     @WrapOperation(method = "extractSlots", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/screens/inventory/AbstractContainerScreen;extractSlot(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/world/inventory/Slot;II)V"))
     public void extractSlot(AbstractContainerScreen instance, GuiGraphicsExtractor graphics, Slot slot, int mouseX, int mouseY, Operation<Void> original) {
+        // Every slot overlay is a SkyBlock feature; elsewhere skip two event posts per slot per frame.
+        if (!LocationAPI.INSTANCE.isOnSkyBlock()) { original.call(instance, graphics, slot, mouseX, mouseY); return; }
         new RenderSlotEvent.Before(graphics, slot).post(SkyBlockAPI.getEventBus());
         original.call(instance, graphics, slot, mouseX, mouseY);
         new RenderSlotEvent.After(graphics, slot).post(SkyBlockAPI.getEventBus());

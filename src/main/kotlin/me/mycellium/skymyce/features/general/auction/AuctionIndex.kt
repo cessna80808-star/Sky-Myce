@@ -45,6 +45,7 @@ class AuctionIndex {
         val complete = pages == totalPages
         // Keep the previous complete snapshot visible until its replacement is coherent and complete.
         if (!view.complete || complete) publish(complete)
+        if (complete) staging.clear() // The published snapshot holds the listings; drop the 80k-entry lookup map.
         else view = view.copy(message = "Refreshing • $pages/$totalPages API pages • showing saved snapshot", version = view.version + 1)
         return !complete
     }

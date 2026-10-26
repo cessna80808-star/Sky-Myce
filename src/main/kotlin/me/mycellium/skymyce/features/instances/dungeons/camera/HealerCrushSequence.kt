@@ -4,7 +4,7 @@ enum class CrushStage { PURPLE, YELLOW }
 
 data class CrushEncounterContext(val world: Long, val enabled: Boolean, val floor: String?, val classEnabled: Boolean,
                                  val alive: Boolean, val inBoss: Boolean, val viewpointsReady: Boolean) {
-    val eligible get() = enabled && floor in setOf("F7", "M7") && classEnabled && alive && inBoss
+    val eligible get() = enabled && (floor == "F7" || floor == "M7") && classEnabled && alive && inBoss
 }
 
 /** Times are monotonic milliseconds from the server's Storm phase entry message. */

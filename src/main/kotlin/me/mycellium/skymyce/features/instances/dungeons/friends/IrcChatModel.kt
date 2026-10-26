@@ -217,6 +217,8 @@ internal class IrcChatStore {
     fun clearPending() = pending.clear()
     fun clearScope(scope: String) { messages.keys.removeIf { it.scope == scope }; pending.keys.removeIf { it.scope == scope }; mutations++ }
     fun get(key: IrcKey): GlobalChatMessage? = messages[key]?.message
+    val isEmpty get() = messages.isEmpty()
+    val revision get() = mutations
     fun values(): List<GlobalChatMessage> = messages.values.map(Entry::message)
     fun accept(message: GlobalChatMessage, now: Long): Boolean {
         expire(now)

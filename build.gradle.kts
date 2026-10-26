@@ -104,7 +104,6 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	implementation("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}")
-    include("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}") { isTransitive = false }
     implementation("net.fabricmc:fabric-language-kotlin:${providers.gradleProperty("fabric_kotlin_version").get()}")
 
 	// Dev Auth
@@ -219,7 +218,8 @@ val communityPackagingCheck by tasks.registering {
             checkCommunityConfiguration(config)
             check(config.stringPropertyNames().all { it in setOf("backend", "minecraft") || it.startsWith("key.") })
             check(jar.entries().asSequence().any { it.name.startsWith("META-INF/jars/owo-lib-") })
-            check(jar.entries().asSequence().any { it.name.startsWith("META-INF/jars/fabric-api-") })
+            // Fabric API is a declared dependency every Fabric client already installs; bundling it only grew the jar.
+            check(jar.entries().asSequence().none { it.name.startsWith("META-INF/jars/fabric-api-") })
             val browser = jar.entries().asSequence().single { it.name.startsWith("META-INF/jars/rinku-fabric-") }
             ZipInputStream(jar.getInputStream(browser)).use { nested ->
                 var entry = nested.nextEntry

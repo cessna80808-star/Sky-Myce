@@ -39,15 +39,19 @@ object HealerCrushCamera : SkyMyceModule() {
     private fun refreshContext(time: Long) {
         val client = MC.instance
         if (client.level !== level) { reset("World changed"); level = client.level }
-        val viewpointsReady = CrushStage.entries.all { CameraViewpoints.get(it.name.lowercase(java.util.Locale.ROOT)) != null }
-        sequence.context(CrushEncounterContext(epoch, isEnabled() && Settings.enabled, DungeonAPI.dungeonFloor?.name,
+        val enabled = isEnabled() && Settings.enabled
+        val context = CrushEncounterContext(epoch, enabled, DungeonAPI.dungeonFloor?.name,
             Settings.classEnabled(DungeonAPI.ownPlayer?.dungeonClass),
             client.player?.isAlive == true && DungeonAPI.ownPlayer?.dead == false,
-            realDungeon() && DungeonAPI.inBoss && !DungeonAPI.completed, viewpointsReady), time)
+            enabled && realDungeon() && DungeonAPI.inBoss && !DungeonAPI.completed, false)
+        // Reading the saved viewpoints parses JSON every tick; only an eligible encounter uses them.
+        sequence.context(if (!context.eligible) context else context.copy(viewpointsReady =
+            CrushStage.entries.all { CameraViewpoints.get(it.name.lowercase(java.util.Locale.ROOT)) != null }), time)
     }
 
     @Subscription(receiveCancelled = true)
     fun onChat(event: ChatReceivedEvent.Pre) {
+        if (!isEnabled() || !Settings.enabled || LocationAPI.island != SkyBlockIsland.THE_CATACOMBS) return
         val text = event.text
         val capturedEpoch = epoch
         MC.instance.execute {

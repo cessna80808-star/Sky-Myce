@@ -37,4 +37,9 @@ fun textHookBenchmark() {
     }
     measure("previous") { previous(it) }
     measure("current") { map.sequence(it) }
+    // Font.width(String) path: the string hook, then the sequence hook it calls back into. Fresh strings miss the cache.
+    var serial = 0
+    measure("string") { map.sequence(map.string("${lines[serial % lines.size]} ${serial++}")) }
+    // The same HUD strings redrawn each frame, so the string cache hits.
+    measure("repeated string") { map.sequence(map.string(lines[serial++ % lines.size])) }
 }
