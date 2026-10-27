@@ -84,6 +84,8 @@ object GreenhousePlanner : SkyMyceModule() {
     private const val ESTIMATE_ITERATIONS = 30_000
     /** Planting, spawns and harvests count only between two scans this close, made with the player this near. */
     private const val CONTINUITY_MS = 10_000L
+    /** How long a plot must look completely empty before it counts as harvested rather than still arriving from the server. */
+    private const val EMPTY_CONFIRM_MS = 3_000L
     private const val WATCH_DISTANCE = 24
     private const val ANALYSIS_WINDOW = 5_000L
     /** How long after opening the Bazaar for a crop its amount waits for the amount sign. */
@@ -130,6 +132,8 @@ object GreenhousePlanner : SkyMyceModule() {
         var previous: BooleanArray? = null
         var previousAt = 0L
         var previousComplete = false
+        /** When scans started seeing the plot completely empty after a scan that saw crops; 0 otherwise. */
+        var emptySince = 0L
     }
 
     private var loaded = false
@@ -926,7 +930,9 @@ object GreenhousePlanner : SkyMyceModule() {
         if (pending.lines.size < 120) pending.lines += lines.take(120 - pending.lines.size)
         val (stage, stages) = parseGrowth(lines) ?: return
         analysis = null
-        val reading = GrowthReading(stage, stages, now)
+        // The tool shows a woken Snoozling at the stage it fell asleep at, just like an asleep one, so a wake stays.
+        val last = pending.plot.growth[pending.key]?.takeIf { it.at >= (pending.plot.spawned[pending.key] ?: 0L) }
+        val reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage)
         pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
@@ -1152,9 +1158,13 @@ object GreenhousePlanner : SkyMyceModule() {
             if (!ingredient) targets += Triple(placement, planted, wasOccupied)
         }
         val complete = plants.isEmpty()
-        // A scan that sees nothing at all is a plot whose crops have not arrived from the server yet (or are unloading),
-        // not one harvested and replanted: it must not time mutations from now or drop their growth readings.
-        if (occupiedNow.any { it }) {
+        // A scan that sees nothing at all is usually a plot whose crops have not arrived from the server yet: it never times
+        // mutations from now, and counts as everything harvested only while it stays empty against a recent scan with crops.
+        val seen = occupiedNow.any { it }
+        if (seen || previous == null) plot.emptySince = 0
+        else if (plot.emptySince == 0L) plot.emptySince = now
+        if (seen || plot.emptySince != 0L && now - plot.emptySince >= EMPTY_CONFIRM_MS) {
+            plot.emptySince = 0
             for ((placement, planted, wasOccupied) in targets) {
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 if (previous != null && planted && !wasOccupied) { plot.spawned[key] = now; changed = true }
@@ -1164,7 +1174,7 @@ object GreenhousePlanner : SkyMyceModule() {
             if (complete && previous != null && !plot.previousComplete) { plot.plantedAt = now; changed = true }
             if (!complete && plot.plantedAt != 0L) { plot.plantedAt = 0; changed = true }
             plot.previous = occupiedNow; plot.previousAt = now; plot.previousComplete = complete
-        } else plot.previous = null
+        } else if (previous == null) plot.previous = null
         val text = String(status)
         if (text != plot.status || plants != plot.missingPlants || soils != plot.missingSoil) changed = true
         plot.status = text; plot.scannedAt = now; plot.missingPlants = plants; plot.missingSoil = soils
