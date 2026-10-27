@@ -8,9 +8,12 @@ import io.wispforest.owo.ui.core.OwoUIGraphics
 import io.wispforest.owo.ui.core.Sizing
 import io.wispforest.owo.ui.core.Surface
 import io.wispforest.owo.ui.core.VerticalAlignment
+import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.ui.*
+import me.mycellium.skymyce.utils.PlayerUtils.sendCommand
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -38,6 +41,12 @@ class PriceHistoryScreen(private val parent: Screen, private val tag: String, pr
         root.child(row().apply {
             child(label("PRICE HISTORY", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.content()) })
             child(label(itemName, MenuTheme.TEXT).apply { horizontalSizing(Sizing.expand()) })
+            child(button("Search", 52) {
+                // A pet's title carries its level; the server searches by the pet's name.
+                val name = itemName.replace(Regex("^\\[Lvl \\d+] "), "")
+                if (LocationAPI.isOnSkyBlock) sendCommand(if (market == PriceMarket.BAZAAR) "bz $name" else "ahs $name")
+            }.apply { active(LocationAPI.isOnSkyBlock) }
+                .wrappedTooltip(Component.literal(if (market == PriceMarket.BAZAAR) "Opens the Bazaar search for this item" else "Opens the Auction House search for this item")))
             child(button("Close", 46) { onClose() })
         })
         root.child(row().apply {
