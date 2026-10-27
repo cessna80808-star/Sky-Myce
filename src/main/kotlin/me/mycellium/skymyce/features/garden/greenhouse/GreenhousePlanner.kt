@@ -850,8 +850,9 @@ object GreenhousePlanner : SkyMyceModule() {
 
     private fun knownLooks(plot: Plot): Map<String, String> = if (plot.learned.isEmpty()) learned else learned + plot.learned
 
+    // ClientLevel.hasChunk is always true; the chunk cache knows which chunks have arrived.
     private fun loaded(level: Level, origin: Anchor) = listOf(0 to 0, 0 to GREENHOUSE_SIZE - 1, GREENHOUSE_SIZE - 1 to 0, GREENHOUSE_SIZE - 1 to GREENHOUSE_SIZE - 1)
-        .all { (row, col) -> cellPos(origin, row, col).let { level.hasChunk(Math.floorDiv(it.x, 16), Math.floorDiv(it.z, 16)) } }
+        .all { (row, col) -> cellPos(origin, row, col).let { level.chunkSource.hasChunk(Math.floorDiv(it.x, 16), Math.floorDiv(it.z, 16)) } }
 
     private fun soilOf(state: BlockState): Soil? = Soil.entries.firstOrNull { state.`is`(soilBlock(it)) }
 
@@ -1093,6 +1094,7 @@ object GreenhousePlanner : SkyMyceModule() {
         var changed = false
         val plants = LinkedHashMap<String, Int>()
         val soils = LinkedHashMap<Soil, Int>()
+        val targets = ArrayList<Triple<Placement, Boolean, Boolean>>()
         for (placement in current.placements) {
             val plant = catalog[placement.plantId] ?: continue
             val soil = current.soils.getValue(placement)
@@ -1147,17 +1149,22 @@ object GreenhousePlanner : SkyMyceModule() {
                     shown += Ghost(box, HudTheme.alpha(color, alpha))
                 }
             }
-            if (!ingredient) {
+            if (!ingredient) targets += Triple(placement, planted, wasOccupied)
+        }
+        val complete = plants.isEmpty()
+        // A scan that sees nothing at all is a plot whose crops have not arrived from the server yet (or are unloading),
+        // not one harvested and replanted: it must not time mutations from now or drop their growth readings.
+        if (occupiedNow.any { it }) {
+            for ((placement, planted, wasOccupied) in targets) {
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
                 if (previous != null && planted && !wasOccupied) { plot.spawned[key] = now; changed = true }
                 if (previous != null && !planted && wasOccupied) { recordHarvest(plot, current, placement, now); plot.growth.remove(key); changed = true }
                 if (!planted && plot.spawned.remove(key) != null) changed = true
             }
-        }
-        val complete = plants.isEmpty()
-        if (complete && previous != null && !plot.previousComplete) { plot.plantedAt = now; changed = true }
-        if (!complete && plot.plantedAt != 0L) { plot.plantedAt = 0; changed = true }
-        plot.previous = occupiedNow; plot.previousAt = now; plot.previousComplete = complete
+            if (complete && previous != null && !plot.previousComplete) { plot.plantedAt = now; changed = true }
+            if (!complete && plot.plantedAt != 0L) { plot.plantedAt = 0; changed = true }
+            plot.previous = occupiedNow; plot.previousAt = now; plot.previousComplete = complete
+        } else plot.previous = null
         val text = String(status)
         if (text != plot.status || plants != plot.missingPlants || soils != plot.missingSoil) changed = true
         plot.status = text; plot.scannedAt = now; plot.missingPlants = plants; plot.missingSoil = soils
