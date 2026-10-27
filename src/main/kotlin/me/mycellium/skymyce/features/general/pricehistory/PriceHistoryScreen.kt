@@ -13,6 +13,7 @@ import me.mycellium.skymyce.ui.*
 import me.mycellium.skymyce.utils.PlayerUtils.sendCommand
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import net.minecraft.util.StringUtil
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import java.time.Instant
 import java.time.ZoneId
@@ -42,8 +43,10 @@ class PriceHistoryScreen(private val parent: Screen, private val tag: String, pr
             child(label("PRICE HISTORY", MenuTheme.ACCENT).apply { horizontalSizing(Sizing.content()) })
             child(label(itemName, MenuTheme.TEXT).apply { horizontalSizing(Sizing.expand()) })
             child(button("Search", 52) {
-                // A pet's title carries its level; the server searches by the pet's name.
-                val name = itemName.replace(Regex("^\\[Lvl \\d+] "), "")
+                // A pet's title carries its level; the server searches by the pet's name. Hypixel kicks for "illegal
+                // characters" in a command, so formatting codes and symbols (Blazetekk™ Ham Radio) are left out.
+                val name = StringUtil.stripColor(itemName).replace(Regex("^\\[Lvl \\d+] "), "")
+                    .filter { it.code in 32..126 }.replace(Regex(" {2,}"), " ").trim()
                 if (LocationAPI.isOnSkyBlock) sendCommand(if (market == PriceMarket.BAZAAR) "bz $name" else "ahs $name")
             }.apply { active(LocationAPI.isOnSkyBlock) }
                 .wrappedTooltip(Component.literal(if (market == PriceMarket.BAZAAR) "Opens the Bazaar search for this item" else "Opens the Auction House search for this item")))
