@@ -1,19 +1,34 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
+import io.wispforest.owo.ui.container.FlowLayout
+import io.wispforest.owo.ui.container.UIContainers
+import io.wispforest.owo.ui.core.Insets
+import io.wispforest.owo.ui.core.Sizing
+import java.util.IdentityHashMap
+import kotlin.math.roundToInt
 import me.mycellium.mixin.IrcChatAccessor
 import me.mycellium.mixin.IrcChatScreenAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.config.misc.GlobalChatConfig
+import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.browser.BrowserLinks
 import me.mycellium.skymyce.features.browser.InGameBrowser
+import me.mycellium.skymyce.ui.MenuButton
+import me.mycellium.skymyce.ui.MenuButtonIntent
+import me.mycellium.skymyce.ui.MenuCanvas
+import me.mycellium.skymyce.ui.MenuGraphics
+import me.mycellium.skymyce.ui.MenuLabel
+import me.mycellium.skymyce.ui.MenuScreen
+import me.mycellium.skymyce.ui.MenuTextBox
 import me.mycellium.skymyce.ui.MenuTexture
+import me.mycellium.skymyce.ui.MenuTheme
 import me.mycellium.skymyce.utils.MC
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
-import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
+import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
 import net.minecraft.client.gui.ActiveTextCollector
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.TextAlignment
@@ -21,10 +36,10 @@ import net.minecraft.client.gui.components.ChatComponent
 import net.minecraft.client.gui.navigation.ScreenRectangle
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.ConfirmLinkScreen
+import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.multiplayer.chat.GuiMessage
 import net.minecraft.client.multiplayer.chat.GuiMessageSource
 import net.minecraft.client.multiplayer.chat.GuiMessageTag
-import net.minecraft.world.entity.player.ChatVisiblity
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.FontDescription
@@ -32,10 +47,9 @@ import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.resources.Identifier
 import net.minecraft.util.FormattedCharSequence
-import java.util.IdentityHashMap
-import kotlin.math.roundToInt
-import org.lwjgl.glfw.GLFW
+import net.minecraft.world.entity.player.ChatVisiblity
 import org.joml.Matrix3x2f
+import org.lwjgl.glfw.GLFW
 
 internal const val IRC_THUMBNAIL_WIDTH = 96
 internal const val IRC_THUMBNAIL_HEIGHT = 72
@@ -516,4 +530,197 @@ object IrcChatRendering {
         }
         while (textures.size > 8) textures.remove(textures.keys.first())?.texture?.close()
     }
+}
+
+internal data class IrcControlBounds(val x: Int, val y: Int, val width: Int, val height: Int) {
+    fun contains(px: Int, py: Int) = px >= x && py >= y && px < x + width && py < y + height
+}
+internal fun ircPickerBounds(x: Int, y: Int, width: Int, height: Int): IrcControlBounds {
+    val size = minOf(246, (width - 8).coerceAtLeast(1))
+    val maxX = (width - size - 4).coerceAtLeast(0)
+    return IrcControlBounds(x.coerceIn(minOf(4, maxX), maxX),
+        (y - 68).coerceIn(0, (height - 96).coerceAtLeast(0)), size, 64)
+}
+internal fun ircReactionCell(bounds: IrcControlBounds, index: Int): IrcControlBounds {
+    require(index in IRC_REACTIONS.indices)
+    val column = index % 3
+    val left = bounds.x + column * bounds.width / 3
+    val right = bounds.x + (column + 1) * bounds.width / 3
+    return IrcControlBounds(left, bounds.y + 20 + index / 3 * 20, right - left, 20)
+}
+internal fun ircReactionAt(bounds: IrcControlBounds, x: Int, y: Int): Int? =
+    IRC_REACTIONS.indices.firstOrNull { ircReactionCell(bounds, it).contains(x, y) }
+
+/** Overlay controls belong to the existing native composer, with no separate reply/reaction screen. */
+internal object IrcInlineControls {
+    private data class Picker(val screen: ChatScreen, val key: IrcKey, val x: Int, val y: Int)
+    private var picker: Picker? = null
+    private val canvas = MenuCanvas()
+    private val texture = MenuTexture()
+    fun open(key: IrcKey, x: Int, y: Int) {
+        val screen = MC.screen as? ChatScreen ?: return
+        picker = Picker(screen, key, x, y)
+    }
+    fun clear() { picker = null; canvas.close(); texture.close() }
+    fun escape(): Boolean = if (picker != null) { clear(); true } else false
+    private fun current(screen: ChatScreen): Picker? = picker?.takeIf {
+        it.screen === screen && RelayMessages.currentIrcChannel(it.key) &&
+            RelayMessages.chatStore.get(it.key)?.deleted == false && DungeonFriendRelay.richChatAvailable
+    }.also { if (it == null) picker = null }
+    private fun cancelBounds(screen: ChatScreen) = IrcControlBounds((screen.width - 54).coerceAtLeast(4), screen.height - 40, 50, 18)
+    fun hasInteractionAt(screen: ChatScreen, x: Int, y: Int): Boolean =
+        current(screen)?.let { ircPickerBounds(it.x, it.y, screen.width, screen.height).contains(x, y) } == true ||
+            RelayMessages.replyMessage() != null && cancelBounds(screen).contains(x, y)
+    fun click(screen: ChatScreen, x: Int, y: Int): Boolean {
+        val selected = current(screen)
+        if (selected != null) {
+            val bounds = ircPickerBounds(selected.x, selected.y, screen.width, screen.height)
+            if (bounds.contains(x, y)) {
+                ircReactionAt(bounds, x, y)?.let { index ->
+                    val emoji = IRC_REACTIONS[index]
+                    val message = RelayMessages.chatStore.get(selected.key) ?: return true
+                    val mine = message.reactions.firstOrNull { it.emoji == emoji }?.mine == true
+                    if (RelayMessages.operation(selected.key, "reaction", emoji = emoji, active = !mine)) clear()
+                }
+                return true
+            }
+            clear() // A click outside closes the picker and retains ordinary native chat behavior.
+        }
+        if (RelayMessages.replyMessage() != null && cancelBounds(screen).contains(x, y)) {
+            RelayMessages.cancelReply(); return true
+        }
+        return false
+    }
+    fun render(screen: ChatScreen, output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
+        val selected = current(screen)
+        val reply = RelayMessages.replyMessage()
+        if (selected == null && reply == null) { canvas.close(); texture.close(); return }
+        if (texture.prepareFrame()) canvas.close()
+        canvas.begin()
+        val graphics = MenuGraphics(canvas, mouseX, mouseY, screen.width, screen.height)
+        val font = MC.instance.font
+        val emojiLabels = arrayListOf<Pair<Component, IrcControlBounds>>()
+        reply?.let { message ->
+            val cancel = cancelBounds(screen)
+            val y = screen.height - 40
+            MenuTheme.box(graphics, 2, y, screen.width - 4, 18, MenuTheme.SIDEBAR)
+            val preview = ircReadableText(message.text.replace('\n', ' ')).joinToString("") { it.text }
+                .ifBlank { message.media.firstOrNull()?.name ?: "Media" }
+            val from = ircReadableText(message.from).joinToString("") { it.text }
+            graphics.text(font, fit("Reply to $from: $preview", cancel.x - 12), 7, y + 4, MenuTheme.alpha(MenuTheme.TEXT), false)
+            if (cancel.contains(mouseX, mouseY)) MenuTheme.rounded(graphics, cancel.x, cancel.y, cancel.width, cancel.height, MenuTheme.CARD)
+            graphics.text(font, "Cancel", cancel.x + 7, y + 4, MenuTheme.alpha(MenuTheme.ACCENT), false)
+            if (cancel.contains(mouseX, mouseY)) output.setTooltipForNextFrame(Component.literal("Cancel this reply; keep your message draft"), mouseX, mouseY)
+        }
+        selected?.let { picker ->
+            RelayMessages.chatStore.get(picker.key)?.let { message ->
+                val bounds = ircPickerBounds(picker.x, picker.y, screen.width, screen.height)
+                MenuTheme.box(graphics, bounds.x, bounds.y, bounds.width, bounds.height, MenuTheme.SIDEBAR)
+                val from = ircReadableText(message.from).joinToString("") { it.text }
+                graphics.text(font, fit("React · $from", bounds.width - 12), bounds.x + 6, bounds.y + 4, MenuTheme.alpha(MenuTheme.MUTED), false)
+                IRC_REACTIONS.forEachIndexed { index, emoji ->
+                    val cell = ircReactionCell(bounds, index)
+                    val reaction = message.reactions.firstOrNull { it.emoji == emoji }
+                    if (cell.contains(mouseX, mouseY)) {
+                        MenuTheme.rounded(graphics, cell.x + 1, cell.y, cell.width - 2, cell.height, MenuTheme.CARD, 3)
+                        output.setTooltipForNextFrame(Component.literal("${if (reaction?.mine == true) "Remove" else "Add"} ${IRC_REACTION_NAMES[index]} reaction"), mouseX, mouseY)
+                    }
+                    val color = MenuTheme.alpha(if (reaction?.mine == true) MenuTheme.ACCENT else MenuTheme.TEXT)
+                    val text = ircDisplayText("${if (reaction?.mine == true) "✓ " else ""}$emoji${reaction?.count?.takeIf { it > 0 }?.let { " $it" }.orEmpty()}", color)
+                    emojiLabels += text to cell
+                }
+            }
+        }
+        output.nextStratum()
+        val scale = minOf(me.mycellium.skymyce.ui.AutoGraphics.quality.rasterScale, 2560.0 / screen.width.coerceAtLeast(1), 1440.0 / screen.height.coerceAtLeast(1))
+        texture.render(output, canvas, screen.width, screen.height, scale)
+        if (emojiLabels.isNotEmpty()) output.nextStratum()
+        for ((text, cell) in emojiLabels) {
+            output.enableScissor(cell.x, cell.y, cell.x + cell.width, cell.y + cell.height)
+            output.text(font, text, cell.x + 6, cell.y + 5, 0xFFFFFFFF.toInt(), false)
+            output.disableScissor()
+        }
+    }
+    private fun fit(text: String, width: Int): String {
+        var end = 0
+        var measured = 0.0
+        while (end < text.length) {
+            val codepoint = text.codePointAt(end)
+            measured += MenuCanvas.textWidth(codepoint)
+            if (measured > width.coerceAtLeast(1)) break
+            end += Character.charCount(codepoint)
+        }
+        return text.substring(0, end)
+    }
+    fun focusComposer(screen: ChatScreen) {
+        val input = (screen as IrcChatScreenAccessor).`skymyce$getInput`()
+        screen.setFocused(input)
+        input.setFocused(true)
+    }
+}
+
+/** Own-message editing only; Reply and React remain directly inside native chat. */
+internal class IrcMessageControlsScreen(private val previous: Screen?, private val key: IrcKey) : MenuScreen(Component.literal("Edit your IRC message")) {
+    internal val scope get() = key.scope
+    override val modal = true
+    override val menuParent get() = previous
+    private lateinit var edit: MenuTextBox
+    private lateinit var save: MenuButton
+    private lateinit var delete: MenuButton
+    private lateinit var feedback: MenuLabel
+    private var confirmDelete = false
+    private var requestAfter = 0L
+    private var seenRevision = -1
+    private var status = ""
+
+    override fun buildContent(root: FlowLayout) {
+        confirmDelete = false
+        val draft = if (::edit.isInitialized) edit.value else null
+        val message = RelayMessages.chatStore.get(key)
+        root.padding(Insets.of(16)); root.gap(8)
+        root.child(label("EDIT MESSAGE", MenuTheme.ACCENT))
+        root.child(label("${ircPrefix(key.scope)} ${message?.from.orEmpty()}", MenuTheme.MUTED))
+        edit = MenuTextBox(Sizing.fill()).apply { verticalSizing(Sizing.fixed(24)); setHint(Component.literal("Edit your message")) }
+        root.child(edit)
+        val maximum = if (key.scope == "room") 256 else 1024
+        edit.setMaxLength(maximum)
+        edit.value = draft ?: message?.text?.replace('\n', ' ').orEmpty().take(maximum)
+        edit.setEditable(RelayMessages.canManage(key))
+        save = button("Save edit") {
+            if (RelayMessages.operation(key, "edit", text = edit.value)) queued("Edit requested; waiting for chat update.")
+        }.apply { horizontalSizing(Sizing.fill(48)); intent = MenuButtonIntent.PRIMARY }
+        delete = button("Delete") {
+            if (!confirmDelete) { confirmDelete = true; delete.message = Component.literal("Confirm delete") }
+            else if (RelayMessages.operation(key, "delete")) queued("Deletion requested; waiting for chat update.")
+        }.apply { horizontalSizing(Sizing.fill(48)); intent = MenuButtonIntent.DESTRUCTIVE }
+        root.child(UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).gap(6).apply { child(save); child(delete) })
+        root.child(label("Own-message edits and deletion are available for 15 minutes.", MenuTheme.MUTED))
+        feedback = label(status, MenuTheme.MUTED); root.child(feedback)
+        root.child(button("Back to chat") { onClose() })
+        updateControls()
+    }
+    private fun queued(text: String) {
+        // A queued operation is not a Discord HTTP delivery receipt. Never optimistically alter the message.
+        status = text; requestAfter = System.nanoTime() + 1_000_000_000L
+    }
+    private fun updateControls() {
+        val message = RelayMessages.chatStore.get(key)
+        val available = message != null && !message.deleted && message.model == 1 && RelayMessages.currentIrcChannel(key) && DungeonFriendRelay.richChatAvailable
+        val waiting = System.nanoTime() < requestAfter
+        val own = available && RelayMessages.canManage(key)
+        save.active = own && !waiting && ircClientMessageError(key.scope, edit.value) == null
+        delete.active = own && !waiting
+        edit.setEditable(own)
+        if (message != null && seenRevision >= 0 && message.revision != seenRevision) {
+            status = if (message.deleted) "Message deleted." else "Chat updated."
+            requestAfter = 0
+        }
+        seenRevision = message?.revision ?: -1
+        if (!available) status = "This message is no longer available. Return to chat."
+        if (feedback.text().string != status) feedback.text(Component.literal(status))
+    }
+    override fun tick() { super.tick(); if (::edit.isInitialized && !menuClosing) updateControls() }
+    override fun onClose() { closeMenuTo(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous) }
+    private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
+    private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
 }

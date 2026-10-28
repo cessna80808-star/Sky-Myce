@@ -1,13 +1,34 @@
 package me.mycellium.skymyce.features.digest
 
+import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import java.net.URI
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.DailyDigestConfig
+import me.mycellium.skymyce.features.browser.BrowserLinks
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
-import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
+import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
 import me.mycellium.skymyce.utils.MC
+import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.validObservedItemMetadata
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -17,10 +38,6 @@ import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.CompletableFuture
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 /** Client-thread coordinator. All file work runs on SBAPI's scheduler; the menu reads immutable snapshots. */
 object DailyDigest : SkyMyceModule() {
@@ -452,4 +469,349 @@ object DailyDigest : SkyMyceModule() {
         return DigestCardState("rng", "RNG Activity", entries.firstOrNull()?.title ?: "Your next rare find starts here", rngStatus,
             if (entries.isEmpty()) DigestTone.MUTED else DigestTone.SPECIAL, entries, entries.firstOrNull()?.timestamp)
     }
+}
+
+/** The digest's local day is independent of Hypixel activity reset times and profile changes. */
+class DigestDailyGate {
+    val lastOpened = mutableMapOf<String, String>()
+    private var joined = false
+    private var readyAt = Long.MAX_VALUE
+
+    fun enter(now: Long, delayMillis: Long) {
+        joined = true
+        readyAt = now + delayMillis.coerceIn(2000, 30000)
+    }
+
+    fun leave() { joined = false; readyAt = Long.MAX_VALUE }
+
+    fun shouldOpen(account: String?, now: Long, date: LocalDate, enabled: Boolean,
+                   stateLoaded: Boolean, profileReady: Boolean, screenFree: Boolean): Boolean =
+        joined && enabled && stateLoaded && profileReady && screenFree && account != null && now >= readyAt &&
+            lastOpened[account]?.let { runCatching { LocalDate.parse(it) }.getOrNull()?.let { day -> day >= date } } != true
+
+    fun opened(account: String, date: LocalDate) {
+        val previous = lastOpened[account]?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        if (previous == null || date > previous) lastOpened[account] = date.toString()
+        while (lastOpened.size > 64) lastOpened.remove(lastOpened.minBy { it.value }.key)
+    }
+
+    companion object {
+        fun localDate(now: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        fun nextMidnight(now: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
+            localDate(now, zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        fun profileKey(account: String, profile: String, alpha: Boolean): String =
+            "$account/${if (alpha) "alpha" else "main"}/${profile.trim().lowercase()}"
+    }
+}
+
+data class DigestRngEntry(val id: String, val item: String, val activity: String, val occurredAt: Long,
+                          val player: String, val community: Boolean = false)
+data class DigestProfileState(val tasks: List<DailyTask> = emptyList(), val history: List<DigestRngEntry> = emptyList())
+data class DigestSavedState(val version: Int = 1, val lastOpened: Map<String, String> = emptyMap(),
+                           val profiles: Map<String, DigestProfileState> = emptyMap(),
+                           val news: Map<String, DigestNewsState> = emptyMap(), val global: GlobalDigest? = null)
+
+/** Pure file store: caller must use the existing background scheduler. A damaged original is backed up before replacement. */
+class DigestStateStore(private val file: Path) {
+    private val gson = Gson()
+    var recovered = false
+        private set
+
+    fun load(): DigestSavedState = try {
+        if (!Files.exists(file)) DigestSavedState() else {
+            require(Files.size(file) <= 8 * 1024 * 1024)
+            val json = Files.newBufferedReader(file).use { JsonParser.parseReader(it).asJsonObject }
+            require(json.get("version")?.asInt == 1)
+            // Retired news must not invalidate otherwise valid local profiles/history or become normal news.
+            json.getAsJsonObject("news")?.remove("alpha")
+            json.getAsJsonObject("news")?.entrySet()?.forEach { (_, news) ->
+                news.asJsonObject.getAsJsonArray("items")?.forEach { item ->
+                    if (!item.asJsonObject.has("links")) item.asJsonObject.add("links", JsonArray())
+                }
+            }
+            gson.fromJson(json, DigestSavedState::class.java).also(::validate)
+        }
+    } catch (_: Exception) {
+        recovered = true
+        DigestSavedState()
+    }
+
+    @Synchronized fun save(state: DigestSavedState) {
+        validate(state)
+        Files.createDirectories(file.parent)
+        if (recovered && Files.exists(file)) {
+            Files.copy(file, file.resolveSibling("${file.fileName}.corrupt-${System.currentTimeMillis()}"))
+            recovered = false
+        }
+        val temporary = Files.createTempFile(file.parent, "digest-", ".tmp")
+        try {
+            Files.newBufferedWriter(temporary).use { gson.toJson(state, it) }
+            require(Files.size(temporary) <= 8 * 1024 * 1024)
+            try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING) }
+            catch (_: AtomicMoveNotSupportedException) { Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING) }
+        } finally { Files.deleteIfExists(temporary) }
+    }
+
+    private fun validate(state: DigestSavedState) {
+        require(state.version == 1 && requireNotNull(state.lastOpened).size <= 64 && requireNotNull(state.profiles).size <= 64)
+        state.lastOpened.forEach { (account, date) -> require(account.matches(digestAccount)); LocalDate.parse(date) }
+        state.profiles.forEach { (key, profile) ->
+            require(key.length in 1..128 && key.none(Char::isISOControl))
+            require(requireNotNull(profile.tasks).size <= 6 && requireNotNull(profile.history).size <= 530)
+            profile.tasks.forEach { task ->
+                require(requireNotNull(task.id).length in 1..32 && requireNotNull(task.title).length <= 100)
+                require(task.state in DailyState.entries && requireNotNull(task.detail).length <= 1000 && requireNotNull(task.source).length <= 200)
+                require(task.updatedAt >= 0 && task.readyAt >= 0 && task.progress >= 0 && task.total in 0..100)
+                require(requireNotNull(task.slots).size <= 7)
+                task.slots.forEach { require(it.index in 0..7 && requireNotNull(it.item).length <= 160 && it.state in DailyState.entries && it.readyAt >= 0) }
+            }
+            profile.history.forEach { require(validDigestRng(it, Long.MAX_VALUE / 2)) }
+        }
+        require(requireNotNull(state.news).size <= NewsSource.entries.size)
+        state.news.forEach { (source, news) ->
+            require(source in NewsSource.entries.map { it.wire } && news.fetchedAt >= 0 && news.retryAt >= 0)
+            require(requireNotNull(news.items).size <= 8)
+            news.items.forEach { item ->
+                require(item.source.wire == source && requireNotNull(item.id).length in 1..80 && requireNotNull(item.title).length in 1..160)
+                require(requireNotNull(item.content).length <= 2500 && item.publishedAt > 0 && (item.url == null || safeDigestNewsUrl(item.url, item.source) != null))
+                require(item.thumbnailUrl == null || item.source == NewsSource.DERAILIOUS && safeDigestVideoUrl(item.thumbnailUrl, true) != null)
+                require(requireNotNull(item.links).size <= 8 && item.links.distinct().size == item.links.size)
+                require(item.links.sumOf { it.length } <= 1024)
+                require(item.links.all { BrowserLinks.trusted(it) != null })
+            }
+        }
+        state.global?.let { global ->
+            require(global.mayor == null || global.mayor.length <= 100)
+            require(global.updatedAt >= 0 && requireNotNull(global.perks).size <= 16 && requireNotNull(global.events).size <= 32)
+            global.perks.forEach { require(requireNotNull(it.name).length <= 160 && requireNotNull(it.description).length <= 2000) }
+            global.events.forEach { require(requireNotNull(it.name).length <= 160 && it.startsAt >= 0 && (it.endsAt == 0L || it.endsAt >= it.startsAt) && requireNotNull(it.source).length <= 200) }
+        }
+    }
+}
+
+// Compiled once: validation runs per history entry on every add, restore and save.
+internal val digestRngId = Regex("[a-f0-9]{32}")
+private val digestRngPlayer = Regex("[A-Za-z0-9_]{1,16}")
+private val digestRngActivities = setOf("dungeon", "slayer", "kuudra", "fishing")
+private val digestRngFloor = Regex("E|[FM][1-7]")
+private val digestAccount = Regex("[a-f0-9-]{32,36}")
+
+internal fun validDigestRng(entry: DigestRngEntry, now: Long): Boolean = runCatching {
+    entry.id.matches(digestRngId) && entry.item.length in 1..80 && entry.activity in digestRngActivities &&
+        entry.occurredAt in 1..now + 60000 && entry.player.matches(digestRngPlayer) &&
+        DigestRngCatalog.valid(entry.item, entry.activity)
+}.getOrDefault(false)
+
+/** Immutable bounded local history; received events never become publishable personal events. */
+class DigestRngHistory {
+    private val removedCommunity = linkedSetOf<String>()
+    var entries: List<DigestRngEntry> = emptyList()
+        private set
+    fun restore(saved: List<DigestRngEntry>, limit: Int, now: Long) {
+        val valid = saved.filter { validDigestRng(it, now) && (!it.community || it.id !in removedCommunity) }.distinctBy { it.id }.sortedByDescending { it.occurredAt }
+        entries = (valid.filter { !it.community }.take(limit.coerceIn(20, 500)) + valid.filter { it.community }.take(30))
+            .sortedByDescending { it.occurredAt }
+    }
+    fun add(entry: DigestRngEntry, limit: Int, now: Long): Boolean {
+        if (!validDigestRng(entry, now) || entry.community && entry.id in removedCommunity || entries.any { it.id == entry.id }) return false
+        restore(entries + entry, limit, now)
+        return true
+    }
+    fun clear() { entries = emptyList() }
+    fun removeCommunity(ids: Set<String>? = null) {
+        if (ids != null) {
+            removedCommunity.addAll(ids)
+            while (removedCommunity.size > 10000) removedCommunity.remove(removedCommunity.first())
+        }
+        entries = entries.filter { !it.community || ids != null && it.id !in ids }
+    }
+}
+
+/** One pending snapshot. submit never waits for disk; flush runs only on a background shutdown thread. */
+class DigestStateWriter(private val store: DigestStateStore, private val schedule: (() -> Unit) -> Unit,
+                        private val result: (Exception?) -> Unit = {}) {
+    private val latest = AtomicReference<DigestSavedState?>()
+    private val written = AtomicReference<DigestSavedState?>()
+    private val running = AtomicBoolean()
+    private val closed = AtomicBoolean()
+    private val ioLock = Any()
+    val scheduled get() = running.get()
+
+    fun submit(state: DigestSavedState) {
+        latest.set(state)
+        start()
+    }
+
+    private fun start() {
+        if (closed.get() || written.get() == latest.get() || !running.compareAndSet(false, true)) return
+        schedule {
+            var attempted: DigestSavedState? = null
+            try {
+                synchronized(ioLock) {
+                    if (!closed.get()) {
+                        attempted = latest.get()
+                        attempted?.let { store.save(it); written.set(it) }
+                    }
+                }
+                result(null)
+            } catch (error: Exception) { result(error) }
+            finally {
+                running.set(false)
+                // Coalesce changes arriving during a write; a failed write retries only on a later submit.
+                if (latest.get() != attempted && !closed.get()) start()
+            }
+        }
+    }
+
+    fun flush() = synchronized(ioLock) {
+        closed.set(true)
+        latest.get()?.takeIf { it != written.get() }?.let { store.save(it); written.set(it) }
+    }
+}
+
+internal fun digestRngSubmission(drop: DetectedRng, sharing: Boolean, showName: Boolean, now: Long,
+    acquisition: AcquisitionEvent? = null, context: AcquisitionContext? = null): Map<String, Any>? {
+    if (!sharing || !drop.id.matches(digestRngId) || !DigestRngCatalog.public(drop.item, drop.activity) ||
+        drop.occurredAt <= 0 || drop.occurredAt <= now - 300000 || drop.occurredAt > now + 60000) return null
+    // Only this live receipt can supply context. Old history and another profile's matching item are not metadata sources.
+    val confirmed = acquisition?.takeIf { it.id == drop.id && it.item == drop.item && it.activity == drop.activity &&
+        it.origin == "confirmed" && context?.matches(it.context) == true &&
+        kotlin.math.abs(it.occurredAt - drop.occurredAt) <= 15000 }
+    val metadata = observedItemMetadata(confirmed?.rarity ?: drop.rarity, confirmed?.displayName ?: drop.displayName)
+    val floor = confirmed?.floor?.takeIf { drop.activity == "dungeon" && it.matches(digestRngFloor) }
+    val event = buildMap<String, Any> {
+        put("id", drop.id); put("item", drop.item); put("activity", drop.activity); put("occurredAt", drop.occurredAt)
+        metadata?.rarity?.let { put("rarity", it) }
+        metadata?.displayName?.let { put("displayName", it) }
+        floor?.let { put("floor", it) }
+    }
+    return mapOf("event" to event, "showName" to showName)
+}
+
+internal fun parseDigestCommunityEvent(json: com.google.gson.JsonObject, now: Long): DigestRngEntry? = runCatching {
+    require(json.get("unverified")?.asBoolean == true)
+    require(json.keySet().all { it in setOf("id", "item", "activity", "occurredAt", "player", "unverified", "rarity", "displayName", "floor") })
+    fun optionalText(key: String): String? = json[key]?.takeUnless { it.isJsonNull }?.let {
+        require(it.isJsonPrimitive && it.asJsonPrimitive.isString); it.asString
+    }
+    require(validObservedItemMetadata(optionalText("rarity"), optionalText("displayName")))
+    val floor = optionalText("floor")
+    require(floor == null || json["activity"]?.asString == "dungeon" && floor.matches(digestRngFloor))
+    DigestRngEntry(json.get("id").asString, json.get("item").asString, json.get("activity").asString,
+        json.get("occurredAt").asLong, json.get("player").asString, true).also {
+        require(it.occurredAt >= now - 7 * 86400000L && validDigestRng(it, now))
+    }
+}.getOrNull()
+
+/** A malformed report cannot hide healthy siblings; a malformed or oversized envelope still fails closed. */
+internal fun parseDigestCommunityHistory(json: com.google.gson.JsonElement?, now: Long): List<DigestRngEntry> {
+    require(json?.isJsonArray == true)
+    val events = requireNotNull(json).asJsonArray
+    require(events.size() <= 30)
+    return events.mapNotNull { event -> event.takeIf { it.isJsonObject }?.asJsonObject?.let { parseDigestCommunityEvent(it, now) } }
+        .distinctBy { it.id }
+}
+
+/** Immutable presentation data. The screen only reads these snapshots; providers own all I/O. */
+enum class DigestTone { POSITIVE, WAITING, ATTENTION, INFO, SPECIAL, MUTED }
+
+data class DigestEntry(
+    val id: String,
+    val title: String,
+    val summary: String = "",
+    val detail: String = "",
+    val tone: DigestTone = DigestTone.MUTED,
+    val meta: String = "",
+    val timestamp: Long? = null,
+    val until: Long? = null,
+    val url: String? = null,
+    val manualId: String? = null,
+    val manualComplete: Boolean = false,
+    val community: Boolean = false,
+    val activity: String = "",
+    val slots: List<DigestEntry> = emptyList(),
+    val video: Boolean = false,
+    val links: List<String> = emptyList(),
+    /** SkyBlock item id for an item icon (RNG drops); empty for none. */
+    val item: String = "",
+)
+
+data class DigestCardState(
+    val id: String,
+    val title: String,
+    val summary: String,
+    val status: String = "",
+    val tone: DigestTone = DigestTone.MUTED,
+    val entries: List<DigestEntry> = emptyList(),
+    val updatedAt: Long? = null,
+    val loading: Boolean = false,
+)
+
+data class DigestView(
+    val context: String = "Waiting for SkyBlock profile",
+    val status: String = "",
+    val cards: List<DigestCardState> = emptyList(),
+    val revision: Long = 0,
+)
+
+/** Plain bounded report text only; never invent a public URL or dispatch a chat message here. */
+fun digestShareText(entry: DigestEntry): String {
+    val suffix = if (entry.community) " [unverified]" else ""
+    return "[Sky-Hawk] ${entry.title} • ${entry.summary} (${entry.activity})"
+        .replace(Regex("§."), "").filter { it >= ' ' && it != '\u007f' }.take(240 - suffix.length) + suffix
+}
+
+/** Logical GUI pixels, so Minecraft's selected GUI scale applies without another transform. */
+data class DigestLayout(val width: Int, val height: Int, val padding: Int, val gap: Int, val columns: Int) {
+    val contentWidth get() = (width - padding * 2 - 4).coerceAtLeast(1)
+    val cardWidth get() = ((contentWidth - gap * (columns - 1)) / columns).coerceAtLeast(1)
+
+    companion object {
+        fun fit(width: Int, height: Int, compact: Boolean = false): DigestLayout {
+            val margin = if (width < 380 || height < 240) 6 else 12
+            val panelWidth = (width - margin * 2).coerceIn(1, 760)
+            val dense = compact || height < 300
+            return DigestLayout(panelWidth, (height - margin * 2).coerceIn(1, 490),
+                if (dense || panelWidth < 400) 8 else 14, if (dense) 7 else 10,
+                if (panelWidth >= if (dense) 400 else 560) 2 else 1)
+        }
+    }
+}
+
+fun digestText(value: String, limit: Int = 240): String = value
+    .filter { it >= ' ' && it != '§' || it == '\n' }.take(limit)
+
+fun digestTimeRemaining(until: Long, now: Long): String {
+    val seconds = ((until - now).coerceAtLeast(0) + 999) / 1000
+    return when {
+        seconds == 0L -> "Ready now"
+        seconds >= 86_400 -> "${seconds / 86_400}d ${(seconds % 86_400) / 3600}h remaining"
+        seconds >= 3600 -> "${seconds / 3600}h ${(seconds % 3600) / 60}m remaining"
+        seconds >= 60 -> "${seconds / 60}m ${seconds % 60}s remaining"
+        else -> "${seconds}s remaining"
+    }
+}
+
+fun digestRelativeTime(timestamp: Long, now: Long): String {
+    val seconds = ((now - timestamp).coerceAtLeast(0)) / 1000
+    return when {
+        seconds < 60 -> "Just now"
+        seconds < 3600 -> "${seconds / 60}m ago"
+        seconds < 86_400 -> "${seconds / 3600}h ago"
+        else -> "${seconds / 86_400}d ago"
+    }
+}
+
+fun digestLink(value: String?): URI? = runCatching {
+    value?.takeIf { it.length <= 2048 }?.let(::URI)?.takeIf {
+        it.scheme == "https" && !it.host.isNullOrBlank() && it.userInfo == null && (it.port == -1 || it.port == 443)
+    }
+}.getOrNull()
+
+fun digestHistory(entries: List<DigestEntry>, community: Boolean, activity: String, search: String): List<DigestEntry> {
+    val query = search.trim().take(80)
+    return entries.asSequence().filter { it.community == community && (activity.isEmpty() || it.activity == activity) }
+        .filter { query.isEmpty() || it.title.contains(query, true) || it.summary.contains(query, true) || it.meta.contains(query, true) }
+        .sortedByDescending { it.timestamp ?: 0 }.toList()
 }

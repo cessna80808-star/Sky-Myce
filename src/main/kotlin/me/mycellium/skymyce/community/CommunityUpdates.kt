@@ -1,24 +1,30 @@
 package me.mycellium.skymyce.community
 
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import me.mycellium.skymyce.community.update.UpdateInstaller
-import me.mycellium.skymyce.community.update.GameRestart
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
-import net.fabricmc.loader.api.FabricLoader
-import net.fabricmc.loader.impl.launch.FabricLauncherBase
-import net.minecraft.client.Minecraft
-import net.minecraft.network.chat.Component
+import java.lang.management.ManagementFactory
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
 import java.time.Duration
+import java.util.Base64
 import java.util.Properties
 import java.util.concurrent.Executors
-import java.lang.management.ManagementFactory
 import java.util.zip.ZipFile
+import me.mycellium.skymyce.community.update.GameRestart
+import me.mycellium.skymyce.community.update.UpdateInstaller
+import me.mycellium.skymyce.utils.AtomicJsonFile
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
+import net.fabricmc.loader.api.FabricLoader
+import net.fabricmc.loader.impl.launch.FabricLauncherBase
+import net.minecraft.client.Minecraft
+import net.minecraft.network.chat.Component
 
 /** Verified staging is approved by Update Now or the user's persisted auto-update preference. */
 object CommunityUpdates {
@@ -265,5 +271,73 @@ object CommunityUpdates {
             return updatePlan to installer
         } catch (error: Exception) { if (downloaded) Files.deleteIfExists(next); throw error }
         finally { response.body().close() }
+    }
+}
+
+internal const val MAX_COMMUNITY_JAR = 128L * 1024 * 1024
+internal data class CommunityRelease(val version: String, val size: Long, val sha256: String, val notes: String)
+/** X.Y.Z or X.Y.Z-beta-N; a release sorts after every beta of the same X.Y.Z. */
+internal fun communityVersion(value: String): List<Int> {
+    val match = requireNotNull(Regex("([0-9]{1,5})\\.([0-9]{1,5})\\.([0-9]{1,5})(?:-beta-([0-9]{1,5}))?").matchEntire(value))
+    return match.groupValues.subList(1, 4).map(String::toInt) + (match.groupValues[4].toIntOrNull() ?: Int.MAX_VALUE)
+}
+internal fun newerCommunityVersion(next: String, current: String): Boolean {
+    val left = communityVersion(next); val right = communityVersion(current)
+    return left.zip(right).firstOrNull { it.first != it.second }?.let { it.first > it.second } ?: false
+}
+/** Authenticate the exact payload bytes before trusting any download metadata. */
+internal fun verifyCommunityRelease(envelope: JsonObject, configuration: Properties, now: Long = System.currentTimeMillis()): CommunityRelease {
+    val kid = envelope["kid"].asString
+    require(kid.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+    val encoded = envelope["payload"].asString; require(encoded.length <= 32768)
+    val payload = Base64.getUrlDecoder().decode(encoded)
+    val signature = Base64.getUrlDecoder().decode(envelope["signature"].asString); require(signature.size == 64)
+    val key = KeyFactory.getInstance("Ed25519").generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(configuration.getProperty("key.$kid"))))
+    require(Signature.getInstance("Ed25519").run { initVerify(key); update(payload); verify(signature) })
+    val data = JsonParser.parseString(payload.toString(Charsets.UTF_8)).asJsonObject
+    require(data["product"].asString == "sky-myce" && data["protocol"].asInt == 4 && data["installation"].asString == "fabric")
+    require(data["minecraft"].asString == configuration.getProperty("minecraft"))
+    val version = data["version"].asString; communityVersion(version)
+    require(data["artifact"].asString == "releases/Sky-Myce-$version.jar" && !data.has("minimumLoaderVersion"))
+    val size = data["size"].asLong; require(size in 4..MAX_COMMUNITY_JAR)
+    val hash = data["sha256"].asString; require(hash.matches(Regex("[a-f0-9]{64}")))
+    val issued = data["issuedAt"].asLong; val expires = data["expiresAt"].asLong
+    require(issued <= now + 300_000 && expires > now && expires > issued && expires - issued <= 14L * 86400000)
+    val notes = data["notes"]?.asString ?: ""; require(notes.length <= 8000)
+    return CommunityRelease(version, size, hash, notes)
+}
+
+internal data class CommunityUpdatePreferences(val autoUpdate: Boolean = false, val deferredVersion: String = "")
+
+/** Old installations retain explicit Update Now behavior until the user turns this on. */
+internal class CommunityUpdatePreferenceStore(path: Path) {
+    private val file = AtomicJsonFile(path, 4096)
+    fun read(): CommunityUpdatePreferences {
+        val json = file.read()?.takeIf { it.isJsonObject }?.asJsonObject ?: return CommunityUpdatePreferences()
+        return CommunityUpdatePreferences(
+            json["autoUpdate"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: false,
+            json["deferredVersion"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString?.take(128) ?: "",
+        )
+    }
+    fun write(value: CommunityUpdatePreferences) {
+        val json = file.read()?.takeIf { it.isJsonObject }?.asJsonObject ?: JsonObject()
+        json.addProperty("autoUpdate", value.autoUpdate)
+        json.addProperty("deferredVersion", value.deferredVersion)
+        file.write(json)
+    }
+}
+
+/** Identical Later presses are idempotent; a new Update Now approval remains independently cancellable. */
+internal class CommunityUpdateSelection {
+    var generation = 0L; private set
+    private var deferredGeneration = -1L
+    private var deferredVersion = ""
+
+    fun approve(): Long = ++generation
+    fun cancel(): Long = ++generation
+    fun defer(version: String): Boolean {
+        if (deferredGeneration == generation && deferredVersion == version) return false
+        deferredVersion = version; deferredGeneration = ++generation
+        return true
     }
 }

@@ -1,24 +1,35 @@
 package me.mycellium.skymyce.ui
 
+import com.google.gson.JsonPrimitive
+import com.mojang.serialization.JsonOps
 import io.wispforest.owo.ui.component.ItemComponent
 import io.wispforest.owo.ui.core.OwoUIGraphics
-import me.mycellium.skymyce.utils.MC
-import me.mycellium.mixin.MenuItemLayersAccessor
-import net.minecraft.core.component.DataComponents
-import net.minecraft.core.registries.BuiltInRegistries
-import net.minecraft.client.renderer.texture.DynamicTexture
-import net.minecraft.client.resources.DefaultPlayerSkin
-import net.minecraft.client.renderer.item.ItemStackRenderState
-import net.minecraft.client.renderer.item.MissingItemModel
-import net.minecraft.client.renderer.texture.TextureAtlasSprite
-import net.minecraft.resources.Identifier
-import net.minecraft.world.item.ItemStack
-import net.minecraft.world.item.ItemDisplayContext
-import net.minecraft.world.item.Items
-import net.minecraft.world.item.component.ResolvableProfile
-import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import io.wispforest.owo.ui.core.UIComponent
+import java.awt.RenderingHints
+import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
+import me.mycellium.mixin.MenuItemLayersAccessor
+import me.mycellium.skymyce.hud.wrappedTooltip
+import me.mycellium.skymyce.utils.ItemUtils
+import me.mycellium.skymyce.utils.MC
+import net.minecraft.client.renderer.item.ItemStackRenderState
+import net.minecraft.client.renderer.item.MissingItemModel
+import net.minecraft.client.renderer.texture.DynamicTexture
+import net.minecraft.client.renderer.texture.TextureAtlasSprite
+import net.minecraft.client.resources.DefaultPlayerSkin
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.network.chat.Component
+import net.minecraft.resources.Identifier
+import net.minecraft.world.item.ItemDisplayContext
+import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
+import net.minecraft.world.item.component.ResolvableProfile
+import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
 
 private fun menuItemModelStack(stack: ItemStack): ItemStack {
     val model = stack.get(DataComponents.ITEM_MODEL) ?: return stack
@@ -151,5 +162,84 @@ class MenuItem(stack: ItemStack) : ItemComponent(stack) {
         private val itemIcons = object : LinkedHashMap<Pair<TextureAtlasSprite, Int>, BufferedImage>(128, .75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<TextureAtlasSprite, Int>, BufferedImage>?) = size > 128
         }
+    }
+}
+
+/** A static icon uses a real sprite frame, with the tint selected by Minecraft. */
+internal fun menuItemTextureArt(source: BufferedImage, width: Int, height: Int, frame: Int, tint: Int): BufferedImage? {
+    if (width !in 1..2048 || height !in 1..2048 || source.width % width != 0 || source.height % height != 0) return null
+    val columns = source.width / width
+    val rows = source.height / height
+    if (frame < 0 || frame >= columns * rows) return null
+    val left = frame % columns * width
+    val top = frame / columns * height
+    return BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB).apply {
+        for (y in 0 until height) for (x in 0 until width) {
+            val color = source.getRGB(left + x, top + y)
+            var tinted = 0
+            for (shift in 0..24 step 8)
+                tinted = tinted or (((color ushr shift and 255) * (tint ushr shift and 255) / 255) shl shift)
+            setRGB(x, y, tinted)
+        }
+    }
+}
+
+/** Skin UVs and the skull item's 30°/45° GUI pose, baked without Minecraft rendering. */
+internal fun menuSkullArt(skin: BufferedImage): BufferedImage? {
+    if (skin.width < 64 || skin.width % 64 != 0) return null
+    val factor = skin.width / 64
+    if (skin.height != 32 * factor && skin.height != 64 * factor) return null
+    val result = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB)
+    val graphics = result.createGraphics()
+    graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+    val scale = 56.0 / (8.5 * (sqrt(3.0) / 2 + 1 / sqrt(2.0)))
+    val horizontal = scale / sqrt(2.0)
+    val slope = horizontal / 2
+    val vertical = scale * sqrt(3.0) / 2
+    fun face(u: Int, v: Int, light: Double, transform: AffineTransform) {
+        val size = 8 * factor
+        val pixels = skin.getRGB(u * factor, v * factor, size, size, null, 0, size)
+        for (index in pixels.indices) {
+            val color = pixels[index]
+            pixels[index] = (color and 0xFF000000.toInt()) or
+                (((color ushr 16 and 255) * light).roundToInt() shl 16) or
+                (((color ushr 8 and 255) * light).roundToInt() shl 8) or
+                ((color and 255) * light).roundToInt()
+        }
+        val face = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+        face.setRGB(0, 0, size, size, pixels, 0, size)
+        graphics.drawImage(face, transform, null)
+    }
+    for ((offset, radius) in listOf(0 to 4.0, 32 to 4.25)) {
+        val edge = radius * 2 / (8 * factor)
+        val left = 32 - radius * 2 * horizontal
+        val top = 32 - radius * vertical
+        // The player's right face is on screen-left; the front face remains unmirrored on screen-right.
+        face(offset + 8, 0, 1.0, AffineTransform(edge * horizontal, -edge * slope,
+            edge * horizontal, edge * slope, left, top))
+        face(offset, 8, .72, AffineTransform(edge * horizontal, edge * slope,
+            0.0, edge * vertical, left, top))
+        face(offset + 8, 8, .9, AffineTransform(edge * horizontal, -edge * slope,
+            0.0, edge * vertical, 32.0, top + radius * 2 * slope))
+    }
+    graphics.dispose()
+    return result
+}
+
+/** A stored item key: a plain SkyBlock id (`NECRON_HANDLE`) or a typed one (`pet:…`). Null when it cannot be read. */
+fun skyBlockItemId(item: String): SkyBlockId? = runCatching {
+    if (':' in item) SkyBlockId.CODEC.parse(JsonOps.INSTANCE, JsonPrimitive(item.lowercase(java.util.Locale.ROOT))).result().orElse(null)
+    else SkyBlockId.item(item)
+}.getOrNull()
+
+/**
+ * The item as Hypixel shows it: the repository definition with its model and skull texture, so resource packs and
+ * profile-textured heads render like in game. Falls back to paper with an explanatory tooltip.
+ */
+fun skyBlockItemIcon(item: String): UIComponent {
+    val stack = runCatching { skyBlockItemId(item)?.let(ItemUtils::displayItem) }.getOrNull()?.takeUnless(ItemStack::isEmpty)
+    val display = stack ?: runCatching { Items.PAPER.defaultInstance }.getOrDefault(ItemStack.EMPTY)
+    return MenuItem(ItemUtils.displayStack(display)).apply {
+        if (stack != null) setTooltipFromStack(true) else wrappedTooltip(Component.literal("$item • item definition unavailable"))
     }
 }

@@ -2,10 +2,13 @@ package me.mycellium.skymyce
 
 import com.teamresourceful.resourcefulconfig.api.loader.Configurator
 import com.teamresourceful.resourcefulconfig.api.types.ResourcefulConfig
+import java.lang.ref.WeakReference
+import java.nio.file.Path
 import me.mycellium.skymyce.api.AuctionAPI
 import me.mycellium.skymyce.api.DungeonApi
 import me.mycellium.skymyce.api.MiscApi
 import me.mycellium.skymyce.commands.SkyMyceCommands
+import me.mycellium.skymyce.community.CommunityClient
 import me.mycellium.skymyce.config.instances.dungeons.GoldorCoordinationConfig
 import me.mycellium.skymyce.config.instances.dungeons.PartyFinder
 import me.mycellium.skymyce.config.loadSkyMyceConfig
@@ -39,8 +42,8 @@ import me.mycellium.skymyce.features.instances.dungeons.leap.LeapPovSharing
 import me.mycellium.skymyce.features.instances.dungeons.routing.StarredClearRouting
 import me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplits
 import me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsHud
-import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTracker
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTrackerWidget
 import me.mycellium.skymyce.features.instances.dungeons.tracker.RecentRngWidget
 import me.mycellium.skymyce.features.mining.MiningFeatures
@@ -58,9 +61,6 @@ import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.resources.Identifier
 import org.slf4j.LoggerFactory
 import tech.thatgravyboat.skyblockapi.api.SkyBlockAPI
-import java.nio.file.Path
-import me.mycellium.skymyce.community.CommunityClient
-
 
 object SkyMyce : ClientModInitializer {
     val mod = FabricLoader.getInstance().getModContainer("skymyce").orElseThrow()
@@ -112,4 +112,51 @@ object SkyMyce : ClientModInitializer {
     }
 
     fun id(path: String): Identifier = Identifier.fromNamespaceAndPath(MOD_ID, path)
+}
+
+abstract class SkyMyceModule {
+    private var enabled = true
+
+    init {
+        SkyMyce.logger.info("Module Created: ${this::class.simpleName}")
+        ModuleManager.instances += WeakReference(this)
+    }
+
+    fun enable() {
+        if (!enabled) {
+            enabled = true
+            onEnable()
+        }
+    }
+
+    fun disable() {
+        if (enabled) {
+            enabled = false
+            onDisable()
+        }
+    }
+
+    fun isEnabled(): Boolean = enabled
+
+    open fun init() {}
+
+    open fun tick() {}
+
+    open fun onEnable() {}
+
+    open fun onDisable() {}
+}
+
+object ModuleManager {
+    val instances = mutableListOf<WeakReference<SkyMyceModule>>()
+
+    // Referencing each module object runs its initializer, which registers it in [instances].
+    fun loadModules(vararg modules: SkyMyceModule) {
+    }
+
+    val modules: List<SkyMyceModule>
+        get() {
+            instances.removeIf { it.get() == null }
+            return instances.mapNotNull { it.get() }
+        }
 }

@@ -1,11 +1,31 @@
 package me.mycellium.skymyce.features.instances.dungeons.friends
 
+import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
+import me.mycellium.skymyce.SkyMyce
+import me.mycellium.skymyce.config.misc.PartyCommandsConfig
+import me.mycellium.skymyce.features.dev.RuntimeProfiler
+import me.mycellium.skymyce.utils.MC
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.Style
 import net.minecraft.util.StringDecomposer
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import tech.thatgravyboat.skyblockapi.utils.http.Http
+import tech.thatgravyboat.skyblockapi.utils.text.TextUtils.splitLines
 
 val FRIEND_FLOORS = DungeonFloor.entries.filter { it != DungeonFloor.E }
 
@@ -427,5 +447,862 @@ class DungeonFriendParty {
         private val CLASS_JOIN = Regex("^Party Finder > $PLAYER joined the dungeon group! \\((\\w+) Level (\\d+)\\)$")
         fun joinedPlayer(message: String): String? = (JOIN.matchEntire(message) ?: CLASS_JOIN.matchEntire(message))?.groupValues?.get(1)
         private val LEAVE = Regex("^(?:You left the party\\.|You have been kicked from the party by .+|You are not (?:currently )?in a party\\.|The party was disbanded.*|(?:\\[[^]]+] )?[A-Za-z0-9_]{1,16} has disbanded the party!)$")
+    }
+}
+
+/** Optional provider integration follows DungeonProgressHud; no extra bundled mod or API key is needed. */
+object DungeonFriendProfileProvider {
+    private val viewerRequests = ProfileLookupCooldown()
+    private val skyblockerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblocker") }
+    internal val viewerAvailable by lazy { FabricLoader.getInstance().isModLoaded("skyblockpv") }
+    val available: Boolean get() = skyblockerAvailable || viewerAvailable
+
+    fun fetch(name: String, uuid: UUID): DungeonFriendStats? {
+        if (skyblockerAvailable) {
+            runCatching {
+                val json = fetchSkyblockerProfiles(uuid)
+                DungeonFriendStats.fromProfiles(json, uuid.toString().replace("-", ""))
+            }.getOrNull()?.let { return it }
+        }
+        if (viewerAvailable) {
+            runCatching {
+                val selected = fetchViewerProfile(uuid) ?: return DungeonFriendStats(StatsState.NO_PROFILE)
+                val backing = getter(selected, "getBackingProfile") ?: error("No profile data")
+                val future = getter(backing, "getDungeonData") as CompletableFuture<*>
+                fromViewerDungeonData(future.get(30, TimeUnit.SECONDS) ?: error("No dungeon data"))
+            }.getOrNull()?.let { return it }
+        }
+        return null // The caller can fall back to the user's Hypixel key or retry later.
+    }
+
+    private fun fetchSkyblockerProfiles(uuid: UUID): JsonObject {
+        val api = Class.forName("de.hysky.skyblocker.utils.ProfileUtils")
+        val future = api.getMethod("fetchFullProfileByUuid", String::class.java)
+            .invoke(null, uuid.toString().replace("-", "")) as CompletableFuture<*>
+        return future.get(30, TimeUnit.SECONDS) as JsonObject
+    }
+
+    internal fun fetchViewerProfile(uuid: UUID, fresh: Boolean = false): Any? =
+        fetchViewerProfile(uuid, fresh, Class.forName("me.owdding.skyblockpv.api.ProfileAPI").getField("INSTANCE").get(null))
+
+    internal fun fetchViewerProfile(uuid: UUID, fresh: Boolean, instance: Any): Any? {
+        val api = instance.javaClass
+        val cached = api.getMethod("getCached", Any::class.java).invoke(instance, uuid) as? List<*>
+        if (fresh && cached != null) {
+            // The provider has no per-player invalidation. Wait for its cache rather than clearing other mods' data.
+            val ttl = (api.getMethod("getMaxCache").invoke(instance) as Number).toLong().coerceIn(1000, 300000)
+            throw ProfileLookupDeferred(System.currentTimeMillis() + ttl)
+        }
+        val profiles = (cached ?: run {
+            check(viewerRequests.start(System.currentTimeMillis())) { "Profile lookups are cooling down" }
+            var success = false
+            try {
+                val response = CompletableFuture<List<*>>()
+                // getProfiles hides failures as empty lists. Preserve errors so every caller backs off.
+                val callback: (Result<List<*>>) -> Unit = { it.fold(response::complete, response::completeExceptionally) }
+                api.getMethod("getDataAsync", Any::class.java, String::class.java, kotlin.Function1::class.java)
+                    .invoke(instance, uuid, "skymyce", callback)
+                response.get(30, TimeUnit.SECONDS).also { success = true }
+            } finally {
+                viewerRequests.finish(System.currentTimeMillis(), success)
+            }
+        }).filterNotNull()
+        if (profiles.isEmpty()) return null
+        return profiles.firstOrNull { getter(it, "getSelected") == true }
+            ?: profiles.singleOrNull() ?: error("No selected profile")
+    }
+
+    internal fun fromViewerDungeonData(data: Any): DungeonFriendStats {
+        val types = getter(data, "getDungeonTypes") as? Map<*, *> ?: error("Missing dungeon types")
+        if (types["catacombs"] == null) return DungeonFriendStats(StatsState.HIDDEN)
+        val json = JsonObject()
+        val classes = JsonObject()
+        (getter(data, "getClassExperience") as? Map<*, *>).orEmpty().forEach { (name, xp) ->
+            if (name is String && xp is Number) classes.add(name, JsonObject().apply { addProperty("experience", xp) })
+        }
+        json.add("player_classes", classes)
+        (getter(data, "getSelectedClass") as? String)?.let { json.addProperty("selected_dungeon_class", it) }
+        val dungeonTypes = JsonObject()
+        types.forEach { (name, type) ->
+            if (name !is String || type == null) return@forEach
+            val dungeon = JsonObject()
+            dungeon.addProperty("experience", getter(type, "getExperience") as? Number)
+            val completions = JsonObject()
+            val fastest = JsonObject()
+            val sPlus = JsonObject()
+            (getter(type, "getFloors") as? Map<*, *>).orEmpty().forEach { (floor, value) ->
+                if (value != null) {
+                    val key = floor.toString()
+                    completions.addProperty(key, getter(value, "getCompletions") as? Number)
+                    viewerTime(value, "getFastestTime-")?.let { fastest.addProperty(key, it) }
+                    viewerTime(value, "getFastestTimeSplus-")?.let { sPlus.addProperty(key, it) }
+                }
+            }
+            dungeon.add("tier_completions", completions)
+            dungeon.add("fastest_time", fastest)
+            dungeon.add("fastest_time_s_plus", sPlus)
+            dungeonTypes.add(name, dungeon)
+        }
+        json.add("dungeon_types", dungeonTypes)
+        return DungeonFriendStats.fromDungeons(json)
+    }
+
+    private fun getter(instance: Any, name: String): Any? = instance.javaClass.getMethod(name).invoke(instance)
+
+    private fun viewerTime(floor: Any, prefix: String): Long? {
+        // Kotlin Duration getters return an encoded value, not milliseconds.
+        val getter = floor.javaClass.methods.single { it.name.startsWith(prefix) && it.parameterCount == 0 }
+        val encoded = getter.invoke(floor) as Long
+        val duration = Duration::class.java.getMethod("box-impl", Long::class.javaPrimitiveType).invoke(null, encoded) as Duration
+        return duration.takeIf { it.isFinite() && it.isPositive() }?.inWholeMilliseconds
+    }
+}
+
+internal class ProfileLookupDeferred(val retryAt: Long) : Exception("Waiting for the provider cache to expire")
+
+/** Both dungeon stats and wealth use the same provider budget; fallback success cannot erase a failure. */
+internal class ProfileLookupCooldown {
+    @Volatile var nextRequest = 0L
+        private set
+    private var running = false
+    private var retryDelay = 60000L
+
+    @Synchronized fun start(now: Long): Boolean {
+        if (running || now < nextRequest) return false
+        running = true
+        return true
+    }
+
+    @Synchronized fun finish(now: Long, success: Boolean) {
+        running = false
+        nextRequest = now + if (success) 10000 else retryDelay
+        retryDelay = if (success) 60000 else (retryDelay * 2).coerceAtMost(300000)
+    }
+}
+
+/** Cache lookups run independently of the single, rate-limited provider/API request. */
+object DungeonFriendStatsCache {
+    private data class Request(val uuid: UUID?, val force: Boolean, val refreshExpired: Boolean)
+    private data class SharedLookup(val response: CompletableFuture<JsonObject?>, val expires: Long)
+    private val cache = mutableMapOf<String, CachedDungeonFriend>()
+    private val liveClasses = mutableMapOf<String, Pair<String, DungeonClass>>()
+    private val revisions = mutableMapOf<String, Long>()
+    private val invalidProfiles = mutableMapOf<String, Long>()
+    private val sharedSuppressedAt = mutableMapOf<String, Long>()
+    private val pending = linkedMapOf<String, Request>()
+    private val sharedLookups = mutableMapOf<String, SharedLookup>()
+    private val PLAYER_NAME = Regex("[A-Za-z0-9_]{1,16}")
+    private var relayCredits = 20.0 // Leave room below the relay's 30-message burst limit for uploads.
+    private var relayUpdated = 0L
+    private var store: DungeonFriendStatsStore? = null
+    private var dirty = false
+    private var nextSave = 0L
+    private var inFlight: String? = null
+    private var generation = 0L
+    private var nextRequest = 0L
+    private var apiKey = ""
+    private var feedback = ""
+    val pendingCount: Int get() = pending.size + if (inFlight != null) 1 else 0
+    var completedCount = 0L
+        private set
+    val status: String get() = feedback.ifEmpty {
+        inFlight?.let { "Loading PBs: $it (${pending.size} queued)" }
+            ?: if (pending.isNotEmpty()) "Loading PBs: ${pending.size} queued" else ""
+    }
+    var version = 0L
+        private set
+
+    val stats: Map<String, DungeonFriendStats> get() = cache.mapValues { it.value.stats }
+    fun get(name: String): DungeonFriendStats? = cache[name.lowercase()]?.stats
+    fun isPending(name: String): Boolean = name.lowercase().let { it == inFlight || it in pending }
+    fun liveClass(name: String): DungeonClass? = name.lowercase().let { key ->
+        liveClasses[key]?.takeIf { it.first == cache[key]?.uuid }?.second
+    }
+    fun verified(name: String): DungeonFriendStats? = cache[name.lowercase()]
+        ?.takeIf { it.verifiedUntil > System.currentTimeMillis() }?.stats
+    val canFetch: Boolean get() = DungeonFriendRelay.sharedStatsAvailable || DungeonFriendProfileProvider.available || PartyCommandsConfig.hypixelApiKey.isNotBlank()
+    fun diagnostics(): Map<String, Long> = mapOf("stats.cached" to cache.size.toLong(), "stats.queued" to pending.size.toLong(),
+        "stats.sharedLookups" to sharedLookups.size.toLong(), "stats.apiJob" to if (inFlight != null) 1L else 0L)
+
+    /** Exact existing automatic policy, for event-driven queueing without delaying cache expiry. */
+    fun nextAutomaticRefresh(name: String, now: Long): Long {
+        val key = name.lowercase()
+        if (isPending(key)) return Long.MAX_VALUE
+        val record = cache[key] ?: return now
+        return if (record.stats.state == StatsState.UNAVAILABLE || (record.stats.catacombs ?: 0) > 40)
+            maxOf(now, record.expires) else Long.MAX_VALUE
+    }
+
+    fun updateClass(name: String, uuid: String?, clazz: DungeonClass): Boolean {
+        val key = name.lowercase()
+        val previous = cache[key]
+        val id = uuid ?: previous?.uuid ?: return false
+        if (!key.matches(Regex("[a-z0-9_]{1,16}")) || !id.matches(Regex("[a-f0-9]{32}")) ||
+            (previous?.uuid != null && previous.uuid != id)) return false
+        liveClasses[key] = id to clazz
+        if (previous?.stats?.selectedClass == clazz && previous.uuid == id) return false
+        val record = previous ?: CachedDungeonFriend(DungeonFriendStats(StatsState.UNAVAILABLE), id, 0L, 0L)
+        cache[key] = record.copy(uuid = id, stats = record.stats.copy(selectedClass = clazz))
+        dirty = true
+        version++
+        return true
+    }
+
+    fun forgetLiveClass(name: String) { liveClasses.remove(name.lowercase()) }
+
+    fun removeSharedSubjects(uuids: Set<String>) {
+        if (uuids.isEmpty()) return
+        val now = System.currentTimeMillis()
+        uuids.forEach { sharedSuppressedAt[it] = now }
+        // A name-only lookup may already hold a removed UUID's result. Drop every outstanding
+        // shared response so server/client clock differences cannot restore it after removal.
+        sharedLookups.clear()
+        val names = cache.filterValues { it.uuid in uuids }.keys.toSet() + pending.filterValues { it.uuid?.toString()?.replace("-", "") in uuids }.keys
+        names.forEach { name -> invalidateProfile(name); pending.remove(name) }
+        if (sharedSuppressedAt.size > 10000) sharedSuppressedAt.entries.sortedBy { it.value }.take(sharedSuppressedAt.size - 10000).forEach { sharedSuppressedAt.remove(it.key) }
+    }
+
+    fun invalidateProfile(name: String, now: Long = System.currentTimeMillis()) {
+        val key = name.lowercase()
+        forgetLiveClass(key)
+        cache.remove(key)
+        sharedLookups.remove(key)
+        invalidProfiles[key] = now
+        revisions[key] = (revisions[key] ?: 0) + 1
+        dirty = true
+        version++
+    }
+
+    private fun withLiveClass(name: String, record: CachedDungeonFriend): CachedDungeonFriend =
+        liveClasses[name]?.takeIf { it.first == record.uuid }?.let { record.copy(stats = record.stats.copy(selectedClass = it.second)) } ?: record
+
+    fun request(name: String, uuid: UUID? = null, force: Boolean = false, priority: Boolean = false, bypassShared: Boolean = false, refreshExpired: Boolean = false) {
+        if (!name.matches(PLAYER_NAME)) return
+        val key = name.lowercase()
+        val existing = cache[key]
+        val changedPlayer = uuid != null && existing?.uuid != null && existing.uuid != uuid.toString().replace("-", "")
+        if (changedPlayer) { cache.remove(key); dirty = true; version++ }
+        if (key == inFlight && !force && !changedPlayer) return
+        if (!force && !changedPlayer && existing != null &&
+            !(if (refreshExpired) System.currentTimeMillis() >= existing.expires else existing.shouldRefresh(System.currentTimeMillis()))) return
+        if (force || changedPlayer) {
+            revisions[key] = (revisions[key] ?: 0) + 1
+            sharedLookups.remove(key)
+        }
+        val queued = pending[key]
+        if (bypassShared) invalidProfiles.putIfAbsent(key, System.currentTimeMillis())
+        val request = Request(uuid ?: queued?.uuid, force || changedPlayer || queued?.force == true, refreshExpired || queued?.refreshExpired == true)
+        if (priority) {
+            pending.remove(key)
+            val rest = pending.toMap()
+            pending.clear()
+            pending[key] = request
+            pending.putAll(rest)
+        } else pending[key] = request
+    }
+
+    /** Recheck at dequeue: another request or relay report may have refreshed this player meanwhile. */
+    internal fun queuedNeedsFetch(name: String, now: Long): Boolean {
+        val request = pending[name] ?: return false
+        val record = cache[name] ?: return true
+        return request.force || if (request.refreshExpired) now >= record.expires else record.shouldRefresh(now)
+    }
+
+    fun initialize(file: Path) {
+        val persistence = DungeonFriendStatsStore(file)
+        try {
+            cache.putAll(persistence.load())
+            store = persistence
+            version++
+        } catch (_: Exception) {
+            // Preserve unreadable data rather than silently overwriting it.
+            SkyMyce.logger.warn("Could not read saved dungeon friend stats; using memory for this session")
+        }
+    }
+
+    /** Periodic saves serialize the (large) cache off the render thread; a forced save (disconnect) stays synchronous. */
+    private var writer: me.mycellium.skymyce.utils.StateWriter<Map<String, CachedDungeonFriend>>? = null
+
+    fun save(force: Boolean = false) {
+        val persistence = store ?: return
+        val now = System.currentTimeMillis()
+        if (!dirty || (!force && now < nextSave)) return
+        nextSave = now + 30000
+        val snapshot = cache.toMap()
+        if (!force) {
+            val background = writer ?: me.mycellium.skymyce.utils.StateWriter<Map<String, CachedDungeonFriend>>({ persistence.save(it) },
+                { job -> Scheduling.schedule(0.seconds) { job() } },
+                { MC.instance.execute { dirty = true }; SkyMyce.logger.warn("Could not save dungeon friend stats; will retry") }).also { writer = it }
+            background.submit(snapshot); dirty = false
+            return
+        }
+        try {
+            persistence.save(snapshot)
+            dirty = false
+        } catch (_: Exception) {
+            SkyMyce.logger.warn("Could not save dungeon friend stats; will retry")
+        }
+    }
+
+    fun disconnect() {
+        save(true)
+        liveClasses.clear()
+        generation++
+        pending.clear()
+        sharedLookups.clear()
+        feedback = ""
+        version++ // Queue generation/capability changes must wake automatic scheduling.
+    }
+
+    fun clear() {
+        generation++
+        liveClasses.clear()
+        cache.clear()
+        revisions.clear()
+        invalidProfiles.clear()
+        pending.clear()
+        sharedLookups.clear()
+        feedback = ""
+        version++
+    }
+
+    /** Retain displayed PBs and the server's retry deadline while requesting fresh stats. */
+    fun refresh() {
+        var changed = false
+        cache.replaceAll { _, value -> if ((value.stats.catacombs ?: 0) > 40 && value.expires != 0L) {
+            changed = true; value.copy(expires = 0L)
+        } else value }
+        if (changed) version++
+    }
+
+    /** Live relay reports update eligibility and visible rows without another refresh or API lookup. */
+    internal fun receiveShared(json: JsonObject, name: String, uuid: String?, now: Long): Boolean {
+        val key = name.lowercase()
+        if (!key.matches(Regex("[a-z0-9_]{1,16}"))) return false
+        val previous = cache[key]
+        val record = sharedDungeonFriend(json, name, uuid ?: previous?.uuid, now)?.let { withLiveClass(key, it) } ?: return false
+        if (sharedSuppressedAt[record.uuid]?.let { record.verifiedUntil - 600000 <= it } == true) return false
+        if (!afterProfileChange(key, record)) return false
+        if (previous != null && previous.verifiedUntil >= record.verifiedUntil) return false
+        cache[key] = record
+        invalidProfiles.remove(key)
+        if (pending.containsKey(key)) {
+            pending.remove(key)
+            sharedLookups.remove(key)
+            completedCount++
+        }
+        dirty = true
+        version++
+        return true
+    }
+
+    // A profile change rejects older reports, not every future relay report. Clients without a local
+    // API provider must still be able to recover when another client publishes fresh selected-profile data.
+    private fun afterProfileChange(name: String, record: CachedDungeonFriend): Boolean =
+        invalidProfiles[name]?.let { record.verifiedUntil - 600000 > it } ?: true
+
+    /** A forced follow-up invalidates the older response, including its eligibility and upload. */
+    internal fun storeFetched(name: String, revision: Long, fetched: DungeonFriendStats, uuid: String?, started: Long, time: Long): Boolean {
+        if (revision != (revisions[name] ?: 0L)) return false
+        val previous = cache[name]
+        if ((previous?.verifiedUntil ?: 0L) > started + 600000) return false
+        val failed = fetched.state == StatsState.UNAVAILABLE
+        val value = if (failed) previous?.stats ?: fetched else fetched
+        cache[name] = withLiveClass(name, CachedDungeonFriend(value, uuid, time + if (failed) 60000 else 600000,
+            if (failed) previous?.verifiedUntil ?: 0L else started + 600000))
+        if (!failed) invalidProfiles.remove(name)
+        dirty = true
+        version++
+        return true
+    }
+
+    /** Runs on the client thread, including while an API request or its retry deadline is pending. */
+    internal fun pollShared(now: Long, lookup: (String, String?) -> CompletableFuture<JsonObject?>?) {
+        relayCredits = minOf(20.0, relayCredits + (now - relayUpdated).coerceAtLeast(0) / 1000.0)
+        relayUpdated = now
+        sharedLookups.entries.removeIf { it.key !in pending || it.value.expires <= now }
+        for ((name, query) in sharedLookups.toMap()) {
+            if (!query.response.isDone) continue
+            val response = runCatching { query.response.getNow(null) }.getOrNull() ?: continue
+            if (response.get("error")?.takeIf { it.isJsonPrimitive }?.asString == "rate_limited") {
+                relayCredits = 0.0
+                sharedLookups.remove(name)
+                continue
+            }
+            val request = pending[name] ?: continue
+            val uuid = request.uuid?.toString()?.replace("-", "") ?: cache[name]?.uuid
+            val record = response.get("record")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.let { sharedDungeonFriend(it, name, uuid, now) }?.let { withLiveClass(name, it) } ?: continue
+            if (sharedSuppressedAt[record.uuid]?.let { record.verifiedUntil - 600000 <= it } == true) continue
+            if (!afterProfileChange(name, record)) continue
+            val previous = cache[name]
+            // Refresh clears expires. A valid hit must restore it even if the report is unchanged.
+            cache[name] = if (previous != null && previous.verifiedUntil >= record.verifiedUntil)
+                previous.copy(expires = maxOf(previous.expires, previous.verifiedUntil)) else record
+            invalidProfiles.remove(name)
+            pending.remove(name)
+            sharedLookups.remove(name)
+            completedCount++
+            dirty = true
+            version++
+        }
+        // At most three prefetched misses plus the active API request: the relay keeps four upload grants.
+        if (sharedLookups.size >= 3 || relayCredits < 1) return
+        val request = pending.entries.firstOrNull { it.key !in sharedLookups } ?: return
+        val uuid = request.value.uuid?.toString()?.replace("-", "") ?: cache[request.key]?.uuid
+        val response = lookup(request.key, uuid) ?: return
+        relayCredits--
+        sharedLookups[request.key] = SharedLookup(response, now + 110000)
+    }
+
+    fun tick() {
+        save()
+        val key = PartyCommandsConfig.hypixelApiKey.trim()
+        if (key != apiKey) {
+            apiKey = key
+            disconnect()
+            cache.replaceAll { _, value -> if (value.stats.state == StatsState.UNAVAILABLE) value.copy(expires = 0L) else value }
+            nextRequest = 0L
+        }
+        if (!canFetch) {
+            feedback = "Use SkyBlockPv / SkyBlocker or add an API key"
+            if (pending.isNotEmpty() || sharedLookups.isNotEmpty()) version++
+            pending.clear()
+            sharedLookups.clear()
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (DungeonFriendRelay.sharedStatsAvailable) pollShared(now, DungeonFriendRelay::lookupStats)
+        else sharedLookups.clear()
+        if (inFlight != null || now < nextRequest) return
+        val request = pending.entries.firstOrNull {
+            !DungeonFriendRelay.sharedStatsAvailable || sharedLookups[it.key]?.response?.isDone == true
+        } ?: return
+        val fetch = queuedNeedsFetch(request.key, now)
+        pending.remove(request.key)
+        val sharedLookup = sharedLookups.remove(request.key)
+        if (!fetch) { completedCount++; version++; return }
+        val knownUuid = request.value.uuid?.toString()?.replace("-", "") ?: cache[request.key]?.uuid
+        inFlight = request.key
+        val token = generation
+        val revision = revisions[request.key] ?: 0L
+        feedback = ""
+        Scheduling.schedule(0.seconds) {
+            var resolvedUuid = knownUuid
+            var result = DungeonFriendStats(StatsState.UNAVAILABLE)
+            var retryAfter = 2000L
+            var message = ""
+            var upload: String? = null
+            try {
+                val response = runCatching { sharedLookup?.response?.getNow(null) }.getOrNull()
+                upload = response?.get("upload")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.matches(Regex("[a-f0-9]{32}")) }
+                if (resolvedUuid == null) {
+                    resolvedUuid = Http.get("https://api.mojang.com/users/profiles/minecraft/${request.key}") {
+                        val body = asText()
+                        check(isOk) { "Name lookup unavailable" }
+                        JsonParser.parseString(body).asJsonObject.get("id").asString
+                    }
+                }
+                require(resolvedUuid!!.matches(Regex("[a-fA-F0-9]{32}")))
+                val profileUuid = UUID.fromString(resolvedUuid.replace(Regex("(.{8})(.{4})(.{4})(.{4})(.{12})"), "$1-$2-$3-$4-$5"))
+                RuntimeProfiler.measure(RuntimeProfiler.Area.FRIEND_API) {
+                    val provided = DungeonFriendProfileProvider.fetch(request.key, profileUuid)
+                    result = if (provided != null) provided else {
+                        check(key.isNotEmpty()) { "Profile providers unavailable" }
+                        Http.get(
+                            "https://api.hypixel.net/v2/skyblock/profiles",
+                            queries = mapOf("uuid" to resolvedUuid),
+                            headers = mapOf("API-Key" to key),
+                        ) {
+                            fun header(name: String) = headers.entries.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
+                            val reset = header("RateLimit-Reset")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60L
+                            if (header("RateLimit-Remaining")?.toIntOrNull() == 0) retryAfter = maxOf(retryAfter, reset * 1000)
+                            val body = asText() // Consume/close the response even on errors.
+                            if (RuntimeProfiler.active) RuntimeProfiler.network(RuntimeProfiler.Area.FRIEND_API, body.toByteArray(Charsets.UTF_8).size.toLong())
+                            when (statusCode) {
+                                429 -> {
+                                    retryAfter = maxOf(reset, header("Retry-After")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60) * 1000
+                                    message = "API rate limit reached; waiting before retrying"
+                                    DungeonFriendStats(StatsState.UNAVAILABLE)
+                                }
+                                401, 403 -> {
+                                    retryAfter = 300000
+                                    message = "API key rejected; update it in API setup"
+                                    DungeonFriendStats(StatsState.UNAVAILABLE)
+                                }
+                                else -> {
+                                    check(isOk)
+                                    DungeonFriendStats.fromProfiles(JsonParser.parseString(body).asJsonObject, resolvedUuid)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                message = "Stats temporarily unavailable; retrying later"
+                retryAfter = maxOf(retryAfter, 10000)
+            } finally {
+                val fetched = result
+                val uuid = resolvedUuid?.takeIf { it.matches(Regex("[a-fA-F0-9]{32}")) }
+                val retry = retryAfter
+                val requestFeedback = message
+                MC.instance.execute {
+                    inFlight = null
+                    version++ // Even a discarded generation releases automatic request ownership.
+                    if (token == generation) {
+                        completedCount++
+                        val time = System.currentTimeMillis()
+                        val failed = fetched.state == StatsState.UNAVAILABLE
+                        val stored = storeFetched(request.key, revision, fetched, uuid, now, time)
+                        if (stored && !failed && uuid != null && upload != null && sharedLookup != null && time < sharedLookup.expires) {
+                            DungeonFriendRelay.publishStats(request.key, uuid, cache.getValue(request.key).stats, now, upload)
+                            relayCredits--
+                        }
+                        nextRequest = time + retry
+                        feedback = requestFeedback
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class CachedDungeonFriend(val stats: DungeonFriendStats, val uuid: String?, val expires: Long, val verifiedUntil: Long = expires) {
+    // Failed first lookups may retry; successfully checked low/hidden profiles stay cached across sessions.
+    fun shouldRefresh(now: Long): Boolean = now >= expires &&
+        (stats.state == StatsState.UNAVAILABLE || (stats.catacombs ?: 0) > 40)
+}
+
+private val sharedStatsGson = GsonBuilder().create()
+
+/** Shared stats are fresh reports from verified mod users, not a signed Hypixel response. */
+fun sharedDungeonFriend(json: JsonObject, name: String, uuid: String?, now: Long): CachedDungeonFriend? = runCatching {
+    require(json.get("name").asString.equals(name, true))
+    val id = json.get("uuid").asString
+    require(id.matches(Regex("[a-f0-9]{32}")) && (uuid == null || uuid == id))
+    val fetchedAt = json.get("fetchedAt").asLong
+    require(fetchedAt > now - 600000 && fetchedAt <= now + 60000)
+    val stats = sharedStatsGson.fromJson(json.get("stats"), DungeonFriendStats::class.java)
+    validateDungeonFriendStats(stats)
+    require(stats.state != StatsState.UNAVAILABLE)
+    CachedDungeonFriend(stats, id, minOf(fetchedAt, now) + 600000)
+}.getOrNull()
+
+private fun validateDungeonFriendStats(stats: DungeonFriendStats) {
+    require(stats.state in StatsState.entries)
+    require(stats.catacombs == null || stats.catacombs in 0..10000)
+    requireNotNull(stats.classes).forEach { (key, level) -> require(key in DungeonClass.entries && level in 0..10000) }
+    stats.classXp?.forEach { (key, xp) -> require(key in DungeonClass.entries && xp.isFinite() && xp in 0.0..1e13) }
+    listOf(requireNotNull(stats.completionTimes), requireNotNull(stats.sPlusTimes)).forEach { times ->
+        times.forEach { (floor, time) -> require(floor in FRIEND_FLOORS && time in 1..86400000L) }
+    }
+    require(requireNotNull(stats.completedFloors).all { it in FRIEND_FLOORS })
+}
+
+/** Only normalized stats/UUIDs are persisted, never API credentials or private messages. */
+class DungeonFriendStatsStore(private val file: Path) {
+    private val gson = GsonBuilder().setPrettyPrinting().create()
+
+    fun load(): Map<String, CachedDungeonFriend> {
+        if (!Files.exists(file)) return emptyMap()
+        val root = Files.newBufferedReader(file).use { JsonParser.parseReader(it).asJsonObject }
+        require(root.get("version")?.asInt == 1) { "Unknown dungeon friend cache format" }
+        return root.getAsJsonObject("players").entrySet().associate { (name, json) ->
+            require(name.matches(Regex("[a-z0-9_]{1,16}")))
+            val value = gson.fromJson(json, CachedDungeonFriend::class.java)
+            require(value.uuid == null || value.uuid.matches(Regex("[a-fA-F0-9]{32}")))
+            require(value.expires >= 0)
+            require(value.verifiedUntil >= 0)
+            validateDungeonFriendStats(requireNotNull(value.stats))
+            name to value
+        }
+    }
+
+    fun save(players: Map<String, CachedDungeonFriend>) {
+        Files.createDirectories(file.parent)
+        val temporary = Files.createTempFile(file.parent, "dungeon_friend_stats", ".tmp")
+        try {
+            Files.newBufferedWriter(temporary).use { gson.toJson(mapOf("version" to 1, "players" to players), it) }
+            try {
+                Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
+    }
+}
+
+/** Complete rosters and online snapshots are saved only after a successful scan, per account. */
+class FriendListStore(private val file: Path) {
+    fun load(): List<OnlineDungeonFriend>? = load("online")
+    fun loadAll(): List<OnlineDungeonFriend>? = load("all")
+
+    private fun load(field: String): List<OnlineDungeonFriend>? {
+        if (!Files.exists(file)) return null
+        val root = Files.newBufferedReader(file).use { JsonParser.parseReader(it).asJsonObject }
+        require(root.get("version")?.asInt in 1..2) { "Unknown friend list cache format" }
+        val entries = root.get(field)?.takeUnless { it.isJsonNull }
+            ?: return if (field == "all") null else error("Missing friend list")
+        return entries.asJsonArray.map {
+            val friend = it.asJsonObject
+            val name = friend.get("name").asString
+            val location = friend.get("location").asString
+            require(name.matches(Regex("[A-Za-z0-9_]{1,16}")) && location.length <= 256)
+            val color = friend.get("rankColor")?.takeUnless { it.isJsonNull }?.asInt
+            require(color == null || color in 0..0xFFFFFF)
+            OnlineDungeonFriend(name, location, color, friend.get("bestFriend")?.asBoolean ?: false)
+        }
+    }
+
+    fun save(online: Collection<OnlineDungeonFriend>, all: Collection<OnlineDungeonFriend>? = null) {
+        Files.createDirectories(file.parent)
+        val temporary = Files.createTempFile(file.parent, "friends", ".tmp")
+        try {
+            Files.newBufferedWriter(temporary).use {
+                GsonBuilder().setPrettyPrinting().create().toJson(mapOf("version" to 2, "online" to online, "all" to all), it)
+            }
+            try {
+                Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
+    }
+}
+
+/** Only suppresses recognizable responses to a scan we actually requested. All times are monotonic milliseconds. */
+class FriendListScanner(cached: Collection<OnlineDungeonFriend>? = null, cachedAll: Collection<OnlineDungeonFriend>? = null) {
+    val online = cached.orEmpty().associateByTo(linkedMapOf()) { it.name.lowercase() }
+    val all = (cachedAll ?: cached.orEmpty()).associateByTo(linkedMapOf()) { it.name.lowercase() }
+    private val completed = online.toMutableMap()
+    private val completedAll = all.toMutableMap()
+    val savedFriends: Collection<OnlineDungeonFriend> get() = completed.values
+    val savedAllFriends: Collection<OnlineDungeonFriend>? get() = completedAll.values.takeIf { hasScannedAll }
+    var hasScannedAll = cachedAll != null
+        private set
+    var hasScanned = cached != null
+        private set
+    var version = 0L
+        private set
+    var scanning = false
+        private set
+    var status = if (hasScanned) "${online.size} cached friends online" else "Waiting for friend list"
+        private set
+    private var page = 1
+    private var lastPage = 1
+    var completedPages = 0
+        private set
+    val remainingPages: Int get() = if (scanning) (lastPage - completedPages).coerceAtLeast(1) else 0
+    private var waiting = false
+    private var headerSeen = false
+    private var deadline = 0L
+    private var nextCommand = 0L
+    private var requested = !hasScanned
+    private var nextAutomaticRefresh = 0L
+    private var requestedAll = false
+    private var scanAll = false
+    private var stopAfterResponse = false
+    private var offlineSeen = false
+    private val seen = mutableSetOf<String>()
+    private val seenAll = mutableSetOf<String>()
+
+    fun refresh(now: Long, full: Boolean = false) {
+        if (!scanning) {
+            requested = true
+            requestedAll = requestedAll || full
+            nextCommand = maxOf(now, nextCommand)
+        }
+    }
+
+    /** Party Finder opening cooldown; manual status refreshes and the initial scan also start it. */
+    fun refreshOnOpen(now: Long, full: Boolean = false): Boolean {
+        if (scanning || requested || now < nextAutomaticRefresh) return false
+        refresh(now, full && !hasScannedAll)
+        return true
+    }
+
+    fun tick(now: Long): String? {
+        if (waiting && now >= deadline) {
+            scanning = false
+            waiting = false
+            status = "Friend scan timed out; click Refresh to retry"
+        }
+        if (!scanning) {
+            if (!requested) return null
+            requested = false
+            scanning = true
+            nextAutomaticRefresh = now + 60000
+            scanAll = requestedAll
+            requestedAll = false
+            page = 1
+            lastPage = 1
+            completedPages = 0
+            stopAfterResponse = false
+            offlineSeen = false
+            seen.clear()
+            seenAll.clear()
+        }
+        if (waiting || now < nextCommand) return null
+        waiting = true
+        headerSeen = false
+        deadline = now + 10000
+        nextCommand = now + 1200
+        status = "Scanning friends (page $page)"
+        return "friend list $page"
+    }
+
+    fun manualCommand() {
+        // The response already in flight still belongs to us; suppress it before yielding to manual output.
+        stopAfterResponse = waiting
+        if (!waiting) scanning = false
+        requested = false
+        requestedAll = false
+    }
+
+    fun cancel() {
+        scanning = false
+        waiting = false
+        requested = !hasScanned
+        requestedAll = requested && (requestedAll || scanAll)
+    }
+
+    fun notification(name: String, joined: Boolean, style: Style? = null) {
+        val key = name.lowercase()
+        val previous = all[key]
+        all[key] = OnlineDungeonFriend(name, if (joined) "Unknown" else "Offline", style?.color?.value ?: previous?.rankColor,
+            previous?.bestFriend == true || style?.isBold == true)
+        seenAll += key
+        if (joined) {
+            online[key] = all.getValue(key)
+            seen += key
+        } else {
+            online.remove(key)
+            seen.remove(key)
+        }
+        if (hasScanned) {
+            if (joined) completed[key] = online.getValue(key) else completed.remove(key)
+        }
+        if (hasScannedAll) completedAll[key] = all.getValue(key)
+        version++
+    }
+
+    fun remove(name: String) {
+        val key = name.lowercase()
+        online.remove(key); all.remove(key); completed.remove(key); completedAll.remove(key)
+        seen.remove(key); seenAll.remove(key)
+        version++
+    }
+
+    fun bestFriend(name: String, best: Boolean) {
+        val key = name.lowercase()
+        val friend = all[key] ?: return
+        if (friend.bestFriend == best) return
+        all[key] = friend.copy(bestFriend = best)
+        online[key]?.let { online[key] = it.copy(bestFriend = best) }
+        completed[key]?.let { completed[key] = it.copy(bestFriend = best) }
+        completedAll[key]?.let { completedAll[key] = it.copy(bestFriend = best) }
+        version++
+    }
+
+    fun receive(message: String, now: Long, component: Component = Component.literal(message)): Boolean {
+        if (!waiting || now >= deadline) return false
+        val lines = message.replace(LEGACY_FORMAT, "").trim().replace(CHAT_REPEAT, "")
+            .lines().map { it.trim() }
+        // Never swallow a mixed packet containing unrelated chat.
+        if (lines.any { !recognized(it) }) return false
+        if (!headerSeen && lines.none { HEADER.containsMatchIn(it) } && lines.any { ENTRY.matches(it) }) return false
+        val styledLines = component.splitLines()
+        for (line in lines) {
+            val header = HEADER.find(line)
+            if (header != null) {
+                if (header.groupValues[1].toIntOrNull() != page) return false
+                lastPage = header.groupValues[2].toIntOrNull()?.coerceIn(1, 1000) ?: return false
+                headerSeen = true
+            } else if (EMPTY.matches(line)) {
+                lastPage = page
+                scanAll = true // An explicitly empty list is a complete roster, even during an online-only scan.
+                headerSeen = true
+                finishPage(now)
+            } else if (ERROR.matches(line)) {
+                scanning = false
+                waiting = false
+                status = "Friend scan stopped by server; click Refresh to retry"
+            } else {
+                val entry = ENTRY.matchEntire(line)
+                if (entry != null && headerSeen) {
+                    val (name, location) = entry.destructured
+                    val key = name.lowercase()
+                    val source = styledLines.firstOrNull { ENTRY.matchEntire(it.string.replace(LEGACY_FORMAT, "").trim())?.groupValues?.get(1) == name }
+                        ?: component
+                    val style = dungeonPlayerNameStyle(source, name)
+                    val color = style?.color?.value?.takeIf { it != dungeonPlayerNameStyle(source, location)?.color?.value }
+                    val friend = OnlineDungeonFriend(name, location, color ?: all[key]?.rankColor,
+                        style?.isBold == true || all[key]?.bestFriend == true)
+                    all[key] = friend
+                    seenAll += key
+                    if (location.startsWith("offline", true) || location.startsWith("currently offline", true)) {
+                        offlineSeen = true
+                        online.remove(key)
+                    } else if (!offlineSeen || scanAll) {
+                        seen += key
+                        online[key] = friend
+                    }
+                    version++
+                } else if (SEPARATOR.matches(line) && headerSeen) {
+                    finishPage(now)
+                }
+            }
+        }
+        return true
+    }
+
+    private fun finishPage(now: Long) {
+        if (!waiting) return
+        completedPages = page
+        waiting = false
+        if (stopAfterResponse) {
+            scanning = false
+            status = "Background scan paused after manual command"
+            return
+        }
+        // Status checks stop at offline entries; only the initial cache load needs the full roster.
+        if ((!scanAll && offlineSeen) || page >= lastPage) {
+            online.keys.retainAll(seen)
+            if (scanAll) {
+                all.keys.retainAll(seenAll)
+                hasScannedAll = true
+            } else {
+                all.replaceAll { key, friend -> if (key in online) friend else friend.copy(location = "Offline") }
+            }
+            completed.clear()
+            completed.putAll(online)
+            if (hasScannedAll) { completedAll.clear(); completedAll.putAll(all) }
+            hasScanned = true
+            version++
+            scanning = false
+            status = if (scanAll) "${all.size} friends • ${online.size} online" else "${online.size} friends online"
+        } else {
+            page++
+            nextCommand = now + 1200
+        }
+    }
+
+    private fun recognized(line: String) = line.isEmpty() || HEADER.containsMatchIn(line) ||
+        ENTRY.matches(line) || SEPARATOR.matches(line) || EMPTY.matches(line) || ERROR.matches(line) ||
+        NAVIGATION.matches(line)
+
+    companion object {
+        private val NAVIGATION = Regex("(?:<<|>>|<-|->|Previous Page|Next Page|Click to view.*)(?:.*)")
+        private val HEADER = Regex("^(?:<<\\s*)?Friends \\(Page (\\d+) of (\\d+)\\)(?:.*)$")
+        private val ENTRY = Regex("^(?:\\[[^]]+]\\s*)?([A-Za-z0-9_]{1,16}) is (.+)$")
+        private val SEPARATOR = Regex("^[-▬─]{5,}$")
+        private val EMPTY = Regex("^(?:You (?:don't|do not) have any friends(?: yet)?[!.]?|Your friends list is empty[!.]?)$")
+        private val ERROR = Regex("^(?:You are sending commands too fast!.*|Please wait.*before using this command.*|You can only use this command.*|Invalid page number.*)$")
     }
 }

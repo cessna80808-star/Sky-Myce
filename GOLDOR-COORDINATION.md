@@ -28,7 +28,7 @@ Sky-Myce's profile and ADG differ in S2. Sky-Myce has Berserker do **T4 then T3*
 
 ## Strategy profiles
 
-Profiles are data (`GoldorStrategy.kt`); `GoldorEngine` interprets them. A profile holds:
+Profiles are data (in `GoldorEngine.kt`); `GoldorEngine` interprets them. A profile holds:
 
 - **Per-section role plans:** ordered objectives (`s2.t4`, `s3.dev`, `s4.lr` …) and a stack partner.
 - **Early-enter routes:** route to runner role.
@@ -43,7 +43,7 @@ To change the meta, edit or add a profile. Event handling does not need to chang
 
 ### `gold-standard` v1 (default): the supplied gold standard, F7 and M7
 
-The supplied class-by-class baseline (received 2026-10-18) lives in `GoldorBaseline.kt`. It is the only profile with a **step guide**:
+The supplied class-by-class baseline (received 2026-10-18) lives in `GoldorEngine.kt`. It is the only profile with a **step guide**:
 - every class has its own S1–S4 steps;
 - each step is marked as prep, required, conditional (with its condition), optional, recovery or reminder;
 - the supplied reference videos and images are attached to their class and section.

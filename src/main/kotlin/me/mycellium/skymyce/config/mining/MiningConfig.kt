@@ -4,11 +4,6 @@ import com.teamresourceful.resourcefulconfig.api.types.options.TranslatableValue
 import com.teamresourceful.resourcefulconfigkt.api.CategoryKt
 
 object MiningConfig : CategoryKt("Mining") {
-    val powderTracker by boolean(false) {
-        name = TranslatableValue.literal("Power Tracker")
-        description = TranslatableValue.literal("Tracks powder gains while mining")
-    }
-
     val crystalHollowsInfo by boolean(true) {
         name = TranslatableValue.literal("Crystal Hollows Info")
         description = TranslatableValue.literal("Displays useful Crystal Hollows info in your lobby")

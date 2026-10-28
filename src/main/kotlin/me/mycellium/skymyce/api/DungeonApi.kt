@@ -1,15 +1,17 @@
 package me.mycellium.skymyce.api
 
+import java.util.UUID
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.api.events.DungeonChestOpenEvent
 import me.mycellium.skymyce.api.events.DungeonChestRerollEvent
 import me.mycellium.skymyce.features.instances.dungeons.DungeonChestProtection
-import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import me.mycellium.skymyce.utils.ObservedItemMetadata
-import me.mycellium.skymyce.utils.observedItemMetadata
+import me.mycellium.skymyce.utils.Utils.displayDevMessage
 import me.mycellium.skymyce.utils.consistentItemMetadata
+import me.mycellium.skymyce.utils.observedItemMetadata
 import net.minecraft.ChatFormatting
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.core.component.DataComponents
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.player.Inventory
@@ -32,8 +34,7 @@ import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId
 import tech.thatgravyboat.skyblockapi.api.remote.api.SkyBlockId.Companion.getSkyBlockId
 import tech.thatgravyboat.skyblockapi.utils.extentions.isSkyblockFiller
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
-import java.util.UUID
+
 object DungeonApi : SkyMyceModule() {
     val chestNames = mapOf(
         "Catacombs - Floor I" to DungeonFloor.F1,
@@ -210,4 +211,64 @@ enum class DungeonRank(val label: String, val color: ChatFormatting, val texture
 
         fun DungeonRank.formatted() = "§${this.color.char}§l${this.label}"
     }
+}
+
+private val chestFormatting = Regex("§[0-9a-fk-or]", RegexOption.IGNORE_CASE)
+private val chestSpaces = Regex("[\\s\\u00a0]+")
+private val chestCoins = Regex("(?:Cost: )?([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+) Coins")
+private val chestQuantity = Regex("[A-Za-z ]+ (?:Essence|Shard)(?: x([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+))?")
+private val chestEssence = Regex("(Wither|Undead|Dragon|Spider|Ice|Gold|Diamond|Crimson) Essence(?: x[0-9,]+)?")
+private val chestMaterial = Regex("[A-Za-z ]+ (?:Essence|Shard)(?: .*)?")
+
+/** Bounded aliases, rather than substring matching against unrelated inventories. */
+internal fun normalizeChestText(value: String): String? {
+    if (value.length > 256) return null
+    val text = chestFormatting.replace(value, "")
+    if (text.any { it.isISOControl() && !it.isWhitespace() } || '§' in text) return null
+    return chestSpaces.replace(text, " ").trim()
+}
+
+internal fun dungeonChestControl(name: String): String? = normalizeChestText(name)?.takeIf {
+    it == "Open Reward Chest" || it == "Reroll Chest"
+}
+
+internal fun dungeonChestCost(lore: List<String>): Long? {
+    if (lore.size > 64) return null
+    val values = lore.mapNotNull { raw ->
+        val line = normalizeChestText(raw) ?: return null
+        if (line.endsWith(" Coins") && chestCoins.matchEntire(line) == null) return null
+        when (line) {
+            "FREE", "Cost: FREE" -> 0L
+            else -> chestCoins.matchEntire(line)?.groupValues?.get(1)?.replace(",", "")?.toLongOrNull()
+        }
+    }.distinct()
+    return values.singleOrNull()?.takeIf { it in 0..1_000_000_000_000L }
+}
+
+internal fun dungeonRewardQuantity(name: String, stackCount: Int): Int? {
+    val text = normalizeChestText(name) ?: return null
+    val match = chestQuantity.matchEntire(text)
+    if (match == null && chestMaterial.matches(text)) return null
+    val quantity = if (match == null) stackCount else if (match.groupValues[1].isEmpty()) 1
+        else match.groupValues[1].replace(",", "").toIntOrNull() ?: return null
+    return quantity.takeIf { it in 1..100000 }
+}
+
+internal fun dungeonEssenceId(name: String): String? = normalizeChestText(name)?.let {
+    chestEssence.matchEntire(it)?.groupValues?.get(1)?.uppercase()?.let { type -> "ESSENCE_$type" }
+}
+
+/**
+ * Rewards Hypixel files away instead of placing in the inventory: essences go to essence storage and shards to the
+ * Hunting Box. A chest receipt cannot wait for them to arrive.
+ */
+internal fun dungeonStoredReward(id: String, displayName: String?): Boolean {
+    val canonical = id.uppercase()
+    return canonical.startsWith("ESSENCE_") || canonical.startsWith("SHARD_") || canonical.startsWith("ATTRIBUTE:") ||
+        displayName?.let(::normalizeChestText)?.let { chestStored.matches(it) } == true
+}
+private val chestStored = Regex("[A-Za-z' -]+ (?:Essence|Shard)(?: x[0-9,]+)?")
+
+internal fun dungeonRewardHeader(text: String): DungeonChest? = normalizeChestText(text)?.let { value ->
+    DungeonChest.entries.firstOrNull { value == "${it.name} CHEST REWARDS" }
 }

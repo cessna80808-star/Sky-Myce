@@ -13,8 +13,7 @@ This file is the repository's development reference. Prefer code and build confi
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main/kotlin/me/mycellium/skymyce/SkyMyce.kt` | Fabric client entry point and module initialization |
-| `.../SkyMyceModule.kt`, `.../ModuleManager.kt` | Feature module lifecycle |
+| `src/main/kotlin/me/mycellium/skymyce/SkyMyce.kt` | Fabric client entry point, module initialization and the `SkyMyceModule`/`ModuleManager` lifecycle |
 | `.../api/` | SkyBlock API integration and shared events |
 | `.../config/` | Resourceful Config categories, persistence and settings UI |
 | `.../features/general/` | General client features, auction browser and widgets |
@@ -33,6 +32,7 @@ This file is the repository's development reference. Prefer code and build confi
 
 - Features are generally singleton `SkyMyceModule` objects. Follow the existing initialization pattern in `SkyMyce.initializeModules`; ensure a new module is registered and its `init()` runs.
 - Event-driven features use SkyBlockAPI event types and `@Subscription`. Use existing cancellable events at the earliest pre-action point when preventing an interaction; do not open/undo, duplicate, or replay player actions.
+- Keep each feature in a few files grouped by role (logic and data, screen or HUD) rather than one file per small class or helper; add to the feature's existing file before creating a new one.
 - Keep feature logic isolated, and extract pure calculation/parsing logic so it can be tested without a live client. Follow nearby code's Kotlin formatting and naming.
 - Config belongs in a `CategoryKt` category under `config/`; register it through the existing config tree and use `TranslatableValue.literal` for names/descriptions. Preserve existing config paths and defaults unless a migration is intended.
 - For item values, reuse `utils/ItemUtils.kt` and the configured Bazaar/Auction types rather than embedding prices. Distinguish an unknown price from a valid zero value when safety decisions depend on lookup completeness.

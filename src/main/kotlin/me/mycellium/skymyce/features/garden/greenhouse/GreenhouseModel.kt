@@ -1,11 +1,42 @@
 package me.mycellium.skymyce.features.garden.greenhouse
 
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.mojang.authlib.GameProfile
+import java.io.InputStream
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.random.Random
+import me.mycellium.skymyce.community.CommunityClient
+import me.mycellium.skymyce.community.withCommunityBodyDeadline
+import net.minecraft.core.BlockPos
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.world.entity.Display
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.EquipmentSlot
+import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.item.ItemStack
+import net.minecraft.world.level.Level
+import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.level.block.entity.SkullBlockEntity
+import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.world.phys.AABB
+import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
+import tech.thatgravyboat.skyblockapi.api.datatype.getData
 
 const val GREENHOUSE_SIZE = 10
 const val GREENHOUSE_CELLS = GREENHOUSE_SIZE * GREENHOUSE_SIZE
@@ -595,3 +626,548 @@ fun inferCrops(catalog: PlantCatalog, planted: Array<String?>, looks: Array<Stri
 
 /** Hypixel's Bazaar amount prompt (Buy Instantly or buy order "Custom Amount"): the player types on line 1, line 3 reads "Enter amount". */
 fun isBazaarAmountSign(lines: List<String>) = lines.size >= 3 && lines[2].trim().equals("Enter amount", true)
+
+/**
+ * Reads what occupies a crop spot as a stable fingerprint: `block:<id>@<soil block>`, `head:<texture>` for a player head
+ * (as a block, an armor stand's helmet or a display item), `item:<SkyBlock or vanilla id>`, or `entity:<type>` when
+ * nothing more is known. Mutations are mostly player heads using their item's texture, but some reuse a vanilla crop
+ * block on a different soil (Ashwreath is wheat on soul sand), so block fingerprints carry the soil. Null means empty.
+ */
+internal object GreenhouseWorld {
+    private val TEXTURE_URL = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"")
+
+    /** Mutations seen in game as a vanilla crop block on their own soil; checked before [VANILLA]. */
+    private val ON_SOIL = mapOf("block:wheat@soul_sand" to "ASHWREATH")
+
+    /** Vanilla crop blocks for the base crops, on any soil; everything else is matched by head texture, item id or learned. */
+    private val VANILLA = mapOf(
+        "wheat" to "WHEAT_SEEDS", "potatoes" to "POTATO", "carrots" to "CARROT", "melon_stem" to "MELON_SEEDS",
+        "attached_melon_stem" to "MELON_SEEDS", "pumpkin_stem" to "PUMPKIN_SEEDS", "attached_pumpkin_stem" to "PUMPKIN_SEEDS",
+        "cocoa" to "COCOA_BEANS", "sugar_cane" to "SUGAR_CANE", "cactus" to "CACTUS", "nether_wart" to "NETHER_WART",
+        "brown_mushroom" to "BROWN_MUSHROOM", "red_mushroom" to "RED_MUSHROOM", "fire" to "FIRE", "sunflower" to "SUNFLOWER",
+    ).mapKeys { "block:${it.key}" }
+
+    fun fingerprint(level: Level, pos: BlockPos): String? {
+        // A mutation is a head on an armor stand, usually over a vanilla wheat or melon block that is only decoration,
+        // so a worn or displayed item wins over the block. Bare armor stands are Hypixel's invisible markers, not crops.
+        // An entity belongs to the slot it stands in; one near a slot edge also overlaps its neighbour's column.
+        val entities = level.getEntitiesOfClass(Entity::class.java, column(pos)) { entity ->
+            entity.blockX == pos.x && entity.blockZ == pos.z &&
+                (entity is Display || entity is ArmorStand && EquipmentSlot.entries.any { !entity.getItemBySlot(it).isEmpty })
+        }
+        var fallback: String? = null
+        for (entity in entities) {
+            val stack = when (entity) {
+                is ArmorStand -> EquipmentSlot.entries.firstNotNullOfOrNull { slot -> entity.getItemBySlot(slot).takeUnless { it.isEmpty } }
+                is Display.ItemDisplay -> entity.itemRenderState()?.itemStack()
+                else -> null
+            }
+            itemKey(stack)?.let { return it }
+            fallback = fallback ?: (entity as? Display.BlockDisplay)?.blockRenderState()?.blockState()?.let { blockKey(level, pos, it) }
+                ?: ("entity:" + BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path)
+        }
+        val state = level.getBlockState(pos)
+        if (state.`is`(Blocks.FIRE) || !state.isAir && !state.canBeReplaced()) {
+            (level.getBlockEntity(pos) as? SkullBlockEntity)?.ownerProfile?.let { textureKey(it.partialProfile()) }?.let { return "head:$it" }
+            return blockKey(level, pos, state)
+        }
+        return fallback
+    }
+
+    private fun blockKey(level: Level, pos: BlockPos, state: BlockState) =
+        "block:" + BuiltInRegistries.BLOCK.getKey(state.block).path + "@" + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos.below()).block).path
+
+    /**
+     * The space a crop's entities can occupy: its own block column from 1.5 below the crop block to 2.5 above. Armor-stand
+     * crops stand with their feet below the block so the head shows in it, and marker stands (no size) float above it.
+     */
+    private fun column(pos: BlockPos) = AABB(pos.x.toDouble(), pos.y - 1.5, pos.z.toDouble(), pos.x + 1.0, pos.y + 2.5, pos.z + 1.0)
+
+    /** What is at a spot, for the log when a look is not recognised: entity types, names, flags and equipment. */
+    fun describe(level: Level, pos: BlockPos): String = level.getEntitiesOfClass(Entity::class.java, column(pos)) { it is ArmorStand || it is Display }
+        .take(4).joinToString("; ") { entity ->
+            val equipment = (entity as? ArmorStand)?.let { stand -> EquipmentSlot.entries.mapNotNull { slot -> stand.getItemBySlot(slot).takeUnless { it.isEmpty }?.let { "$slot=${itemKey(it)}" } } }
+            "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path} at ${"%.2f".format(entity.y - pos.y)} name=${entity.customName?.string} invisible=${entity.isInvisible}" +
+                ((entity as? ArmorStand)?.let { " marker=${it.isMarker} small=${it.isSmall} equipment=$equipment" } ?: "")
+        }.ifEmpty { "block " + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).block).path }
+
+    /** The plant a fingerprint shows: learned first, then bundled head textures, SkyBlock item ids and vanilla crop blocks. */
+    fun plantFor(fingerprint: String, catalog: PlantCatalog, learned: Map<String, String>): String? = learned[fingerprint] ?: when {
+        fingerprint.startsWith("head:") -> catalog.byHead[fingerprint.removePrefix("head:")]?.id
+        fingerprint.startsWith("item:") -> fingerprint.removePrefix("item:").let { id -> catalog[id]?.id ?: catalog.plants.firstOrNull { id in it.itemIds }?.id }
+        else -> ON_SOIL[fingerprint] ?: VANILLA[fingerprint.substringBefore('@')]
+    }
+
+    private fun itemKey(stack: ItemStack?): String? {
+        if (stack == null || stack.isEmpty) return null
+        stack.getData(DataTypes.ID)?.let { return "item:$it" }
+        stack.get(DataComponents.PROFILE)?.let { textureKey(it.partialProfile()) }?.let { return "head:$it" }
+        return "item:" + BuiltInRegistries.ITEM.getKey(stack.item).path.uppercase()
+    }
+
+    /** The skin file name from a head's texture property; the full value also carries a timestamp that varies. */
+    private fun textureKey(profile: GameProfile): String? {
+        val value = profile.properties()["textures"].firstOrNull()?.value ?: return null
+        val decoded = runCatching { String(java.util.Base64.getDecoder().decode(value)) }.getOrNull() ?: return value.take(64)
+        return TEXTURE_URL.find(decoded)?.groupValues?.get(1)?.substringAfterLast('/') ?: value.take(64)
+    }
+}
+
+/**
+ * One product's top of book. [buyOrderPrice] is the best bid (what a new buy order competes with) and
+ * [sellOfferPrice] the best ask. Volumes are the summed amounts of the best five levels on each side.
+ */
+data class BazaarProduct(
+    val id: String,
+    val buyOrderPrice: Double?,
+    val sellOfferPrice: Double?,
+    val buyVolume: Double? = null,
+    val sellVolume: Double? = null,
+    val buyMovingWeek: Double? = null,
+    val sellMovingWeek: Double? = null,
+    val buyOrders: Int? = null,
+    val sellOrders: Int? = null,
+)
+
+data class BazaarSnapshot(val source: String, val observedAt: Long, val retrievedAt: Long, val products: List<BazaarProduct>)
+
+/** Public market traffic has no player identity or credentials. The planner owns its single refresh job. */
+internal class BazaarTransport {
+    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build()
+    private var backendRetryAt = 0L
+    private val retryDeadlines = ConcurrentHashMap<String, Long>()
+
+    fun fetch(now: Long): BazaarSnapshot {
+        if (now >= backendRetryAt) {
+            val origin = runCatching { URI(CommunityClient.configuration.getProperty("backend")) }.getOrNull()
+            if (origin?.scheme == "https" && origin.userInfo == null && origin.rawQuery == null && origin.fragment == null) {
+                runCatching { return parseBazaarMarket(get(origin.resolve("/community/bazaar/market?active=true")), now, normalized = true) }
+                    .exceptionOrNull()?.let { if (it is InterruptedException || it is BazaarMarketFailure && it.rateLimited) throw it }
+            }
+            backendRetryAt = now + 10 * 60_000
+        }
+        return parseBazaarMarket(get(URI("https://api.hypixel.net/v2/skyblock/bazaar")), now).copy(source = "Hypixel public Bazaar · direct fallback")
+    }
+
+    private fun get(uri: URI): JsonObject {
+        val defaultPort = if (uri.scheme.equals("https", true)) 443 else 80
+        val origin = "${uri.scheme.lowercase(Locale.ROOT)}://${uri.host.lowercase(Locale.ROOT)}:${uri.port.takeIf { it >= 0 } ?: defaultPort}"
+        val now = System.currentTimeMillis()
+        retryDeadlines[origin]?.let { deadline ->
+            if (deadline > now) throw BazaarMarketFailure(true, deadline)
+            retryDeadlines.remove(origin, deadline)
+        }
+        val request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15)).header("Accept", "application/json").GET().build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofInputStream())
+        if (response.statusCode() !in 200..299) {
+            if (response.statusCode() == 429) {
+                val received = System.currentTimeMillis()
+                val fallback = if (received > Long.MAX_VALUE - 60_000) Long.MAX_VALUE else received + 60_000
+                val requested = parseBazaarRetryAt(response.headers().firstValue("Retry-After").orElse(null), received)
+                val deadline = requireNotNull(retryDeadlines.merge(origin, maxOf(fallback, requested ?: fallback)) { previous, next -> maxOf(previous, next) })
+                runCatching { response.body().close() }
+                throw BazaarMarketFailure(true, deadline)
+            }
+            response.body().close()
+            throw BazaarMarketFailure(false)
+        }
+        return readBazaarMarketBody(response.body())
+    }
+}
+
+internal class BazaarMarketFailure(val rateLimited: Boolean, val retryAt: Long? = null) : Exception()
+
+private const val DEPTH_LEVELS = 5
+private val PRODUCT_ID = Regex("[A-Z0-9_:;-]{1,100}")
+
+/** Full public order books exceed the community DTO reader's deliberate 256 KiB ceiling. */
+internal fun readBazaarMarketBody(body: InputStream): JsonObject = withCommunityBodyDeadline(body, Duration.ofSeconds(15)) { input ->
+    val maximum = 8 * 1024 * 1024
+    val bytes = input.readNBytes(maximum + 1)
+    require(bytes.size <= maximum) { "Bazaar market response exceeds 8 MiB" }
+    val json = try { JsonParser.parseString(bytes.toString(Charsets.UTF_8)) }
+        catch (failure: com.google.gson.JsonParseException) { throw IllegalArgumentException("Bazaar market response is invalid JSON", failure) }
+    require(json.isJsonObject) { "Bazaar market response must be a JSON object" }
+    json.asJsonObject
+}
+
+/** Retry-After has no short upper cap: overflowing positive waits saturate rather than retrying early. */
+internal fun parseBazaarRetryAt(header: String?, now: Long): Long? {
+    if (now < 0) return null
+    val value = header?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    if (value.all { it in '0'..'9' }) {
+        var seconds = 0L
+        for (character in value) {
+            val digit = character - '0'
+            if (seconds > (Long.MAX_VALUE - digit) / 10) return Long.MAX_VALUE
+            seconds = seconds * 10 + digit
+        }
+        return if (seconds > (Long.MAX_VALUE - now) / 1000) Long.MAX_VALUE else now + seconds * 1000
+    }
+    return runCatching { ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }
+        .getOrNull()?.takeIf { it >= now }
+}
+
+/** Hypixel's names describe instant transactions: sell_summary is bids; buy_summary is asks. */
+internal fun parseBazaarMarket(json: JsonObject, now: Long, normalized: Boolean = false): BazaarSnapshot {
+    require(now > 0 && (if (normalized) json["ok"]?.asBoolean else json["success"]?.asBoolean) == true)
+    if (normalized) require(json.number("version") == 1.0)
+    val observed = json.number(if (normalized) "observedAt" else "lastUpdated")?.toLong() ?: error("Market timestamp unavailable")
+    val retrieved = if (normalized) json.number("retrievedAt")?.toLong() ?: error("Retrieval timestamp unavailable") else now
+    require(observed > 0 && retrieved > 0 && observed <= now + 10_000 && retrieved <= now + 10_000)
+    val entries = if (normalized) {
+        val array = json.getAsJsonArray("products") ?: error("Products unavailable")
+        require(array.size() <= 10_000)
+        array.map { item -> require(item.isJsonObject); val product = item.asJsonObject; (product.text("id", 100) ?: error("Product id unavailable")) to product }
+    } else {
+        val products = json.getAsJsonObject("products") ?: error("Products unavailable")
+        require(products.size() <= 10_000)
+        products.entrySet().map { (id, value) -> require(value.isJsonObject); id to value.asJsonObject }
+    }
+    val seen = hashSetOf<String>()
+    val products = entries.map { (id, product) ->
+        require(seen.add(id) && id.matches(PRODUCT_ID))
+        if (!normalized) require(product.text("product_id", 100) == id)
+        val quick = if (normalized) product else product.getAsJsonObject("quick_status") ?: JsonObject()
+        // Both sources describe depth as the best five price levels.
+        fun depth(name: String, bids: Boolean): Pair<Double?, Double?> {
+            val levels = product.get(name)?.takeIf(JsonElement::isJsonArray)?.asJsonArray ?: return null to null
+            require(levels.size() <= 30)
+            val valid = levels.map { value ->
+                require(value.isJsonObject)
+                val level = value.asJsonObject
+                val price = level.number(if (normalized) "price" else "pricePerUnit")
+                val amount = level.number("amount")
+                require(price != null && price > 0 && amount != null && amount >= 0)
+                price to amount
+            }.filter { it.second > 0 }
+            val best = (if (bids) valid.sortedByDescending { it.first } else valid.sortedBy { it.first }).take(DEPTH_LEVELS)
+            return best.firstOrNull()?.first to best.sumOf { it.second }
+        }
+        val bid = depth(if (normalized) "buyDepth" else "sell_summary", true)
+        val ask = depth(if (normalized) "sellDepth" else "buy_summary", false)
+        BazaarProduct(id,
+            if (normalized) product.number("buyPrice") ?: bid.first else bid.first,
+            if (normalized) product.number("sellPrice") ?: ask.first else ask.first,
+            bid.second, ask.second,
+            quick.number(if (normalized) "buyMovingWeek" else "sellMovingWeek"),
+            quick.number(if (normalized) "sellMovingWeek" else "buyMovingWeek"),
+            quick.number(if (normalized) "buyOrders" else "sellOrders")?.toInt(),
+            quick.number(if (normalized) "sellOrders" else "buyOrders")?.toInt())
+    }
+    return BazaarSnapshot(if (normalized) json.text("source", 160) ?: "Sky-Myce shared Bazaar" else "Hypixel public Bazaar", observed, retrieved, products)
+}
+
+private fun JsonObject.number(key: String): Double? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+    ?.asDouble?.takeIf { it.isFinite() && it in 0.0..1e15 }
+private fun JsonObject.text(key: String, maximum: Int): String? = get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+    ?.asString?.takeIf { it.length in 1..maximum && it.none(Char::isISOControl) }
+
+/**
+ * First-principles reimplementation; skymutations.eu's solver is server-side and unlicensed, so only its outputs were compared.
+ *
+ * Model (same as the site): a mutation spawns in an empty footprint when the 8-neighbour ring around the whole footprint,
+ * diagonals included, holds at least the required number of planted ingredient tiles. Ingredients may serve several targets.
+ * Targets never count as ingredients for each other, since they are empty until they spawn.
+ *
+ * Objective, whole plot per hour: each valid target earns its revenue once per growth cycle; every planted ingredient is bought
+ * once per cycle of the fastest target (the site charges ingredients per spawn, so a lone placement matches its leaderboard).
+ * Unique base crops on the plot shorten every cycle, so the search may add them when the faster cycle pays for them.
+ *
+ * Search: simulated annealing over the planted ingredients only. Targets are then filled greedily, most valuable first, into
+ * every free footprint whose ring is satisfied (exact for 1x1 targets, which cannot block each other). Nearly satisfied
+ * footprints earn partial credit to guide the search. A final prune drops ingredients that do not pay for themselves.
+ * Deterministic for a given seed.
+ */
+class GreenhouseSolver(
+    private val catalog: PlantCatalog,
+    private val quotes: Map<String, Quote>,
+    private val settings: GreenhouseSettings,
+    private val unlocked: BooleanArray,
+    targetIds: List<String>,
+    private val iterations: Int = 120_000,
+) {
+    private val targets = targetIds.mapNotNull { catalog[it] }.filter { plant ->
+        // An ingredient without a price costs nothing here, matching the ranking; only the target must be priced.
+        plant.solvable && revenuePrice(quotes[plant.bazaarId], settings.priceMode) != null && gardenLevelFor(catalog, plant) <= settings.gardenLevel
+    }.distinct()
+    private val pool = (targets + targets.flatMap { it.requires.keys }.map { catalog[it]!! } +
+        catalog.plants.filter { it.unique && it.gardenLevel <= settings.gardenLevel && costPrice(it, quotes) != null }).distinct()
+    private val index = pool.withIndex().associate { (i, plant) -> plant.id to i }
+    private val revenue = DoubleArray(pool.size) { revenuePrice(quotes[pool[it].bazaarId], settings.priceMode) ?: 0.0 }
+    private val cost = DoubleArray(pool.size) { costPrice(pool[it], quotes) ?: 0.0 }
+    private val needs = pool.map { plant -> if (plant in targets) plant.requires.map { (id, count) -> index.getValue(id) to count } else emptyList() }
+    private val targetIndices = targets.map { index.getValue(it.id) }
+    private val uniqueIndices = pool.indices.filter { pool[it].unique }
+    /** Plants worth planting: anything a target needs, plus unique crops for the growth bonus. */
+    private val plantable = (targetIndices.flatMap { t -> needs[t].map { it.first } } + uniqueIndices).distinct()
+
+    private data class Item(val plant: Int, val row: Int, val col: Int, val size: Int)
+    private class Evaluation(val exact: Double, val guided: Double, val unique: Int, val targets: List<Item>, val ingredients: List<Item> = emptyList())
+
+    fun solve(seed: Long, now: Long, hash: String): Layout? {
+        if (targets.isEmpty()) return null
+        val random = Random(seed)
+        var ingredients = prune(anneal(random, ::mutate, ::evaluate))
+        if (targets.all { target -> target.requires.keys.all { catalog[it]!!.size == 1 } }) {
+            // Rings shared between multi-tile targets need all their tiles at once; choosing footprints first finds those lattices.
+            val footprints = anneal(random, ::mutateTargets, ::assign)
+            val alternative = prune(assign(footprints).ingredients)
+            if (evaluate(alternative).exact > evaluate(ingredients).exact) ingredients = alternative
+        }
+        val final = evaluate(ingredients)
+        if (final.targets.isEmpty()) return null
+        val placements = ingredients.map { Placement(pool[it.plant].id, it.row, it.col, it.size, Role.INGREDIENT) } +
+            final.targets.map { Placement(pool[it.plant].id, it.row, it.col, it.size, Role.TARGET) }
+        return Layout(placements, placements.associateWith { catalog[it.plantId]!!.soils.first() }, final.exact, final.unique, now, hash)
+    }
+
+    private fun anneal(random: Random, mutate: (List<Item>, Random) -> List<Item>?, evaluate: (List<Item>) -> Evaluation): List<Item> {
+        var current = emptyList<Item>()
+        var currentScore = evaluate(current)
+        var best = current
+        var bestScore = currentScore
+        val scale = targetIndices.maxOf { revenue[it] / cycle(it, 12) }
+        for (step in 0 until iterations) {
+            val next = mutate(current, random) ?: continue
+            val nextScore = evaluate(next)
+            val temperature = scale * TEMPERATURE * (1.0 - step / iterations.toDouble()) + scale * 1e-4
+            val delta = nextScore.guided - currentScore.guided
+            if (delta >= 0 || random.nextDouble() < exp(delta / temperature)) {
+                current = next; currentScore = nextScore
+                if (nextScore.exact > bestScore.exact) { best = next; bestScore = nextScore }
+            }
+        }
+        return best
+    }
+
+    private fun cycle(plant: Int, unique: Int) = cycleHours(pool[plant], settings.upgrade, unique)
+
+    private fun fits(cells: IntArray, row: Int, col: Int, size: Int): Boolean {
+        if (row < 0 || col < 0 || row + size > GREENHOUSE_SIZE || col + size > GREENHOUSE_SIZE) return false
+        for (r in row until row + size) for (c in col until col + size) {
+            val cell = r * GREENHOUSE_SIZE + c
+            if (!unlocked[cell] || cells[cell] >= 0) return false
+        }
+        return true
+    }
+
+    private fun occupy(cells: IntArray, item: Item, owner: Int) {
+        for (r in 0 until item.size) for (c in 0 until item.size) cells[(item.row + r) * GREENHOUSE_SIZE + item.col + c] = owner
+    }
+
+    private fun evaluate(ingredients: List<Item>): Evaluation {
+        val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+        ingredients.forEachIndexed { i, item -> occupy(cells, item, i) }
+        val unique = maxOf(settings.uniqueCrops, uniqueIndices.count { u -> ingredients.any { it.plant == u } }).coerceAtMost(12)
+        val counts = IntArray(pool.size)
+        val valid = ArrayList<Pair<Item, Double>>()
+        var partial = 0.0
+        for (target in targetIndices) {
+            val size = pool[target].size
+            val value = revenue[target] / cycle(target, unique)
+            for (row in 0..GREENHOUSE_SIZE - size) for (col in 0..GREENHOUSE_SIZE - size) {
+                if (!fits(cells, row, col, size)) continue
+                counts.fill(0)
+                for (r in row - 1..row + size) for (c in col - 1..col + size) {
+                    if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE) continue
+                    if (r in row until row + size && c in col until col + size) continue
+                    val owner = cells[r * GREENHOUSE_SIZE + c]
+                    if (owner >= 0) counts[ingredients[owner].plant]++
+                }
+                var have = 0; var need = 0
+                for ((ingredient, count) in needs[target]) { have += minOf(counts[ingredient], count); need += count }
+                if (have == need) valid += Item(target, row, col, size) to value
+                else if (have > 0) { val fraction = have / need.toDouble(); partial += value * fraction * fraction * 0.3 / (size * size) }
+            }
+        }
+        // Most valuable first; ties keep scan order so results are deterministic.
+        valid.sortByDescending { it.second }
+        val placed = ArrayList<Item>()
+        var income = 0.0
+        var fastest = Double.MAX_VALUE
+        for ((item, value) in valid) {
+            if (!fits(cells, item.row, item.col, item.size)) continue
+            occupy(cells, item, GREENHOUSE_CELLS)
+            placed += item; income += value
+            fastest = minOf(fastest, cycle(item.plant, unique))
+        }
+        if (fastest == Double.MAX_VALUE) fastest = hoursPerStage(settings.upgrade, unique)
+        val exact = income - ingredients.sumOf { cost[it.plant] } / fastest
+        return Evaluation(exact, exact + partial, unique, placed)
+    }
+
+    private fun mutate(items: List<Item>, random: Random): List<Item>? {
+        val roll = random.nextInt(100)
+        if (roll < 30) return repair(items, random)
+        if (items.isEmpty() || roll < 45) return add(items, random.nextInt(plantable.size).let { plantable[it] }, random)
+        val i = random.nextInt(items.size)
+        val item = items[i]
+        val rest = items.toMutableList().apply { removeAt(i) }
+        return when {
+            roll < 70 -> rest
+            roll < 88 -> {
+                val options = plantable.filter { pool[it].size == item.size && it != item.plant }
+                if (options.isEmpty()) null else items.toMutableList().apply { set(i, item.copy(plant = options[random.nextInt(options.size)])) }
+            }
+            else -> add(rest, item.plant, random)
+        }
+    }
+
+    private fun add(base: List<Item>, plant: Int, random: Random): List<Item>? {
+        val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+        base.forEachIndexed { i, item -> occupy(cells, item, i) }
+        val size = pool[plant].size
+        val row = random.nextInt(GREENHOUSE_SIZE - size + 1); val col = random.nextInt(GREENHOUSE_SIZE - size + 1)
+        return if (fits(cells, row, col, size)) base + Item(plant, row, col, size) else null
+    }
+
+    /**
+     * Adds one missing ingredient to the ring of the most complete of a few sampled free target footprints, so rings that
+     * need many tiles (a 2x2 needs all 12) get finished instead of spreading ingredients evenly.
+     */
+    private fun repair(items: List<Item>, random: Random): List<Item>? {
+        val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+        items.forEachIndexed { i, item -> occupy(cells, item, i) }
+        val target = targetIndices[random.nextInt(targetIndices.size)]
+        val size = pool[target].size
+        val counts = IntArray(pool.size)
+        var row = -1; var col = -1; var bestFraction = -1.0
+        var missing = emptyList<Pair<Int, Int>>()
+        repeat(6) {
+            val r0 = random.nextInt(GREENHOUSE_SIZE - size + 1); val c0 = random.nextInt(GREENHOUSE_SIZE - size + 1)
+            if (!fits(cells, r0, c0, size)) return@repeat
+            counts.fill(0)
+            for (r in r0 - 1..r0 + size) for (c in c0 - 1..c0 + size) {
+                if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE) continue
+                val owner = cells[r * GREENHOUSE_SIZE + c]
+                if (owner >= 0) counts[items[owner].plant]++
+            }
+            var have = 0; var need = 0
+            for ((ingredient, count) in needs[target]) { have += minOf(counts[ingredient], count); need += count }
+            if (have < need && have / need.toDouble() > bestFraction) {
+                bestFraction = have / need.toDouble(); row = r0; col = c0
+                missing = needs[target].filter { (ingredient, count) -> counts[ingredient] < count }
+            }
+        }
+        if (missing.isEmpty()) return null
+        val ingredient = missing[random.nextInt(missing.size)].first
+        val tile = pool[ingredient].size
+        // Reserve the target footprint so the ingredient lands in the ring, not on it.
+        occupy(cells, Item(target, row, col, size), GREENHOUSE_CELLS)
+        val options = ArrayList<Int>()
+        for (r in row - tile..row + size) for (c in col - tile..col + size) if (fits(cells, r, c, tile)) options += r * GREENHOUSE_SIZE + c
+        if (options.isEmpty()) return null
+        val cell = options[random.nextInt(options.size)]
+        return items + Item(ingredient, cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE, tile)
+    }
+
+    private fun mutateTargets(items: List<Item>, random: Random): List<Item>? {
+        val roll = random.nextInt(100)
+        if (items.isEmpty() || roll < 40) {
+            val plant = targetIndices[random.nextInt(targetIndices.size)]
+            return add(items, plant, random)
+        }
+        val i = random.nextInt(items.size)
+        val item = items[i]
+        val rest = items.toMutableList().apply { removeAt(i) }
+        return when {
+            roll < 62 -> rest
+            roll < 80 -> {
+                val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+                rest.forEachIndexed { j, other -> occupy(cells, other, j) }
+                val moved = item.copy(row = item.row + random.nextInt(3) - 1, col = item.col + random.nextInt(3) - 1)
+                if (moved != item && fits(cells, moved.row, moved.col, moved.size)) rest + moved else null
+            }
+            roll < 85 -> {
+                // Slide the whole layout one cell so a lattice that is nearly aligned can gain its missing row or column.
+                val dr = random.nextInt(3) - 1; val dc = random.nextInt(3) - 1
+                val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+                val shifted = items.map { it.copy(row = it.row + dr, col = it.col + dc) }
+                if (shifted.all { fits(cells, it.row, it.col, it.size) && run { occupy(cells, it, 0); true } }) shifted else null
+            }
+            else -> {
+                val options = targetIndices.filter { pool[it].size == item.size && it != item.plant }
+                if (options.isEmpty()) null else items.toMutableList().apply { set(i, item.copy(plant = options[random.nextInt(options.size)])) }
+            }
+        }
+    }
+
+    /**
+     * Fixed target footprints, 1x1 ingredients: ring cells shared by the most targets are assigned first, each to the
+     * ingredient its touching targets lack the most of in total (cheaper on ties); cells no target lacks stay empty.
+     * Leftover free cells then take the cheapest missing unique crops while the faster cycle pays for them.
+     */
+    private fun assign(footprints: List<Item>): Evaluation {
+        val cells = IntArray(GREENHOUSE_CELLS) { -1 }
+        footprints.forEachIndexed { i, item -> occupy(cells, item, i) }
+        val touching = Array(GREENHOUSE_CELLS) { ArrayList<Int>(4) }
+        footprints.forEachIndexed { i, item ->
+            for (r in item.row - 1..item.row + item.size) for (c in item.col - 1..item.col + item.size) {
+                if (r !in 0 until GREENHOUSE_SIZE || c !in 0 until GREENHOUSE_SIZE) continue
+                val cell = r * GREENHOUSE_SIZE + c
+                if (unlocked[cell] && cells[cell] < 0) touching[cell] += i
+            }
+        }
+        val required = footprints.map { item -> IntArray(pool.size).also { d -> needs[item.plant].forEach { (ingredient, count) -> d[ingredient] = count } } }
+        val have = footprints.map { IntArray(pool.size) }
+        val kind = IntArray(GREENHOUSE_CELLS) { -1 }
+        val ring = (0 until GREENHOUSE_CELLS).filter { touching[it].isNotEmpty() }.sortedByDescending { touching[it].size }
+        fun plant(cell: Int, plant: Int) {
+            if (kind[cell] >= 0) touching[cell].forEach { have[it][kind[cell]]-- }
+            kind[cell] = plant
+            if (plant >= 0) touching[cell].forEach { have[it][plant]++ }
+        }
+        for (cell in ring) {
+            var bestPlant = -1; var bestGain = 0
+            for (plant in plantable) {
+                val gain = touching[cell].sumOf { maxOf(0, required[it][plant] - have[it][plant]) }
+                if (gain > bestGain || gain == bestGain && gain > 0 && cost[plant] < cost[bestPlant]) { bestGain = gain; bestPlant = plant }
+            }
+            if (bestPlant >= 0) plant(cell, bestPlant)
+        }
+        val ingredients = ArrayList<Item>()
+        for (cell in ring) if (kind[cell] >= 0) {
+            ingredients += Item(kind[cell], cell / GREENHOUSE_SIZE, cell % GREENHOUSE_SIZE, 1)
+            cells[cell] = GREENHOUSE_CELLS
+        }
+        val deficits = footprints.indices.map { t -> IntArray(pool.size) { maxOf(0, required[t][it] - have[t][it]) } }
+        val validTargets = footprints.filterIndexed { i, _ -> deficits[i].all { it == 0 } }
+        val present = uniqueIndices.filter { u -> ingredients.any { it.plant == u } }
+        val missing = (uniqueIndices - present.toSet()).sortedBy { cost[it] }
+        val free = (0 until GREENHOUSE_CELLS).filter { unlocked[it] && cells[it] < 0 }
+        var bestExtra = 0; var bestExact = Double.NEGATIVE_INFINITY
+        for (extra in 0..minOf(missing.size, free.size)) {
+            val unique = maxOf(settings.uniqueCrops, present.size + extra).coerceAtMost(12)
+            val fastest = validTargets.minOfOrNull { cycle(it.plant, unique) } ?: hoursPerStage(settings.upgrade, unique)
+            val exact = validTargets.sumOf { revenue[it.plant] / cycle(it.plant, unique) } -
+                (ingredients.sumOf { cost[it.plant] } + missing.take(extra).sumOf { cost[it] }) / fastest
+            if (exact > bestExact) { bestExact = exact; bestExtra = extra }
+        }
+        missing.take(bestExtra).forEachIndexed { i, plant -> ingredients += Item(plant, free[i] / GREENHOUSE_SIZE, free[i] % GREENHOUSE_SIZE, 1) }
+        val unique = maxOf(settings.uniqueCrops, present.size + bestExtra).coerceAtMost(12)
+        var partial = 0.0
+        footprints.forEachIndexed { i, item ->
+            val need = needs[item.plant].sumOf { it.second }
+            val fraction = (need - deficits[i].sum()) / need.toDouble()
+            if (fraction < 1) partial += revenue[item.plant] / cycle(item.plant, unique) * fraction * fraction * 0.3
+        }
+        return Evaluation(bestExact, bestExact + partial, unique, validTargets, ingredients)
+    }
+
+    private fun prune(items: List<Item>): List<Item> {
+        var current = items
+        var changed = true
+        while (changed) {
+            changed = false
+            val base = evaluate(current).exact
+            for (i in current.indices.reversed()) {
+                val without = current.toMutableList().apply { removeAt(i) }
+                if (evaluate(without).exact >= base - 1e-9) { current = without; changed = true; break }
+            }
+        }
+        return current
+    }
+}
+
+private const val TEMPERATURE = 0.3

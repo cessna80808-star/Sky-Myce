@@ -1,27 +1,42 @@
 package me.mycellium.skymyce.ui
 
+import io.wispforest.owo.ui.base.BaseUIComponent
 import io.wispforest.owo.ui.component.ButtonComponent
+import io.wispforest.owo.ui.component.ColorPickerComponent
 import io.wispforest.owo.ui.component.DropdownComponent
 import io.wispforest.owo.ui.component.LabelComponent
 import io.wispforest.owo.ui.component.SliderComponent
+import io.wispforest.owo.ui.component.TextBoxComponent
+import io.wispforest.owo.ui.container.CollapsibleContainer
 import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import io.wispforest.owo.ui.core.Color
+import io.wispforest.owo.ui.core.CursorStyle
+import io.wispforest.owo.ui.core.OwoUIGraphics
+import io.wispforest.owo.ui.core.Size
+import io.wispforest.owo.ui.core.Sizing
+import io.wispforest.owo.ui.core.UIComponent
 import io.wispforest.owo.ui.inject.GreedyInputUIComponent
 import io.wispforest.owo.ui.util.FocusHandler
 import io.wispforest.owo.ui.util.UISounds
+import java.util.function.Consumer
+import kotlin.math.ceil
+import kotlin.math.roundToInt
+import me.mycellium.mixin.MenuEditBoxAccessor
 import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.utils.MC
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.input.CharacterEvent
+import net.minecraft.client.input.KeyEvent
+import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.client.input.PreeditEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.FontDescription
 import net.minecraft.network.chat.Style
 import net.minecraft.resources.Identifier
-import net.minecraft.client.input.MouseButtonEvent
-import net.minecraft.client.input.KeyEvent
 import org.lwjgl.glfw.GLFW
-import java.util.function.Consumer
 
 /** Menu density is independent of Minecraft's GUI scale. */
 data class MenuViewport(val width: Int, val height: Int, val screenWidth: Int, val screenHeight: Int) {
@@ -786,4 +801,436 @@ class MenuSlider : SliderComponent(Sizing.fill()), GreedyInputUIComponent {
         }
         if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
     }
+}
+
+/** Native toggle/input/focus behavior with a clipped, clock-driven content height. */
+class MenuCollapsible(horizontal: Sizing, vertical: Sizing, title: Component, expanded: Boolean = false) :
+    CollapsibleContainer(horizontal, vertical, title, expanded) {
+    private val heightMotion = MotionValue(0.0)
+    private val arrowMotion = MotionValue(if (expanded) 1.0 else 0.0)
+    private val hoverMotion = MotionValue(0.0)
+    private val groupKey = "collapsible:${System.identityHashCode(this)}"
+    private var initialized = false
+    private var expandedHeight = 0.0
+    private var collapseHeight = 1.0
+    private var outgoing: MenuCanvas.Snapshot? = null
+        set(value) { if (field !== value) field?.close(); field = value }
+    private var lastCanvas: MenuCanvas? = null
+    private var lastGroup: String? = null
+    private var paintedX = 0.0
+    private var paintedY = 0.0
+
+    // Already-expanded sections contribute their natural height to the first layout and scroll bounds.
+    private val body = object : FlowLayout(Sizing.content(), if (expanded) Sizing.content() else Sizing.fixed(0), Algorithm.VERTICAL) {
+        override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+            val g = graphics as MenuGraphics
+            val oldGroup = g.canvas.group
+            val tag = "${oldGroup ?: "ui"}/$groupKey"
+            g.canvas.group = tag
+            try {
+                if (this@MenuCollapsible.expanded) {
+                    val alpha = if (expandedHeight > 0) heightMotion.sample() / expandedHeight else 1.0
+                    g.layer(alpha = alpha) { super.draw(graphics, mouseX, mouseY, partialTicks, delta) }
+                    lastCanvas = g.canvas; lastGroup = tag
+                    paintedX = worldX(g); paintedY = worldY(g)
+                } else outgoing?.let { image ->
+                    g.enableScissor(x(), y(), x() + width(), y() + height())
+                    try {
+                        g.layer {
+                            g.canvas.replay(image, heightMotion.sample() / collapseHeight,
+                                worldX(g) - paintedX, worldY(g) - paintedY, g.canvas.clip)
+                        }
+                    } finally { g.disableScissor() }
+                }
+            } finally { g.canvas.group = oldGroup }
+        }
+
+        // Keep owo's traversal, excluding controls that are still below the unfolding clip.
+        override fun forEachDescendant(action: Consumer<UIComponent>) {
+            super.forEachDescendant { component ->
+                if (component === this || component.y() >= y() && component.y() + component.height() <= y() + height())
+                    action.accept(component)
+            }
+        }
+
+        private fun worldX(g: MenuGraphics) = g.pose().m00() * x().toDouble() + g.pose().m10() * y() + g.pose().m20()
+        private fun worldY(g: MenuGraphics) = g.pose().m01() * x().toDouble() + g.pose().m11() * y() + g.pose().m21()
+    }
+
+    init {
+        titleLayout.clearChildren()
+        titleLayout.child(MenuLabel(title).color(Color.ofRgb(MenuTheme.TEXT)).cursorStyle(CursorStyle.HAND))
+        titleLayout.child(object : BaseUIComponent() {
+            init { sizing(Sizing.fixed(8), Sizing.fixed(10)); margins(Insets.of(0, 0, 5, 10)); cursorStyle(CursorStyle.HAND) }
+            override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+                graphics.pose().pushMatrix()
+                try {
+                    graphics.pose().translate(x() + 4f, y() + 5f)
+                    graphics.pose().rotate((arrowMotion.sample() * Math.PI / 2).toFloat())
+                    graphics.pose().translate(-x() - 4f, -y() - 5f)
+                    val color = Color.ofRgb(MenuTheme.blend(MenuTheme.MUTED, MenuTheme.ACCENT, (hoverMotion.sample() * 100).toInt()))
+                    graphics.drawLine(x() + 2, y() + 1, x() + 6, y() + 5, 1.0, color)
+                    graphics.drawLine(x() + 6, y() + 5, x() + 2, y() + 9, 1.0, color)
+                } finally { graphics.pose().popMatrix() }
+            }
+        })
+        titleLayout.surface(Surface { g, c ->
+            val opacity = (hoverMotion.sample().coerceIn(0.0, 1.0) * 24).toInt()
+            if (opacity > 0) MenuTheme.rounded(g, c.x(), c.y(), c.width(), c.height(), MenuTheme.alpha(MenuTheme.CARD, opacity))
+        })
+        // Preserve the original content layout used by native child()/children()/toggleExpansion().
+        children.remove(contentLayout)
+        body.child(contentLayout)
+        children.add(body)
+    }
+
+    override fun toggleExpansion() {
+        val currentHeight = heightMotion.sample().coerceAtLeast(0.0)
+        if (expanded) {
+            outgoing = if (ThemeConfig.animationMode == GuiMotion.OFF) null else lastGroup?.let { lastCanvas?.snapshot(it) }
+            collapseHeight = currentHeight.coerceAtLeast(1.0)
+            body.horizontalSizing(Sizing.fixed(body.width()))
+            var focused = focusHandler()?.focused()
+            while (focused != null) {
+                if (focused === contentLayout) {
+                    focusHandler()?.focus(this, UIComponent.FocusSource.KEYBOARD_CYCLE)
+                    break
+                }
+                focused = focused.parent()
+            }
+        } else {
+            outgoing = null
+            body.horizontalSizing(Sizing.content())
+        }
+        super.toggleExpansion()
+        expandedHeight = if (expanded) contentLayout.fullSize().height().toDouble() else expandedHeight
+        heightMotion.animateTo(if (expanded) expandedHeight else 0.0, 190, MotionEasing.QUICK, ThemeConfig.animationMode)
+        arrowMotion.animateTo(if (expanded) 1.0 else 0.0, 160, MotionEasing.QUICK, ThemeConfig.animationMode)
+        applyHeight()
+    }
+
+    override fun parentUpdate(delta: Float, mouseX: Int, mouseY: Int) {
+        super.parentUpdate(delta, mouseX, mouseY)
+        if (expanded) expandedHeight = contentLayout.fullSize().height().toDouble()
+        if (!initialized) {
+            heightMotion.snap(if (expanded) expandedHeight else 0.0)
+            initialized = true
+        }
+        heightMotion.animateTo(if (expanded) expandedHeight else 0.0, 190, MotionEasing.QUICK, ThemeConfig.animationMode)
+        arrowMotion.animateTo(if (expanded) 1.0 else 0.0, 160, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val headerHovered = mouseX >= x() && mouseX < x() + width() &&
+            mouseY >= titleLayout.y() && mouseY < titleLayout.y() + titleLayout.height() && menuHoverAllowed(this, mouseX, mouseY)
+        hoverMotion.animateTo(if (headerHovered || focusHandler()?.focused() === this) 1.0 else 0.0,
+            110, MotionEasing.QUICK, ThemeConfig.animationMode)
+        applyHeight()
+        if (!expanded && !heightMotion.running) {
+            outgoing = null
+            if (!body.horizontalSizing().get().isContent) body.horizontalSizing(Sizing.content())
+        }
+    }
+
+    private fun applyHeight() {
+        val height = ceil(heightMotion.sample().coerceAtLeast(0.0)).toInt()
+        if (body.verticalSizing().get().value != height) body.verticalSizing(Sizing.fixed(height))
+    }
+
+    internal fun releaseMotion() {
+        heightMotion.snap(if (expanded) expandedHeight else 0.0)
+        arrowMotion.snap(if (expanded) 1.0 else 0.0)
+        hoverMotion.snap(0.0)
+        outgoing = null; lastCanvas = null; lastGroup = null
+        applyHeight()
+        if (!expanded && !body.horizontalSizing().get().isContent) body.horizontalSizing(Sizing.content())
+    }
+
+    override fun dismount(reason: UIComponent.DismountReason) {
+        if (reason == UIComponent.DismountReason.REMOVED) releaseMotion()
+        super.dismount(reason)
+    }
+}
+
+/** Keep color selection input, replace owo's direct shader submission with canvas gradients. */
+class MenuColorPicker : ColorPickerComponent() {
+    private val hoverMotion = MotionValue(0.0)
+    private var pointerX = -1
+
+    override fun cursorStyle(): CursorStyle = if (pointerX in 1..colorAreaWidth() + 1 ||
+        pointerX in hueSelectorX() + 1..hueSelectorX() + selectorWidth() + 1 ||
+        showAlpha() && pointerX in alphaSelectorX() + 1..alphaSelectorX() + selectorWidth() + 1)
+        CursorStyle.MOVE else CursorStyle.POINTER
+
+    override fun draw(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
+        pointerX = mouseX - x()
+        val left = renderX(); val top = renderY(); val w = colorAreaWidth(); val h = renderHeight()
+        if (w <= 0 || h <= 0 || selectorWidth() <= 0) return
+        hoverMotion.animateTo(if (isInBoundingBox(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY) || focusHandler()?.focused() === this) 1.0 else 0.0,
+            110, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val emphasis = hoverMotion.sample().coerceIn(0.0, 1.0)
+        val hueColor = java.awt.Color.HSBtoRGB(hue, 1f, 1f)
+        MenuTheme.box(g, x(), y(), width(), height(), MenuTheme.CARD,
+            MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (emphasis * 70).toInt()))
+        g.drawGradientRect(left, top, w, h, -1, hueColor, hueColor, -1)
+        g.drawGradientRect(left, top, w, h, 0, 0, 0xFF000000.toInt(), 0xFF000000.toInt())
+        val graphics = g as MenuGraphics
+        val selectedX = left + saturation * w
+        val selectedY = top + (1 - value) * (h - 1)
+        graphics.layer(x = (selectedX - selectedX.toInt()).toDouble(), y = (selectedY - selectedY.toInt()).toDouble()) {
+            g.drawCircle(selectedX.toInt(), selectedY.toInt(), 24, 3.7 + emphasis * .5, Color.ofArgb(0xB006040C.toInt()))
+            g.drawRing(selectedX.toInt(), selectedY.toInt(), 0.0, 360.0, 24, 2.0 + emphasis * .5, 3.0 + emphasis * .5,
+                Color.WHITE, Color.WHITE)
+        }
+        for (section in 0 until 6) {
+            val start = h * section / 6; val end = h * (section + 1) / 6
+            val first = java.awt.Color.HSBtoRGB(1f - section / 6f, 1f, 1f)
+            val last = java.awt.Color.HSBtoRGB(1f - (section + 1) / 6f, 1f, 1f)
+            g.drawGradientRect(left + hueSelectorX(), top + start, selectorWidth(), end - start, first, first, last, last)
+        }
+        drawSelector(graphics, left + hueSelectorX(), top + (1 - hue) * (h - 1))
+        if (showAlpha()) {
+            val alphaLeft = left + alphaSelectorX()
+            for (row in 0 until h step 4) for (column in 0 until selectorWidth() step 4)
+                g.fill(alphaLeft + column, top + row, alphaLeft + minOf(column + 4, selectorWidth()), top + minOf(row + 4, h),
+                    MenuTheme.alpha(if ((row / 4 + column / 4) % 2 == 0) MenuTheme.CARD else MenuTheme.BORDER))
+            val color = 0xFF000000.toInt() or selectedColor().rgb()
+            g.drawGradientRect(alphaLeft, top, selectorWidth(), h, color, color, color and 0xFFFFFF, color and 0xFFFFFF)
+            drawSelector(graphics, alphaLeft, top + (1 - alpha) * (h - 1))
+        }
+    }
+
+    private fun drawSelector(g: MenuGraphics, left: Int, top: Float) {
+        val pixel = top.toInt()
+        g.layer(y = (top - pixel).toDouble()) {
+            MenuTheme.rounded(g, left - 2, pixel - 2, selectorWidth() + 4, 5, 0xB006040C.toInt(), 2)
+            g.drawRectOutline(left - 1, pixel - 1, selectorWidth() + 2, 3, -1)
+        }
+    }
+}
+
+/** Native layout, clipping, focus and scrollbar dragging, with a clock-driven wheel timeline. */
+class MenuScroll<C : UIComponent>(horizontal: Sizing, vertical: Sizing, child: C, clock: () -> Long = System::nanoTime) :
+    ScrollContainer<C>(ScrollDirection.VERTICAL, horizontal, vertical, child) {
+    private val position = MotionValue(0.0, clock)
+    private var wheelStep = 15
+    val scrollPosition get() = currentScrollPosition
+    val scrollTarget get() = scrollOffset
+
+    override fun layout(space: Size) {
+        super.layout(space)
+        currentScrollPosition = position.clampScroll(maxScroll + .5)
+    }
+
+    override fun parentUpdate(delta: Float, mouseX: Int, mouseY: Int) {
+        // The superclass only interpolates this offset; retained component updates run before this hook.
+        currentScrollPosition = position.scrollTo(scrollOffset, ThemeConfig.animationMode).coerceIn(0.0, maxScroll + .5)
+    }
+    override fun scrollStep(step: Int): MenuScroll<C> {
+        wheelStep = if (step > 0) step else 15
+        // Keep subpixel drawing and its hit geometry together rather than snapping each wheel event.
+        super.scrollStep(0)
+        return this
+    }
+    override fun onMouseScroll(mouseX: Double, mouseY: Double, amount: Double): Boolean {
+        if (child.onMouseScroll(x() + mouseX - child.x(), y() + mouseY - child.y(), amount)) return true
+        scrollBy(-amount * wheelStep, false, true)
+        return true
+    }
+    public override fun scrollBy(offset: Double, instant: Boolean, showScrollbar: Boolean) {
+        super.scrollBy(offset, instant, showScrollbar)
+        currentScrollPosition = position.scrollTo(scrollOffset, ThemeConfig.animationMode, instant || !showScrollbar)
+    }
+
+    override fun drawChildren(g: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float,
+                              children: MutableList<out UIComponent>) {
+        // owo 0.13.1 discards every negative fractional offset in ScrollContainer.draw().
+        // Restore that paint translation while retaining its native layout, clip and scrollbar.
+        g.pose().pushMatrix()
+        try {
+            g.pose().translate(0f, -(currentScrollPosition % 1.0).toFloat())
+            super.drawChildren(g, mouseX, mouseY, partialTicks, delta, children)
+        } finally { g.pose().popMatrix() }
+    }
+}
+
+fun <C : UIComponent> menuScroll(horizontal: Sizing, vertical: Sizing, child: C): MenuScroll<C> = MenuScroll(horizontal, vertical, child)
+
+/** Keyboard focus stays visible, including through the nested viewport used by short windows. */
+internal fun revealMenuKeyboardFocus(component: UIComponent) {
+    val scrolls = generateSequence(component.parent()) { it.parent() }.filterIsInstance<MenuScroll<*>>().toList()
+    var inheritedFraction = scrolls.sumOf { it.scrollPosition % 1.0 }
+    var top = component.y() - inheritedFraction
+    var bottom = top + component.height()
+    for (scroll in scrolls) {
+        inheritedFraction -= scroll.scrollPosition % 1.0
+        val padding = scroll.padding().get()
+        val visibleTop = scroll.y() + padding.top() - inheritedFraction
+        val visibleBottom = scroll.y() + scroll.height() - padding.bottom() - inheritedFraction
+        val offset = when {
+            top < visibleTop || component.height() > visibleBottom - visibleTop -> top - visibleTop
+            bottom > visibleBottom -> bottom - visibleBottom
+            else -> 0.0
+        }
+        val before = scroll.scrollPosition
+        if (offset != 0.0 || scroll.scrollTarget != before) {
+            // Cancel an unfinished wheel target before applying the visible control's exact offset.
+            scroll.scrollBy(before + offset - scroll.scrollTarget, true, true)
+            val moved = scroll.scrollPosition - before
+            top -= moved; bottom -= moved
+        }
+    }
+}
+
+/** EditBox owns editing, clipboard and narration; MenuCanvas owns every painted pixel and metric. */
+class MenuTextBox(sizing: Sizing) : TextBoxComponent(sizing) {
+    private var hintText: Component? = null
+    private var suggestionText: String? = null
+    private var editable = true
+    private var centered = false
+    private var composition: PreeditEvent? = null
+    private var scrollX = 0.0
+    private var lastCursor = -1
+    private var lastValue = ""
+    private var caretEpoch = System.nanoTime()
+    private val focusMotion = MotionValue(0.0)
+    private val hoverMotion = MotionValue(0.0)
+
+    init { setTextShadow(false) }
+
+    override fun setHint(hint: Component) { hintText = hint; super.setHint(hint) }
+    override fun setSuggestion(suggestion: String?) { suggestionText = suggestion; super.setSuggestion(suggestion) }
+    override fun setEditable(editable: Boolean) { this.editable = editable; super.setEditable(editable) }
+    override fun setCentered(centered: Boolean) { this.centered = centered; super.setCentered(centered) }
+    override fun setFocused(focused: Boolean) {
+        super.setFocused(focused)
+        if (focused) caretEpoch = System.nanoTime() else composition = null
+    }
+
+    override fun keyPressed(event: KeyEvent): Boolean = super.keyPressed(event).also {
+        if (it) caretEpoch = System.nanoTime()
+    }
+    override fun charTyped(event: CharacterEvent): Boolean = super.charTyped(event).also {
+        if (it) { caretEpoch = System.nanoTime(); composition = null }
+    }
+    override fun preeditUpdated(event: PreeditEvent?): Boolean {
+        composition = event
+        caretEpoch = System.nanoTime()
+        return true
+    }
+
+    private val inset get() = if (isBordered) 6 else 0
+    private val viewport get() = (width - inset * 2).coerceAtLeast(1).toDouble()
+    private fun measure(text: String) = MenuCanvas.textWidth(text)
+
+    private fun updateScroll() {
+        val text = value
+        val cursor = cursorPosition.coerceIn(0, text.length)
+        if (cursor != lastCursor || text != lastValue) {
+            caretEpoch = System.nanoTime(); lastCursor = cursor; lastValue = text
+        }
+        val fullWidth = measure(text)
+        val caret = measure(text.substring(0, cursor))
+        if (caret < scrollX) scrollX = caret
+        if (caret > scrollX + viewport - 1) scrollX = caret - viewport + 1
+        scrollX = scrollX.coerceIn(0.0, (fullWidth - viewport + 1).coerceAtLeast(0.0))
+    }
+
+    private fun origin(): Double {
+        val extra = if (centered) ((viewport - measure(value)) / 2).coerceAtLeast(0.0) else 0.0
+        return x + inset + extra - scrollX
+    }
+
+    override fun getScreenX(index: Int): Int {
+        updateScroll()
+        return (origin() + measure(value.substring(0, index.coerceIn(0, value.length)))).roundToInt()
+    }
+
+    private fun clickedPosition(event: MouseButtonEvent): Int {
+        updateScroll()
+        return menuCaretIndex(value, event.x() - origin(), ::measure)
+    }
+
+    override fun onClick(event: MouseButtonEvent, doubleClick: Boolean) {
+        val position = clickedPosition(event)
+        if (doubleClick) {
+            moveCursorTo(position, false)
+            val start = getWordPosition(-1)
+            val end = getWordPosition(1)
+            moveCursorTo(start, false)
+            moveCursorTo(end, true)
+        } else moveCursorTo(position, event.hasShiftDown())
+        caretEpoch = System.nanoTime()
+    }
+
+    override fun onDrag(event: MouseButtonEvent, deltaX: Double, deltaY: Double) {
+        moveCursorTo(clickedPosition(event), true)
+        caretEpoch = System.nanoTime()
+    }
+
+    override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, delta: Float) {
+        if (!isVisible) return
+        updateScroll()
+        focusMotion.animateTo(if (isFocused) 1.0 else 0.0, 120, MotionEasing.QUICK,
+            ThemeConfig.animationMode)
+        hoverMotion.animateTo(if (active && isMouseOver(mouseX.toDouble(), mouseY.toDouble()) && menuHoverAllowed(this, mouseX, mouseY)) 1.0 else 0.0,
+            110, MotionEasing.QUICK, ThemeConfig.animationMode)
+        val focus = focusMotion.sample().coerceIn(0.0, 1.0)
+        val hover = hoverMotion.sample().coerceIn(0.0, 1.0)
+        if (isBordered) {
+            val graphics = g as MenuGraphics
+            MenuTheme.glow(graphics, x, y, width, height, focus)
+            MenuTheme.box(graphics, x, y, width, height,
+                MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (focus * 7 + hover * 4).toInt()),
+                MenuTheme.blend(MenuTheme.BORDER, MenuTheme.ACCENT, (maxOf(focus, hover * .35) * 100).toInt()))
+            MenuTheme.sheen(graphics, x, y, width, height, .35 + focus * .4 + hover * .25)
+            if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
+        }
+        val left = origin().roundToInt()
+        val lineHeight = MenuCanvas.lineHeight()
+        val top = y + (height - lineHeight) / 2
+        val text = value
+        val cursor = cursorPosition.coerceIn(0, text.length)
+        val highlight = (this as Any as MenuEditBoxAccessor).`skymyce$getHighlightPosition`().coerceIn(0, text.length)
+        val color = MenuTheme.alpha(if (editable && active) MenuTheme.TEXT else MenuTheme.MUTED)
+        g.enableScissor(x + inset, y + 1, x + width - inset, y + height - 1)
+        if (cursor != highlight) {
+            val first = (left + measure(text.substring(0, minOf(cursor, highlight)))).roundToInt()
+            val last = (left + measure(text.substring(0, maxOf(cursor, highlight)))).roundToInt()
+            g.fill(first, top, last, top + lineHeight, MenuTheme.alpha(MenuTheme.ACCENT, 40))
+        }
+        // MenuGraphics captures these calls into Java2D; Minecraft's glyph renderer is never invoked.
+        if (text.isEmpty()) hintText?.let { g.text(MC.font, it, left, top, MenuTheme.alpha(MenuTheme.MUTED), false) }
+        else g.text(MC.font, text, left, top, color, false)
+        if (cursor == text.length) suggestionText?.let {
+            g.text(MC.font, it, (left + measure(text)).roundToInt(), top, MenuTheme.alpha(MenuTheme.MUTED), false)
+        }
+        if (isFocused && editable && (System.nanoTime() - caretEpoch) / 500_000_000L % 2L == 0L) {
+            val caret = (left + measure(text.substring(0, cursor))).roundToInt()
+            g.fill(caret, top, caret + 1, top + lineHeight, MenuTheme.alpha(MenuTheme.TEXT))
+        }
+        g.disableScissor()
+        composition?.takeIf { isFocused && it.fullText().isNotEmpty() }?.let { preedit ->
+            val popupWidth = (measure(preedit.fullText()) + 12).roundToInt().coerceIn(12, width.coerceAtLeast(12))
+            val popupX = getScreenX(cursor).coerceIn(x, (x + width - popupWidth).coerceAtLeast(x))
+            val popupY = y + height + 3
+            MenuTheme.drawField(g, popupX, popupY, popupWidth, 19, true)
+            g.enableScissor(popupX + 5, popupY + 1, popupX + popupWidth - 5, popupY + 18)
+            g.text(MC.font, preedit.toFormattedText(Style.EMPTY.withUnderlined(true)), popupX + 6, popupY + 4, color, false)
+            val caret = (popupX + 6 + measure(preedit.fullText().substring(0, preedit.caretPosition().coerceIn(0, preedit.fullText().length)))).roundToInt()
+            g.fill(caret, popupY + 3, caret + 1, popupY + 15, MenuTheme.alpha(MenuTheme.TEXT))
+            g.disableScissor()
+        }
+    }
+}
+
+/** Pointer positions use the same proportional metrics as paint and never split a surrogate pair. */
+internal fun menuCaretIndex(text: String, offset: Double, measure: (String) -> Double): Int {
+    if (offset <= 0) return 0
+    var index = 0
+    var left = 0.0
+    while (index < text.length) {
+        val end = text.offsetByCodePoints(index, 1)
+        val right = measure(text.substring(0, end))
+        if (offset < (left + right) / 2) return index
+        left = right; index = end
+    }
+    return text.length
 }
