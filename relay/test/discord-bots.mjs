@@ -10,6 +10,7 @@ async function load(entry) {
 const { accountCommand, handleAccountInteraction, handleAccountAutocomplete } = await load('discord-accounts.ts');
 const { verifiedInteraction } = await load('discord.ts');
 const { deliverAccountAlert } = await load('discord-notifications.ts');
+const { ircMedia } = await load('irc-model.ts');
 const actor = { id: '11111111111111111', guildId: '22222222222222222', roles: [], interactionId: '33333333333333333' };
 const config = { DISCORD_GUILD_ID: actor.guildId };
 const target = '66666666666666666', targetOption = { type: 6, name: 'user', value: target };
@@ -299,4 +300,11 @@ test('private session reports distinguish ended, expired, refreshable and discon
   ] }, 'backend');
   assert.deepEqual(result.reply.embeds[0].fields.map(field => field.value.split('State: ')[1]),
     ['Ended', 'Expired', 'Access token expired; refresh available', 'No active relay connection observed', 'Connection observed; see last activity']);
+});
+
+test('a bridged video preview thumbnail in the text is not a second media item', () => {
+  const base = 'https://static2.klipy.com/ii/a/28/c9/', poster = `${base}poster.webp`;
+  const video = { id: 'media-0', type: 'video', url: `${base}clip.mp4`, thumbnailUrl: poster };
+  assert.deepEqual(ircMedia(`https://klipy.com/gifs/example-1\n${poster}`, [video]), [video]);
+  assert.equal(ircMedia(poster).length, 1, 'a plain image link still becomes media');
 });

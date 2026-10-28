@@ -306,7 +306,8 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     this.leapPov.preserve(server, session);
     server.send(JSON.stringify(bridge ? { type: "bridge_ready", protocol: 3, richChatVersion: 1, room: session.room, ...(session.room === GLOBAL_CHAT_ROOM ? { globalChat: true } : {}) } : { type: "challenge", serverId: session.challenge, protocol: legacyRelay(this.env) ? 2 : 3 }));
     const alarm = await this.ctx.storage.getAlarm();
-    if (alarm === null || alarm > session.expires) await this.ctx.storage.setAlarm(session.expires);
+    // An alarm whose retries were exhausted keeps reporting its past time but never fires again; replace it.
+    if (alarm === null || alarm > session.expires || alarm < now - 300_000) await this.ctx.storage.setAlarm(session.expires);
     if (bridge && session.room === GLOBAL_CHAT_ROOM) await this.irc.bridgeConnected();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -868,8 +869,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       for (const ws of this.ctx.getWebSockets()) if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Community services temporarily paused");
       return;
     }
-    await this.irc.flushGlobal();
-    await this.rngForward.drain();
+    // A delivery failure must not skip rescheduling: a dead alarm stops listener checks and Gateway demand renewal.
+    try { await this.irc.flushGlobal(); await this.rngForward.drain(); }
+    catch (error) { console.warn({ event: "room_alarm_delivery_failed", error: String(error).slice(0, 200) }); }
     let next = Infinity;
     let globalListener = false;
     for (const ws of this.ctx.getWebSockets()) {

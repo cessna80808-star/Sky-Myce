@@ -95,7 +95,8 @@ export function ircMedia(text: string, supplied?: unknown): IrcMedia[] | undefin
     const url = ircMediaUrl(match[0].replace(/[),.;\]]+$/, ""));
     if (!url || !mediaType(url)) continue;
     const key = ircMediaKey(url), previous = entries.get(key);
-    if (previous || [...entries.values()].some(item => item.sourceUrl && ircMediaKey(item.sourceUrl) === key)) continue; // Preserve the actual supplied resource and its original link.
+    // Preserve the actual supplied resource; its original link or preview thumbnail (e.g. Klipy's webp poster) is not a second item.
+    if (previous || [...entries.values()].some(item => [item.sourceUrl, item.thumbnailUrl].some(other => other && ircMediaKey(other) === key))) continue;
     entries.set(key, { id: `link-${entries.size}`, type: mediaType(url)!, url });
     if (entries.size >= 4) break;
   }
