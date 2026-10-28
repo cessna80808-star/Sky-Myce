@@ -604,7 +604,8 @@ internal object IrcEmojiPicker {
         val nextTabs = arrayListOf<Tab>()
         var top = 0
         for ((name, items) in sections) {
-            nextTabs += Tab(name, items.first().glyph, top)
+            // A search with no matches has an empty Results section.
+            nextTabs += Tab(name, (items.firstOrNull() ?: continue).glyph, top)
             nextRows += Row(top, name, emptyList()); top += HEADER
             for (chunk in items.chunked(COLUMNS)) { nextRows += Row(top, null, chunk); top += CELL }
         }

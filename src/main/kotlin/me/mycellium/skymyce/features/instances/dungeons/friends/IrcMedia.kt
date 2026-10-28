@@ -76,8 +76,11 @@ private val mediaHosts = setOf("cdn.discordapp.com", "media.discordapp.net", "me
     "media.tenor.com", "media1.tenor.com", "static.klipy.com", "i.imgur.com", "images.unsplash.com")
 private const val FULL_IMAGE_BYTES = 12 * 1024 * 1024
 private const val THUMBNAIL_BYTES = 2 * 1024 * 1024
-internal const val IRC_MEDIA_THUMBNAIL_WIDTH = 192
-internal const val IRC_MEDIA_THUMBNAIL_HEIGHT = 144
+/** Screen pixels per preview GUI unit, kept current by the chat renderer so previews decode sharp at high GUI scales (e.g. 4K). */
+@Volatile internal var ircThumbnailPixelScale = 2.0
+// The decoders' memory budgets still cap large previews.
+internal val IRC_MEDIA_THUMBNAIL_WIDTH get() = (IRC_THUMBNAIL_WIDTH * ircThumbnailPixelScale).roundToInt().coerceIn(192, 1024)
+internal val IRC_MEDIA_THUMBNAIL_HEIGHT get() = IRC_MEDIA_THUMBNAIL_WIDTH * IRC_THUMBNAIL_HEIGHT / IRC_THUMBNAIL_WIDTH
 private const val MAX_IMAGE_DIMENSION = 4096
 private const val MAX_IMAGE_PIXELS = 16 * 1024 * 1024
 private const val MAX_IMAGE_DECODED_BYTES = 32L * 1024 * 1024
