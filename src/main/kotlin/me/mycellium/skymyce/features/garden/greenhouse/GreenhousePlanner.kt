@@ -71,6 +71,7 @@ import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRel
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -1407,19 +1408,25 @@ object GreenhousePlanner : SkyMyceModule() {
             }
             if (ingredient && !planted) plants.merge(plant.id, 1, Int::plus)
             // Grown mutations are green and ones waiting on the player (an asleep Snoozling) yellow; holding the Plant
-            // Diagnostics Tool also marks the ones not analysed since they appeared red.
+            // Diagnostics Tool also marks red the ones not analysed since they appeared, or whose ready time is unknown
+            // (the overview's "analyze again", usually water running out first).
             if (!ingredient && planted) {
                 val estimate = targetEstimate(plot, placement, now)
                 val color = when {
                     estimate?.ready == true -> 0x55FF55
                     estimate?.paused == true -> 0xFFFF55
-                    analyzer && estimate == null -> 0xFF5555
+                    analyzer && estimate?.readyInMs == null -> 0xFF5555
                     else -> null
                 }
                 val box = AABB(cellPos(origin, placement.row, placement.col).above())
                     .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
                 if (color != null) shown += Ghost(box, HudTheme.alpha(color, alpha))
-                shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate))
+                val key = placement.row * GREENHOUSE_SIZE + placement.col
+                // Its water now, projected from the last level read with the hourly drain.
+                val water = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }?.let { reading ->
+                    reading.water?.let { (it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0).coerceAtLeast(-100.0) }
+                }
+                shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate, water))
             }
             if (!ingredient) targets += Triple(placement, planted, wasOccupied)
         }
@@ -1474,14 +1481,14 @@ object GreenhousePlanner : SkyMyceModule() {
         historyWriter.submit(JsonObject().apply { addProperty("version", 1); add("harvests", JsonArray().apply { history.forEach { add(it.toJson()) } }) })
     }
 
-    /** A mutation's floating label: its name, growth stage and estimated time to the next stage. */
-    private fun growthLabel(name: String, estimate: GrowthEstimate?): List<String> = listOfNotNull(
+    /** A mutation's floating label: its name, growth stage with its estimated water, and estimated time to the next stage. */
+    private fun growthLabel(name: String, estimate: GrowthEstimate?, water: Double?): List<String> = listOfNotNull(
         "§f$name",
         when {
             estimate == null -> "§7Analyze it to time its growth"
             estimate.stages == 0 -> "§aFully grown"
             else -> (if (estimate.ready) "§a" else if (estimate.paused) "§e" else "§c") + "Stage ${estimate.stage.toInt()}/${estimate.stages}" +
-                if (estimate.paused) " · waiting on you" else ""
+                (if (estimate.paused) " · waiting on you" else "") + (water?.let { " §9${it.roundToInt()}" } ?: "")
         },
         estimate?.nextInMs?.let { "§7Next stage in ${age(it)}" },
     )
