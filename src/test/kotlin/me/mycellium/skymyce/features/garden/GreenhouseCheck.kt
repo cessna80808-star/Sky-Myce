@@ -246,14 +246,19 @@ fun main() {
     check(estimateGrowth(catalog["FLESHTRAP"], GrowthReading(4, 14, readAt - 30 * 3_600_000L), 3.0, readAt).let { it.stage == 4.0 && !it.ready && it.readyInMs == null }) { "Unpredictable growth" }
     val grown = namedPlot.copy(growth = mapOf(33 to reading, 34 to GrowthReading(5, 20, readAt, awake = true)))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(grown.toJson()) }) }, catalog).single() == grown) { "Growth persistence" }
-    val watered = grown.copy(growth = mapOf(44 to GrowthReading(5, 8, readAt, water = 48.8, drain = 12.5), 45 to GrowthReading(2, 8, readAt, drain = 10.0)))
+    val watered = grown.copy(growth = mapOf(44 to GrowthReading(5, 8, readAt, water = 48.8, drain = 12.5), 45 to GrowthReading(2, 8, readAt, drain = 10.0),
+        46 to GrowthReading(3, 20, readAt, water = 100.0, drain = 10.4, enough = true)))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(watered.toJson()) }) }, catalog).single() == watered) { "Water persistence" }
 
     // A Crop Diagnostics menu as read in game on 2026-10-22 (one line per lore line), here mid-growth with a countdown.
     val menu = "Crop Diagnostics |  | Coalroot | Mutation Crop |  | Size: 1x1 | Growth Surface: Farmland | Growth Stages: 8 |  | Growth Stage | Age: 1d 10h 41m 12s | " +
         "Stage: 5/8 | Next Stage: 1h 40m 20s | Times Mutated: 0 |  | Decay Info | Mutates Remaining: 10 | Water Level | §7Water: §b48.8§7/100 | Lasts for: §b15h 02m 38s |  | " +
+        "§aThis crop has enough water to | §areach full growth! |  | " +
         "Shows how much water the current | crop has, ranging between -100 | (halted) and 100 (fully watered)."
-    check(parseDiagnostics(menu.split(" | ")) == Diagnostics(5, 8, 48.8, true, (3600 + 40 * 60 + 20) * 1000L, 54_158_000L)) { "Diagnostics ${parseDiagnostics(menu.split(" | "))}" }
+    check(parseDiagnostics(menu.split(" | ")) == Diagnostics(5, 8, 48.8, true, (3600 + 40 * 60 + 20) * 1000L, 54_158_000L, true)) { "Diagnostics ${parseDiagnostics(menu.split(" | "))}" }
+    // The verdict on one line or wrapped over two; a plant without it (in game on 2026-10-29) has not got enough.
+    check(parseDiagnostics(listOf("Stage: 3/20", "Water: 100/100", "Lasts for: 19h 11m 02s", "This crop has enough water to reach full growth!"))!!.enoughWater &&
+        !parseDiagnostics(listOf("Stage: 3/20", "Water: 100/100", "Lasts for: 19h 10m 29s"))!!.enoughWater) { "Enough water" }
     // In game on 2026-10-29: "Lasts for" runs to -100 (halted), so 45.8 for 15h 02m 38s and 100 for 19h 11m 02s both lose ~10 an hour.
     check(abs(drainPerHour(45.8, 54_158_000L)!! - 9.692) < 1e-3 && abs(drainPerHour(100.0, 69_062_000L)!! - 10.425) < 1e-3 &&
         drainPerHour(-40.0, 6 * 3_600_000L) == 10.0 && drainPerHour(-100.0, 1000L) == null && drainPerHour(45.8, null) == null) { "Drain from lasts for" }
@@ -291,6 +296,9 @@ fun main() {
     // At 12.2 an hour it runs out 4 hours after the reading, before it is ready: not promised, reminded when it runs out.
     val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 12.2)
     check(dry.readyInMs == null && dry.dryInMs == 3 * hour) { "Runs dry $dry" }
+    // When the game said it has enough water to reach full growth, that is trusted.
+    val enough = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8, enough = true), 2.0, readAt + hour, tick, 12.2)
+    check(enough.readyInMs == 5 * hour && enough.dryInMs == null) { "Enough water $enough" }
     check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = -5.0), 2.0, readAt + hour, tick, 20.0).dryInMs == 0L) { "Already dry" }
     check(estimateGrowth(coalroot, GrowthReading(8, 8, readAt, water = 10.0), 2.0, readAt + hour, tick, 20.0).dryInMs == null) { "Grown needs no water" }
 

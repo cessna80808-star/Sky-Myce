@@ -263,9 +263,10 @@ data class PlotState(
 /**
  * A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]; [awake] when the player woke it at that
  * stage since. [water] is its water level (-100..100) when it needs water and the level is known; [drain] the water it loses
- * per hour, from the tool's "Lasts for".
+ * per hour, from the tool's "Lasts for". [enough] when the tool said it "has enough water to reach full growth".
  */
-data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false, val water: Double? = null, val drain: Double? = null)
+data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false, val water: Double? = null, val drain: Double? = null,
+                         val enough: Boolean = false)
 
 /**
  * A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told,
@@ -330,8 +331,8 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
         else -> raw.coerceAtMost(stages.toDouble())
     }
     val ready = stage >= readyAt
-    // When the water reaches 0.
-    val dryAt = reading.water?.takeIf { drain != null && drain > 0 }?.let { reading.at + (it.coerceAtLeast(0.0) / drain!! * 3_600_000).toLong() }
+    // When the water reaches 0; never before full growth when the game said it has enough.
+    val dryAt = reading.water?.takeIf { drain != null && drain > 0 && !reading.enough }?.let { reading.at + (it.coerceAtLeast(0.0) / drain!! * 3_600_000).toLong() }
     val readyInMs = when {
         ready -> 0L
         paused || unpredictable -> null
@@ -380,7 +381,8 @@ fun parseGrowth(lines: List<String>): Pair<Int, Int>? {
 }
 
 /** What a Crop Diagnostics menu showed. [water] is null when the crop needs no water or it was not shown. */
-data class Diagnostics(val stage: Int, val stages: Int, val water: Double?, val needsWater: Boolean?, val nextStageMs: Long?, val lastsMs: Long? = null)
+data class Diagnostics(val stage: Int, val stages: Int, val water: Double?, val needsWater: Boolean?, val nextStageMs: Long?, val lastsMs: Long? = null,
+                       val enoughWater: Boolean = false)
 
 fun parseDiagnostics(lines: List<String>): Diagnostics? {
     val (stage, stages) = parseGrowth(lines) ?: return null
@@ -389,7 +391,8 @@ fun parseDiagnostics(lines: List<String>): Diagnostics? {
     val water = if (noWater) null else text.firstNotNullOfOrNull { WATER.find(it)?.groupValues?.get(1)?.toDoubleOrNull() }?.takeIf { it in -100.0..100.0 }
     val next = text.firstNotNullOfOrNull { NEXT_STAGE.find(it)?.groupValues?.get(1) }?.let(::parseDuration)
     val lasts = if (water == null) null else text.firstNotNullOfOrNull { LASTS_FOR.find(it)?.groupValues?.get(1) }?.let(::parseDuration)
-    return Diagnostics(stage, stages, water, if (noWater) false else if (water != null) true else null, next, lasts)
+    return Diagnostics(stage, stages, water, if (noWater) false else if (water != null) true else null, next, lasts,
+        water != null && ENOUGH_WATER.containsMatchIn(text.joinToString(" ")))
 }
 
 /** "1d 10h 41m 12s" in milliseconds, or null without a part. */
@@ -436,6 +439,8 @@ fun parseDeskGrowthTier(name: String, lore: List<String>): Int? {
 
 private val WATER = Regex("(?i)^\\s*water:\\s*(-?\\d{1,3}(?:\\.\\d+)?)\\s*/\\s*100\\b")
 private val NO_WATER = Regex("(?i)doesn't need water")
+// Wrapped over two lore lines in the menu ("This crop has enough water to" / "reach full growth!").
+private val ENOUGH_WATER = Regex("(?i)\\bhas enough water to\\s+reach full growth")
 private val LASTS_FOR = Regex("(?i)lasts for:\\s*((?:\\d{1,4}\\s*[dhms]\\s*)+)")
 private val NEXT_STAGE = Regex("(?i)next stage:\\s*((?:\\d{1,4}\\s*[dhms]\\s*)+)")
 private val DURATION_PART = Regex("(\\d{1,4})\\s*([dhms])")
@@ -477,8 +482,9 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     if (growth.isNotEmpty()) add("growth", JsonObject().apply {
         growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply {
             add(reading.stage); add(reading.stages); add(reading.at)
-            if (reading.awake || reading.water != null || reading.drain != null) add(reading.awake)
-            if (reading.water != null || reading.drain != null) { add(reading.water); add(reading.drain) }
+            if (reading.awake || reading.water != null || reading.drain != null || reading.enough) add(reading.awake)
+            if (reading.water != null || reading.drain != null || reading.enough) { add(reading.water); add(reading.drain) }
+            if (reading.enough) add(true)
         }) }
     })
 }
@@ -517,7 +523,8 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
                     cell.toInt().also { require(it in 0 until GREENHOUSE_CELLS) } to
                         GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong, row.size() > 3 && row[3].asBoolean,
                             row.takeIf { it.size() > 4 && !it[4].isJsonNull }?.get(4)?.asDouble?.takeIf { it in -100.0..100.0 },
-                            row.takeIf { it.size() > 5 && !it[5].isJsonNull }?.get(5)?.asDouble?.takeIf { it > 0 && it <= 200 })
+                            row.takeIf { it.size() > 5 && !it[5].isJsonNull }?.get(5)?.asDouble?.takeIf { it > 0 && it <= 200 },
+                            row.size() > 6 && row[6].asBoolean)
                             .also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
                 }.getOrNull() }.toMap()
             }.getOrDefault(emptyMap()))

@@ -954,11 +954,11 @@ object GreenhousePlanner : SkyMyceModule() {
         // The tool shows a woken Snoozling at the stage it fell asleep at, just like an asleep one, so a wake stays.
         val last = pending.plot.growth[pending.key]?.takeIf { it.at >= (pending.plot.spawned[pending.key] ?: 0L) }
         val reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage, water = diagnostics.water,
-            drain = drainPerHour(diagnostics.water, diagnostics.lastsMs) ?: last?.drain)
+            drain = drainPerHour(diagnostics.water, diagnostics.lastsMs) ?: last?.drain, enough = diagnostics.enoughWater)
         val layout = pending.plot.layout
         // One line per reading, so water and cycle timing can be checked against the game later.
-        SkyMyce.logger.info("Greenhouse diagnostics: {} {}/{} water={} lastsForMs={} nextStageMs={}", pending.plantId, stage, stages,
-            diagnostics.water, diagnostics.lastsMs, diagnostics.nextStageMs)
+        SkyMyce.logger.info("Greenhouse diagnostics: {} {}/{} water={} lastsForMs={} enough={} nextStageMs={}", pending.plantId, stage, stages,
+            diagnostics.water, diagnostics.lastsMs, diagnostics.enoughWater, diagnostics.nextStageMs)
         pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
@@ -1040,41 +1040,52 @@ object GreenhousePlanner : SkyMyceModule() {
     private var waterBarCheckAt = 0L
 
     /**
-     * While a watering can is held, the game shows the aimed plant's water as a bar over it. A level more than one segment
-     * away from the stored one replaces it, so watering (or drying) is followed without opening the Diagnostics menu.
+     * The game shows a plant's water as a bar on the name tag of an armor stand over it (seen with a watering can held). Every
+     * bar on [plot] is read about once a second; a level more than one segment away from the stored one replaces it, so
+     * watering (or drying) is followed without opening the Diagnostics menu.
      */
-    private fun readWaterBar(now: Long) {
+    private fun readWaterBars(plot: Plot, origin: Anchor, now: Long) {
         if (now < waterBarCheckAt) return
-        waterBarCheckAt = now + 500
-        if (MC.player.mainHandItem.getData(DataTypes.ID)?.let(::isWateringCan) != true) return
+        waterBarCheckAt = now + 1000
+        val layout = plot.layout ?: return
         val level = MC.instance.level ?: return
-        val (plot, placement) = aimedTarget(null) ?: return
-        val origin = plot.anchor ?: return
-        val a = cellPos(origin, placement.row, placement.col)
-        val b = cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1)
-        val box = AABB(minOf(a.x, b.x) - 0.5, a.y - 1.0, minOf(a.z, b.z) - 0.5, maxOf(a.x, b.x) + 1.5, a.y + 5.0, maxOf(a.z, b.z) + 1.5)
-        val entities = level.getEntities(null as Entity?, box) { true }
-        val texts = entities.map { (it as? Display.TextDisplay)?.textRenderState()?.text() ?: it.customName }
-        val water = texts.firstNotNullOfOrNull { it?.let { text -> parseWaterBar(glyphs(text)) } }
-        if (water == null) {
-            // Logged once a session, so the bar's format can be learned if it is never found.
-            if (!waterBarLogged && entities.isNotEmpty()) {
+        val corner = cellPos(origin, GREENHOUSE_SIZE - 1, GREENHOUSE_SIZE - 1)
+        val box = AABB(minOf(origin.pos.x, corner.x) - 0.5, origin.pos.y - 1.0, minOf(origin.pos.z, corner.z) - 0.5,
+            maxOf(origin.pos.x, corner.x) + 1.5, origin.pos.y + 6.0, maxOf(origin.pos.z, corner.z) + 1.5)
+        val entities = level.getEntities(null as Entity?, box) { (it as? Display.TextDisplay)?.textRenderState()?.text() != null || it.customName != null }
+        val bars = entities.mapNotNull { entity ->
+            val text = (entity as? Display.TextDisplay)?.textRenderState()?.text() ?: entity.customName ?: return@mapNotNull null
+            val water = parseWaterBar(glyphs(text)) ?: return@mapNotNull null
+            // A bar belongs to the planned plant covering the cell under it: a big mutation (Snoozling) shows its bar over its
+            // middle or a corner depending on aim, and one over an ingredient is not given to a neighbouring mutation.
+            val cell = cellOf(origin, BlockPos.containing(entity.x, origin.pos.y.toDouble(), entity.z)) ?: return@mapNotNull null
+            layout.targets.firstOrNull { p -> cell / GREENHOUSE_SIZE - p.row in 0 until p.size && cell % GREENHOUSE_SIZE - p.col in 0 until p.size }?.let { it to water }
+        }.distinctBy { it.first }
+        if (bars.isEmpty()) {
+            // Logged once a session while a can is held, so the bar's format can be learned if it is never found.
+            if (!waterBarLogged && entities.isNotEmpty() && MC.player.mainHandItem.getData(DataTypes.ID)?.let(::isWateringCan) == true) {
                 waterBarLogged = true
-                SkyMyce.logger.info("Greenhouse: no water bar among {}", entities.zip(texts).map { (entity, text) ->
+                SkyMyce.logger.info("Greenhouse: no water bar among {}", entities.take(20).map { entity ->
+                    val text = (entity as? Display.TextDisplay)?.textRenderState()?.text() ?: entity.customName
                     "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path}=${text?.string?.take(80)}" })
             }
             return
         }
         waterBarSeen = true
-        val key = placement.row * GREENHOUSE_SIZE + placement.col
-        val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: return
         val step = 100.0 / 16
-        val projected = reading.water?.let { it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0 }
-        // The bar only tells the segment; a stored level inside it is finer, so it stays.
-        if (projected != null && projected in water - 1..water + step + 1) return
-        val estimate = targetEstimate(plot, placement, now) ?: return
-        plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, water = water)
-        revision++; dirty = true; save()
+        var changed = false
+        for ((placement, water) in bars) {
+            val key = placement.row * GREENHOUSE_SIZE + placement.col
+            val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: continue
+            val projected = reading.water?.let { it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0 }
+            // The bar only tells the segment; a stored level inside it is finer, so it stays.
+            if (projected != null && projected in water - 1..water + step + 1) continue
+            val estimate = targetEstimate(plot, placement, now) ?: continue
+            // A new level makes the tool's "enough water" verdict stale.
+            plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, water = water, enough = false)
+            changed = true
+        }
+        if (changed) { revision++; dirty = true; save() }
     }
 
     /** A text's characters with their colours, including legacy section-sign codes inside it. */
@@ -1249,7 +1260,6 @@ object GreenhousePlanner : SkyMyceModule() {
         if (inGarden) pollPrices(now)
         val player = MC.instance.player
         if (!inGarden || player == null) return clear()
-        readWaterBar(now)
         val position = player.blockPosition()
         var nearest: Plot? = null
         var nearestDistance = Double.MAX_VALUE
@@ -1263,6 +1273,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val origin = plot.anchor
         if (origin == null) { clear(); if (current != null) hudLines = unanchoredLines; return }
         if (origin.pos.distSqr(position) > square(GreenhouseConfig.renderDistance + 24)) return clear()
+        readWaterBars(plot, origin, now)
         val stack = player.mainHandItem
         if (stack !== heldStack) {
             heldStack = stack
