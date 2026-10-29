@@ -251,9 +251,17 @@ fun main() {
 
     // A Crop Diagnostics menu as read in game on 2026-10-22 (one line per lore line), here mid-growth with a countdown.
     val menu = "Crop Diagnostics |  | Coalroot | Mutation Crop |  | Size: 1x1 | Growth Surface: Farmland | Growth Stages: 8 |  | Growth Stage | Age: 1d 10h 41m 12s | " +
-        "Stage: 5/8 | Next Stage: 1h 40m 20s | Times Mutated: 0 |  | Decay Info | Mutates Remaining: 10 | Water Level | §7Water: §b48.8§7/100 |  | " +
+        "Stage: 5/8 | Next Stage: 1h 40m 20s | Times Mutated: 0 |  | Decay Info | Mutates Remaining: 10 | Water Level | §7Water: §b48.8§7/100 | Lasts for: §b15h 02m 38s |  | " +
         "Shows how much water the current | crop has, ranging between -100 | (halted) and 100 (fully watered)."
-    check(parseDiagnostics(menu.split(" | ")) == Diagnostics(5, 8, 48.8, true, (3600 + 40 * 60 + 20) * 1000L)) { "Diagnostics ${parseDiagnostics(menu.split(" | "))}" }
+    check(parseDiagnostics(menu.split(" | ")) == Diagnostics(5, 8, 48.8, true, (3600 + 40 * 60 + 20) * 1000L, 54_158_000L)) { "Diagnostics ${parseDiagnostics(menu.split(" | "))}" }
+    // In game on 2026-10-29: "Lasts for" runs to -100 (halted), so 45.8 for 15h 02m 38s and 100 for 19h 11m 02s both lose ~10 an hour.
+    check(abs(drainPerHour(45.8, 54_158_000L)!! - 9.692) < 1e-3 && abs(drainPerHour(100.0, 69_062_000L)!! - 10.425) < 1e-3 &&
+        drainPerHour(-40.0, 6 * 3_600_000L) == 10.0 && drainPerHour(-100.0, 1000L) == null && drainPerHour(45.8, null) == null) { "Drain from lasts for" }
+    // The watering-can bar, as seen in game: 7 blue of 16 at 45.8, 6 red at -40, drawn as two identical lines.
+    fun bar(blue: Int, red: Int) = (List(blue) { '|' to 0x5555FF } + List(16 - blue - red) { '|' to 0xFFFFFF } + List(red) { '|' to 0xFF5555 })
+    check(parseWaterBar(bar(7, 0) + listOf('\n' to 0) + bar(7, 0)) == 43.75 && parseWaterBar(bar(0, 6)) == -43.75 && parseWaterBar(bar(0, 0)) == 0.0) { "Water bar" }
+    check(parseWaterBar(bar(3, 3)) == null && parseWaterBar("Snoozling".map { it to 0xFFFFFF }) == null &&
+        parseWaterBar(bar(0, 6).reversed()) == null) { "Not a water bar" }
     check(parseDiagnostics(listOf("Scourroot", "Growth Stages: 0", "Stage: FULLY GROWN", "Next Stage: FULLY GROWN", "Water: 100/100", "This crop doesn't need water!")) ==
         Diagnostics(1, 1, null, false, null)) { "Diagnostics without water" }
     check(parseDuration("1d 10h 41m 12s") == 124_872_000L && parseDuration("45s") == 45_000L && parseDuration("FULLY GROWN") == null) { "Durations" }
@@ -277,21 +285,14 @@ fun main() {
     // On the shared tick a Coalroot read at 5/8 just after a tick is ready on the third tick after it.
     val onTick = estimateGrowth(coalroot, GrowthReading(5, 8, readAt), 2.0, readAt + hour, tick)
     check(onTick.stage == 5.0 && onTick.readyInMs == 5 * hour && onTick.dryInMs == null) { "Tick growth $onTick" }
-    // Water: 48.8 at 16 a tick still has 0.8 after the 3 ticks to ready, so it is promised and needs no water reminder.
-    val wet = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 16.0)
+    // Water: 48.8 at 8 an hour lasts past the ready tick 6 hours after the reading, so it is promised and needs no reminder.
+    val wet = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 8.0)
     check(wet.readyInMs == 5 * hour && wet.dryInMs == null) { "Water lasts $wet" }
-    // At 20 a tick it would be below 0 on the tick it grows ready; the game may skip that stage, so it is not promised.
-    check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 20.0).let { it.readyInMs == null && it.dryInMs == 5 * hour }) { "Water edge" }
-    // 30 a tick runs out on the second tick, before it is ready: it is not promised, and the dry time is when it runs out.
-    val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 30.0)
+    // At 12.2 an hour it runs out 4 hours after the reading, before it is ready: not promised, reminded when it runs out.
+    val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 12.2)
     check(dry.readyInMs == null && dry.dryInMs == 3 * hour) { "Runs dry $dry" }
     check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = -5.0), 2.0, readAt + hour, tick, 20.0).dryInMs == 0L) { "Already dry" }
     check(estimateGrowth(coalroot, GrowthReading(8, 8, readAt, water = 10.0), 2.0, readAt + hour, tick, 20.0).dryInMs == null) { "Grown needs no water" }
-    // Drain is seen between two readings with no watering; a watered or grown one teaches nothing.
-    check(drainBetween(GrowthReading(4, 8, readAt, water = 80.0), GrowthReading(6, 8, readAt + 4 * hour, water = 40.0), 2) == 20.0 &&
-        drainBetween(GrowthReading(4, 8, readAt, water = 20.0), GrowthReading(6, 8, readAt, water = 90.0), 2) == null &&
-        drainBetween(GrowthReading(8, 8, readAt, water = 80.0), GrowthReading(8, 8, readAt, water = 60.0), 1) == null &&
-        drainBetween(GrowthReading(4, 8, readAt, water = 80.0), GrowthReading(4, 8, readAt, water = 70.0), 0) == null) { "Drain" }
 
     // Reminders: at 50% of 4 mutations, the second-soonest ready time; untimed ones count as not ready; nothing already true.
     fun timedIn(ms: Long?, dryMs: Long? = null) = GrowthEstimate(1.0, 8, ms == 0L, false, ms, dryMs)

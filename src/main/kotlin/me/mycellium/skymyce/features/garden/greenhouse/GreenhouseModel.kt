@@ -262,8 +262,8 @@ data class PlotState(
 
 /**
  * A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]; [awake] when the player woke it at that
- * stage since. [water] is its water level (-100..100) when it needs water and the level is known; [drain] the water it was
- * seen to lose per growth tick.
+ * stage since. [water] is its water level (-100..100) when it needs water and the level is known; [drain] the water it loses
+ * per hour, from the tool's "Lasts for".
  */
 data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false, val water: Double? = null, val drain: Double? = null)
 
@@ -298,22 +298,22 @@ fun updateCycle(cycle: GrowthCycle?, nextTick: Long, countdownMs: Long, formulaM
     return GrowthCycle(nextTick, Math.round(measured).coerceAtLeast(countdownMs), measured = true)
 }
 
-/** Water a plant was seen to lose per growth tick between two readings; null when it was watered, grown, or no tick passed. */
-fun drainBetween(previous: GrowthReading, next: GrowthReading, ticks: Int): Double? {
-    val before = previous.water ?: return null
-    val after = next.water ?: return null
-    if (ticks <= 0 || previous.stage >= previous.stages || after >= before || after <= -100.0) return null
-    return (before - after) / ticks
-}
+/**
+ * Water lost per hour, from the Diagnostics "Water: 45.8/100" and "Lasts for: 15h 02m 38s". "Lasts for" runs to -100, where
+ * growth halts: read in game on 2026-10-29, 45.8 lasting 15h 02m 38s and 100 lasting 19h 11m 02s both lose about 10 an hour
+ * that way, while to 0 they would disagree (3.0 and 5.2). Water drops once a growth cycle, so this rate is an average.
+ */
+fun drainPerHour(water: Double?, lastsMs: Long?): Double? =
+    if (water == null || lastsMs == null || water <= -100 || lastsMs <= 0) null else (water + 100) / (lastsMs / 3_600_000.0)
 
-/** Assumed water lost per growth tick until a plant's own drain is seen (players measured about 10-25 before 0.27.2). */
-const val DEFAULT_DRAIN = 20.0
+/** Water lost per hour until a plant's own rate is read: about 10 in game on 2026-10-29 (see [drainPerHour]). */
+const val DEFAULT_DRAIN = 10.0
 
 /**
  * Projects a reading with the growth timer, following [plant]'s rules: it stops at a pause until woken, a restarting crop
  * wraps back to stage 1, and unpredictable growth stays at what was read. With [cycle] it advances on the shared tick.
- * With [drain], growth is only promised while the water stays at 0 or above, since below it the game may skip a stage.
- * Day/night (Noctilume) is not modelled.
+ * With [drain] (water per hour), growth is only promised while the water stays above 0, since below it the game may skip a
+ * stage. Day/night (Noctilume) is not modelled.
  */
 fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double, now: Long, cycle: GrowthCycle? = null, drain: Double? = null): GrowthEstimate {
     val stages = reading.stages
@@ -330,21 +330,16 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
         else -> raw.coerceAtMost(stages.toDouble())
     }
     val ready = stage >= readyAt
-    val water = reading.water?.takeIf { drain != null && drain > 0 }
-    // Ticks after the reading until the water reaches 0.
-    val dryTicks = water?.let { if (it <= 0) 0 else ceil(it / drain!!).toInt() }
+    // When the water reaches 0.
+    val dryAt = reading.water?.takeIf { drain != null && drain > 0 }?.let { reading.at + (it.coerceAtLeast(0.0) / drain!! * 3_600_000).toLong() }
     val readyInMs = when {
         ready -> 0L
         paused || unpredictable -> null
-        water != null && water - drain!! * (readyAt - reading.stage) < 0 -> null
-        cycle != null -> cycle.tickAfter(now, ceil(readyAt - stage).toInt()) - now
-        else -> ((readyAt - stage) * stageMs).toLong()
+        else -> (if (cycle != null) cycle.tickAfter(now, ceil(readyAt - stage).toInt()) - now else ((readyAt - stage) * stageMs).toLong())
+            .takeIf { dryAt == null || now + it <= dryAt }
     }
     // Only water that runs out before it is ready matters; after that it needs none.
-    val dryInMs = dryTicks?.takeIf { !ready }?.let { n ->
-        val at = if (n == 0) reading.at else cycle?.tickAfter(reading.at, n) ?: (reading.at + n * stageMs).toLong()
-        (at - now).coerceAtLeast(0)
-    }?.takeIf { readyInMs == null || it < readyInMs }
+    val dryInMs = dryAt?.takeIf { !ready }?.let { (it - now).coerceAtLeast(0) }?.takeIf { readyInMs == null || it < readyInMs }
     return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs)
 }
 
@@ -385,7 +380,7 @@ fun parseGrowth(lines: List<String>): Pair<Int, Int>? {
 }
 
 /** What a Crop Diagnostics menu showed. [water] is null when the crop needs no water or it was not shown. */
-data class Diagnostics(val stage: Int, val stages: Int, val water: Double?, val needsWater: Boolean?, val nextStageMs: Long?)
+data class Diagnostics(val stage: Int, val stages: Int, val water: Double?, val needsWater: Boolean?, val nextStageMs: Long?, val lastsMs: Long? = null)
 
 fun parseDiagnostics(lines: List<String>): Diagnostics? {
     val (stage, stages) = parseGrowth(lines) ?: return null
@@ -393,7 +388,8 @@ fun parseDiagnostics(lines: List<String>): Diagnostics? {
     val noWater = text.any { NO_WATER.containsMatchIn(it) }
     val water = if (noWater) null else text.firstNotNullOfOrNull { WATER.find(it)?.groupValues?.get(1)?.toDoubleOrNull() }?.takeIf { it in -100.0..100.0 }
     val next = text.firstNotNullOfOrNull { NEXT_STAGE.find(it)?.groupValues?.get(1) }?.let(::parseDuration)
-    return Diagnostics(stage, stages, water, if (noWater) false else if (water != null) true else null, next)
+    val lasts = if (water == null) null else text.firstNotNullOfOrNull { LASTS_FOR.find(it)?.groupValues?.get(1) }?.let(::parseDuration)
+    return Diagnostics(stage, stages, water, if (noWater) false else if (water != null) true else null, next, lasts)
 }
 
 /** "1d 10h 41m 12s" in milliseconds, or null without a part. */
@@ -401,6 +397,32 @@ fun parseDuration(text: String): Long? {
     val parts = DURATION_PART.findAll(text).toList().takeIf { it.isNotEmpty() } ?: return null
     return parts.sumOf { part ->
         part.groupValues[1].toLong() * when (part.groupValues[2]) { "d" -> 86_400_000L; "h" -> 3_600_000L; "m" -> 60_000L; else -> 1000L }
+    }
+}
+
+/**
+ * A plant's water from the bar shown over it while a watering can is held, as (glyph, RGB colour) pairs. The bar has 16
+ * segments: blue filled from the left above 0, red from the right below it, white otherwise (read in game 2026-10-29: 7 blue
+ * at 45.8, 6 red at -40). Only the first line counts; the lower end of the segment's range is returned. Null for anything else.
+ */
+fun parseWaterBar(glyphs: List<Pair<Char, Int>>): Double? {
+    val segments = glyphs.takeWhile { it.first != '\n' }.filter { !it.first.isWhitespace() }
+    if (segments.size !in 8..40 || segments.map { it.first }.distinct().size != 1) return null
+    val kinds = segments.map { (_, rgb) -> barKind(rgb) ?: return null }
+    val blue = kinds.count { it == 'b' }
+    val red = kinds.count { it == 'r' }
+    if (blue > 0 && red > 0 || kinds.take(blue).any { it != 'b' } || kinds.takeLast(red).any { it != 'r' }) return null
+    val step = 100.0 / segments.size
+    return if (red > 0) -(red + 1) * step else blue * step
+}
+
+private fun barKind(rgb: Int): Char? {
+    val r = rgb shr 16 and 255; val g = rgb shr 8 and 255; val b = rgb and 255
+    return when {
+        r > 200 && g > 200 && b > 200 -> 'w'
+        b > r + 60 && b > g + 60 -> 'b'
+        r > g + 60 && r > b + 60 -> 'r'
+        else -> null
     }
 }
 
@@ -414,6 +436,7 @@ fun parseDeskGrowthTier(name: String, lore: List<String>): Int? {
 
 private val WATER = Regex("(?i)^\\s*water:\\s*(-?\\d{1,3}(?:\\.\\d+)?)\\s*/\\s*100\\b")
 private val NO_WATER = Regex("(?i)doesn't need water")
+private val LASTS_FOR = Regex("(?i)lasts for:\\s*((?:\\d{1,4}\\s*[dhms]\\s*)+)")
 private val NEXT_STAGE = Regex("(?i)next stage:\\s*((?:\\d{1,4}\\s*[dhms]\\s*)+)")
 private val DURATION_PART = Regex("(\\d{1,4})\\s*([dhms])")
 private val DESK_TIER = Regex("Current Tier:\\s*(\\d)\\s*/\\s*9")

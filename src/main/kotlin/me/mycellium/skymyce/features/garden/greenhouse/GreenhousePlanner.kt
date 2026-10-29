@@ -39,6 +39,10 @@ import net.minecraft.gizmos.Gizmos
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.FormattedText
+import net.minecraft.network.chat.Style
+import net.minecraft.ChatFormatting
+import net.minecraft.world.entity.Display
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.item.ItemStack
@@ -915,13 +919,13 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun noteWake(stack: ItemStack, entity: Entity?) {
         if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
         val held = stack.getData(DataTypes.ID)
-        if (held?.contains("DIAGNOSTIC") == true || held?.startsWith("HYDRO_CAN") == true || held?.startsWith("AQUAMASTER") == true) return
+        if (held?.contains("DIAGNOSTIC") == true || held != null && isWateringCan(held)) return
         val (plot, placement) = aimedTarget(entity) ?: return
         val key = placement.row * GREENHOUSE_SIZE + placement.col
         val reading = plot.growth[key] ?: return
         val estimate = targetEstimate(plot, placement)?.takeIf { it.paused } ?: return
         val now = System.currentTimeMillis()
-        val water = reading.water?.let { w -> (w - drainFor(plot, key, placement.plantId) * ticksBetween(reading.at, now)).coerceAtLeast(-100.0) }
+        val water = reading.water?.let { w -> (w - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0).coerceAtLeast(-100.0) }
         plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, awake = true, water = water)
         revision++; dirty = true; save()
         displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
@@ -949,11 +953,12 @@ object GreenhousePlanner : SkyMyceModule() {
         diagnostics.nextStageMs?.let { cycle = updateCycle(cycle, (now + it) / 1000 * 1000, it, formulaCycleMs()) }
         // The tool shows a woken Snoozling at the stage it fell asleep at, just like an asleep one, so a wake stays.
         val last = pending.plot.growth[pending.key]?.takeIf { it.at >= (pending.plot.spawned[pending.key] ?: 0L) }
-        var reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage, water = diagnostics.water, drain = last?.drain)
+        val reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage, water = diagnostics.water,
+            drain = drainPerHour(diagnostics.water, diagnostics.lastsMs) ?: last?.drain)
         val layout = pending.plot.layout
-        if (last != null) drainBetween(last, reading, ticksBetween(last.at, now))?.let { seen ->
-            reading = reading.copy(drain = last.drain?.let { (it + seen) / 2 } ?: seen)
-        }
+        // One line per reading, so water and cycle timing can be checked against the game later.
+        SkyMyce.logger.info("Greenhouse diagnostics: {} {}/{} water={} lastsForMs={} nextStageMs={}", pending.plantId, stage, stages,
+            diagnostics.water, diagnostics.lastsMs, diagnostics.nextStageMs)
         pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
@@ -1002,21 +1007,23 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Until two countdowns time the cycle, it is at least what the upgrades predict, so estimates never run early. */
     private fun growthCycle(): GrowthCycle? = cycle?.let { if (it.measured) it else it.copy(cycleMs = maxOf(it.cycleMs, formulaCycleMs())) }
 
-    /** The water [plot]'s mutation at [key] loses per tick: its own, else the average seen for that mutation, else assumed. */
+    /** The water [plot]'s mutation at [key] loses per hour: its own, else the average read for that mutation, else assumed. */
     private fun drainFor(plot: Plot, key: Int, plantId: String): Double = plot.growth[key]?.drain
         ?: plots.flatMap { p -> p.layout?.targets.orEmpty().filter { it.plantId == plantId }.mapNotNull { p.growth[it.row * GREENHOUSE_SIZE + it.col]?.drain } }
             .takeIf { it.isNotEmpty() }?.average() ?: DEFAULT_DRAIN
 
-    private fun ticksBetween(from: Long, to: Long): Int =
-        growthCycle()?.ticks(from, to) ?: ((to - from).coerceAtLeast(0) / (stageHours() * 3_600_000)).toInt()
-
     private var wateringHinted = false
 
-    /** Watering a mutation with a Hydrocan: its last water level is stale, so it is timed as staying watered until analysed again. */
+    private fun isWateringCan(id: String) = id.startsWith("HYDRO_CAN") || id.startsWith("AQUAMASTER")
+
+    /**
+     * Watering a mutation with a Hydrocan when its water bar cannot be read: its last water level is stale, so it is timed as
+     * staying watered until analysed again.
+     */
     private fun noteWatering(stack: ItemStack, entity: Entity?) {
-        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
+        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN || waterBarSeen) return
         val id = stack.getData(DataTypes.ID) ?: return
-        if (!id.startsWith("HYDRO_CAN") && !id.startsWith("AQUAMASTER")) return
+        if (!isWateringCan(id)) return
         val (plot, placement) = aimedTarget(entity) ?: return
         val key = placement.row * GREENHOUSE_SIZE + placement.col
         val reading = plot.growth[key]?.takeIf { it.water != null } ?: return
@@ -1026,6 +1033,63 @@ object GreenhousePlanner : SkyMyceModule() {
             wateringHinted = true
             displayModMessage("§7Watered: reminders treat it as staying watered. Analyze it again with the Plant Diagnostics Tool so they know its real water level")
         }
+    }
+
+    private var waterBarSeen = false
+    private var waterBarLogged = false
+    private var waterBarCheckAt = 0L
+
+    /**
+     * While a watering can is held, the game shows the aimed plant's water as a bar over it. A level more than one segment
+     * away from the stored one replaces it, so watering (or drying) is followed without opening the Diagnostics menu.
+     */
+    private fun readWaterBar(now: Long) {
+        if (now < waterBarCheckAt) return
+        waterBarCheckAt = now + 500
+        if (MC.player.mainHandItem.getData(DataTypes.ID)?.let(::isWateringCan) != true) return
+        val level = MC.instance.level ?: return
+        val (plot, placement) = aimedTarget(null) ?: return
+        val origin = plot.anchor ?: return
+        val a = cellPos(origin, placement.row, placement.col)
+        val b = cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1)
+        val box = AABB(minOf(a.x, b.x) - 0.5, a.y - 1.0, minOf(a.z, b.z) - 0.5, maxOf(a.x, b.x) + 1.5, a.y + 5.0, maxOf(a.z, b.z) + 1.5)
+        val entities = level.getEntities(null as Entity?, box) { true }
+        val texts = entities.map { (it as? Display.TextDisplay)?.textRenderState()?.text() ?: it.customName }
+        val water = texts.firstNotNullOfOrNull { it?.let { text -> parseWaterBar(glyphs(text)) } }
+        if (water == null) {
+            // Logged once a session, so the bar's format can be learned if it is never found.
+            if (!waterBarLogged && entities.isNotEmpty()) {
+                waterBarLogged = true
+                SkyMyce.logger.info("Greenhouse: no water bar among {}", entities.zip(texts).map { (entity, text) ->
+                    "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path}=${text?.string?.take(80)}" })
+            }
+            return
+        }
+        waterBarSeen = true
+        val key = placement.row * GREENHOUSE_SIZE + placement.col
+        val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: return
+        val step = 100.0 / 16
+        val projected = reading.water?.let { it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0 }
+        // The bar only tells the segment; a stored level inside it is finer, so it stays.
+        if (projected != null && projected in water - 1..water + step + 1) return
+        val estimate = targetEstimate(plot, placement, now) ?: return
+        plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, water = water)
+        revision++; dirty = true; save()
+    }
+
+    /** A text's characters with their colours, including legacy section-sign codes inside it. */
+    private fun glyphs(text: Component): List<Pair<Char, Int>> {
+        val out = ArrayList<Pair<Char, Int>>()
+        text.visit(FormattedText.StyledContentConsumer<Unit> { style, part ->
+            var rgb = style.color?.value ?: 0xFFFFFF
+            var i = 0
+            while (i < part.length) {
+                if (part[i] == '\u00a7' && i + 1 < part.length) { ChatFormatting.getByCode(part[i + 1])?.color?.let { rgb = it }; i += 2; continue }
+                out += part[i] to rgb; i++
+            }
+            java.util.Optional.empty()
+        }, Style.EMPTY)
+        return out
     }
 
     /** The Desk's Greenhouse Upgrades menu shows the Growth Speed tier; a changed tier also changes the cycle, so it is timed again. */
@@ -1185,6 +1249,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (inGarden) pollPrices(now)
         val player = MC.instance.player
         if (!inGarden || player == null) return clear()
+        readWaterBar(now)
         val position = player.blockPosition()
         var nearest: Plot? = null
         var nearestDistance = Double.MAX_VALUE
