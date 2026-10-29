@@ -203,8 +203,11 @@ object GreenhousePlanner : SkyMyceModule() {
     }
 
     /** Settings for [plot]: the unique-crop count comes from the player's other saved plots unless the setting is higher. */
-    internal fun settings(plot: Plot? = null) = GreenhouseSettings(GreenhouseConfig.upgradeLevel,
-        maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode, gardenLevel() ?: 15, cropGrowth())
+    internal fun settings(plot: Plot? = null): GreenhouseSettings {
+        val elsewhere = uniqueElsewhere(plot)
+        return GreenhouseSettings(GreenhouseConfig.upgradeLevel, maxOf(GreenhouseConfig.uniqueCrops, elsewhere.size), GreenhouseConfig.priceMode,
+            gardenLevel() ?: 15, cropGrowth(), elsewhere)
+    }
 
     /** Crop Growth the mod can see (the Garden level's share); 0 while the level is unknown, so timers err slow. */
     private fun cropGrowth() = gardenLevel()?.let(::gardenCropGrowth) ?: 0
@@ -275,9 +278,10 @@ object GreenhousePlanner : SkyMyceModule() {
      * shortcut: combined with this plot's own unique crops by maximum, not union, as the solver takes a count; upgrade if
      * plots often grow different unique crops.
      */
-    internal fun uniqueElsewhere(plot: Plot?): Int = plots.asSequence().filter { it !== plot }
+    /** Unique base crops planned on every plot but [plot]; sorted, so a solve's inputs hash does not depend on plot order. */
+    internal fun uniqueElsewhere(plot: Plot?): Set<String> = plots.asSequence().filter { it !== plot }
         .flatMap { it.layout?.placements.orEmpty().asSequence() }
-        .filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }.toSet().size
+        .filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }.toSortedSet()
 
     private fun owner(layout: Layout) = plots.firstOrNull { it.layout === layout }
 
@@ -406,7 +410,8 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Hours from a target appearing to its harvest, from the site's timer; null without a target. */
     internal fun cycleHours(layout: Layout): Double? {
         val plant = layout.targets.firstOrNull()?.let { catalog?.get(it.plantId) } ?: return null
-        return cycleHours(plant, GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops), cropGrowth())
+        val here = layout.placements.filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }
+        return cycleHours(plant, GreenhouseConfig.upgradeLevel, settings(owner(layout)).uniqueWith(here), cropGrowth())
     }
 
     private fun remember(hash: String, estimate: PlotEstimate) {
@@ -982,9 +987,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private fun stageHours() = hoursPerStage(GreenhouseConfig.upgradeLevel, uniqueCropsEverywhere(), cropGrowth())
 
     /** Unique crop types across every plot: the game counts them in ANY Greenhouse plot, so every plot grows at the same speed. */
-    private fun uniqueCropsEverywhere(): Int = maxOf(GreenhouseConfig.uniqueCrops, plots.asSequence()
-        .flatMap { it.layout?.placements.orEmpty().asSequence() }
-        .filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }.toSet().size)
+    private fun uniqueCropsEverywhere(): Int = settings().uniqueWith(emptyList())
 
     // ---- Growth tick, water and Desk ----------------------------------------------------------------------------
 

@@ -119,8 +119,18 @@ enum class ProfitMetric(val label: String) { PER_HOUR("Per hour"), PER_CYCLE("Pe
 /** Bazaar quick-status pair: the highest buy order and lowest sell offer. */
 data class Quote(val buyOrder: Double, val sellOffer: Double)
 
-/** [gardenLevel] is 15 (everything unlocked) while the player's level is unknown; [cropGrowth] counts only what is known. */
-data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode, val gardenLevel: Int = 15, val cropGrowth: Int = 0)
+/**
+ * [gardenLevel] is 15 (everything unlocked) while the player's level is unknown; [cropGrowth] counts only what is known.
+ * [uniqueElsewhere] holds the unique base crops on the player's other plots; [uniqueCrops] is the least the bonus counts.
+ */
+data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode, val gardenLevel: Int = 15, val cropGrowth: Int = 0,
+                              val uniqueElsewhere: Set<String> = emptySet())
+
+/**
+ * The unique-crop bonus count for a plot growing [here]: the game counts unique crop types in ANY Greenhouse plot, so a crop
+ * already on another plot adds nothing. Up to 10 (wiki, 0.27.2).
+ */
+fun GreenhouseSettings.uniqueWith(here: Collection<String>) = maxOf(uniqueCrops, (uniqueElsewhere + here).size).coerceAtMost(10)
 
 /** The Garden level a mutation needs: the highest unlock level among the base crops it spreads from. */
 fun gardenLevelFor(catalog: PlantCatalog, plant: Plant) = plant.requires.keys.maxOfOrNull { catalog[it]?.gardenLevel ?: 0 } ?: 0
@@ -217,7 +227,7 @@ data class Layout(
  */
 fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: GreenhouseSettings): Double? {
     val ingredients = placements.filter { it.role == Role.INGREDIENT }.map { catalog[it.plantId] ?: return null }
-    val unique = maxOf(settings.uniqueCrops, ingredients.filter { it.unique }.distinct().size).coerceAtMost(12)
+    val unique = settings.uniqueWith(ingredients.filter { it.unique }.map { it.id })
     var income = 0.0
     var fastest = Double.MAX_VALUE
     for (target in targets) {
@@ -624,7 +634,7 @@ private fun importFor(catalog: PlantCatalog, planted: Array<String?>, occupied: 
         val plant = catalog[placement.plantId]!!
         soil[placement.row * GREENHOUSE_SIZE + placement.col]?.takeIf { it in plant.soils } ?: plant.soils.first()
     }
-    val unique = maxOf(settings.uniqueCrops, placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]!!.unique }.map { it.plantId }.distinct().size).coerceAtMost(12)
+    val unique = settings.uniqueWith(placements.filter { it.role == Role.INGREDIENT && catalog[it.plantId]!!.unique }.map { it.plantId })
     val draft = Layout(placements, soils, 0.0, unique, now, hash)
     return draft.copy(totalProfitPerHour = draft.profitPerHour(catalog, quotes, settings) ?: 0.0) to supported
 }
@@ -1018,6 +1028,11 @@ class GreenhouseSolver(
     private val needs = pool.map { plant -> if (plant in targets) plant.requires.map { (id, count) -> index.getValue(id) to count } else emptyList() }
     private val targetIndices = targets.map { index.getValue(it.id) }
     private val uniqueIndices = pool.indices.filter { pool[it].unique }
+    /** Unique crops already on the player's other plots: planting them here adds nothing to the bonus. */
+    private val elsewhere = uniqueIndices.filter { pool[it].id in settings.uniqueElsewhere }.toSet()
+    private val elsewhereOutsidePool = settings.uniqueElsewhere.count { id -> uniqueIndices.none { pool[it].id == id } }
+    /** The bonus count with [counted] of the pool's unique crops on this plot or elsewhere. */
+    private fun uniqueCount(counted: Int) = maxOf(settings.uniqueCrops, elsewhereOutsidePool + counted).coerceAtMost(10)
     /** Plants worth planting: anything a target needs, plus unique crops for the growth bonus. */
     private val plantable = (targetIndices.flatMap { t -> needs[t].map { it.first } } + uniqueIndices).distinct()
 
@@ -1078,7 +1093,7 @@ class GreenhouseSolver(
     private fun evaluate(ingredients: List<Item>): Evaluation {
         val cells = IntArray(GREENHOUSE_CELLS) { -1 }
         ingredients.forEachIndexed { i, item -> occupy(cells, item, i) }
-        val unique = maxOf(settings.uniqueCrops, uniqueIndices.count { u -> ingredients.any { it.plant == u } }).coerceAtMost(12)
+        val unique = uniqueCount(uniqueIndices.count { u -> u in elsewhere || ingredients.any { it.plant == u } })
         val counts = IntArray(pool.size)
         val valid = ArrayList<Pair<Item, Double>>()
         var partial = 0.0
@@ -1252,19 +1267,19 @@ class GreenhouseSolver(
         }
         val deficits = footprints.indices.map { t -> IntArray(pool.size) { maxOf(0, required[t][it] - have[t][it]) } }
         val validTargets = footprints.filterIndexed { i, _ -> deficits[i].all { it == 0 } }
-        val present = uniqueIndices.filter { u -> ingredients.any { it.plant == u } }
+        val present = uniqueIndices.filter { u -> u in elsewhere || ingredients.any { it.plant == u } }
         val missing = (uniqueIndices - present.toSet()).sortedBy { cost[it] }
         val free = (0 until GREENHOUSE_CELLS).filter { unlocked[it] && cells[it] < 0 }
         var bestExtra = 0; var bestExact = Double.NEGATIVE_INFINITY
         for (extra in 0..minOf(missing.size, free.size)) {
-            val unique = maxOf(settings.uniqueCrops, present.size + extra).coerceAtMost(12)
+            val unique = uniqueCount(present.size + extra)
             val fastest = validTargets.minOfOrNull { cycle(it.plant, unique) } ?: hoursPerStage(settings.upgrade, unique, settings.cropGrowth)
             val exact = validTargets.sumOf { revenue[it.plant] / cycle(it.plant, unique) } -
                 (ingredients.sumOf { cost[it.plant] } + missing.take(extra).sumOf { cost[it] }) / fastest
             if (exact > bestExact) { bestExact = exact; bestExtra = extra }
         }
         missing.take(bestExtra).forEachIndexed { i, plant -> ingredients += Item(plant, free[i] / GREENHOUSE_SIZE, free[i] % GREENHOUSE_SIZE, 1) }
-        val unique = maxOf(settings.uniqueCrops, present.size + bestExtra).coerceAtMost(12)
+        val unique = uniqueCount(present.size + bestExtra)
         var partial = 0.0
         footprints.forEachIndexed { i, item ->
             val need = needs[item.plant].sumOf { it.second }

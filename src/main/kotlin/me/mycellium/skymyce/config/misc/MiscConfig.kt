@@ -249,8 +249,8 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
 
     val uniqueCrops by int(0) {
         name = TranslatableValue.literal("Unique Crops Elsewhere")
-        description = TranslatableValue.literal("Counted automatically from your other saved plots. Raise it only for unique crops grown in plots the planner does not know")
-        range = 0..12; slider = true
+        description = TranslatableValue.literal("Unique crop types count across all your Greenhouse plots (up to 10), so crops on your other saved plots are counted automatically and not planted twice. Raise it only for unique crops grown in plots the planner does not know")
+        range = 0..10; slider = true
     }
 
     val gardenLevel by int(0) {

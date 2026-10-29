@@ -52,6 +52,10 @@ fun main() {
     check(hoursPerStage(0, 0) == 4.0 && abs(hoursPerStage(9, 12) - 4.0 / 1.75) < 1e-9 && abs(hoursPerStage(8, 0) - 4.0 / 1.4) < 1e-9 &&
         abs(hoursPerStage(9, 10, 210) * 3600 - 14400 / 2.275) < 1e-6) { "Timer" }
     check(gardenCropGrowth(15) == 140 && gardenCropGrowth(1) == 0 && gardenCropGrowth(null) == 0) { "Garden Crop Growth" }
+    // Unique crops count across ANY plot: Wheat and Carrot elsewhere plus Potato and Wheat here make 3, up to 10.
+    val anyPlot = GreenhouseSettings(0, 2, PriceMode.SELL_OFFER, uniqueElsewhere = setOf("WHEAT_SEEDS", "CARROT"))
+    check(anyPlot.uniqueWith(listOf("POTATO", "WHEAT_SEEDS")) == 3 && anyPlot.uniqueWith(emptyList()) == 2 &&
+        anyPlot.copy(uniqueCrops = 12).uniqueWith(emptyList()) == 10) { "Unique crops across plots" }
 
     val quotes = mapOf("GLASSCORN" to Quote(900_000.0, 1_000_000.0), "STARTLEVINE" to Quote(9_000.0, 10_000.0), "CHLORONITE" to Quote(1_000.0, 2_000.0),
         "ALL_IN_ALOE" to Quote(5e6, 5e6), "MAGIC_JELLYBEAN" to Quote(100.0, 100.0), "PLANTBOY_ADVANCE" to Quote(1e5, 1e5))
@@ -89,6 +93,12 @@ fun main() {
     check(hash != inputsHash(full, listOf("GLASSCORN"), settings, catalog, priced + ("GLASSCORN" to Quote(2e6, 2e6)))) { "Large move kept hash" }
     val layout = GreenhouseSolver(catalog, priced, settings, full, listOf("GLASSCORN")).solve(1, 5, hash)!!
     validate(layout, full)
+    // A unique crop already on another plot adds nothing to the bonus here, so the solver plants only what Gloomgourd needs.
+    val allUnique = catalog.plants.filter { it.unique }.map { it.id }.toSortedSet()
+    val shared = GreenhouseSolver(catalog, priced, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER, uniqueElsewhere = allUnique), full, listOf("GLOOMGOURD"), 20_000).solve(3, 0, "x")!!
+    check(shared.placements.filter { it.role == Role.INGREDIENT }.all { it.plantId in setOf("PUMPKIN_SEEDS", "MELON_SEEDS") } && shared.uniqueCrops == 10) {
+        "Bonus crops grown elsewhere ${shared.placements.filter { it.role == Role.INGREDIENT }.map { it.plantId }.toSet()}"
+    }
     val restored = layoutFromJson(layout.toJson(), catalog)
     check(restored.placements == layout.placements && restored.cells == layout.cells && restored.inputsHash == hash) { "Round trip" }
     check(layout.cells.values.filter { it.plantId == "GLASSCORN" }.all { it.soil == Soil.SAND && it.role == Role.TARGET }) { "Soil" }
