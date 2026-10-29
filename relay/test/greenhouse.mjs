@@ -8,7 +8,7 @@ async function load(entry) {
     bundle: true, format: 'esm', platform: 'browser', write: false });
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 }
-const { validGreenhouseUpload, nextGreenhouseDm, unsentEvents, greenhouseView, GreenhouseReminders, handleGreenhouseInteraction, GREENHOUSE_LIMITS } =
+const { validGreenhouseUpload, nextGreenhouseDm, unsentEvents, greenhouseView, greenhouseDmText, GreenhouseReminders, handleGreenhouseInteraction, GREENHOUSE_LIMITS } =
   await load('greenhouse-reminders.ts');
 
 /** Durable Object SqlStorage over node:sqlite, with rows read/written counted like Cloudflare bills them. */
@@ -32,23 +32,23 @@ const upload = (events, extra = {}) => ({ type: 'greenhouse_schedule', id, enabl
 test('uploads are checked strictly at the trust boundary', () => {
   assert.deepEqual(validGreenhouseUpload(upload([ready]), now), { enabled: true, events: [ready], plots: [plot] });
   assert.deepEqual(validGreenhouseUpload({ type: 'greenhouse_schedule', id, enabled: false }, now), { enabled: false });
-  for (const bad of [upload([ready], { extra: 1 }), upload([ready, ready]), upload(Array(7).fill(ready)), upload([{ ...ready, at: now + 15 * 24 * hour }]),
+  for (const bad of [upload([ready], { extra: 1 }), upload([ready, ready]), upload(Array(10).fill(ready)), upload([{ ...ready, kind: 'sleep' }]), upload([{ ...ready, at: now + 15 * 24 * hour }]),
     upload([{ ...ready, count: 23 }]), upload([{ ...ready, plot: 'a b' }]), upload([ready], { id: 'x' }),
     upload([ready], { plots: [{ ...plot, targets: [[22, 1, 1, 5, 8, 0, 0, 0]] }] }), upload([ready], { plots: [{ ...plot, cycleMs: 60_000 }] })])
     assert.equal(validGreenhouseUpload(bad, now), null);
 });
 
-test('DMs coalesce within 30 minutes, keep 2 hours apart and stop at 4 a day, and are never early', () => {
+test('DMs coalesce within 30 minutes, keep 2 hours apart and stop at 8 a day, and are never early', () => {
   const at = (minutes, kind = 'ready', plot = '1') => ({ plot, kind, at: now + minutes * 60_000, count: 1, total: 2 });
   assert.equal(nextGreenhouseDm([at(0), at(20, 'water')], [], now).at, now + 20 * 60_000, 'one DM, when the later one is due');
   assert.equal(nextGreenhouseDm([at(0), at(20, 'water')], [], now).events.length, 2);
   assert.deepEqual(nextGreenhouseDm([at(0), at(40, 'water')], [], now).events.map(e => e.kind), ['ready'], 'outside the window it waits');
   assert.equal(nextGreenhouseDm([at(0)], [now - hour], now).at, now + hour, '2 hours after the last DM');
-  const four = [now - 20 * hour, now - 15 * hour, now - 10 * hour, now - 5 * hour];
-  assert.equal(nextGreenhouseDm([at(0)], four, now).at, now + 4 * hour, 'the fifth waits a day after the oldest');
+  const eight = [23, 20, 17, 14, 11, 8, 5, 2].map(h => now - h * hour);
+  assert.equal(nextGreenhouseDm([at(0)], eight, now).at, now + hour, 'the ninth waits a day after the oldest');
   assert.deepEqual(nextGreenhouseDm([at(0), at(100, 'water')], [now - 90 * 60_000], now).events.length, 1, 'held back DMs carry only what is due');
   assert.equal(nextGreenhouseDm([], [], now), null);
-  assert.equal(GREENHOUSE_LIMITS.perDay, 4);
+  assert.equal(GREENHOUSE_LIMITS.perDay, 8);
 });
 
 test('an event already sent is not sent again when the mod re-uploads it', () => {
@@ -108,6 +108,14 @@ test('a failed DM is retried once, then dropped', async () => {
   await store.deliver(ready.at + GREENHOUSE_LIMITS.retryMs);
   assert.equal(store.nextDue(), null);
   assert.equal(calls, 2);
+});
+
+test('a wake reminder names the mutations that stop then', () => {
+  const sleepy = { ...plot, plants: ['COALROOT', 'SNOOZLING'], targets: [...plot.targets, [44, 3, 1, 3, 20, 0, 0, now + 2 * hour]] };
+  const parsed = validGreenhouseUpload(upload([{ plot: '2', kind: 'wake', at: now + 2 * hour, count: 1, total: 3 }], { plots: [sleepy] }), now);
+  assert.ok(parsed);
+  assert.match(greenhouseDmText(parsed.events, parsed.plots), /💤 Plot 2: a mutation stops growing until you act on it \(Snoozling\)/);
+  assert.match(greenhouseView([sleepy], now, now + 3 * hour).embeds[0].description, /Snoozling\*\*: 1 need you/);
 });
 
 test('the view projects growth with the shared growth tick', () => {

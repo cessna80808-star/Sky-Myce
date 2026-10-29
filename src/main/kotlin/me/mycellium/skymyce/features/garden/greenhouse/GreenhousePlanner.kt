@@ -1208,6 +1208,7 @@ object GreenhousePlanner : SkyMyceModule() {
                 val horizon = now + 13 * 86_400_000L
                 reminder.readyAt?.takeIf { it <= horizon }?.let { events.add(event("ready", minute(it), reminder.readyCount)) }
                 reminder.dryAt?.takeIf { it <= horizon }?.let { events.add(event("water", minute(it), reminder.dryCount)) }
+                reminder.waitAt?.takeIf { it <= horizon }?.let { events.add(event("wake", minute(it), reminder.waitCount)) }
             }
             val plants = targets.map { it.plantId }.distinct().take(8)
             views.add(JsonObject().apply {
@@ -1230,7 +1231,7 @@ object GreenhousePlanner : SkyMyceModule() {
                             add(key); add(placement.size); add(plants.indexOf(placement.plantId))
                             add((reading?.stage ?: 0).coerceAtMost(stages)); add(stages)
                             add(readyAt); add(estimate?.dryInMs?.let { if (it == 0L) latest else minute(now + it) }?.takeIf { it < now + 29 * 86_400_000L } ?: 0L)
-                            add(if (estimate?.paused == true) latest else 0L)
+                            add(estimate?.waitInMs?.let { if (it == 0L) latest else minute(now + it) }?.takeIf { it < now + 29 * 86_400_000L } ?: 0L)
                         })
                     }
                 })

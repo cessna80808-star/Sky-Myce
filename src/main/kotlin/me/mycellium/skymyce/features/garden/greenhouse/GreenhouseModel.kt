@@ -270,9 +270,11 @@ data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awak
 
 /**
  * A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told,
- * including when its water runs out first. [dryInMs] is when a growing one's water runs out (0: already), null when untracked.
+ * including when its water runs out first or it must be woken on the way. [dryInMs] is when a growing one's water runs out
+ * (0: already), null when untracked. [waitInMs] is when it stops until the player acts (0: stopped now), null when it will not.
  */
-data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?, val dryInMs: Long? = null)
+data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?, val dryInMs: Long? = null,
+                          val waitInMs: Long? = null)
 
 /**
  * The Greenhouse's shared growth tick, which advances every plant at once: a tick at [tickAt] and every [cycleMs] around it.
@@ -333,23 +335,32 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
     val ready = stage >= readyAt
     // When the water reaches 0; never before full growth when the game said it has enough.
     val dryAt = reading.water?.takeIf { drain != null && drain > 0 && !reading.enough }?.let { reading.at + (it.coerceAtLeast(0.0) / drain!! * 3_600_000).toLong() }
+    // Time until it reaches [target], promised only while its water lasts.
+    fun until(target: Int): Long? = (if (cycle != null) cycle.tickAfter(now, ceil(target - stage).toInt()) - now else ((target - stage) * stageMs).toLong())
+        .takeIf { dryAt == null || now + it <= dryAt }
     val readyInMs = when {
         ready -> 0L
-        paused || unpredictable -> null
-        else -> (if (cycle != null) cycle.tickAfter(now, ceil(readyAt - stage).toInt()) - now else ((readyAt - stage) * stageMs).toLong())
-            .takeIf { dryAt == null || now + it <= dryAt }
+        // A pause on the way (a Snoozling falling asleep) waits on the player, so the ready time cannot be told yet.
+        paused || unpredictable || pause != null && pause < readyAt -> null
+        else -> until(readyAt)
     }
     // Only water that runs out before it is ready matters; after that it needs none.
     val dryInMs = dryAt?.takeIf { !ready }?.let { (it - now).coerceAtLeast(0) }?.takeIf { readyInMs == null || it < readyInMs }
-    return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs)
+    val waitInMs = when {
+        paused -> 0L
+        pause == null || unpredictable || ready -> null
+        else -> until(pause)
+    }
+    return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs, waitInMs)
 }
 
 /**
- * One plot's next Discord reminders: when [percent] of its mutations are ready, and when the first growing one runs out of
- * water. [estimates] has one entry per mutation on the plot (null when not timed). Only future times: something already
- * true is not reminded.
+ * One plot's next Discord reminders: when [percent] of its mutations are ready, when the first growing one runs out of
+ * water, and when the first one stops until the player acts (wake a Snoozling, kill a Cheesebite's rat). [estimates] has one
+ * entry per mutation on the plot (null when not timed). Only future times: something already true is not reminded.
  */
-data class PlotReminder(val readyAt: Long?, val readyCount: Int, val dryAt: Long?, val dryCount: Int, val total: Int)
+data class PlotReminder(val readyAt: Long?, val readyCount: Int, val dryAt: Long?, val dryCount: Int, val total: Int,
+                        val waitAt: Long? = null, val waitCount: Int = 0)
 
 fun plotReminder(estimates: List<GrowthEstimate?>, percent: Int, now: Long): PlotReminder? {
     if (estimates.isEmpty()) return null
@@ -357,9 +368,11 @@ fun plotReminder(estimates: List<GrowthEstimate?>, percent: Int, now: Long): Plo
     val needed = ceil(total * percent.coerceIn(1, 100) / 100.0).toInt().coerceIn(1, total)
     val readyAt = if (estimates.count { it?.ready == true } >= needed) null
         else estimates.map { it?.readyInMs }.sortedWith(nullsLast(naturalOrder()))[needed - 1]?.let { now + it }
-    val dry = estimates.mapNotNull { it?.dryInMs?.takeIf { ms -> ms > 0 } }
-    val first = dry.minOrNull()
-    return PlotReminder(readyAt, needed, first?.let { now + it }, if (first == null) 0 else dry.count { it <= first + 30 * 60_000 }, total)
+    // The first future time, and how many fall within 30 minutes of it (one DM covers them).
+    fun soonest(times: List<Long>): Pair<Long, Int>? = times.filter { it > 0 }.minOrNull()?.let { first -> now + first to times.count { it in 1..first + 30 * 60_000 } }
+    val dry = soonest(estimates.mapNotNull { it?.dryInMs })
+    val wait = soonest(estimates.mapNotNull { it?.waitInMs })
+    return PlotReminder(readyAt, needed, dry?.first, dry?.second ?: 0, total, wait?.first, wait?.second ?: 0)
 }
 
 private val GROWTH_STAGE = Regex("(?i)(?:growth\\s+)?stage\\D{0,12}?(\\d{1,3})\\s*(?:/|of)\\s*(\\d{1,3})")

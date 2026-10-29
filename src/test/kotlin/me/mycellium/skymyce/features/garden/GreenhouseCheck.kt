@@ -238,6 +238,12 @@ fun main() {
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt), 3.0, readAt).paused) { "Read asleep" }
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 6 * 3_600_000L, awake = true), 3.0, readAt).let { !it.paused && it.stage == 7.0 }) { "Woken Snoozling" }
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 60 * 3_600_000L, awake = true), 3.0, readAt).let { it.paused && it.stage == 10.0 }) { "Sleeps again" }
+    // Wake reminders: read at 3, it falls asleep at 5 in two 3-hour stages, and it cannot be ready before it is woken.
+    check(estimateGrowth(snoozling, GrowthReading(3, 20, readAt), 3.0, readAt).let { it.waitInMs == 6 * 3_600_000L && it.readyInMs == null }) { "Falls asleep" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt), 3.0, readAt).waitInMs == 0L) { "Asleep now" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 6 * 3_600_000L, awake = true), 3.0, readAt).waitInMs == 9 * 3_600_000L) { "Next sleep" }
+    check(estimateGrowth(catalog["CHEESEBITE"], GrowthReading(2, 10, readAt), 3.0, readAt).waitInMs == 6 * 3_600_000L) { "Cheesebite rat" }
+    check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt), 3.0, readAt).waitInMs == null) { "No pause, no wake" }
     // Glasscorn is ready at 7 and 8, then another stage starts it again from 1.
     val glasscornPlant = catalog["GLASSCORN"]
     check(estimateGrowth(glasscornPlant, GrowthReading(6, 8, readAt - 3 * 3_600_000L), 3.0, readAt).ready) { "Glasscorn ready at 7" }
@@ -306,6 +312,10 @@ fun main() {
     fun timedIn(ms: Long?, dryMs: Long? = null) = GrowthEstimate(1.0, 8, ms == 0L, false, ms, dryMs)
     val four = listOf(timedIn(3 * hour), timedIn(hour, 5 * hour), null, timedIn(2 * hour, 5 * hour + 60_000))
     check(plotReminder(four, 50, readAt) == PlotReminder(readAt + 2 * hour, 2, readAt + 5 * hour, 2, 4)) { "Reminder ${plotReminder(four, 50, readAt)}" }
+    // The first one to stop, with the others stopping within 30 minutes of it; one stopped already is not reminded.
+    val sleepy = listOf(GrowthEstimate(3.0, 20, false, false, null, waitInMs = 2 * hour + 20 * 60_000), GrowthEstimate(3.0, 20, false, false, null, waitInMs = 2 * hour),
+        GrowthEstimate(5.0, 20, false, true, null, waitInMs = 0), GrowthEstimate(3.0, 20, false, false, null, waitInMs = 5 * hour))
+    check(plotReminder(sleepy, 50, readAt)!!.let { it.waitAt == readAt + 2 * hour && it.waitCount == 2 && it.readyAt == null }) { "Wake reminder ${plotReminder(sleepy, 50, readAt)}" }
     check(plotReminder(four, 100, readAt)!!.readyAt == null && plotReminder(four, 10, readAt)!!.readyCount == 1) { "Untimed blocks 100%" }
     check(plotReminder(listOf(timedIn(0), timedIn(0), timedIn(hour)), 50, readAt)!!.readyAt == null) { "Already reached" }
     check(plotReminder(listOf(timedIn(hour, 0)), 50, readAt)!!.dryAt == null && plotReminder(emptyList(), 50, readAt) == null) { "Already dry is not reminded" }

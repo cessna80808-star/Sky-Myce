@@ -9,7 +9,7 @@ export const GREENHOUSE_LIMITS = {
   /** Events due this close together go out as one DM, sent when the last of them is due (never early). */
   coalesceMs: 30 * 60_000,
   gapMs: 2 * 3_600_000,
-  perDay: 4,
+  perDay: 8,
   dayMs: 86_400_000,
   horizonMs: 14 * 86_400_000,
   /** A client cannot rewrite its row more often than this. */
@@ -19,7 +19,8 @@ export const GREENHOUSE_LIMITS = {
   retryMs: 5 * 60_000,
 };
 
-export type GreenhouseEvent = { plot: string; kind: "ready" | "water"; at: number; count: number; total: number };
+/** ready: the chosen share of a plot is ready; water: a growing one runs dry; wake: one stops until the player acts. */
+export type GreenhouseEvent = { plot: string; kind: "ready" | "water" | "wake"; at: number; count: number; total: number };
 /** cell, size, index into the plot's plants, stage, stages, readyAt, dryAt, waitAt; times are 0 when unknown or not expected. */
 export type GreenhouseTarget = [number, number, number, number, number, number, number, number];
 export type GreenhousePlotView = { name: string; tickAt: number; cycleMs: number; plants: string[]; targets: GreenhouseTarget[] };
@@ -35,12 +36,12 @@ const time = (value: unknown, now: number) => value === 0 || int(value, now - 30
 export function validGreenhouseUpload(raw: Record<string, unknown>, now = Date.now()): GreenhouseUpload | null {
   if (!Object.keys(raw).every(key => ["type", "id", "enabled", "events", "plots"].includes(key)) || typeof raw.id !== "string" || !hex.test(raw.id)) return null;
   if (raw.enabled === false) return { enabled: false };
-  if (raw.enabled !== true || !Array.isArray(raw.events) || raw.events.length > 6 || !Array.isArray(raw.plots) || raw.plots.length > 3) return null;
+  if (raw.enabled !== true || !Array.isArray(raw.events) || raw.events.length > 9 || !Array.isArray(raw.plots) || raw.plots.length > 3) return null;
   const events: GreenhouseEvent[] = [];
   for (const value of raw.events) {
     const event = value as Record<string, unknown>;
     if (!event || typeof event !== "object" || Object.keys(event).length !== 5 || typeof event.plot !== "string" || !plotName.test(event.plot) ||
-      (event.kind !== "ready" && event.kind !== "water") || !int(event.at, now - 5 * 60_000, now + GREENHOUSE_LIMITS.horizonMs) ||
+      (event.kind !== "ready" && event.kind !== "water" && event.kind !== "wake") || !int(event.at, now - 5 * 60_000, now + GREENHOUSE_LIMITS.horizonMs) ||
       !int(event.total, 1, 100) || !int(event.count, 1, event.total as number) || events.some(e => e.plot === event.plot && e.kind === event.kind)) return null;
     events.push({ plot: event.plot, kind: event.kind, at: event.at as number, count: event.count as number, total: event.total as number });
   }
@@ -92,9 +93,13 @@ const discordTime = (at: number) => `<t:${Math.floor(at / 1000)}:R>`;
 export function greenhouseDmText(events: GreenhouseEvent[], plots: GreenhousePlotView[]): string {
   const lines = events.map(event => {
     const plant = mainPlant(plots.find(p => p.name === event.plot)), what = plant ? `${title(plant)} ` : "";
-    return event.kind === "ready"
-      ? `🌱 Plot ${event.plot}: ${event.count} of ${event.total} ${what}mutations ready (${discordTime(event.at)})`
-      : `💧 Plot ${event.plot}: ${event.count === 1 ? "a growing mutation runs" : `${event.count} growing mutations run`} out of water (${discordTime(event.at)})`;
+    if (event.kind === "ready") return `🌱 Plot ${event.plot}: ${event.count} of ${event.total} ${what}mutations ready (${discordTime(event.at)})`;
+    if (event.kind === "water") return `💧 Plot ${event.plot}: ${event.count === 1 ? "a growing mutation runs" : `${event.count} growing mutations run`} out of water (${discordTime(event.at)})`;
+    // The mutations that stop then (a Snoozling falling asleep, a Cheesebite's rat), named from the plot's view.
+    const view = plots.find(p => p.name === event.plot);
+    const names = [...new Set(view?.targets.filter(t => t[7] && Math.abs(t[7] - event.at) <= GREENHOUSE_LIMITS.coalesceMs).map(t => title(view.plants[t[2]])) ?? [])];
+    return `💤 Plot ${event.plot}: ${event.count === 1 ? "a mutation stops" : `${event.count} mutations stop`} growing until you act on ${event.count === 1 ? "it" : "them"}` +
+      `${names.length ? ` (${names.join(", ")})` : ""} (${discordTime(event.at)})`;
   });
   return `**Greenhouse**\n${lines.join("\n")}\n-# Estimated from your last Plant Diagnostics readings.`;
 }

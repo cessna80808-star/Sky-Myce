@@ -277,7 +277,7 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
 
     val discordReminders by boolean(false) {
         name = TranslatableValue.literal("Discord Reminders")
-        description = TranslatableValue.literal("Sky-Myce's Discord bot DMs you when enough of a plot's mutations are ready, or when a growing one runs out of water. At most 4 a day, 2 hours apart. Shares your plots' mutation stages, water and timings with the Sky-Myce relay; needs Discord connected. Timings come from your Plant Diagnostics Tool readings")
+        description = TranslatableValue.literal("Sky-Myce's Discord bot DMs you when enough of a plot's mutations are ready, when a growing one runs out of water, or when one stops until you act on it (a Snoozling falling asleep, a Cheesebite's rat). At most 8 a day, 2 hours apart. Shares your plots' mutation stages, water and timings with the Sky-Myce relay; needs Discord connected. Timings come from your Plant Diagnostics Tool readings")
     }
 
     val reminderReadyPercent by int(50) {
