@@ -232,10 +232,13 @@ fun main() {
     val coalroot = catalog["COALROOT"]
     check(estimateGrowth(coalroot, reading, 3.0, readAt).let { abs(it.stage - 7.0) < 1e-9 && !it.ready && it.readyInMs == 3 * 3_600_000L }) { "Growth projection" }
     check(estimateGrowth(coalroot, reading, 1.0, readAt).let { it.stage == 8.0 && it.ready && it.readyInMs == 0L }) { "Growth projection caps" }
+    // Next stage: 6.5 of 8 after 4.5 three-hour stages is 1.5 hours from 7; none once grown or asleep.
+    check(estimateGrowth(coalroot, GrowthReading(2, 8, readAt - 27 * 1_800_000L), 3.0, readAt).nextInMs == 3 * 1_800_000L) { "Next stage" }
+    check(estimateGrowth(coalroot, reading, 1.0, readAt).nextInMs == null) { "No next stage when grown" }
     // Snoozling sleeps at 5, 10 and 15 until right-clicked: read at 3, it stops at 5; woken there, it grows on to 10.
     val snoozling = catalog["SNOOZLING"]
     check(estimateGrowth(snoozling, GrowthReading(3, 20, readAt - 30 * 3_600_000L), 3.0, readAt).let { it.paused && it.stage == 5.0 && it.readyInMs == null }) { "Snoozling sleeps" }
-    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt), 3.0, readAt).paused) { "Read asleep" }
+    check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt), 3.0, readAt).let { it.paused && it.nextInMs == null }) { "Read asleep" }
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 6 * 3_600_000L, awake = true), 3.0, readAt).let { !it.paused && it.stage == 7.0 }) { "Woken Snoozling" }
     check(estimateGrowth(snoozling, GrowthReading(5, 20, readAt - 60 * 3_600_000L, awake = true), 3.0, readAt).let { it.paused && it.stage == 10.0 }) { "Sleeps again" }
     // Wake reminders: read at 3, it falls asleep at 5 in two 3-hour stages, and it cannot be ready before it is woken.

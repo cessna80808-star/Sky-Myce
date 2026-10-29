@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -272,9 +273,10 @@ data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awak
  * A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told,
  * including when its water runs out first or it must be woken on the way. [dryInMs] is when a growing one's water runs out
  * (0: already), null when untracked. [waitInMs] is when it stops until the player acts (0: stopped now), null when it will not.
+ * [nextInMs] is when it reaches its next stage, null when that cannot be told (paused, unpredictable, fully grown or dry first).
  */
 data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?, val dryInMs: Long? = null,
-                          val waitInMs: Long? = null)
+                          val waitInMs: Long? = null, val nextInMs: Long? = null)
 
 /**
  * The Greenhouse's shared growth tick, which advances every plant at once: a tick at [tickAt] and every [cycleMs] around it.
@@ -351,7 +353,8 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
         pause == null || unpredictable || ready -> null
         else -> until(pause)
     }
-    return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs, waitInMs)
+    val nextInMs = if (paused || unpredictable || stage >= stages) null else until(floor(stage).toInt() + 1)
+    return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs, waitInMs, nextInMs)
 }
 
 /**

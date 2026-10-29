@@ -36,6 +36,7 @@ import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.gizmos.GizmoStyle
 import net.minecraft.gizmos.Gizmos
+import net.minecraft.gizmos.TextGizmo
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Component
@@ -53,6 +54,7 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
+import net.minecraft.world.phys.Vec3
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
 import tech.thatgravyboat.skyblockapi.api.datatype.getData
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
@@ -92,6 +94,7 @@ object GreenhousePlanner : SkyMyceModule() {
     /** How long a plot must look completely empty before it counts as harvested rather than still arriving from the server. */
     private const val EMPTY_CONFIRM_MS = 3_000L
     private const val WATCH_DISTANCE = 24
+    private const val LABEL_DISTANCE = 16
     private const val ANALYSIS_WINDOW = 5_000L
     /** How long after opening the Bazaar for a crop its amount waits for the amount sign. */
     private const val AMOUNT_WINDOW = 120_000L
@@ -115,6 +118,7 @@ object GreenhousePlanner : SkyMyceModule() {
 
     internal data class Anchor(val pos: BlockPos, val facing: Direction)
     private data class Ghost(val box: AABB, val color: Int)
+    private data class Label(val pos: Vec3, val lines: List<String>)
     private data class PlotEstimate(val count: Int, val profitPerHour: Double)
 
     /** One Greenhouse plot. Its [layout] is pinned: only plan, auto, recompute and import replace it, never a price update. */
@@ -169,6 +173,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private var heldId: String? = null
     private var dirty = true
     private var ghosts: List<Ghost> = emptyList()
+    private var labels: List<Label> = emptyList()
     private var hudLines: List<String>? = null
 
     private val unanchoredLines = listOf("§aGreenhouse §7· plan ready", "§eLook at the corner slot's soil:", "§e/sm greenhouse anchor")
@@ -1248,7 +1253,7 @@ object GreenhousePlanner : SkyMyceModule() {
 
     // ---- World overlay ------------------------------------------------------------------------------------------
 
-    private fun clear() { ghosts = emptyList(); hudLines = null }
+    private fun clear() { ghosts = emptyList(); labels = emptyList(); hudLines = null }
 
     @Subscription
     fun onTick(event: TickEvent) {
@@ -1357,6 +1362,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val occupiedNow = BooleanArray(GREENHOUSE_CELLS)
         val status = CharArray(GREENHOUSE_CELLS) { CellStatus.UNUSED.code }
         val shown = ArrayList<Ghost>()
+        val shownLabels = ArrayList<Label>()
         var done = 0
         var changed = false
         val plants = LinkedHashMap<String, Int>()
@@ -1410,11 +1416,10 @@ object GreenhousePlanner : SkyMyceModule() {
                     analyzer && estimate == null -> 0xFF5555
                     else -> null
                 }
-                if (color != null) {
-                    val box = AABB(cellPos(origin, placement.row, placement.col).above())
-                        .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
-                    shown += Ghost(box, HudTheme.alpha(color, alpha))
-                }
+                val box = AABB(cellPos(origin, placement.row, placement.col).above())
+                    .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
+                if (color != null) shown += Ghost(box, HudTheme.alpha(color, alpha))
+                shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate))
             }
             if (!ingredient) targets += Triple(placement, planted, wasOccupied)
         }
@@ -1441,6 +1446,7 @@ object GreenhousePlanner : SkyMyceModule() {
         plot.status = text; plot.scannedAt = now; plot.missingPlants = plants; plot.missingSoil = soils
         if (changed) { revision++; save() }
         ghosts = shown
+        labels = shownLabels
         val cells = current.placements.sumOf { it.size * it.size }
         val target = current.targets.firstOrNull()?.let { catalog[it.plantId]?.name } ?: "?"
         val holdingMissingCrop = held != null && plants.keys.any { held in catalog[it]!!.itemIds }
@@ -1468,13 +1474,31 @@ object GreenhousePlanner : SkyMyceModule() {
         historyWriter.submit(JsonObject().apply { addProperty("version", 1); add("harvests", JsonArray().apply { history.forEach { add(it.toJson()) } }) })
     }
 
+    /** A mutation's floating label: its name, growth stage and estimated time to the next stage. */
+    private fun growthLabel(name: String, estimate: GrowthEstimate?): List<String> = listOfNotNull(
+        "§f$name",
+        when {
+            estimate == null -> "§7Analyze it to time its growth"
+            estimate.stages == 0 -> "§aFully grown"
+            else -> (if (estimate.ready) "§a" else if (estimate.paused) "§e" else "§c") + "Stage ${estimate.stage.toInt()}/${estimate.stages}" +
+                if (estimate.paused) " · waiting on you" else ""
+        },
+        estimate?.nextInMs?.let { "§7Next stage in ${age(it)}" },
+    )
+
     @Subscription
     fun render(event: RenderWorldEvent.AfterTranslucent) {
         val shown = ghosts
-        if (shown.isEmpty()) return
+        val labels = labels
+        if (shown.isEmpty() && labels.isEmpty()) return
         val limit = square(GreenhouseConfig.renderDistance).toDouble()
+        val labelLimit = square(LABEL_DISTANCE).toDouble()
         MC.instance.levelRenderer.collectPerFrameGizmos().use {
             for (ghost in shown) if (ghost.box.center.distanceToSqr(event.cameraPosition) <= limit) Gizmos.cuboid(ghost.box, GizmoStyle.fill(ghost.color))
+            // 0.4 is 0.025 blocks per font pixel, the size of a name tag; lines stack 11 pixels apart.
+            for (label in labels) if (label.pos.distanceToSqr(event.cameraPosition) <= labelLimit) label.lines.forEachIndexed { i, line ->
+                Gizmos.billboardText(line, label.pos.add(0.0, (label.lines.size - 1 - i) * 0.275, 0.0), TextGizmo.Style.whiteAndCentered().withScale(0.4f))
+            }
         }
     }
 
