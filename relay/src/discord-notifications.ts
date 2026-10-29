@@ -77,9 +77,31 @@ function alertMessage(alert: AccountAlert, nonce: string): Record<string, unknow
       { type: 2, style: 2, label: "View Audit", custom_id: `sky:admin:audit:${id}` }] }] : [] };
 }
 
-async function discordPost(path: string, token: string, body: unknown): Promise<Response> {
+export async function discordPost(path: string, token: string, body: unknown): Promise<Response> {
   return fetch(`https://discord.com/api/v10${path}`, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(8000),
     headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+/** The DM channel with [recipient], or null when Discord refuses or answers oddly. */
+export async function openDirectMessage(token: string, recipient: string): Promise<string | null> {
+  const response = await discordPost("/users/@me/channels", token, { recipient_id: recipient });
+  if (!response.ok) { await response.body?.cancel(); return null; }
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  let text = "", size = 0;
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 16384) return null;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally { await reader.cancel().catch(() => {}); }
+  const channel = JSON.parse(text) as Record<string, unknown>;
+  return snowflake(channel.id) ? channel.id : null;
 }
 
 /** The durable account outbox owns retries; this helper sends only to fixed administrator DMs. */
@@ -88,26 +110,10 @@ export async function deliverAccountAlert(env: AccountAlertConfig, alert: Accoun
     const token = env.BACKEND_BOT_TOKEN ?? env.DISCORD_BACKEND_BOT_TOKEN;
     if (!token || !ADMIN_ALERT_IDS.includes(alert.recipientId) || !Number.isSafeInteger(alert.auditId) || alert.auditId < 1 ||
         alert.event.id !== alert.auditId || !Number.isSafeInteger(alert.event.at) || alert.event.at <= 0) return false;
-    const response = await discordPost("/users/@me/channels", token, { recipient_id: alert.recipientId });
-    if (!response.ok) { await response.body?.cancel(); return false; }
-    const reader = response.body?.getReader();
-    if (!reader) return false;
-    let text = "", size = 0;
-    const decoder = new TextDecoder();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > 16384) return false;
-        text += decoder.decode(value, { stream: true });
-      }
-      text += decoder.decode();
-    } finally { await reader.cancel().catch(() => {}); }
-    const channel = JSON.parse(text) as Record<string, unknown>;
-    if (!snowflake(channel.id)) return false;
+    const channel = await openDirectMessage(token, alert.recipientId);
+    if (!channel) return false;
     const nonce = (await sha256(`Sky-Myce audit alert\n${alert.id}\n${alert.recipientId}`)).slice(0, 24);
-    const message = await discordPost(`/channels/${channel.id}/messages`, token, alertMessage(alert, nonce));
+    const message = await discordPost(`/channels/${channel}/messages`, token, alertMessage(alert, nonce));
     await message.body?.cancel();
     return message.ok;
   } catch { return false; }

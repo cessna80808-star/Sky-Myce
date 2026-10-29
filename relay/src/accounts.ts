@@ -12,8 +12,9 @@ import { CommunityLeaderboards, type LeaderboardQuery, type JournalComparisonQue
 import type { PublicRngEvent } from "./digest";
 import { CommunityBazaar, type BazaarStatsResult } from "./bazaar";
 import { BazaarMarket } from "./bazaar-market";
+import { GreenhouseReminders, type GreenhouseUpload } from "./greenhouse-reminders";
 
-export type AccountsConfig = LicensePolicy & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket; BAZAAR_MARKET_PROVIDER?: string };
+export type AccountsConfig = LicensePolicy & PromptConfig & CommunityConfig & CosmeticsConfig & { ACCOUNT_STORE?: DurableObjectNamespace<AccountStore>; DISCORD_RNG_CHANNEL_ID?: string; COSMETIC_ASSETS?: R2Bucket; BAZAAR_MARKET_PROVIDER?: string; USER_BOT_TOKEN?: string };
 type AccountRow = { account_id: string; discord_id: string; status: string; license_status: string; license_expires_at: number | null;
   device_hash: string | null; hardware_hash: string | null; hwid_reset_at: number | null; hwid_bound_at: number | null; generation: number; activated_at: number | null; created_at: number; last_seen: number; enrollment_blocked: number; is_admin: number };
 export type AccountSummary = { accountId: string; discordId: string; status: string; isAdmin: boolean; activated: boolean; licenseStatus: string; licenseExpiresAt: number | null;
@@ -47,9 +48,11 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   private readonly bazaar: CommunityBazaar;
   private readonly bazaarMarket: BazaarMarket;
   private readonly bazaarAlertCooldowns = new Map<string, number>();
+  private readonly greenhouse: GreenhouseReminders;
   constructor(ctx: DurableObjectState, env: AccountsConfig) {
     super(ctx, env);
     this.prompts = new PromptJobs(ctx.storage, env);
+    this.greenhouse = new GreenhouseReminders(ctx.storage.sql, () => env.USER_BOT_TOKEN);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS sky_accounts (account_id TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL,
         status TEXT NOT NULL DEFAULT 'active', license_status TEXT NOT NULL DEFAULT 'inactive', license_expires_at INTEGER,
@@ -256,7 +259,20 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   communityOAuthFinish(flow: string, user: { id: string; username: string; displayName: string }) { return this.community.finishOAuth(flow, user); }
   authorizeCommunitySession(input: { uuid: string; token: string; challenge: string; modVersion?: string }) { return this.community.authorize(input); }
   checkCommunitySession(input: CommunitySessionCheck) { return this.community.checkSession(input); }
-  consumeCommunitySessionRequest(input: CommunitySessionCheck) { return this.community.consumeRequest(input); }
+  /** Every client message already passes this check; a Greenhouse upload rides along instead of making its own call. */
+  async consumeCommunitySessionRequest(input: CommunitySessionCheck, greenhouse?: GreenhouseUpload) {
+    const state = this.community.consumeRequest(input);
+    if (!state.ok || !greenhouse || !state.discordId) return state;
+    const stored = this.greenhouse.store(state.discordId, greenhouse);
+    if (stored.next !== null) await this.armGreenhouse(stored.next);
+    return { ...state, greenhouse: stored.result };
+  }
+  greenhouseView(discordId: string) { return snowflake.test(discordId) ? this.greenhouse.view(discordId) : null; }
+  private async armGreenhouse(due = this.greenhouse.nextDue()): Promise<void> {
+    if (due === null) return;
+    const current = await this.ctx.storage.getAlarm(), next = Math.max(Date.now() + 1000, due);
+    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+  }
   reportCommunityTrafficViolation(input: CommunitySessionCheck) { return this.community.reportTrafficViolation(input); }
   markCommunitySessionOffline(sessionId: string, connectionId: string) { this.community.markOffline(sessionId, connectionId); }
   communityUserCommand(actor: DeveloperActor, action: string, options: Record<string, unknown> = {}) { return this.community.user(actor, action, options); }
@@ -374,6 +390,8 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     }));
     const due = this.nextAccountAlertAt(), current = await this.ctx.storage.getAlarm();
     if (due !== null && (current === null || due < current)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+    try { await this.greenhouse.deliver(); } catch (error) { console.warn({ event: "greenhouse_delivery_failed", error: String(error).slice(0, 200) }); }
+    await this.armGreenhouse();
     await this.cleanupCosmeticAssets();
   }
   private byDiscord(discordId: string): AccountRow | undefined {

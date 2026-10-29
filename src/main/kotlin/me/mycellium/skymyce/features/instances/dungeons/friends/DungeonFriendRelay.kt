@@ -187,6 +187,10 @@ object DungeonFriendRelay {
         private set
     var leapPovAvailable = false
         private set
+    var greenhouseAvailable = false
+        private set
+    /** The relay's answer to a Greenhouse reminder upload: stored, unchanged, deleted, throttled, unavailable or invalid. */
+    internal var onGreenhouseResult: ((String) -> Unit)? = null
     internal val sessionGeneration get() = generation
     internal val ircRoom get() = relayUri(DungeonFriendsSettings.relayUrl)?.rawQuery?.substringAfter("room=") ?: "friends"
     private var activeLease: String? = null
@@ -377,6 +381,9 @@ object DungeonFriendRelay {
                                         leapPovAvailable = json.get("leapPovVersion")?.let {
                                             it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
                                         } == true
+                                        greenhouseAvailable = json.get("greenhouseVersion")?.let {
+                                            it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asString == "1"
+                                        } == true
                                         retry.authenticated(DungeonFriends.now())
                                         stage = "connected"
                                         deadline = DungeonFriends.now() + 90000
@@ -486,6 +493,11 @@ object DungeonFriendRelay {
                                             }
                                         }
                                     }
+                                    "greenhouse_result" -> {
+                                        check(connected)
+                                        val result = (json.get("result") ?: json.get("error"))?.asString?.takeIf { it.matches(Regex("[a-z_]{1,32}")) } ?: "invalid"
+                                        onGreenhouseResult?.invoke(result)
+                                    }
                                     "error" -> {
                                         check(connected)
                                         val reason = json.get("code")?.asString?.takeIf { it.matches(Regex("[a-z_]{1,32}")) } ?: "rejected"
@@ -567,6 +579,13 @@ object DungeonFriendRelay {
         if (type !in setOf("leap_pov_subscribe", "leap_pov_pose") || !leapPovAvailable || !currentGlobalSession() ||
             !current() || dropIfBusy && !sending.isDone) return false
         packet(fields + ("type" to type), current)
+        return true
+    }
+
+    /** Uploads the Greenhouse reminder schedule; the relay answers with a greenhouse_result. */
+    internal fun greenhouseSchedule(fields: Map<String, Any>): Boolean {
+        if (!connected || !greenhouseAvailable) return false
+        packet(fields + mapOf("type" to "greenhouse_schedule", "id" to UUID.randomUUID().toString().replace("-", "")))
         return true
     }
 
@@ -721,6 +740,7 @@ object DungeonFriendRelay {
         richChatAvailable = false
         partyChatAvailable = false
         leapPovAvailable = false
+        greenhouseAvailable = false
         cosmeticsAvailable = false
         cosmeticsNamesAvailable = false
         policiesAvailable = false

@@ -241,9 +241,9 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         description = TranslatableValue.literal("Only rank and plan mutations up to this rarity")
     }
 
-    val upgradeLevel by int(0) {
+    var upgradeLevel by int(0) {
         name = TranslatableValue.literal("Growth Speed Upgrade")
-        description = TranslatableValue.literal("Your Greenhouse growth speed upgrade level (0-9); shortens every growth stage")
+        description = TranslatableValue.literal("Your Desk's Greenhouse Growth Speed tier (0-9); shortens every growth stage. Read automatically when you open /desk and Greenhouse Upgrades")
         range = 0..9; slider = true
     }
 
@@ -273,6 +273,17 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         name = TranslatableValue.literal("Missing Items Shown")
         description = TranslatableValue.literal("How many missing crops and soils the HUD lists; /sm greenhouse missing prints the full list")
         range = 0..30; slider = true
+    }
+
+    val discordReminders by boolean(false) {
+        name = TranslatableValue.literal("Discord Reminders")
+        description = TranslatableValue.literal("Sky-Myce's Discord bot DMs you when enough of a plot's mutations are ready, or when a growing one runs out of water. At most 4 a day, 2 hours apart. Shares your plots' mutation stages, water and timings with the Sky-Myce relay; needs Discord connected. Timings come from your Plant Diagnostics Tool readings")
+    }
+
+    val reminderReadyPercent by int(50) {
+        name = TranslatableValue.literal("Ready Reminder At (%)")
+        description = TranslatableValue.literal("Discord Reminders ping when this share of a plot's mutations is ready")
+        range = 10..100; slider = true
     }
 
     val opacity by int(40) {

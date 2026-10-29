@@ -48,14 +48,16 @@ fun main() {
     // The screen's grid is rotated: data row r is screen column r, data column c is screen row c; a 2×2 footprint at (2, 5) spans x 32..63, y 80..111 at 16px cells.
     check(greenhouseCellAt(2 * 16 + 3, 5 * 16 + 1, 16) == 25 && greenhouseCellAt(63, 111, 16) == 36 && greenhouseCellAt(0, 0, 16) == 0 && greenhouseCellAt(159, 159, 16) == 99) { "Grid rotation" }
 
-    // Site timing: 4h per stage minus 2.5 points per upgrade level (≤8), +5 at level 9, and 2.5 per unique crop.
-    check(hoursPerStage(0, 0) == 4.0 && abs(hoursPerStage(9, 12) - 1.8) < 1e-9 && abs(hoursPerStage(8, 0) - 3.2) < 1e-9) { "Timer" }
+    // Wiki timing: 4h divided by 1 + 2.5% per unique crop (≤10) + 0.25% per Crop Growth + the Desk (5% a tier, 10% at IX).
+    check(hoursPerStage(0, 0) == 4.0 && abs(hoursPerStage(9, 12) - 4.0 / 1.75) < 1e-9 && abs(hoursPerStage(8, 0) - 4.0 / 1.4) < 1e-9 &&
+        abs(hoursPerStage(9, 10, 210) * 3600 - 14400 / 2.275) < 1e-6) { "Timer" }
+    check(gardenCropGrowth(15) == 140 && gardenCropGrowth(1) == 0 && gardenCropGrowth(null) == 0) { "Garden Crop Growth" }
 
     val quotes = mapOf("GLASSCORN" to Quote(900_000.0, 1_000_000.0), "STARTLEVINE" to Quote(9_000.0, 10_000.0), "CHLORONITE" to Quote(1_000.0, 2_000.0),
         "ALL_IN_ALOE" to Quote(5e6, 5e6), "MAGIC_JELLYBEAN" to Quote(100.0, 100.0), "PLANTBOY_ADVANCE" to Quote(1e5, 1e5))
     val ranked = rankMutations(catalog, quotes, GreenhouseSettings(0, 0, PriceMode.SELL_OFFER))
     val glasscorn = ranked.single { it.plant.id == "GLASSCORN" }
-    check(glasscorn.revenue == 1_000_000.0 && glasscorn.inputCost == 6 * 10_000.0 + 6 * 2_000.0 && glasscorn.cycleHours == 36.0) { "Glasscorn ${glasscorn}" }
+    check(glasscorn.revenue == 1_000_000.0 && glasscorn.inputCost == 6 * 10_000.0 + 6 * 2_000.0 && glasscorn.cycleHours == 32.0) { "Glasscorn ${glasscorn}" }
     // PlantBoy Advance (2x2) is charged per tile, as on the site: 2 x 100k, not 1.
     check(ranked.single { it.plant.id == "ALL_IN_ALOE" }.inputCost == 6 * 100.0 + 2 * 1e5) { "PlantBoy exception" }
     check(ranked.none { it.plant.id == "SOGGYBUD" }) { "Unpriced mutation ranked" }
@@ -234,6 +236,60 @@ fun main() {
     check(estimateGrowth(catalog["FLESHTRAP"], GrowthReading(4, 14, readAt - 30 * 3_600_000L), 3.0, readAt).let { it.stage == 4.0 && !it.ready && it.readyInMs == null }) { "Unpredictable growth" }
     val grown = namedPlot.copy(growth = mapOf(33 to reading, 34 to GrowthReading(5, 20, readAt, awake = true)))
     check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(grown.toJson()) }) }, catalog).single() == grown) { "Growth persistence" }
+    val watered = grown.copy(growth = mapOf(44 to GrowthReading(5, 8, readAt, water = 48.8, drain = 12.5), 45 to GrowthReading(2, 8, readAt, drain = 10.0)))
+    check(plotsFromJson(com.google.gson.JsonObject().apply { add("plots", com.google.gson.JsonArray().apply { add(watered.toJson()) }) }, catalog).single() == watered) { "Water persistence" }
+
+    // A Crop Diagnostics menu as read in game on 2026-10-22 (one line per lore line), here mid-growth with a countdown.
+    val menu = "Crop Diagnostics |  | Coalroot | Mutation Crop |  | Size: 1x1 | Growth Surface: Farmland | Growth Stages: 8 |  | Growth Stage | Age: 1d 10h 41m 12s | " +
+        "Stage: 5/8 | Next Stage: 1h 40m 20s | Times Mutated: 0 |  | Decay Info | Mutates Remaining: 10 | Water Level | §7Water: §b48.8§7/100 |  | " +
+        "Shows how much water the current | crop has, ranging between -100 | (halted) and 100 (fully watered)."
+    check(parseDiagnostics(menu.split(" | ")) == Diagnostics(5, 8, 48.8, true, (3600 + 40 * 60 + 20) * 1000L)) { "Diagnostics ${parseDiagnostics(menu.split(" | "))}" }
+    check(parseDiagnostics(listOf("Scourroot", "Growth Stages: 0", "Stage: FULLY GROWN", "Next Stage: FULLY GROWN", "Water: 100/100", "This crop doesn't need water!")) ==
+        Diagnostics(1, 1, null, false, null)) { "Diagnostics without water" }
+    check(parseDuration("1d 10h 41m 12s") == 124_872_000L && parseDuration("45s") == 45_000L && parseDuration("FULLY GROWN") == null) { "Durations" }
+    // The Desk's Greenhouse Upgrades item; the tier panes ("Growth Speed IV") and other menus are not it.
+    val deskLore = listOf("§7Upgrade your §aGrowth Speed §7tier to", "§7increase your §bGreenhouse Growth", "§bSpeed.", "", "§7Current Tier: §e3§7/§a9", "§7Growth Speed: §b15%")
+    check(parseDeskGrowthTier("§aGrowth Speed", deskLore) == 3 && parseDeskGrowthTier("Growth Speed IV", deskLore) == null &&
+        parseDeskGrowthTier("Growth Speed", listOf("Current Tier: 3/9")) == null) { "Desk tier" }
+
+    // The shared growth tick: ticks in (from, to] and the n-th tick after a time.
+    val hour = 3_600_000L
+    val tick = GrowthCycle(readAt, 2 * hour)
+    check(tick.ticks(readAt - 1, readAt) == 1 && tick.ticks(readAt, readAt + 2 * hour - 1) == 0 && tick.ticks(readAt - 5 * hour, readAt + 4 * hour) == 5 &&
+        tick.tickAfter(readAt, 1) == readAt + 2 * hour && tick.tickAfter(readAt - 1, 1) == readAt && tick.tickAfter(readAt + hour, 3) == readAt + 6 * hour) { "Tick math" }
+    // Two countdowns three cycles apart time the cycle; one far off (an upgrade) starts over; one in the same cycle refines the tick.
+    val timed = updateCycle(GrowthCycle(readAt, 2 * hour), readAt + 3 * (2 * hour + 60_000), 30 * 60_000, 2 * hour)
+    check(timed.measured && timed.cycleMs == 2 * hour + 60_000) { "Cycle measured $timed" }
+    check(!updateCycle(GrowthCycle(readAt, 2 * hour, true), readAt + 3 * hour, hour, 2 * hour).measured) { "Cycle changed" }
+    check(updateCycle(GrowthCycle(readAt, 2 * hour), readAt + 30_000, 1000, hour).let { it.tickAt == readAt + 30_000 && it.cycleMs == 2 * hour }) { "Same tick" }
+    check(updateCycle(null, readAt, 3 * hour, 2 * hour).cycleMs == 3 * hour) { "A countdown is never longer than the cycle" }
+
+    // On the shared tick a Coalroot read at 5/8 just after a tick is ready on the third tick after it.
+    val onTick = estimateGrowth(coalroot, GrowthReading(5, 8, readAt), 2.0, readAt + hour, tick)
+    check(onTick.stage == 5.0 && onTick.readyInMs == 5 * hour && onTick.dryInMs == null) { "Tick growth $onTick" }
+    // Water: 48.8 at 16 a tick still has 0.8 after the 3 ticks to ready, so it is promised and needs no water reminder.
+    val wet = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 16.0)
+    check(wet.readyInMs == 5 * hour && wet.dryInMs == null) { "Water lasts $wet" }
+    // At 20 a tick it would be below 0 on the tick it grows ready; the game may skip that stage, so it is not promised.
+    check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 20.0).let { it.readyInMs == null && it.dryInMs == 5 * hour }) { "Water edge" }
+    // 30 a tick runs out on the second tick, before it is ready: it is not promised, and the dry time is when it runs out.
+    val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 30.0)
+    check(dry.readyInMs == null && dry.dryInMs == 3 * hour) { "Runs dry $dry" }
+    check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = -5.0), 2.0, readAt + hour, tick, 20.0).dryInMs == 0L) { "Already dry" }
+    check(estimateGrowth(coalroot, GrowthReading(8, 8, readAt, water = 10.0), 2.0, readAt + hour, tick, 20.0).dryInMs == null) { "Grown needs no water" }
+    // Drain is seen between two readings with no watering; a watered or grown one teaches nothing.
+    check(drainBetween(GrowthReading(4, 8, readAt, water = 80.0), GrowthReading(6, 8, readAt + 4 * hour, water = 40.0), 2) == 20.0 &&
+        drainBetween(GrowthReading(4, 8, readAt, water = 20.0), GrowthReading(6, 8, readAt, water = 90.0), 2) == null &&
+        drainBetween(GrowthReading(8, 8, readAt, water = 80.0), GrowthReading(8, 8, readAt, water = 60.0), 1) == null &&
+        drainBetween(GrowthReading(4, 8, readAt, water = 80.0), GrowthReading(4, 8, readAt, water = 70.0), 0) == null) { "Drain" }
+
+    // Reminders: at 50% of 4 mutations, the second-soonest ready time; untimed ones count as not ready; nothing already true.
+    fun timedIn(ms: Long?, dryMs: Long? = null) = GrowthEstimate(1.0, 8, ms == 0L, false, ms, dryMs)
+    val four = listOf(timedIn(3 * hour), timedIn(hour, 5 * hour), null, timedIn(2 * hour, 5 * hour + 60_000))
+    check(plotReminder(four, 50, readAt) == PlotReminder(readAt + 2 * hour, 2, readAt + 5 * hour, 2, 4)) { "Reminder ${plotReminder(four, 50, readAt)}" }
+    check(plotReminder(four, 100, readAt)!!.readyAt == null && plotReminder(four, 10, readAt)!!.readyCount == 1) { "Untimed blocks 100%" }
+    check(plotReminder(listOf(timedIn(0), timedIn(0), timedIn(hour)), 50, readAt)!!.readyAt == null) { "Already reached" }
+    check(plotReminder(listOf(timedIn(hour, 0)), 50, readAt)!!.dryAt == null && plotReminder(emptyList(), 50, readAt) == null) { "Already dry is not reminded" }
 
     // Garden plot numbers for /tptoplot, as seen in game: anchors at 187/100 and 196/91 are plot 18, -92/-5 is plot 2.
     check(gardenPlotAt(187, 100) == 18 && gardenPlotAt(196, 91) == 18 && gardenPlotAt(-92, -5) == 2 && gardenPlotAt(-101, 4) == 2) { "Garden plots" }
@@ -266,7 +322,6 @@ fun main() {
 
     // Harvest history: rolling totals per plot and calendar-day buckets.
     val now = 1_800_000_000_000L
-    val hour = 3_600_000L
     val history = listOf(Harvest(now - hour, "1", "GLASSCORN", 150.0, 50.0), Harvest(now - 72 * hour, "1", "GLASSCORN", 200.0, 0.0),
         Harvest(now - 480 * hour, "north", "GLASSCORN", 300.0, 0.0), Harvest(now - 1440 * hour, "1", "GLASSCORN", 400.0, 0.0))
     check(harvestTotals(history, now) == HarvestTotals(100.0, 300.0, 600.0, 1000.0, 4)) { "Totals ${harvestTotals(history, now)}" }

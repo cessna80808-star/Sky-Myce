@@ -61,6 +61,7 @@ import tech.thatgravyboat.skyblockapi.api.events.render.RenderWorldEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
+import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import kotlin.math.abs
@@ -182,16 +183,18 @@ object GreenhousePlanner : SkyMyceModule() {
         ClientSendMessageEvents.COMMAND.register(::copyBazaarQuantity)
         // Crops are mostly armor stands, so analysing one is an entity interaction; a block crop is a block interaction.
         UseEntityCallback.EVENT.register { player, level, hand, entity, _ ->
-            if (level.isClientSide) { startAnalysis(player.getItemInHand(hand), entity); noteWake(player.getItemInHand(hand), entity) }
+            if (level.isClientSide) { startAnalysis(player.getItemInHand(hand), entity); noteWake(player.getItemInHand(hand), entity); noteWatering(player.getItemInHand(hand), entity) }
             InteractionResult.PASS
         }
         UseBlockCallback.EVENT.register { player, level, hand, hit ->
             if (!level.isClientSide) return@register InteractionResult.PASS
             startAnalysis(player.getItemInHand(hand), null)
             noteWake(player.getItemInHand(hand), null)
+            noteWatering(player.getItemInHand(hand), null)
             // FAIL on the client stops the click before it is sent.
             if (wrongClick(player.getItemInHand(hand), hit.blockPos)) InteractionResult.FAIL else InteractionResult.PASS
         }
+        DungeonFriendRelay.onGreenhouseResult = { result -> MC.instance.execute { reminderAnswered(result) } }
         Scheduling.schedule(Duration.ZERO) {
             val json = file.read()?.takeIf { it.isJsonObject }?.asJsonObject
             val harvests = historyFile.read()?.takeIf { it.isJsonObject }?.asJsonObject
@@ -201,7 +204,10 @@ object GreenhousePlanner : SkyMyceModule() {
 
     /** Settings for [plot]: the unique-crop count comes from the player's other saved plots unless the setting is higher. */
     internal fun settings(plot: Plot? = null) = GreenhouseSettings(GreenhouseConfig.upgradeLevel,
-        maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode, gardenLevel() ?: 15)
+        maxOf(GreenhouseConfig.uniqueCrops, uniqueElsewhere(plot)), GreenhouseConfig.priceMode, gardenLevel() ?: 15, cropGrowth())
+
+    /** Crop Growth the mod can see (the Garden level's share); 0 while the level is unknown, so timers err slow. */
+    private fun cropGrowth() = gardenLevel()?.let(::gardenCropGrowth) ?: 0
 
     /** The Garden level from the setting, else as last read from the tab list; null while unknown. */
     internal fun gardenLevel(): Int? = GreenhouseConfig.gardenLevel.takeIf { it > 0 } ?: detectedGardenLevel
@@ -400,7 +406,7 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Hours from a target appearing to its harvest, from the site's timer; null without a target. */
     internal fun cycleHours(layout: Layout): Double? {
         val plant = layout.targets.firstOrNull()?.let { catalog?.get(it.plantId) } ?: return null
-        return cycleHours(plant, GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops))
+        return cycleHours(plant, GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops), cropGrowth())
     }
 
     private fun remember(hash: String, estimate: PlotEstimate) {
@@ -867,7 +873,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private var analysis: Analysis? = null
 
     @Subscription
-    fun onRightClick(event: RightClickEvent) = startAnalysis(event.stack, null)
+    fun onRightClick(event: RightClickEvent) { startAnalysis(event.stack, null); noteWatering(event.stack, null) }
 
     /** Notes which planned crop the player analyses; the reading itself arrives in chat or a menu right after. Read-only. */
     private fun startAnalysis(stack: ItemStack, entity: Entity?) {
@@ -903,12 +909,15 @@ object GreenhousePlanner : SkyMyceModule() {
     /** Right-clicking a mutation stopped at a pause (an asleep Snoozling) wakes it, so its growth is timed on from the click. */
     private fun noteWake(stack: ItemStack, entity: Entity?) {
         if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
-        if (stack.getData(DataTypes.ID)?.contains("DIAGNOSTIC") == true) return
+        val held = stack.getData(DataTypes.ID)
+        if (held?.contains("DIAGNOSTIC") == true || held?.startsWith("HYDRO_CAN") == true || held?.startsWith("AQUAMASTER") == true) return
         val (plot, placement) = aimedTarget(entity) ?: return
         val key = placement.row * GREENHOUSE_SIZE + placement.col
         val reading = plot.growth[key] ?: return
         val estimate = targetEstimate(plot, placement)?.takeIf { it.paused } ?: return
-        plot.growth[key] = GrowthReading(estimate.stage.toInt(), reading.stages, System.currentTimeMillis(), awake = true)
+        val now = System.currentTimeMillis()
+        val water = reading.water?.let { w -> plot.layout?.let { (w - drainFor(plot, key, placement.plantId) * ticksBetween(it, reading.at, now)).coerceAtLeast(-100.0) } }
+        plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, awake = true, water = water)
         revision++; dirty = true; save()
         displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
     }
@@ -928,19 +937,28 @@ object GreenhousePlanner : SkyMyceModule() {
         val now = System.currentTimeMillis()
         if (now > pending.until) return
         if (pending.lines.size < 120) pending.lines += lines.take(120 - pending.lines.size)
-        val (stage, stages) = parseGrowth(lines) ?: return
+        val diagnostics = parseDiagnostics(lines) ?: return
+        val (stage, stages) = diagnostics.stage to diagnostics.stages
         analysis = null
+        // The countdown is to the shared tick; rounded to its whole seconds.
+        diagnostics.nextStageMs?.let { cycle = updateCycle(cycle, (now + it) / 1000 * 1000, it, formulaCycleMs()) }
         // The tool shows a woken Snoozling at the stage it fell asleep at, just like an asleep one, so a wake stays.
         val last = pending.plot.growth[pending.key]?.takeIf { it.at >= (pending.plot.spawned[pending.key] ?: 0L) }
-        val reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage)
+        var reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage, water = diagnostics.water, drain = last?.drain)
+        val layout = pending.plot.layout
+        if (last != null && layout != null) drainBetween(last, reading, ticksBetween(layout, last.at, now))?.let { seen ->
+            reading = reading.copy(drain = last.drain?.let { (it + seen) / 2 } ?: seen)
+        }
         pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
-        val estimate = pending.plot.layout?.let { estimateGrowth(catalog?.get(pending.plantId), reading, hoursPerStage(it), now) }
+        val estimate = targetEstimate(pending.plot, layout?.targets?.firstOrNull { it.row * GREENHOUSE_SIZE + it.col == pending.key } ?: return, now)
         displayModMessage("§a$name: growth stage $stage/$stages" + when {
             estimate == null -> ""
             estimate.ready -> if (stage >= stages) " §7· fully grown" else " §7· ready to harvest"
             estimate.paused -> " §7· stopped until you act on it (wake it up)"
+            estimate.dryInMs == 0L -> " §c· out of water; water it and analyze it again"
+            estimate.readyInMs == null && estimate.dryInMs != null -> " §e· runs out of water in about ${age(estimate.dryInMs)}, before it is ready"
             estimate.readyInMs == null -> " §7· its growth cannot be timed; analyze it again later"
             else -> " §7· ready in about ${age(estimate.readyInMs)}"
         })
@@ -960,7 +978,68 @@ object GreenhousePlanner : SkyMyceModule() {
         displayModMessage("§7No growth stage was found in what the Plant Diagnostics Tool showed; it was written to the log so the planner can learn to read it")
     }
 
-    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops))
+    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops), cropGrowth())
+
+    // ---- Growth tick, water and Desk ----------------------------------------------------------------------------
+
+    /** The shared growth tick, from Diagnostics "Next Stage" countdowns; null before the first one. */
+    private var cycle: GrowthCycle? = null
+    /** When the Desk's Growth Speed tier was last read; 0 when never, so reminders wait for it or a measured cycle. */
+    private var deskReadAt = 0L
+
+    /** The cycle the upgrades predict, for the fastest plot (unique crops count across all of them). */
+    private fun formulaCycleMs(): Long {
+        val unique = plots.mapNotNull { it.layout?.uniqueCrops }.fold(GreenhouseConfig.uniqueCrops, ::maxOf)
+        return (hoursPerStage(GreenhouseConfig.upgradeLevel, unique, cropGrowth()) * 3_600_000).toLong()
+    }
+
+    /** Until two countdowns time the cycle, it is at least what the upgrades predict, so estimates never run early. */
+    private fun growthCycle(): GrowthCycle? = cycle?.let { if (it.measured) it else it.copy(cycleMs = maxOf(it.cycleMs, formulaCycleMs())) }
+
+    /** The water [plot]'s mutation at [key] loses per tick: its own, else the average seen for that mutation, else assumed. */
+    private fun drainFor(plot: Plot, key: Int, plantId: String): Double = plot.growth[key]?.drain
+        ?: plots.flatMap { p -> p.layout?.targets.orEmpty().filter { it.plantId == plantId }.mapNotNull { p.growth[it.row * GREENHOUSE_SIZE + it.col]?.drain } }
+            .takeIf { it.isNotEmpty() }?.average() ?: DEFAULT_DRAIN
+
+    private fun ticksBetween(layout: Layout, from: Long, to: Long): Int =
+        growthCycle()?.ticks(from, to) ?: ((to - from).coerceAtLeast(0) / (hoursPerStage(layout) * 3_600_000)).toInt()
+
+    private var wateringHinted = false
+
+    /** Watering a mutation with a Hydrocan: its last water level is stale, so it is timed as staying watered until analysed again. */
+    private fun noteWatering(stack: ItemStack, entity: Entity?) {
+        if (!active() || LocationAPI.island != SkyBlockIsland.GARDEN) return
+        val id = stack.getData(DataTypes.ID) ?: return
+        if (!id.startsWith("HYDRO_CAN") && !id.startsWith("AQUAMASTER")) return
+        val (plot, placement) = aimedTarget(entity) ?: return
+        val key = placement.row * GREENHOUSE_SIZE + placement.col
+        val reading = plot.growth[key]?.takeIf { it.water != null } ?: return
+        plot.growth[key] = reading.copy(water = null)
+        revision++; dirty = true; save()
+        if (!wateringHinted) {
+            wateringHinted = true
+            displayModMessage("§7Watered: reminders treat it as staying watered. Analyze it again with the Plant Diagnostics Tool so they know its real water level")
+        }
+    }
+
+    /** The Desk's Greenhouse Upgrades menu shows the Growth Speed tier; a changed tier also changes the cycle, so it is timed again. */
+    @Subscription
+    fun onDeskMenu(event: ContainerInitializedEvent) {
+        if (!active()) return
+        val tier = event.containerItems.firstNotNullOfOrNull { item ->
+            parseDeskGrowthTier(item.hoverName.string, item.get(DataComponents.LORE)?.lines?.map { it.string }.orEmpty())
+        } ?: return
+        val first = deskReadAt == 0L
+        deskReadAt = System.currentTimeMillis()
+        if (tier != GreenhouseConfig.upgradeLevel) {
+            GreenhouseConfig.upgradeLevel = tier
+            SkyMyce.config.save()
+            cycle = null
+            dirty = true; revision++
+            displayModMessage("§aGreenhouse growth speed: Desk tier $tier")
+        } else if (first) displayModMessage("§aGreenhouse growth speed read: Desk tier $tier")
+        save()
+    }
 
     /** [readyInMs] is when the last analysed one is ready, or null when one of them cannot be timed. */
     internal data class GrowthSummary(val analysed: Int, val targets: Int, val stage: Double, val stages: Int, val readyInMs: Long?)
@@ -984,7 +1063,105 @@ object GreenhousePlanner : SkyMyceModule() {
         val key = placement.row * GREENHOUSE_SIZE + placement.col
         val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }
             ?: return if (plant?.stages == 0) GrowthEstimate(0.0, 0, ready = true, paused = false, readyInMs = 0) else null
-        return estimateGrowth(plant, reading, hoursPerStage(layout), now)
+        return estimateGrowth(plant, reading, hoursPerStage(layout), now, growthCycle(), drainFor(plot, key, placement.plantId))
+    }
+
+    // ---- Discord reminders --------------------------------------------------------------------------------------
+
+    private const val REMINDER_INTERVAL = 5 * 60_000L
+    private var reminderCheckAt = 0L
+    /** The last schedule the relay confirmed, and the last one sent. */
+    private var reminderConfirmed: String? = null
+    private var reminderSent: String? = null
+    private var reminderSentAt = 0L
+    /** Whether the relay may hold a schedule, so turning reminders off deletes it once instead of every session. */
+    private var remindersShared = false
+    private var deskHinted = false
+
+    /** Uploads the schedule when it changed, at most every 5 minutes; the relay rides it on its existing request check. */
+    private fun syncReminders(now: Long) {
+        if (now < reminderCheckAt || !DungeonFriendRelay.greenhouseAvailable) return
+        reminderCheckAt = now + 15_000
+        val payload: Map<String, Any> = when {
+            !GreenhouseConfig.discordReminders -> if (remindersShared) mapOf("enabled" to false) else return
+            deskReadAt == 0L && cycle?.measured != true -> {
+                if (!deskHinted) { deskHinted = true; displayModMessage("§eDiscord Reminders: open §f/desk §eand §fGreenhouse Upgrades §eonce so reminders know your growth speed") }
+                return
+            }
+            else -> reminderSchedule(now)
+        }
+        val text = JsonObject().apply { payload.forEach { (key, value) -> if (value is JsonElement) add(key, value) else addProperty(key, value as Boolean) } }.toString()
+        if (text == reminderConfirmed || now - reminderSentAt < REMINDER_INTERVAL) return
+        if (text.length > 7_800) { SkyMyce.logger.warn("Greenhouse reminder schedule too large to share ({} bytes)", text.length); reminderCheckAt = now + REMINDER_INTERVAL; return }
+        if (DungeonFriendRelay.greenhouseSchedule(payload)) { reminderSent = text; reminderSentAt = now }
+    }
+
+    private fun reminderAnswered(result: String) {
+        if (result !in setOf("stored", "unchanged", "deleted")) {
+            // Throttled or refused: tried again with the next change, at most every 5 minutes.
+            if (result == "invalid") SkyMyce.logger.warn("Greenhouse reminder schedule was refused by the relay")
+            return
+        }
+        reminderConfirmed = reminderSent
+        remindersShared = result != "deleted"
+        save()
+    }
+
+    /** Each plot's reminder events and its mutations for the Discord view. Times are absolute and stable between readings. */
+    private fun reminderSchedule(now: Long): Map<String, Any> {
+        val events = JsonArray()
+        val views = JsonArray()
+        val tick = growthCycle()
+        for (plot in plots.filter { it.layout != null && it.name.matches(PLOT_NAME) }.take(3)) {
+            val layout = plot.layout!!
+            val targets = layout.targets.filter { hasMutation(plot, it) }.take(40)
+            // Every time below changes only with a new reading, so an unchanged plot uploads (and writes) nothing.
+            val latest = targets.mapNotNull { plot.growth[it.row * GREENHOUSE_SIZE + it.col]?.at }.maxOrNull()
+            if (latest == null || latest < now - 29 * 86_400_000L) continue
+            val estimates = targets.map { targetEstimate(plot, it, now) }
+            fun minute(at: Long) = Math.floorDiv(at, 60_000L) * 60_000L
+            plotReminder(estimates, GreenhouseConfig.reminderReadyPercent, now)?.let { reminder ->
+                fun event(kind: String, at: Long, count: Int) = JsonObject().apply {
+                    addProperty("plot", plot.name); addProperty("kind", kind); addProperty("at", at); addProperty("count", count); addProperty("total", reminder.total)
+                }
+                val horizon = now + 13 * 86_400_000L
+                reminder.readyAt?.takeIf { it <= horizon }?.let { events.add(event("ready", minute(it), reminder.readyCount)) }
+                reminder.dryAt?.takeIf { it <= horizon }?.let { events.add(event("water", minute(it), reminder.dryCount)) }
+            }
+            val plants = targets.map { it.plantId }.distinct().take(8)
+            views.add(JsonObject().apply {
+                addProperty("name", plot.name)
+                addProperty("tickAt", tick?.tickAfter(latest, 0) ?: latest)
+                addProperty("cycleMs", (tick?.cycleMs ?: (hoursPerStage(layout) * 3_600_000).toLong()).coerceIn(30 * 60_000L, 8 * 3_600_000L))
+                add("plants", JsonArray().apply { plants.forEach(::add) })
+                add("targets", JsonArray().apply {
+                    targets.zip(estimates).filter { (it, _) -> it.plantId in plants }.forEach { (placement, estimate) ->
+                        val key = placement.row * GREENHOUSE_SIZE + placement.col
+                        val reading = plot.growth[key]
+                        val stages = reading?.stages ?: catalog?.get(placement.plantId)?.stages ?: 0
+                        // Ready and paused ones are marked from the latest reading, so their times stay the same between uploads.
+                        val readyAt = when {
+                            estimate == null -> 0L
+                            estimate.ready -> latest
+                            else -> estimate.readyInMs?.let { now + it }?.takeIf { it < now + 29 * 86_400_000L }?.let(::minute) ?: 0L
+                        }
+                        add(JsonArray().apply {
+                            add(key); add(placement.size); add(plants.indexOf(placement.plantId))
+                            add((reading?.stage ?: 0).coerceAtMost(stages)); add(stages)
+                            add(readyAt); add(estimate?.dryInMs?.let { if (it == 0L) latest else minute(now + it) }?.takeIf { it < now + 29 * 86_400_000L } ?: 0L)
+                            add(if (estimate?.paused == true) latest else 0L)
+                        })
+                    }
+                })
+            })
+        }
+        return mapOf("enabled" to true, "events" to events, "plots" to views)
+    }
+
+    /** Whether a mutation is on [placement]: the last scan saw one, or it was analysed since it appeared. */
+    private fun hasMutation(plot: Plot, placement: Placement): Boolean {
+        val key = placement.row * GREENHOUSE_SIZE + placement.col
+        return plot.status.getOrNull(key) == CellStatus.TARGET_GROWING.code || plot.growth[key]?.let { it.at >= (plot.spawned[key] ?: 0L) } == true
     }
 
     // ---- World overlay ------------------------------------------------------------------------------------------
@@ -996,6 +1173,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (!loaded || !active()) return clear()
         val now = System.currentTimeMillis()
         expireAnalysis(now)
+        syncReminders(now)
         fillAmountSign(now)
         val inGarden = LocationAPI.island == SkyBlockIsland.GARDEN
         if (inGarden) pollPrices(now)
@@ -1238,6 +1416,9 @@ object GreenhousePlanner : SkyMyceModule() {
             add("estimates", JsonObject().apply { estimates.forEach { (hash, e) -> add(hash, JsonArray().apply { add(e.count); add(e.profitPerHour) }) } })
             add("fingerprints", JsonObject().apply { learned.forEach { (fingerprint, id) -> addProperty(fingerprint, id) } })
             detectedGardenLevel?.let { addProperty("gardenLevel", it) }
+            cycle?.let { c -> add("cycle", JsonArray().apply { add(c.tickAt); add(c.cycleMs); add(c.measured) }) }
+            if (deskReadAt > 0) addProperty("deskReadAt", deskReadAt)
+            if (remindersShared) addProperty("remindersShared", true)
         }
         writer.submit(json)
     }
@@ -1255,6 +1436,9 @@ object GreenhousePlanner : SkyMyceModule() {
             }.getOrNull() }.toMap()
         }
         detectedGardenLevel = runCatching { json["gardenLevel"]?.asInt?.takeIf { it in 1..15 } }.getOrNull()
+        cycle = runCatching { json.getAsJsonArray("cycle").let { GrowthCycle(it[0].asLong, it[1].asLong.also { ms -> require(ms in 60_000L..86_400_000L) }, it[2].asBoolean) } }.getOrNull()
+        deskReadAt = runCatching { json["deskReadAt"]?.asLong }.getOrNull() ?: 0L
+        remindersShared = runCatching { json["remindersShared"]?.asBoolean }.getOrNull() == true
         runCatching { json.getAsJsonArray("layouts").forEach { element -> runCatching { layoutFromJson(element.asJsonObject, catalog) }.getOrNull()?.let { layouts[it.inputsHash] = it } } }
         runCatching { json.getAsJsonObject("estimates").entrySet().forEach { (hash, value) -> runCatching {
             val pair = value.asJsonArray

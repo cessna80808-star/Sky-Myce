@@ -14,6 +14,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.ln
@@ -118,8 +119,8 @@ enum class ProfitMetric(val label: String) { PER_HOUR("Per hour"), PER_CYCLE("Pe
 /** Bazaar quick-status pair: the highest buy order and lowest sell offer. */
 data class Quote(val buyOrder: Double, val sellOffer: Double)
 
-/** [gardenLevel] is 15 (everything unlocked) while the player's level is unknown. */
-data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode, val gardenLevel: Int = 15)
+/** [gardenLevel] is 15 (everything unlocked) while the player's level is unknown; [cropGrowth] counts only what is known. */
+data class GreenhouseSettings(val upgrade: Int, val uniqueCrops: Int, val priceMode: PriceMode, val gardenLevel: Int = 15, val cropGrowth: Int = 0)
 
 /** The Garden level a mutation needs: the highest unlock level among the base crops it spreads from. */
 fun gardenLevelFor(catalog: PlantCatalog, plant: Plant) = plant.requires.keys.maxOfOrNull { catalog[it]?.gardenLevel ?: 0 } ?: 0
@@ -146,15 +147,19 @@ fun costPrice(plant: Plant, quotes: Map<String, Quote>): Double? =
     if (plant.free) 0.0 else quotes[plant.bazaarId]?.let { max(it.buyOrder, it.sellOffer) / plant.perItem }?.takeIf { it.isFinite() && it > 0 }
 
 /**
- * skymutations.eu's growth timer: 4 hours per stage, reduced by percentage points from the Greenhouse upgrade
- * (2.5 per level up to 8, plus 5 at level 9) and 2.5 per unique crop type (site allows 12; the wiki caps the bonus at 10).
+ * The Greenhouse growth cycle (hypixelskyblock.minecraft.wiki/w/Greenhouse, 2026-10-28): 4 hours divided by 1 + 2.5% per
+ * unique crop (up to 10) + 0.25% per Crop Growth + the Desk's Growth Speed (5% a tier, 10% at IX). Flora and Timestalk
+ * shards are not known here, so this can only be slower than the game, never faster.
  */
-fun hoursPerStage(upgrade: Int, uniqueCrops: Int): Double {
-    val upgradeBonus = if (upgrade <= 0) 0.0 else minOf(upgrade, 8) * 2.5 + if (upgrade >= 9) 5.0 else 0.0
-    return 4.0 * (1.0 - (upgradeBonus + uniqueCrops.coerceIn(0, 12) * 2.5) / 100.0)
+fun hoursPerStage(upgrade: Int, uniqueCrops: Int, cropGrowth: Int = 0): Double {
+    val desk = if (upgrade >= 9) 0.5 else upgrade.coerceAtLeast(0) * 0.05
+    return 4.0 / (1.0 + uniqueCrops.coerceIn(0, 10) * 0.025 + cropGrowth.coerceIn(0, 210) * 0.0025 + desk)
 }
 
-fun cycleHours(plant: Plant, upgrade: Int, uniqueCrops: Int) = max(1, plant.stages) * hoursPerStage(upgrade, uniqueCrops)
+/** Crop Growth from the Garden level: 10 for each level after I. */
+fun gardenCropGrowth(gardenLevel: Int?) = ((gardenLevel ?: 1).coerceIn(1, 15) - 1) * 10
+
+fun cycleHours(plant: Plant, upgrade: Int, uniqueCrops: Int, cropGrowth: Int = 0) = max(1, plant.stages) * hoursPerStage(upgrade, uniqueCrops, cropGrowth)
 
 data class RankedMutation(val plant: Plant, val revenue: Double, val inputCost: Double, val cycleHours: Double) {
     val profitPerCycle get() = revenue - inputCost
@@ -180,7 +185,7 @@ fun rankMutations(catalog: PlantCatalog, quotes: Map<String, Quote>, settings: G
         val count = if (ingredient.size > 1 && id != "PLANTBOY_ADVANCE") ceil(quantity / ingredient.size.toDouble()) else quantity.toDouble()
         cost += (costPrice(ingredient, quotes) ?: 0.0) * count
     }
-    RankedMutation(plant, revenue, cost, cycleHours(plant, settings.upgrade, settings.uniqueCrops))
+    RankedMutation(plant, revenue, cost, cycleHours(plant, settings.upgrade, settings.uniqueCrops, settings.cropGrowth))
 }.sortedByDescending { it.profitPerHour }
 
 enum class Role { TARGET, INGREDIENT }
@@ -217,7 +222,7 @@ fun Layout.profitPerHour(catalog: PlantCatalog, quotes: Map<String, Quote>, sett
     var fastest = Double.MAX_VALUE
     for (target in targets) {
         val plant = catalog[target.plantId] ?: return null
-        val hours = cycleHours(plant, settings.upgrade, unique)
+        val hours = cycleHours(plant, settings.upgrade, unique, settings.cropGrowth)
         income += (revenuePrice(quotes[plant.bazaarId], settings.priceMode) ?: return null) / hours
         fastest = minOf(fastest, hours)
     }
@@ -245,22 +250,68 @@ data class PlotState(
     val growth: Map<Int, GrowthReading> = emptyMap(),
 )
 
-/** A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]; [awake] when the player woke it at that stage since. */
-data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false)
+/**
+ * A growth stage read from the Plant Diagnostics Tool: [stage] of [stages] at [at]; [awake] when the player woke it at that
+ * stage since. [water] is its water level (-100..100) when it needs water and the level is known; [drain] the water it was
+ * seen to lose per growth tick.
+ */
+data class GrowthReading(val stage: Int, val stages: Int, val at: Long, val awake: Boolean = false, val water: Double? = null, val drain: Double? = null)
 
-/** A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told. */
-data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?)
+/**
+ * A mutation's growth now. [paused] waits on the player (an asleep Snoozling); [readyInMs] is null when it cannot be told,
+ * including when its water runs out first. [dryInMs] is when a growing one's water runs out (0: already), null when untracked.
+ */
+data class GrowthEstimate(val stage: Double, val stages: Int, val ready: Boolean, val paused: Boolean, val readyInMs: Long?, val dryInMs: Long? = null)
+
+/**
+ * The Greenhouse's shared growth tick, which advances every plant at once: a tick at [tickAt] and every [cycleMs] around it.
+ * [measured] once two "Next Stage" countdowns timed the cycle; until then [cycleMs] is only a lower bound.
+ */
+data class GrowthCycle(val tickAt: Long, val cycleMs: Long, val measured: Boolean = false) {
+    /** Ticks in (from, to]. */
+    fun ticks(from: Long, to: Long): Int = if (to <= from) 0 else (Math.floorDiv(to - tickAt, cycleMs) - Math.floorDiv(from - tickAt, cycleMs)).toInt()
+    /** The [n]-th tick after [from] (n >= 1). */
+    fun tickAfter(from: Long, n: Int): Long = tickAt + (Math.floorDiv(from - tickAt, cycleMs) + n) * cycleMs
+}
+
+/**
+ * Folds a Diagnostics "Next Stage" countdown (the next tick at [nextTick]) into [cycle]. Two ticks a few cycles apart time
+ * the cycle exactly; one far off the expected length means it changed (a Desk upgrade), so timing starts over.
+ */
+fun updateCycle(cycle: GrowthCycle?, nextTick: Long, countdownMs: Long, formulaMs: Long): GrowthCycle {
+    val length = maxOf(cycle?.cycleMs ?: formulaMs, countdownMs)
+    if (cycle == null) return GrowthCycle(nextTick, length)
+    val k = Math.round((nextTick - cycle.tickAt).toDouble() / length)
+    if (k == 0L) return GrowthCycle(nextTick, length, cycle.measured)
+    val measured = (nextTick - cycle.tickAt).toDouble() / k
+    if (abs(k) > 6 || abs(measured - length) > length * 0.1) return GrowthCycle(nextTick, maxOf(formulaMs, countdownMs))
+    return GrowthCycle(nextTick, Math.round(measured).coerceAtLeast(countdownMs), measured = true)
+}
+
+/** Water a plant was seen to lose per growth tick between two readings; null when it was watered, grown, or no tick passed. */
+fun drainBetween(previous: GrowthReading, next: GrowthReading, ticks: Int): Double? {
+    val before = previous.water ?: return null
+    val after = next.water ?: return null
+    if (ticks <= 0 || previous.stage >= previous.stages || after >= before || after <= -100.0) return null
+    return (before - after) / ticks
+}
+
+/** Assumed water lost per growth tick until a plant's own drain is seen (players measured about 10-25 before 0.27.2). */
+const val DEFAULT_DRAIN = 20.0
 
 /**
  * Projects a reading with the growth timer, following [plant]'s rules: it stops at a pause until woken, a restarting crop
- * wraps back to stage 1, and unpredictable growth stays at what was read. Estimated: water and day/night are not modelled.
+ * wraps back to stage 1, and unpredictable growth stays at what was read. With [cycle] it advances on the shared tick.
+ * With [drain], growth is only promised while the water stays at 0 or above, since below it the game may skip a stage.
+ * Day/night (Noctilume) is not modelled.
  */
-fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double, now: Long): GrowthEstimate {
+fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double, now: Long, cycle: GrowthCycle? = null, drain: Double? = null): GrowthEstimate {
     val stages = reading.stages
     val readyAt = plant?.readyStage?.coerceAtMost(stages) ?: stages
     val stageMs = hoursPerStage * 3_600_000
     val unpredictable = plant?.unpredictable == true
-    val raw = reading.stage + if (unpredictable) 0.0 else (now - reading.at).coerceAtLeast(0) / stageMs
+    val passed = cycle?.ticks(reading.at, now)?.toDouble() ?: ((now - reading.at).coerceAtLeast(0) / stageMs)
+    val raw = reading.stage + if (unpredictable) 0.0 else passed
     val pause = plant?.pauses?.firstOrNull { it in reading.stage until stages && (it > reading.stage || !reading.awake) }
     val paused = pause != null && raw >= pause
     val stage = when {
@@ -269,12 +320,40 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
         else -> raw.coerceAtMost(stages.toDouble())
     }
     val ready = stage >= readyAt
+    val water = reading.water?.takeIf { drain != null && drain > 0 }
+    // Ticks after the reading until the water reaches 0.
+    val dryTicks = water?.let { if (it <= 0) 0 else ceil(it / drain!!).toInt() }
     val readyInMs = when {
         ready -> 0L
         paused || unpredictable -> null
+        water != null && water - drain!! * (readyAt - reading.stage) < 0 -> null
+        cycle != null -> cycle.tickAfter(now, ceil(readyAt - stage).toInt()) - now
         else -> ((readyAt - stage) * stageMs).toLong()
     }
-    return GrowthEstimate(stage, stages, ready, paused, readyInMs)
+    // Only water that runs out before it is ready matters; after that it needs none.
+    val dryInMs = dryTicks?.takeIf { !ready }?.let { n ->
+        val at = if (n == 0) reading.at else cycle?.tickAfter(reading.at, n) ?: (reading.at + n * stageMs).toLong()
+        (at - now).coerceAtLeast(0)
+    }?.takeIf { readyInMs == null || it < readyInMs }
+    return GrowthEstimate(stage, stages, ready, paused, readyInMs, dryInMs)
+}
+
+/**
+ * One plot's next Discord reminders: when [percent] of its mutations are ready, and when the first growing one runs out of
+ * water. [estimates] has one entry per mutation on the plot (null when not timed). Only future times: something already
+ * true is not reminded.
+ */
+data class PlotReminder(val readyAt: Long?, val readyCount: Int, val dryAt: Long?, val dryCount: Int, val total: Int)
+
+fun plotReminder(estimates: List<GrowthEstimate?>, percent: Int, now: Long): PlotReminder? {
+    if (estimates.isEmpty()) return null
+    val total = estimates.size
+    val needed = ceil(total * percent.coerceIn(1, 100) / 100.0).toInt().coerceIn(1, total)
+    val readyAt = if (estimates.count { it?.ready == true } >= needed) null
+        else estimates.map { it?.readyInMs }.sortedWith(nullsLast(naturalOrder()))[needed - 1]?.let { now + it }
+    val dry = estimates.mapNotNull { it?.dryInMs?.takeIf { ms -> ms > 0 } }
+    val first = dry.minOrNull()
+    return PlotReminder(readyAt, needed, first?.let { now + it }, if (first == null) 0 else dry.count { it <= first + 30 * 60_000 }, total)
 }
 
 private val GROWTH_STAGE = Regex("(?i)(?:growth\\s+)?stage\\D{0,12}?(\\d{1,3})\\s*(?:/|of)\\s*(\\d{1,3})")
@@ -295,6 +374,39 @@ fun parseGrowth(lines: List<String>): Pair<Int, Int>? {
     return stages to stages
 }
 
+/** What a Crop Diagnostics menu showed. [water] is null when the crop needs no water or it was not shown. */
+data class Diagnostics(val stage: Int, val stages: Int, val water: Double?, val needsWater: Boolean?, val nextStageMs: Long?)
+
+fun parseDiagnostics(lines: List<String>): Diagnostics? {
+    val (stage, stages) = parseGrowth(lines) ?: return null
+    val text = lines.map { it.replace(FORMATTING, "") }
+    val noWater = text.any { NO_WATER.containsMatchIn(it) }
+    val water = if (noWater) null else text.firstNotNullOfOrNull { WATER.find(it)?.groupValues?.get(1)?.toDoubleOrNull() }?.takeIf { it in -100.0..100.0 }
+    val next = text.firstNotNullOfOrNull { NEXT_STAGE.find(it)?.groupValues?.get(1) }?.let(::parseDuration)
+    return Diagnostics(stage, stages, water, if (noWater) false else if (water != null) true else null, next)
+}
+
+/** "1d 10h 41m 12s" in milliseconds, or null without a part. */
+fun parseDuration(text: String): Long? {
+    val parts = DURATION_PART.findAll(text).toList().takeIf { it.isNotEmpty() } ?: return null
+    return parts.sumOf { part ->
+        part.groupValues[1].toLong() * when (part.groupValues[2]) { "d" -> 86_400_000L; "h" -> 3_600_000L; "m" -> 60_000L; else -> 1000L }
+    }
+}
+
+/** The Desk's Greenhouse Growth Speed tier, from its menu item ("Growth Speed", lore "Current Tier: 3/9"), or null. */
+fun parseDeskGrowthTier(name: String, lore: List<String>): Int? {
+    if (name.replace(FORMATTING, "").trim() != "Growth Speed") return null
+    val text = lore.map { it.replace(FORMATTING, "") }
+    if (text.none { it.contains("Greenhouse Growth") }) return null
+    return text.firstNotNullOfOrNull { DESK_TIER.find(it)?.groupValues?.get(1)?.toInt() }?.takeIf { it in 0..9 }
+}
+
+private val WATER = Regex("(?i)^\\s*water:\\s*(-?\\d{1,3}(?:\\.\\d+)?)\\s*/\\s*100\\b")
+private val NO_WATER = Regex("(?i)doesn't need water")
+private val NEXT_STAGE = Regex("(?i)next stage:\\s*((?:\\d{1,4}\\s*[dhms]\\s*)+)")
+private val DURATION_PART = Regex("(\\d{1,4})\\s*([dhms])")
+private val DESK_TIER = Regex("Current Tier:\\s*(\\d)\\s*/\\s*9")
 private val FULLY_GROWN = Regex("(?i)\\bstage:\\s*fully grown")
 private val GROWTH_STAGES = Regex("(?i)growth stages:\\s*(\\d{1,3})")
 
@@ -330,7 +442,11 @@ fun PlotState.toJson(): JsonObject = JsonObject().apply {
     if (missingSoil.isNotEmpty()) add("missingSoil", JsonObject().apply { missingSoil.forEach { (soil, n) -> addProperty(soil.name, n) } })
     if (learned.isNotEmpty()) add("learned", JsonObject().apply { learned.forEach { (look, id) -> addProperty(look, id) } })
     if (growth.isNotEmpty()) add("growth", JsonObject().apply {
-        growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply { add(reading.stage); add(reading.stages); add(reading.at); if (reading.awake) add(true) }) }
+        growth.forEach { (cell, reading) -> add(cell.toString(), com.google.gson.JsonArray().apply {
+            add(reading.stage); add(reading.stages); add(reading.at)
+            if (reading.awake || reading.water != null || reading.drain != null) add(reading.awake)
+            if (reading.water != null || reading.drain != null) { add(reading.water); add(reading.drain) }
+        }) }
     })
 }
 
@@ -366,7 +482,10 @@ fun plotsFromJson(json: JsonObject, catalog: PlantCatalog): List<PlotState> {
                 section.getAsJsonObject("growth").entrySet().mapNotNull { (cell, value) -> runCatching {
                     val row = value.asJsonArray
                     cell.toInt().also { require(it in 0 until GREENHOUSE_CELLS) } to
-                        GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong, row.size() > 3 && row[3].asBoolean).also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
+                        GrowthReading(row[0].asInt, row[1].asInt, row[2].asLong, row.size() > 3 && row[3].asBoolean,
+                            row.takeIf { it.size() > 4 && !it[4].isJsonNull }?.get(4)?.asDouble?.takeIf { it in -100.0..100.0 },
+                            row.takeIf { it.size() > 5 && !it[5].isJsonNull }?.get(5)?.asDouble?.takeIf { it > 0 && it <= 200 })
+                            .also { require(it.stages in 1..200 && it.stage in 0..it.stages) }
                 }.getOrNull() }.toMap()
             }.getOrDefault(emptyMap()))
     }
@@ -941,7 +1060,7 @@ class GreenhouseSolver(
         return best
     }
 
-    private fun cycle(plant: Int, unique: Int) = cycleHours(pool[plant], settings.upgrade, unique)
+    private fun cycle(plant: Int, unique: Int) = cycleHours(pool[plant], settings.upgrade, unique, settings.cropGrowth)
 
     private fun fits(cells: IntArray, row: Int, col: Int, size: Int): Boolean {
         if (row < 0 || col < 0 || row + size > GREENHOUSE_SIZE || col + size > GREENHOUSE_SIZE) return false
@@ -992,7 +1111,7 @@ class GreenhouseSolver(
             placed += item; income += value
             fastest = minOf(fastest, cycle(item.plant, unique))
         }
-        if (fastest == Double.MAX_VALUE) fastest = hoursPerStage(settings.upgrade, unique)
+        if (fastest == Double.MAX_VALUE) fastest = hoursPerStage(settings.upgrade, unique, settings.cropGrowth)
         val exact = income - ingredients.sumOf { cost[it.plant] } / fastest
         return Evaluation(exact, exact + partial, unique, placed)
     }
@@ -1139,7 +1258,7 @@ class GreenhouseSolver(
         var bestExtra = 0; var bestExact = Double.NEGATIVE_INFINITY
         for (extra in 0..minOf(missing.size, free.size)) {
             val unique = maxOf(settings.uniqueCrops, present.size + extra).coerceAtMost(12)
-            val fastest = validTargets.minOfOrNull { cycle(it.plant, unique) } ?: hoursPerStage(settings.upgrade, unique)
+            val fastest = validTargets.minOfOrNull { cycle(it.plant, unique) } ?: hoursPerStage(settings.upgrade, unique, settings.cropGrowth)
             val exact = validTargets.sumOf { revenue[it.plant] / cycle(it.plant, unique) } -
                 (ingredients.sumOf { cost[it.plant] } + missing.take(extra).sumOf { cost[it] }) / fastest
             if (exact > bestExact) { bestExact = exact; bestExtra = extra }

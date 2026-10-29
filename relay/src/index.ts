@@ -20,6 +20,7 @@ import type { SharingState, SharingDecision, SharingCategory } from "./community
 import { takeTrafficCredit, type TrafficCredit } from "./traffic";
 import { LeapPov, type LeapPovSession } from "./leap-pov";
 import { BazaarNotifications } from "./bazaar-notifications";
+import { handleGreenhouseInteraction, validGreenhouseUpload, type GreenhouseUpload } from "./greenhouse-reminders";
 export { AccountStore } from "./accounts";
 
 type RelayEnv = Omit<Env, "SKYMYCE_ENVIRONMENT" | "ACCOUNT_STORE" | "RELAY_ROOMS" | "COMMUNITY_SERVICES_ENABLED" | "GLOBAL_CHAT_GATEWAY_CONTROL"> & DigestConfig & CosmeticsConfig & AccountsConfig & IrcConfig & DiscordAccountsConfig & {
@@ -123,6 +124,8 @@ export default {
       if (data.type === 1) return Response.json({ type: 1 });
       const rngCarousel = await handleRngCarouselInteraction(data, env, backend);
       if (rngCarousel) return rngCarousel;
+      const greenhouseView = await handleGreenhouseInteraction(data, env, backend);
+      if (greenhouseView) return greenhouseView;
       if (data.type === 4) return handleAccountAutocomplete(data, env, backend ? "backend" : "user");
       const promptResponse = await handlePromptInteraction(data, env, ctx, backend);
       if (promptResponse) return promptResponse;
@@ -399,7 +402,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         ws.send(JSON.stringify({ type: "ready", name: session.name, uuid: session.uuid, protocol: legacyRelay(this.env) ? 2 : 3, statsCache: true, wealthCache: false, partyPolicies: true, liveUpdates: true, digestNews: true, rngFeed: true, rngMetadataVersion: 1, userMessages: true, cosmetics: true, cosmeticsVersion: 5, cosmeticsNames: true,
           irc: !!session.accountId, globalChat: !!session.accountId && !!globalChatChannel(this.env), richChatVersion: 1, partyChat: !!session.accountId, partyChatVersion: 1, partyChatError: PARTY_CHAT_UNAVAILABLE,
           account: !!session.accountId, license: !!session.accountId, drm: !!session.accountId, leaseExpiresAt: session.leaseExpiresAt,
-          ...(!legacyRelay(this.env) && session.accountId ? { leapPovVersion: 1, bazaarVersion: 1 } : {}) }));
+          ...(!legacyRelay(this.env) && session.accountId ? { leapPovVersion: 1, bazaarVersion: 1 } : {}), ...(this.greenhouseAvailable(session) ? { greenhouseVersion: 1 } : {}) }));
       } catch { console.error({ event: "verification_failed" }); ws.close(1013, "Minecraft verification unavailable; retry later"); }
       return;
     }
@@ -408,10 +411,13 @@ export class RelayRoom extends DurableObject<RelayEnv> {
       ? this.irc.reserveSubscription(ws, session, data) : undefined;
     const povIntent = data.type === "leap_pov_subscribe" ? this.leapPov.reserve(ws, session, data) : undefined;
     const bazaarIntent = data.type === "bazaar_session" ? this.bazaarNotifications.reserve(ws, session) : undefined;
+    const greenhouse = data.type === "greenhouse_schedule" ? { upload: validGreenhouseUpload(data), result: "" } : undefined;
+    if (greenhouse && (!greenhouse.upload || !this.greenhouseAvailable(session))) { ws.send(JSON.stringify({ type: "greenhouse_result", error: "invalid" })); return; }
     if ((data.type === "leap_pov_subscribe" || data.type === "leap_pov_pose") && encoder.encode(raw).length > 2048) {
       this.leapPov.disconnect(ws); ws.close(1009, "POV message too large"); return;
     }
-    if (!await this.authorized(ws, session, true)) return;
+    if (!await this.authorized(ws, session, true, greenhouse)) return;
+    if (greenhouse) { ws.send(JSON.stringify({ type: "greenhouse_result", id: data.id, result: greenhouse.result || "unavailable" })); return; }
     const current = currentIrcSession(ws, session);
     if (!current) return;
     session = current;
@@ -730,7 +736,10 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     return rows.length < 250;
   }
 
-  private async authorized(ws: WebSocket, session: IrcSession, heartbeat = false): Promise<boolean> {
+  private greenhouseAvailable(session: IrcSession) { return !legacyRelay(this.env) && !!session.accountId && !!this.env.USER_BOT_TOKEN; }
+
+  /** [greenhouse] rides on the request check every message already makes; its outcome is written back into it. */
+  private async authorized(ws: WebSocket, session: IrcSession, heartbeat = false, greenhouse?: { upload: GreenhouseUpload | null; result: string }): Promise<boolean> {
     if (session.bridge) return true;
     if (legacyRelay(this.env)) return true;
     if (ws.readyState !== WebSocket.OPEN) return false;
@@ -745,7 +754,9 @@ export class RelayRoom extends DurableObject<RelayEnv> {
         uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation,
         heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId };
       const store = this.env.ACCOUNT_STORE.getByName("global");
-      const state = heartbeat ? await store.consumeCommunitySessionRequest(input) : await store.checkCommunitySession(input);
+      const state = !heartbeat ? await store.checkCommunitySession(input)
+        : greenhouse?.upload ? await store.consumeCommunitySessionRequest(input, greenhouse.upload) : await store.consumeCommunitySessionRequest(input);
+      if (greenhouse && "greenhouse" in state) greenhouse.result = String(state.greenhouse);
       if (!state.ok) {
         if (ws.readyState === WebSocket.OPEN) {
           if (["rate_limited", "traffic_cooldown", "service_busy"].includes(state.error ?? "")) {
