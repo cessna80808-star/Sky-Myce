@@ -916,7 +916,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val reading = plot.growth[key] ?: return
         val estimate = targetEstimate(plot, placement)?.takeIf { it.paused } ?: return
         val now = System.currentTimeMillis()
-        val water = reading.water?.let { w -> plot.layout?.let { (w - drainFor(plot, key, placement.plantId) * ticksBetween(it, reading.at, now)).coerceAtLeast(-100.0) } }
+        val water = reading.water?.let { w -> (w - drainFor(plot, key, placement.plantId) * ticksBetween(reading.at, now)).coerceAtLeast(-100.0) }
         plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, awake = true, water = water)
         revision++; dirty = true; save()
         displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
@@ -946,7 +946,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val last = pending.plot.growth[pending.key]?.takeIf { it.at >= (pending.plot.spawned[pending.key] ?: 0L) }
         var reading = GrowthReading(stage, stages, now, awake = last?.awake == true && last.stage == stage, water = diagnostics.water, drain = last?.drain)
         val layout = pending.plot.layout
-        if (last != null && layout != null) drainBetween(last, reading, ticksBetween(layout, last.at, now))?.let { seen ->
+        if (last != null) drainBetween(last, reading, ticksBetween(last.at, now))?.let { seen ->
             reading = reading.copy(drain = last.drain?.let { (it + seen) / 2 } ?: seen)
         }
         pending.plot.growth[pending.key] = reading
@@ -978,7 +978,13 @@ object GreenhousePlanner : SkyMyceModule() {
         displayModMessage("§7No growth stage was found in what the Plant Diagnostics Tool showed; it was written to the log so the planner can learn to read it")
     }
 
-    private fun hoursPerStage(layout: Layout) = hoursPerStage(GreenhouseConfig.upgradeLevel, maxOf(settings(owner(layout)).uniqueCrops, layout.uniqueCrops), cropGrowth())
+    /** Hours per growth stage; the same for every plot. */
+    private fun stageHours() = hoursPerStage(GreenhouseConfig.upgradeLevel, uniqueCropsEverywhere(), cropGrowth())
+
+    /** Unique crop types across every plot: the game counts them in ANY Greenhouse plot, so every plot grows at the same speed. */
+    private fun uniqueCropsEverywhere(): Int = maxOf(GreenhouseConfig.uniqueCrops, plots.asSequence()
+        .flatMap { it.layout?.placements.orEmpty().asSequence() }
+        .filter { it.role == Role.INGREDIENT && catalog?.get(it.plantId)?.unique == true }.map { it.plantId }.toSet().size)
 
     // ---- Growth tick, water and Desk ----------------------------------------------------------------------------
 
@@ -987,11 +993,8 @@ object GreenhousePlanner : SkyMyceModule() {
     /** When the Desk's Growth Speed tier was last read; 0 when never, so reminders wait for it or a measured cycle. */
     private var deskReadAt = 0L
 
-    /** The cycle the upgrades predict, for the fastest plot (unique crops count across all of them). */
-    private fun formulaCycleMs(): Long {
-        val unique = plots.mapNotNull { it.layout?.uniqueCrops }.fold(GreenhouseConfig.uniqueCrops, ::maxOf)
-        return (hoursPerStage(GreenhouseConfig.upgradeLevel, unique, cropGrowth()) * 3_600_000).toLong()
-    }
+    /** The cycle the upgrades predict; the same for every plot. */
+    private fun formulaCycleMs(): Long = (stageHours() * 3_600_000).toLong()
 
     /** Until two countdowns time the cycle, it is at least what the upgrades predict, so estimates never run early. */
     private fun growthCycle(): GrowthCycle? = cycle?.let { if (it.measured) it else it.copy(cycleMs = maxOf(it.cycleMs, formulaCycleMs())) }
@@ -1001,8 +1004,8 @@ object GreenhousePlanner : SkyMyceModule() {
         ?: plots.flatMap { p -> p.layout?.targets.orEmpty().filter { it.plantId == plantId }.mapNotNull { p.growth[it.row * GREENHOUSE_SIZE + it.col]?.drain } }
             .takeIf { it.isNotEmpty() }?.average() ?: DEFAULT_DRAIN
 
-    private fun ticksBetween(layout: Layout, from: Long, to: Long): Int =
-        growthCycle()?.ticks(from, to) ?: ((to - from).coerceAtLeast(0) / (hoursPerStage(layout) * 3_600_000)).toInt()
+    private fun ticksBetween(from: Long, to: Long): Int =
+        growthCycle()?.ticks(from, to) ?: ((to - from).coerceAtLeast(0) / (stageHours() * 3_600_000)).toInt()
 
     private var wateringHinted = false
 
@@ -1063,7 +1066,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val key = placement.row * GREENHOUSE_SIZE + placement.col
         val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }
             ?: return if (plant?.stages == 0) GrowthEstimate(0.0, 0, ready = true, paused = false, readyInMs = 0) else null
-        return estimateGrowth(plant, reading, hoursPerStage(layout), now, growthCycle(), drainFor(plot, key, placement.plantId))
+        return estimateGrowth(plant, reading, stageHours(), now, growthCycle(), drainFor(plot, key, placement.plantId))
     }
 
     // ---- Discord reminders --------------------------------------------------------------------------------------
@@ -1132,7 +1135,7 @@ object GreenhousePlanner : SkyMyceModule() {
             views.add(JsonObject().apply {
                 addProperty("name", plot.name)
                 addProperty("tickAt", tick?.tickAfter(latest, 0) ?: latest)
-                addProperty("cycleMs", (tick?.cycleMs ?: (hoursPerStage(layout) * 3_600_000).toLong()).coerceIn(30 * 60_000L, 8 * 3_600_000L))
+                addProperty("cycleMs", (tick?.cycleMs ?: (stageHours() * 3_600_000).toLong()).coerceIn(30 * 60_000L, 8 * 3_600_000L))
                 add("plants", JsonArray().apply { plants.forEach(::add) })
                 add("targets", JsonArray().apply {
                     targets.zip(estimates).filter { (it, _) -> it.plantId in plants }.forEach { (placement, estimate) ->
