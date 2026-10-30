@@ -10,6 +10,7 @@ import me.mycellium.mixin.BazaarAssistSignAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.misc.GreenhouseConfig
+import me.mycellium.skymyce.features.general.overlays.NpcDialogue
 import me.mycellium.skymyce.features.general.pricehistory.formatCoins
 import me.mycellium.skymyce.features.instances.dungeons.friends.IrcChatRendering
 import me.mycellium.skymyce.hud.HudTheme
@@ -478,6 +479,7 @@ object GreenhousePlanner : SkyMyceModule() {
     fun command(): LiteralArgumentBuilder<FabricClientCommandSource> = literal("greenhouse")
         .executes { run(::showRanking) }
         .then(literal("help").executes { run(::showHelp) })
+        .then(literal("reminders").executes { run { toggleReminders() } })
         .then(literal("gui").executes { run { navigateMenu(GreenhouseScreen()) } })
         .then(literal("plan").then(argument("mutation", StringArgumentType.word())
             .suggests { _, builder -> SharedSuggestionProvider.suggest(catalog?.plants?.filter { it.solvable }?.map { it.id }.orEmpty(), builder) }
@@ -540,6 +542,7 @@ object GreenhousePlanner : SkyMyceModule() {
             "missing" to "Everything still needed; click a crop for /bz with the amount copied, or a soil for /gfs (also: shopping)",
             "lock <row> <column>" to "Exclude or include one slot; run recompute afterwards",
             "remove <name>" to "Forget a plot",
+            "reminders" to "Turn reminders on or off: shown here while you play, DMed on Discord otherwise",
             "help" to "This list",
         ).forEach { (args, text) ->
             val command = "/sm greenhouse${if (args.isEmpty()) "" else " $args"}"
@@ -1198,20 +1201,64 @@ object GreenhousePlanner : SkyMyceModule() {
 
     /** Uploads the schedule when it changed, at most every 5 minutes; the relay rides it on its existing request check. */
     private fun syncReminders(now: Long) {
-        if (now < reminderCheckAt || !DungeonFriendRelay.greenhouseAvailable) return
+        if (now < reminderCheckAt) return
         reminderCheckAt = now + 15_000
+        val timed = deskReadAt != 0L || cycle?.measured == true
+        val schedule = if (GreenhouseConfig.discordReminders && timed) reminderSchedule(now) else null
+        // The same events show in game when they fall due; the relay skips the DM while you are connected.
+        schedule?.let { noteUpcoming(it["events"] as JsonArray) }
+        if (!DungeonFriendRelay.greenhouseAvailable) return
         val payload: Map<String, Any> = when {
             !GreenhouseConfig.discordReminders -> if (remindersShared) mapOf("enabled" to false) else return
-            deskReadAt == 0L && cycle?.measured != true -> {
+            !timed -> {
                 if (!deskHinted) { deskHinted = true; displayModMessage("§eDiscord Reminders: open §f/desk §eand §fGreenhouse Upgrades §eonce so reminders know your growth speed") }
                 return
             }
-            else -> reminderSchedule(now)
+            else -> schedule!!
         }
         val text = JsonObject().apply { payload.forEach { (key, value) -> if (value is JsonElement) add(key, value) else addProperty(key, value as Boolean) } }.toString()
         if (text == reminderConfirmed || now - reminderSentAt < REMINDER_INTERVAL) return
         if (text.length > 7_800) { SkyMyce.logger.warn("Greenhouse reminder schedule too large to share ({} bytes)", text.length); reminderCheckAt = now + REMINDER_INTERVAL; return }
         if (DungeonFriendRelay.greenhouseSchedule(payload)) { reminderSent = text; reminderSentAt = now }
+    }
+
+    /** Reminder events by plot and kind, waiting for their time; [shownNotices] is when each was last shown, so one shows once. */
+    private val upcoming = HashMap<String, JsonObject>()
+    private val shownNotices = HashMap<String, Long>()
+
+    private fun noteUpcoming(events: JsonArray) {
+        // A due one stays until it is shown; a newer time for the same plot and kind replaces a future one.
+        upcoming.values.removeIf { it["at"].asLong > System.currentTimeMillis() }
+        events.forEach { event -> event.asJsonObject.let { upcoming[it["plot"].asString + ":" + it["kind"].asString] = it } }
+    }
+
+    /** Shows due reminders in the NPC dialogue box (chat when the box is off or you are off SkyBlock), each once like a DM. */
+    private fun showDueNotices(now: Long) {
+        if (upcoming.isEmpty() || MC.instance.player == null) return
+        val due = upcoming.filterValues { it["at"].asLong <= now }
+        for ((key, event) in due) {
+            upcoming.remove(key)
+            if (!GreenhouseConfig.discordReminders || shownNotices[key]?.let { abs(it - event["at"].asLong) < 3 * 3_600_000L } == true) continue
+            shownNotices[key] = event["at"].asLong
+            val plot = event["plot"].asString; val count = event["count"].asInt
+            val plant = plots.firstOrNull { it.name == plot }?.layout?.targets?.firstOrNull()?.let { catalog?.get(it.plantId)?.name }?.let { "$it " } ?: ""
+            val text = when (event["kind"].asString) {
+                "ready" -> "Plot $plot: $count of ${event["total"].asInt} ${plant}mutations are ready"
+                "water" -> "Plot $plot: " + if (count == 1) "a growing mutation is out of water" else "$count growing mutations are out of water"
+                else -> "Plot $plot: " + if (count == 1) "a mutation stopped until you act on it" else "$count mutations stopped until you act on them"
+            }
+            if (!NpcDialogue.say("Greenhouse", text)) displayModMessage("§aGreenhouse §7· §f$text")
+        }
+    }
+
+    /** Turns Discord Reminders on or off from the game; the relay hears of it at the next check. */
+    internal fun toggleReminders(): Boolean {
+        GreenhouseConfig.discordReminders = !GreenhouseConfig.discordReminders
+        SkyMyce.config.save()
+        reminderCheckAt = 0; reminderSentAt = 0
+        displayModMessage(if (GreenhouseConfig.discordReminders) "§aGreenhouse reminders on: §7shown here while you play, DMed on Discord otherwise"
+            else "§7Greenhouse reminders off")
+        return GreenhouseConfig.discordReminders
     }
 
     private fun reminderAnswered(result: String) {
@@ -1303,6 +1350,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val now = System.currentTimeMillis()
         expireAnalysis(now)
         expireAnalysisLines(now)
+        showDueNotices(now)
         syncReminders(now)
         fillAmountSign(now)
         val inGarden = LocationAPI.island == SkyBlockIsland.GARDEN

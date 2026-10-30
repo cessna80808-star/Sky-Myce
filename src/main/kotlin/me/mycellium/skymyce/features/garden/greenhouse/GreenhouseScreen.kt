@@ -6,6 +6,7 @@ import io.wispforest.owo.ui.container.FlowLayout
 import io.wispforest.owo.ui.container.ScrollContainer
 import io.wispforest.owo.ui.container.UIContainers
 import io.wispforest.owo.ui.core.*
+import me.mycellium.skymyce.config.misc.GreenhouseConfig
 import me.mycellium.skymyce.config.SettingsScreen
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.ui.*
@@ -31,6 +32,8 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
                 child(label("§lGreenhouses").horizontalSizing(Sizing.expand()))
                 child(button("Ranking", 64) { chat(GreenhousePlanner::showRanking) }.tooltip(Component.literal("Profit per plot for each mutation, in chat")))
                 child(button("Help", 44) { chat(GreenhousePlanner::showHelp) }.tooltip(Component.literal("Every /sm greenhouse command, in chat")))
+                child(button(remindersLabel(), 92) { it.message = Component.literal(remindersLabel(GreenhousePlanner.toggleReminders())) }
+                    .tooltip(Component.literal("Greenhouse reminders: shown in game while you play, DMed on Discord otherwise")))
                 // Opened with this screen as its parent, so Done and Esc come back here.
                 child(button("Settings", 64) { navigateMenu(SettingsScreen.forFeature(this@GreenhouseScreen, "greenhouse-planner")) })
             })
@@ -225,6 +228,7 @@ class GreenhouseScreen : MenuScreen(Component.literal("Greenhouses"), MenuPage.G
     /** Chat output is hidden behind the menu, so actions that answer in chat close it first. */
     private fun chat(action: () -> Unit) { onClose(); MC.instance.execute(action) }
 
+    private fun remindersLabel(on: Boolean = GreenhouseConfig.discordReminders) = if (on) "Reminders: On" else "Reminders: Off"
     private fun Int?.orZero() = this ?: 0
     private fun row() = UIContainers.horizontalFlow(Sizing.fill(), Sizing.content()).apply { verticalAlignment(VerticalAlignment.CENTER) }
     private fun label(text: String, color: Int = TEXT) = MenuLabel(Component.literal(text)).apply { color(Color.ofRgb(color)); shadow(MenuTheme.SHADOW) }

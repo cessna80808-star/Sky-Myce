@@ -129,6 +129,14 @@ object NpcDialogue : SkyMyceModule() {
         }
     }
 
+    /** Queues a line from Sky-Myce itself (a Greenhouse reminder); false while the box is not showing, so the caller uses chat. */
+    internal fun say(name: String, message: String): Boolean {
+        if (!active()) return false
+        queue.addLast(NpcLine(name, message))
+        while (queue.size > 20) queue.removeFirst()
+        return true
+    }
+
     @Subscription
     fun onDisconnect(event: ServerDisconnectEvent) = reset()
 
