@@ -299,12 +299,20 @@ fun main() {
     // On the shared tick a Coalroot read at 5/8 just after a tick is ready on the third tick after it.
     val onTick = estimateGrowth(coalroot, GrowthReading(5, 8, readAt), 2.0, readAt + hour, tick)
     check(onTick.stage == 5.0 && onTick.readyInMs == 5 * hour && onTick.dryInMs == null) { "Tick growth $onTick" }
-    // Water: 48.8 at 8 an hour lasts past the ready tick 6 hours after the reading, so it is promised and needs no reminder.
-    val wet = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 8.0)
+    // Water: 20 goes at each tick, so 48.8 lasts to the third tick, the ready one 6 hours after the reading: promised, no reminder.
+    val wet = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 30.0)
     check(wet.readyInMs == 5 * hour && wet.dryInMs == null) { "Water lasts $wet" }
-    // At 12.2 an hour it runs out 4 hours after the reading, before it is ready: not promised, reminded when it runs out.
-    val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, tick, 12.2)
+    // 30 runs out at the second tick, 4 hours after the reading, before it is ready: not promised, reminded when it runs out.
+    val dry = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 30.0), 2.0, readAt + hour, tick, 1.0)
     check(dry.readyInMs == null && dry.dryInMs == 3 * hour) { "Runs dry $dry" }
+    // Without a known tick the hourly drain times it: 48.8 at 12.2 an hour lasts 4 hours.
+    check(estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8), 2.0, readAt + hour, null, 12.2).dryInMs == 3 * hour) { "Hourly drain" }
+    // Shown water falls evenly between ticks: 100 read 30% into a cycle is 94; the game's own value steps only at ticks.
+    val read = readAt + 36 * 60_000
+    check(abs(waterAt(100.0, read, read, tick, 10.0) - 94.0) < 1e-9 && waterAt(100.0, read, read, tick, 10.0, smooth = false) == 100.0) { "Water within a cycle" }
+    check(abs(waterAt(100.0, read, readAt + 2 * hour + 30 * 60_000, tick, 10.0) - 75.0) < 1e-9 &&
+        waterAt(100.0, read, readAt + 2 * hour + 30 * 60_000, tick, 10.0, smooth = false) == 80.0) { "Water after a tick" }
+    check(waterAt(50.0, readAt, readAt + 3 * hour, null, 10.0) == 20.0 && waterAt(-90.0, readAt, readAt + 20 * hour, tick, 10.0) == -100.0) { "Water without a tick, and its floor" }
     // When the game said it has enough water to reach full growth, that is trusted.
     val enough = estimateGrowth(coalroot, GrowthReading(5, 8, readAt, water = 48.8, enough = true), 2.0, readAt + hour, tick, 12.2)
     check(enough.readyInMs == 5 * hour && enough.dryInMs == null) { "Enough water $enough" }

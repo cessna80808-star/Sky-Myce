@@ -314,6 +314,20 @@ fun drainPerHour(water: Double?, lastsMs: Long?): Double? =
 /** Water lost per hour until a plant's own rate is read: about 10 in game on 2026-10-29 (see [drainPerHour]). */
 const val DEFAULT_DRAIN = 10.0
 
+/** Water the game takes at each growth tick, all at once: every "Lasts for" read on 2026-10-30 is (water + 100) / 20 ticks. */
+const val WATER_PER_TICK = 20.0
+
+/**
+ * A plant's water at [now] from [water] read at [at]: 20 for each tick in between. A reading is the level the game shows
+ * until its next tick, so [smooth] also takes off the share of the current cycle already gone, falling evenly instead of in
+ * 20s (100 read 30% into a cycle is 94). Without a known [cycle] the hourly [drain] stands in.
+ */
+fun waterAt(water: Double, at: Long, now: Long, cycle: GrowthCycle?, drain: Double, smooth: Boolean = true): Double {
+    if (cycle == null) return (water - drain * (now - at).coerceAtLeast(0) / 3_600_000.0).coerceAtLeast(-100.0)
+    val partial = if (smooth) Math.floorMod(now - cycle.tickAt, cycle.cycleMs).toDouble() / cycle.cycleMs else 0.0
+    return (water - WATER_PER_TICK * (cycle.ticks(at, now) + partial)).coerceAtLeast(-100.0)
+}
+
 /**
  * Projects a reading with the growth timer, following [plant]'s rules: it stops at a pause until woken, a restarting crop
  * wraps back to stage 1, and unpredictable growth stays at what was read. With [cycle] it advances on the shared tick.
@@ -335,8 +349,16 @@ fun estimateGrowth(plant: Plant?, reading: GrowthReading, hoursPerStage: Double,
         else -> raw.coerceAtMost(stages.toDouble())
     }
     val ready = stage >= readyAt
-    // When the water reaches 0; never before full growth when the game said it has enough.
-    val dryAt = reading.water?.takeIf { drain != null && drain > 0 && !reading.enough }?.let { reading.at + (it.coerceAtLeast(0.0) / drain!! * 3_600_000).toLong() }
+    // When the water reaches 0: at the tick that takes the last of it, else from the hourly drain; never before full growth
+    // when the game said it has enough.
+    val dryAt = reading.water?.takeIf { !reading.enough }?.let { water ->
+        when {
+            water <= 0 -> reading.at
+            cycle != null -> cycle.tickAfter(reading.at, ceil(water / WATER_PER_TICK).toInt())
+            drain != null && drain > 0 -> reading.at + (water / drain * 3_600_000).toLong()
+            else -> null
+        }
+    }
     // Time until it reaches [target], promised only while its water lasts.
     fun until(target: Int): Long? = (if (cycle != null) cycle.tickAfter(now, ceil(target - stage).toInt()) - now else ((target - stage) * stageMs).toLong())
         .takeIf { dryAt == null || now + it <= dryAt }

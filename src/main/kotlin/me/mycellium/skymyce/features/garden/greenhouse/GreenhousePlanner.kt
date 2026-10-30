@@ -941,7 +941,7 @@ object GreenhousePlanner : SkyMyceModule() {
         val reading = plot.growth[key] ?: return
         val estimate = targetEstimate(plot, placement)?.takeIf { it.paused } ?: return
         val now = System.currentTimeMillis()
-        val water = reading.water?.let { w -> (w - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0).coerceAtLeast(-100.0) }
+        val water = reading.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId), smooth = false) }
         plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, awake = true, water = water)
         revision++; dirty = true; save()
         displayModMessage("§7${catalog?.get(placement.plantId)?.name ?: placement.plantId} woken at stage ${estimate.stage.toInt()}/${reading.stages}; its growth is timed from now")
@@ -1116,7 +1116,8 @@ object GreenhousePlanner : SkyMyceModule() {
         for ((placement, water) in bars) {
             val key = placement.row * GREENHOUSE_SIZE + placement.col
             val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: continue
-            val projected = reading.water?.let { it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0 }
+            // Compared as the game shows it, stepping at each tick.
+            val projected = reading.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId), smooth = false) }
             // The bar only tells the segment and rounds a level up into the next one (20 shows as 25), so a stored level
             // within a segment either side is finer and stays.
             if (projected != null && projected in water - step - 1..water + step + 1) continue
@@ -1512,9 +1513,9 @@ object GreenhousePlanner : SkyMyceModule() {
                     .minmax(AABB(cellPos(origin, placement.row + placement.size - 1, placement.col + placement.size - 1).above())).inflate(0.03)
                 if (color != null) shown += Ghost(box, HudTheme.alpha(color, alpha))
                 val key = placement.row * GREENHOUSE_SIZE + placement.col
-                // Its water now, projected from the last level read with the hourly drain.
+                // Its water now, projected from the last level read: 20 a growth tick, falling evenly between ticks.
                 val water = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) }?.let { reading ->
-                    reading.water?.let { (it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0).coerceAtLeast(-100.0) }
+                    reading.water?.let { waterAt(it, reading.at, now, growthCycle(), drainFor(plot, key, placement.plantId)) }
                 }
                 shownLabels += Label(Vec3(box.center.x, box.maxY + 0.5, box.center.z), growthLabel(plant.name, estimate, water))
             }
