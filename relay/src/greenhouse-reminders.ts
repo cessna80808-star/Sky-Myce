@@ -1,5 +1,5 @@
 import { sha256 } from "./drm";
-import { discordPost, openDirectMessage } from "./discord-notifications";
+import { discordDeleteMessage, discordPost, openDirectMessage } from "./discord-notifications";
 
 /**
  * Discord DMs for Greenhouse mutations, opt-in from the mod. One row per Discord account holds the whole schedule; the mod
@@ -17,6 +17,10 @@ export const GREENHOUSE_LIMITS = {
   /** A re-upload of an event already sent (same plot and kind, about the same time) is not sent again. */
   firedWindowMs: 3 * 3_600_000,
   retryMs: 5 * 60_000,
+  /** A DM deletes itself after this; a failed delete is retried until it is [messageKeepMs] old. */
+  messageTtlMs: 86_400_000,
+  messageKeepMs: 2 * 86_400_000,
+  maxMessages: 20,
 };
 
 /** ready: the chosen share of a plot is ready; water: a growing one runs dry; wake: one stops until the player acts. */
@@ -26,8 +30,11 @@ export type GreenhouseTarget = [number, number, number, number, number, number, 
 export type GreenhousePlotView = { name: string; tickAt: number; cycleMs: number; plants: string[]; targets: GreenhouseTarget[] };
 export type GreenhouseUpload = { enabled: false } | { enabled: true; events: GreenhouseEvent[]; plots: GreenhousePlotView[] };
 type Fired = { plot: string; kind: string; at: number };
-type Row = { discord_id: string; schedule: string; sent: string; fired: string; attempts: number; updated_at: number };
+/** A DM the relay sent, so it can be deleted after a day. */
+type SentMessage = { channel: string; id: string; at: number };
+type Row = { discord_id: string; schedule: string; sent: string; fired: string; attempts: number; updated_at: number; messages: string; welcome: number };
 
+const snowflake = (value: unknown): value is string => typeof value === "string" && /^\d{17,20}$/.test(value);
 const plotName = /^[A-Za-z0-9_-]{1,16}$/, plantId = /^[A-Z0-9_]{1,32}$/, hex = /^[a-f0-9]{32}$/;
 const int = (value: unknown, min: number, max: number): value is number => Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
 const time = (value: unknown, now: number) => value === 0 || int(value, now - 30 * 86_400_000, now + 30 * 86_400_000);
@@ -135,7 +142,18 @@ export function greenhouseView(plots: GreenhousePlotView[], uploadedAt: number, 
   return { content: `**Greenhouse** · as of ${discordTime(now)}\n-# 🟩 ready · 🟨 growing · 🟥 out of water · 🟪 needs you · ⬜ not timed. Estimated from your last readings.`, embeds };
 }
 
-export const greenhouseButton = (label = "Show greenhouse") => ({ type: 1, components: [{ type: 2, style: 2, label, custom_id: "greenhouse:view" }] });
+/** The view button; a DM also gets Dismiss, which deletes it. */
+export const greenhouseButton = (label = "Show greenhouse", dismissible = false) => ({ type: 1, components: [{ type: 2, style: 2, label, custom_id: "greenhouse:view" },
+  ...(dismissible ? [{ type: 2, style: 2, label: "Dismiss", custom_id: "greenhouse:dismiss" }] : [])] });
+
+export const GREENHOUSE_WELCOME = "**Greenhouse** reminders are on ✅\nYou will get a DM here when your plots are ready, run out of water or need you.\n" +
+  "-# Reminders delete themselves after 24 hours; Dismiss deletes one now.";
+
+/** When a row next needs the alarm: a pending welcome, its next DM, or the first DM due for deletion. */
+function rowDue(dmAt: number | undefined, messages: SentMessage[], welcome: boolean, now: number): number | null {
+  const times = [...(dmAt === undefined ? [] : [dmAt]), ...messages.map(m => m.at + GREENHOUSE_LIMITS.messageTtlMs), ...(welcome ? [now] : [])];
+  return times.length ? Math.min(...times) : null;
+}
 
 const json = <T>(text: string, fallback: T): T => { try { return JSON.parse(text) as T; } catch { return fallback; } };
 
@@ -144,6 +162,11 @@ export class GreenhouseReminders {
     sql.exec(`CREATE TABLE IF NOT EXISTS greenhouse_reminders (discord_id TEXT PRIMARY KEY, schedule TEXT NOT NULL, next_at INTEGER,
       sent TEXT NOT NULL DEFAULT '[]', fired TEXT NOT NULL DEFAULT '[]', attempts INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS greenhouse_reminder_due ON greenhouse_reminders(next_at);`);
+    // Rows from before the welcome DM get it once, with their next upload.
+    const columns = new Set(sql.exec<{ name: string }>("PRAGMA table_info(greenhouse_reminders)").toArray().map(row => row.name));
+    for (const [column, definition] of Object.entries({ messages: "TEXT NOT NULL DEFAULT '[]'", welcome: "INTEGER NOT NULL DEFAULT 1" })) {
+      if (!columns.has(column)) sql.exec(`ALTER TABLE greenhouse_reminders ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   /** Stores [upload] for [discordId]; writes only when it changed. [next] is the row's next due time, if any. */
@@ -154,8 +177,10 @@ export class GreenhouseReminders {
     const schedule = JSON.stringify({ events: unsentEvents(upload.events, fired, now), plots: upload.plots });
     if (row?.schedule === schedule) return { result: "unchanged", next: null };
     if (row && now - row.updated_at < GREENHOUSE_LIMITS.writeGapMs) return { result: "throttled", next: null };
-    const next = nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now)?.at ?? null;
-    this.sql.exec(`INSERT INTO greenhouse_reminders(discord_id,schedule,next_at,sent,fired,attempts,updated_at) VALUES(?,?,?,?,?,0,?)
+    // A new row (reminders just turned on) first gets a DM showing that they work.
+    const next = rowDue(nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now)?.at,
+      json<SentMessage[]>(row?.messages ?? "[]", []), !row || row.welcome === 1, now);
+    this.sql.exec(`INSERT INTO greenhouse_reminders(discord_id,schedule,next_at,sent,fired,attempts,updated_at,welcome) VALUES(?,?,?,?,?,0,?,1)
       ON CONFLICT(discord_id) DO UPDATE SET schedule=excluded.schedule,next_at=excluded.next_at,fired=excluded.fired,attempts=0,updated_at=excluded.updated_at`,
       discordId, schedule, next, row?.sent ?? "[]", JSON.stringify(fired), now);
     return { result: "stored", next };
@@ -172,19 +197,33 @@ export class GreenhouseReminders {
     for (const row of rows) {
       const schedule = json<{ events: GreenhouseEvent[]; plots: GreenhousePlotView[] }>(row.schedule, { events: [], plots: [] });
       const sent = json<number[]>(row.sent, []).filter(t => t > now - GREENHOUSE_LIMITS.dayMs);
-      const due = nextGreenhouseDm(schedule.events, sent, now);
-      if (!due || due.at > now) {
-        this.sql.exec("UPDATE greenhouse_reminders SET next_at=? WHERE discord_id=?", due?.at ?? null, row.discord_id); continue;
+      let fired = json<Fired[]>(row.fired, []).filter(f => f.at > now - GREENHOUSE_LIMITS.dayMs), events = schedule.events, attempts = 0, retryAt: number | undefined;
+      // DMs older than a day are deleted; one that fails is tried again until it is two days old.
+      const messages: SentMessage[] = [];
+      for (const message of json<SentMessage[]>(row.messages, [])) {
+        if (message.at > now - GREENHOUSE_LIMITS.messageTtlMs) messages.push(message);
+        else if (!(token && await discordDeleteMessage(token, message.channel, message.id).catch(() => false)) && message.at > now - GREENHOUSE_LIMITS.messageKeepMs) messages.push(message);
       }
-      const delivered = !!token && await this.send(token, row.discord_id, due, schedule.plots);
-      if (!delivered && row.attempts < 1) {
-        this.sql.exec("UPDATE greenhouse_reminders SET attempts=1,next_at=? WHERE discord_id=?", now + GREENHOUSE_LIMITS.retryMs, row.discord_id); continue;
+      if (row.welcome && token) {
+        const welcome = await this.send(token, row.discord_id, GREENHOUSE_WELCOME, `welcome:${row.updated_at}`, now);
+        if (welcome.message) messages.push(welcome.message);
       }
-      const events = schedule.events.filter(e => !due.events.includes(e));
-      const fired = [...json<Fired[]>(row.fired, []).filter(f => f.at > now - GREENHOUSE_LIMITS.dayMs), ...due.events.map(e => ({ plot: e.plot, kind: e.kind, at: e.at }))];
-      if (delivered) sent.push(now);
-      this.sql.exec("UPDATE greenhouse_reminders SET schedule=?,next_at=?,sent=?,fired=?,attempts=0 WHERE discord_id=?",
-        JSON.stringify({ events, plots: schedule.plots }), nextGreenhouseDm(events, sent, now)?.at ?? null, JSON.stringify(sent), JSON.stringify(fired), row.discord_id);
+      const due = nextGreenhouseDm(events, sent, now);
+      if (due && due.at <= now) {
+        const result = token ? await this.send(token, row.discord_id, greenhouseDmText(due.events, schedule.plots), due.events.map(e => `${e.plot}:${e.kind}:${e.at}`).join(","), now)
+          : { delivered: false, message: undefined };
+        if (!result.delivered && row.attempts < 1) { attempts = 1; retryAt = now + GREENHOUSE_LIMITS.retryMs; }
+        else {
+          events = events.filter(e => !due.events.includes(e));
+          fired = [...fired, ...due.events.map(e => ({ plot: e.plot, kind: e.kind, at: e.at }))];
+          if (result.delivered) sent.push(now);
+          if (result.message) messages.push(result.message);
+        }
+      }
+      const kept = messages.slice(-GREENHOUSE_LIMITS.maxMessages);
+      this.sql.exec("UPDATE greenhouse_reminders SET schedule=?,next_at=?,sent=?,fired=?,attempts=?,messages=?,welcome=0 WHERE discord_id=?",
+        JSON.stringify({ events, plots: schedule.plots }), rowDue(retryAt ?? nextGreenhouseDm(events, sent, now)?.at, kept, false, now),
+        JSON.stringify(sent), JSON.stringify(fired), attempts, JSON.stringify(kept), row.discord_id);
     }
   }
 
@@ -195,33 +234,41 @@ export class GreenhouseReminders {
     return greenhouseView(json<{ plots: GreenhousePlotView[] }>(row.schedule, { plots: [] }).plots, row.updated_at, now);
   }
 
-  private async send(token: string, recipient: string, due: { at: number; events: GreenhouseEvent[] }, plots: GreenhousePlotView[]): Promise<boolean> {
+  /** One DM with the view and Dismiss buttons; its [message] is kept so it can be deleted later. */
+  private async send(token: string, recipient: string, content: string, key: string, now: number): Promise<{ delivered: boolean; message?: SentMessage }> {
     try {
       const channel = await openDirectMessage(token, recipient);
-      if (!channel) return false;
-      const nonce = (await sha256(`Sky-Myce greenhouse\n${recipient}\n${due.events.map(e => `${e.plot}:${e.kind}:${e.at}`).join(",")}`)).slice(0, 24);
-      const message = await discordPost(`/channels/${channel}/messages`, token, { content: greenhouseDmText(due.events, plots),
-        components: [greenhouseButton()], allowed_mentions: { parse: [] }, nonce, enforce_nonce: true });
-      await message.body?.cancel();
-      return message.ok;
-    } catch { return false; }
+      if (!channel) return { delivered: false };
+      const nonce = (await sha256(`Sky-Myce greenhouse\n${recipient}\n${key}`)).slice(0, 24);
+      const response = await discordPost(`/channels/${channel}/messages`, token, { content, components: [greenhouseButton("Show greenhouse", true)],
+        allowed_mentions: { parse: [] }, nonce, enforce_nonce: true });
+      if (!response.ok) { await response.body?.cancel(); return { delivered: false }; }
+      const id = (await response.json().catch(() => null) as { id?: unknown } | null)?.id;
+      return { delivered: true, message: snowflake(id) ? { channel, id, at: now } : undefined };
+    } catch { return { delivered: false }; }
   }
 }
 
 const object = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-/** The "Show greenhouse" button on a reminder DM. Called only after User Bot signature verification. */
+/** The "Show greenhouse" and "Dismiss" buttons on a reminder DM. Called only after User Bot signature verification. */
 export async function handleGreenhouseInteraction(data: Record<string, unknown>, env: { DISCORD_USER_APPLICATION_ID?: string; DISCORD_APPLICATION_ID?: string;
-  COMMUNITY_SERVICES_ENABLED?: string; ACCOUNT_STORE?: DurableObjectNamespace<import("./accounts").AccountStore> }, backend: boolean): Promise<Response | null> {
+  COMMUNITY_SERVICES_ENABLED?: string; USER_BOT_TOKEN?: string; ACCOUNT_STORE?: DurableObjectNamespace<import("./accounts").AccountStore> }, backend: boolean): Promise<Response | null> {
   const command = object(data.data);
-  if (command?.custom_id !== "greenhouse:view") return null;
+  if (command?.custom_id !== "greenhouse:view" && command?.custom_id !== "greenhouse:dismiss") return null;
   const message = object(data.message), author = object(message?.author), caller = object(data.user) ?? object(object(data.member)?.user);
   const reply = (body: object) => Response.json({ type: typeof message?.flags === "number" && (message.flags & 64) !== 0 ? 7 : 4,
     data: { ...body, flags: 64, allowed_mentions: { parse: [] } } });
   const unavailable = () => reply({ content: "Your Greenhouse is unavailable right now. Try again later.", embeds: [], components: [] });
   if (backend || env.COMMUNITY_SERVICES_ENABLED === "false" || data.type !== 3 || command.component_type !== 2 || !env.ACCOUNT_STORE ||
     author?.id !== (env.DISCORD_USER_APPLICATION_ID ?? env.DISCORD_APPLICATION_ID) || typeof caller?.id !== "string" || !/^\d{17,20}$/.test(caller.id)) return unavailable();
+  if (command.custom_id === "greenhouse:dismiss") {
+    // Only the DM's recipient can press it, and the bot deletes nothing but its own DM.
+    if (data.guild_id || !env.USER_BOT_TOKEN || typeof data.channel_id !== "string" || typeof message?.id !== "string") return unavailable();
+    const deleted = await discordDeleteMessage(env.USER_BOT_TOKEN, data.channel_id, message.id).catch(() => false);
+    return deleted ? Response.json({ type: 6 }) : reply({ content: "That reminder could not be deleted right now. Try again later.", embeds: [], components: [] });
+  }
   try {
     const view = await env.ACCOUNT_STORE.getByName("global").greenhouseView(caller.id);
     return view ? reply({ ...view, components: [greenhouseButton("Refresh")] }) : reply({ content: "No Greenhouse reminders are on for your account. Turn them on in the Sky-Myce Greenhouse settings.", embeds: [], components: [] });

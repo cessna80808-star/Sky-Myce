@@ -62,18 +62,25 @@ test('one row per account: unchanged uploads write nothing, a due DM is one read
   const sql = sqlStorage(), store = new GreenhouseReminders(sql, () => 'token');
   const parsed = validGreenhouseUpload(upload([ready]), now);
   sql.usage.read = sql.usage.written = 0;
-  assert.deepEqual(store.store(discord, parsed, now), { result: 'stored', next: ready.at });
+  assert.deepEqual(store.store(discord, parsed, now), { result: 'stored', next: now }, 'turning reminders on sends a welcome first');
   assert.equal(sql.usage.written, 1);
   assert.equal(store.store(discord, parsed, now + 10 * 60_000).result, 'unchanged');
   assert.equal(sql.usage.written, 1, 'nothing written for the same schedule');
   assert.equal(store.store(discord, validGreenhouseUpload(upload([{ ...ready, at: ready.at + 1 }]), now), now + 30_000).result, 'throttled');
-  assert.equal(store.nextDue(), ready.at);
+  assert.equal(store.nextDue(), now);
 
-  const posts = [];
+  const posts = [], deletes = [];
   globalThis.fetch = async (url, init) => {
+    if (init.method === 'DELETE') { deletes.push(String(url)); return new Response(null, { status: 204 }); }
     posts.push({ url: String(url), body: JSON.parse(init.body) });
-    return new Response(String(url).endsWith('/users/@me/channels') ? JSON.stringify({ id: '76543210987654321' }) : '{}', { status: 200 });
+    return new Response(JSON.stringify({ id: String(url).endsWith('/users/@me/channels') ? '76543210987654321' : `9876543210987654${posts.length}` }), { status: 200 });
   };
+  await store.deliver(now);
+  assert.equal(posts.length, 2);
+  assert.match(posts[1].body.content, /reminders are on/);
+  assert.deepEqual(posts[1].body.components[0].components.map(c => c.custom_id), ['greenhouse:view', 'greenhouse:dismiss']);
+  assert.equal(store.nextDue(), ready.at, 'the welcome is sent once');
+  posts.length = 0;
   await store.deliver(ready.at - 1);
   assert.equal(posts.length, 0, 'nothing before it is due');
   sql.usage.read = sql.usage.written = 0;
@@ -83,13 +90,16 @@ test('one row per account: unchanged uploads write nothing, a due DM is one read
   assert.equal(posts[1].body.components[0].components[0].custom_id, 'greenhouse:view');
   assert.deepEqual(posts[1].body.allowed_mentions, { parse: [] });
   assert.equal(sql.usage.written, 1);
-  assert.equal(store.nextDue(), null);
+  assert.equal(store.nextDue(), now + GREENHOUSE_LIMITS.messageTtlMs, 'next: deleting the welcome a day later');
 
   assert.equal(store.store(discord, validGreenhouseUpload(upload([{ ...ready, at: ready.at + hour }]), ready.at), ready.at + 2 * 60_000).result, 'unchanged',
     'the same ready event is not pinged twice, and its re-upload writes nothing');
-  assert.equal(store.nextDue(), null);
   const water = { plot: '2', kind: 'water', at: ready.at + 30 * 60_000, count: 1, total: 22 };
   assert.equal(store.store(discord, validGreenhouseUpload(upload([water]), ready.at), ready.at + 4 * 60_000).next, ready.at + 2 * hour, 'the next DM keeps the 2 hour gap');
+
+  await store.deliver(now + GREENHOUSE_LIMITS.messageTtlMs);
+  assert.deepEqual(deletes, ['https://discord.com/api/v10/channels/76543210987654321/messages/98765432109876542'], 'the welcome is deleted after a day, the reminder not yet');
+  assert.equal(store.nextDue(), ready.at + GREENHOUSE_LIMITS.messageTtlMs);
 
   const view = store.view(discord, now);
   assert.match(view.embeds[0].description, /🟨/);
@@ -107,7 +117,7 @@ test('a failed DM is retried once, then dropped', async () => {
   assert.equal(store.nextDue(), ready.at + GREENHOUSE_LIMITS.retryMs);
   await store.deliver(ready.at + GREENHOUSE_LIMITS.retryMs);
   assert.equal(store.nextDue(), null);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3, 'the welcome and the reminder, then its one retry');
 });
 
 test('a wake reminder names the mutations that stop then', () => {
@@ -134,4 +144,13 @@ test('the button only answers its own custom id and a real caller', async () => 
   assert.equal(shown.data.components[0].components[0].label, 'Refresh');
   const forged = await (await handleGreenhouseInteraction({ ...press, message: { author: { id: '22222222222222222' } } }, env, false)).json();
   assert.match(forged.data.content, /unavailable/);
+
+  const deletes = [];
+  globalThis.fetch = async (url, init) => { deletes.push([init.method, String(url)]); return new Response(null, { status: 204 }); };
+  const dismiss = { ...press, data: { custom_id: 'greenhouse:dismiss', component_type: 2 }, channel_id: '76543210987654321', message: { ...press.message, id: '98765432109876543' } };
+  assert.equal((await (await handleGreenhouseInteraction(dismiss, { ...env, USER_BOT_TOKEN: 'token' }, false)).json()).type, 6);
+  assert.deepEqual(deletes, [['DELETE', 'https://discord.com/api/v10/channels/76543210987654321/messages/98765432109876543']]);
+  assert.match((await (await handleGreenhouseInteraction({ ...dismiss, guild_id: '1' }, { ...env, USER_BOT_TOKEN: 'token' }, false)).json()).data.content, /unavailable/,
+    'only a DM can be dismissed');
+  assert.equal(deletes.length, 1);
 });

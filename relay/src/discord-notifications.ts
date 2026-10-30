@@ -82,6 +82,15 @@ export async function discordPost(path: string, token: string, body: unknown): P
     headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+/** Deletes the bot's own message; one already gone counts as deleted. */
+export async function discordDeleteMessage(token: string, channel: string, message: string): Promise<boolean> {
+  if (!snowflake(channel) || !snowflake(message)) return false;
+  const response = await fetch(`https://discord.com/api/v10/channels/${channel}/messages/${message}`, { method: "DELETE", redirect: "manual",
+    signal: AbortSignal.timeout(8000), headers: { Authorization: `Bot ${token}` } });
+  await response.body?.cancel();
+  return response.ok || response.status === 404;
+}
+
 /** The DM channel with [recipient], or null when Discord refuses or answers oddly. */
 export async function openDirectMessage(token: string, recipient: string): Promise<string | null> {
   const response = await discordPost("/users/@me/channels", token, { recipient_id: recipient });
