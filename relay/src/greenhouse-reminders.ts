@@ -8,6 +8,7 @@ import { discordDeleteMessage, discordPost, openDirectMessage } from "./discord-
 export const GREENHOUSE_LIMITS = {
   /** Events due this close together go out as one DM, sent when the last of them is due (never early). */
   coalesceMs: 30 * 60_000,
+  /** The gap before any plot is shared; with plots it is two growth ticks (see [greenhouseGap]). */
   gapMs: 2 * 3_600_000,
   perDay: 8,
   dayMs: 86_400_000,
@@ -84,13 +85,16 @@ export function afterQuietHours(at: number, quiet?: QuietHours): number {
   return inside ? (minute + (end - ofDay + 1440) % 1440) * 60_000 : at;
 }
 
-/** The next DM: when it may go out and the events it carries, honouring the 30 minute window, 2 hour gap, 8 a day and quiet hours. */
-export function nextGreenhouseDm(events: GreenhouseEvent[], sent: number[], now: number, quiet?: QuietHours): { at: number; events: GreenhouseEvent[] } | null {
+/** Two growth ticks, so mutations finishing on neighbouring ticks share one DM instead of one each. */
+export const greenhouseGap = (plots: GreenhousePlotView[]) => plots.length ? 2 * Math.max(...plots.map(p => p.cycleMs)) : GREENHOUSE_LIMITS.gapMs;
+
+/** The next DM: when it may go out and the events it carries, honouring the 30 minute window, the gap, 8 a day and quiet hours. */
+export function nextGreenhouseDm(events: GreenhouseEvent[], sent: number[], now: number, quiet?: QuietHours, gapMs: number = GREENHOUSE_LIMITS.gapMs): { at: number; events: GreenhouseEvent[] } | null {
   if (!events.length) return null;
   const sorted = [...events].sort((a, b) => a.at - b.at), first = sorted[0].at;
   let at = Math.max(...sorted.filter(e => e.at <= first + GREENHOUSE_LIMITS.coalesceMs).map(e => e.at));
   const recent = sent.filter(t => t > now - GREENHOUSE_LIMITS.dayMs).sort((a, b) => a - b);
-  if (recent.length) at = Math.max(at, recent[recent.length - 1] + GREENHOUSE_LIMITS.gapMs);
+  if (recent.length) at = Math.max(at, recent[recent.length - 1] + gapMs);
   if (recent.length >= GREENHOUSE_LIMITS.perDay) at = Math.max(at, recent[recent.length - GREENHOUSE_LIMITS.perDay] + GREENHOUSE_LIMITS.dayMs);
   at = afterQuietHours(at, quiet);
   // Events falling due while the limits or quiet hours hold the DM back ride along with it.
@@ -192,7 +196,7 @@ export class GreenhouseReminders {
     if (row?.schedule === schedule) return { result: "unchanged", next: null };
     if (row && now - row.updated_at < GREENHOUSE_LIMITS.writeGapMs) return { result: "throttled", next: null };
     // A new row (reminders just turned on) first gets a DM showing that they work.
-    const next = rowDue(nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now, upload.quiet)?.at,
+    const next = rowDue(nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now, upload.quiet, greenhouseGap(upload.plots))?.at,
       json<SentMessage[]>(row?.messages ?? "[]", []), !row || row.welcome === 1, now);
     this.sql.exec(`INSERT INTO greenhouse_reminders(discord_id,schedule,next_at,sent,fired,attempts,updated_at,welcome) VALUES(?,?,?,?,?,0,?,1)
       ON CONFLICT(discord_id) DO UPDATE SET schedule=excluded.schedule,next_at=excluded.next_at,fired=excluded.fired,attempts=0,updated_at=excluded.updated_at`,
@@ -222,7 +226,7 @@ export class GreenhouseReminders {
         const welcome = await this.send(token, row.discord_id, GREENHOUSE_WELCOME, `welcome:${row.updated_at}`, now);
         if (welcome.message) messages.push(welcome.message);
       }
-      const due = nextGreenhouseDm(events, sent, now, schedule.quiet);
+      const due = nextGreenhouseDm(events, sent, now, schedule.quiet, greenhouseGap(schedule.plots));
       if (due && due.at <= now && this.online(row.discord_id, now)) {
         // Shown in game by the mod; it does not count toward the DM limits.
         events = events.filter(e => !due.events.includes(e));
@@ -240,7 +244,7 @@ export class GreenhouseReminders {
       }
       const kept = messages.slice(-GREENHOUSE_LIMITS.maxMessages);
       this.sql.exec("UPDATE greenhouse_reminders SET schedule=?,next_at=?,sent=?,fired=?,attempts=?,messages=?,welcome=0 WHERE discord_id=?",
-        JSON.stringify({ events, plots: schedule.plots, quiet: schedule.quiet }), rowDue(retryAt ?? nextGreenhouseDm(events, sent, now, schedule.quiet)?.at, kept, false, now),
+        JSON.stringify({ events, plots: schedule.plots, quiet: schedule.quiet }), rowDue(retryAt ?? nextGreenhouseDm(events, sent, now, schedule.quiet, greenhouseGap(schedule.plots))?.at, kept, false, now),
         JSON.stringify(sent), JSON.stringify(fired), attempts, JSON.stringify(kept), row.discord_id);
     }
   }

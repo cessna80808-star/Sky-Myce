@@ -8,7 +8,7 @@ async function load(entry) {
     bundle: true, format: 'esm', platform: 'browser', write: false });
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 }
-const { validGreenhouseUpload, nextGreenhouseDm, unsentEvents, greenhouseView, greenhouseDmText, GreenhouseReminders, handleGreenhouseInteraction, GREENHOUSE_LIMITS } =
+const { validGreenhouseUpload, nextGreenhouseDm, unsentEvents, greenhouseView, greenhouseDmText, GreenhouseReminders, handleGreenhouseInteraction, GREENHOUSE_LIMITS, greenhouseGap } =
   await load('greenhouse-reminders.ts');
 
 /** Durable Object SqlStorage over node:sqlite, with rows read/written counted like Cloudflare bills them. */
@@ -61,6 +61,9 @@ test('DMs coalesce within 30 minutes, keep 2 hours apart and stop at 8 a day, an
   assert.equal(nextGreenhouseDm([at(0)], eight, now).at, now + hour, 'the ninth waits a day after the oldest');
   assert.deepEqual(nextGreenhouseDm([at(0), at(100, 'water')], [now - 90 * 60_000], now).events.length, 1, 'held back DMs carry only what is due');
   assert.equal(nextGreenhouseDm([], [], now), null);
+  assert.equal(greenhouseGap([plot]), 4 * hour, 'two growth ticks of 2 hours');
+  assert.equal(greenhouseGap([]), 2 * hour);
+  assert.equal(nextGreenhouseDm([at(0)], [now - hour], now, undefined, greenhouseGap([plot])).at, now + 3 * hour, 'the next DM waits two ticks after the last');
   assert.equal(GREENHOUSE_LIMITS.perDay, 8);
 });
 
@@ -108,7 +111,7 @@ test('one row per account: unchanged uploads write nothing, a due DM is one read
   assert.equal(store.store(discord, validGreenhouseUpload(upload([{ ...ready, at: ready.at + hour }]), ready.at), ready.at + 2 * 60_000).result, 'unchanged',
     'the same ready event is not pinged twice, and its re-upload writes nothing');
   const water = { plot: '2', kind: 'water', at: ready.at + 30 * 60_000, count: 1, total: 22 };
-  assert.equal(store.store(discord, validGreenhouseUpload(upload([water]), ready.at), ready.at + 4 * 60_000).next, ready.at + 2 * hour, 'the next DM keeps the 2 hour gap');
+  assert.equal(store.store(discord, validGreenhouseUpload(upload([water]), ready.at), ready.at + 4 * 60_000).next, ready.at + 4 * hour, 'the next DM waits two growth ticks');
 
   await store.deliver(now + GREENHOUSE_LIMITS.messageTtlMs);
   assert.deepEqual(deletes, ['https://discord.com/api/v10/channels/76543210987654321/messages/98765432109876542'], 'the welcome is deleted after a day, the reminder not yet');
