@@ -71,6 +71,8 @@ import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendRelay
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.time.Duration
@@ -98,6 +100,7 @@ object GreenhousePlanner : SkyMyceModule() {
     private const val WATCH_DISTANCE = 24
     private const val LABEL_DISTANCE = 16
     private const val ANALYSIS_WINDOW = 5_000L
+    private const val ANALYSIS_LINE_MS = 60_000L
     /** How long after opening the Bazaar for a crop its amount waits for the amount sign. */
     private const val AMOUNT_WINDOW = 120_000L
 
@@ -978,22 +981,40 @@ object GreenhousePlanner : SkyMyceModule() {
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
         val estimate = targetEstimate(pending.plot, layout?.targets?.firstOrNull { it.row * GREENHOUSE_SIZE + it.col == pending.key } ?: return, now)
-        displayModMessage("§a$name: growth stage $stage/$stages" + when {
+        analysisMessage("§a$name: growth stage $stage/$stages" + when {
             estimate == null -> ""
             estimate.ready -> if (stage >= stages) " §7· fully grown" else " §7· ready to harvest"
             estimate.paused -> " §7· stopped until you act on it (wake it up)"
             estimate.dryInMs == 0L -> " §c· out of water; water it and analyze it again"
             estimate.readyInMs == null && estimate.dryInMs != null -> " §e· runs out of water in about ${age(estimate.dryInMs)}, before it is ready"
+            estimate.readyInMs == null && estimate.waitInMs != null -> " §e· stops in about ${age(estimate.waitInMs)} until you act on it (wake it up)"
             estimate.readyInMs == null -> " §7· its growth cannot be timed; analyze it again later"
             else -> " §7· ready in about ${age(estimate.readyInMs)}"
         })
         growthSummary(pending.plot, now)?.let { summary ->
-            displayModMessage("§7Plot ${pending.plot.name}: ${summary.analysed} of ${summary.targets} analysed, about stage ${"%.1f".format(summary.stage)}/${summary.stages} on average" + when {
+            analysisMessage("§7Plot ${pending.plot.name}: ${summary.analysed} of ${summary.targets} analysed, about stage ${"%.1f".format(summary.stage)}/${summary.stages} on average" + when {
                 summary.readyInMs == null -> ", some need you or another analysis before they finish"
                 summary.readyInMs <= 0 -> ", ready now"
                 else -> ", all ready in about ${age(summary.readyInMs)} (estimated from the growth timer)"
             })
         }
+    }
+
+    /** Analysis results by their plain text and when they last showed; each leaves chat a minute later so a round of analyses does not bury it. */
+    private val analysisLines = HashMap<String, Long>()
+
+    private fun analysisMessage(text: String) {
+        displayModMessage(text)
+        analysisLines[ChatFormatting.stripFormatting("SkyMyce » $text")!!] = System.currentTimeMillis()
+    }
+
+    private fun expireAnalysisLines(now: Long) {
+        if (analysisLines.isEmpty()) return
+        val expired = analysisLines.filterValues { now - it >= ANALYSIS_LINE_MS }.keys
+        if (expired.isEmpty()) return
+        analysisLines.keys.removeAll(expired)
+        // Starts-with, as another mod may append a repeat count such as "(x2)".
+        IrcChatRendering.removeChat { line -> ChatFormatting.stripFormatting(line.content().string)!!.let { text -> expired.any(text::startsWith) } }
     }
 
     private fun expireAnalysis(now: Long) {
@@ -1250,10 +1271,20 @@ object GreenhousePlanner : SkyMyceModule() {
                             add(estimate?.waitInMs?.let { if (it == 0L) latest else minute(now + it) }?.takeIf { it < now + 29 * 86_400_000L } ?: 0L)
                         })
                     }
+                    // Planned spots where no mutation has grown since the last look; stage -1 marks them.
+                    layout.targets.filter { it.plantId in plants && !hasMutation(plot, it) }.take(40 - size()).forEach { placement ->
+                        add(JsonArray().apply {
+                            add(placement.row * GREENHOUSE_SIZE + placement.col); add(placement.size); add(plants.indexOf(placement.plantId))
+                            add(-1); add(catalog?.get(placement.plantId)?.stages ?: 0); add(0L); add(0L); add(0L)
+                        })
+                    }
                 })
             })
         }
-        return mapOf("enabled" to true, "events" to events, "plots" to views)
+        val quiet = GreenhouseConfig.run { if (reminderQuietHours && reminderQuietStart != reminderQuietEnd) listOf(reminderQuietStart, reminderQuietEnd) else null }
+            ?.map { hour -> Math.floorMod(LocalDate.now().atTime(hour, 0).atZone(ZoneId.systemDefault()).toEpochSecond() / 60, 1440L).toInt() }
+        return mapOf("enabled" to true, "events" to events, "plots" to views) +
+            (quiet?.let { mapOf("quiet" to JsonArray().apply { it.forEach(::add) }) } ?: emptyMap())
     }
 
     /** Whether a mutation is on [placement]: the last scan saw one, or it was analysed since it appeared. */
@@ -1271,6 +1302,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (!loaded || !active()) return clear()
         val now = System.currentTimeMillis()
         expireAnalysis(now)
+        expireAnalysisLines(now)
         syncReminders(now)
         fillAmountSign(now)
         val inGarden = LocationAPI.island == SkyBlockIsland.GARDEN
@@ -1418,14 +1450,14 @@ object GreenhousePlanner : SkyMyceModule() {
             }
             if (ingredient && !planted) plants.merge(plant.id, 1, Int::plus)
             // Grown mutations are green and ones waiting on the player (an asleep Snoozling) yellow; holding the Plant
-            // Diagnostics Tool also marks red the ones not analysed since they appeared, or whose ready time is unknown
-            // (the overview's "analyze again", usually water running out first).
+            // Diagnostics Tool also marks red the ones not analysed since they appeared, or whose growth cannot be timed at all
+            // (one that will dry out or fall asleep first is timed, so it is not).
             if (!ingredient && planted) {
                 val estimate = targetEstimate(plot, placement, now)
                 val color = when {
                     estimate?.ready == true -> 0x55FF55
                     estimate?.paused == true -> 0xFFFF55
-                    analyzer && estimate?.readyInMs == null -> 0xFF5555
+                    analyzer && (estimate == null || estimate.readyInMs == null && estimate.dryInMs == null && estimate.waitInMs == null) -> 0xFF5555
                     else -> null
                 }
                 val box = AABB(cellPos(origin, placement.row, placement.col).above())

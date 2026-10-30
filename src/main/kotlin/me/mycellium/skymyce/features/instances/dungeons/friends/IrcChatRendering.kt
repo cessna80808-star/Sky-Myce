@@ -285,6 +285,11 @@ object IrcChatRendering {
         val chat = accessor()
         if (updateIrcHistory(chat.`skymyce$getMessages`(), transform)) refresh(chat)
     }
+    /** Removes vanilla chat lines matching [predicate] (another feature's short-lived notices). */
+    internal fun removeChat(predicate: (GuiMessage) -> Boolean) {
+        val chat = accessor()
+        if (chat.`skymyce$getMessages`().removeIf(predicate)) refresh(chat)
+    }
     private fun refresh(chat: IrcChatAccessor) {
         val scroll = chat.`skymyce$getScroll`()
         withRefreshMessages { chat.`skymyce$refreshMessages`() }

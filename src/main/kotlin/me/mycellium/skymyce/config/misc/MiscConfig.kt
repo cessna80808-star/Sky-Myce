@@ -286,6 +286,21 @@ object GreenhouseConfig : CategoryKt("Greenhouse Planner") {
         range = 10..100; slider = true
     }
 
+    val reminderQuietHours by boolean(true) {
+        name = TranslatableValue.literal("Reminder Quiet Hours")
+        description = TranslatableValue.literal("Discord Reminders due during these hours (your computer's time) wait until they end")
+    }
+
+    val reminderQuietStart by int(23) {
+        name = TranslatableValue.literal("Quiet From (hour)")
+        range = 0..23; slider = true
+    }
+
+    val reminderQuietEnd by int(8) {
+        name = TranslatableValue.literal("Quiet Until (hour)")
+        range = 0..23; slider = true
+    }
+
     val opacity by int(40) {
         name = TranslatableValue.literal("Ghost Block Opacity")
         range = 15..80; slider = true
