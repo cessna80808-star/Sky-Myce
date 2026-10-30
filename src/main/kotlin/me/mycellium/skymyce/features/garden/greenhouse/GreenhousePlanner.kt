@@ -53,6 +53,7 @@ import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
+import net.minecraft.world.phys.EntityHitResult
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
 import tech.thatgravyboat.skyblockapi.api.datatype.DataTypes
@@ -904,10 +905,13 @@ object GreenhousePlanner : SkyMyceModule() {
     /** The planned mutation the player is clicking: [entity] when the click hit one, else the block looked at. */
     private fun aimedTarget(entity: Entity?): Pair<Plot, Placement>? {
         val level = MC.instance.level ?: return null
-        // An armor-stand crop's head sits about 1.5 blocks above its feet.
-        val hit = MC.player.pick(6.0, 1f, false) as? BlockHitResult
+        // The game's own crosshair target, entities included, is what the tool analyses. An armor-stand crop's head sits
+        // about 1.5 blocks above its feet.
+        val crosshair = MC.instance.hitResult
+        val aimed = entity ?: (crosshair as? EntityHitResult)?.entity
+        val hit = crosshair as? BlockHitResult
         val pos = when {
-            entity != null -> BlockPos.containing(entity.x, entity.y + 1.5, entity.z)
+            aimed != null -> BlockPos.containing(aimed.x, aimed.y + 1.5, aimed.z)
             hit == null || hit.type != HitResult.Type.BLOCK -> return null
             soilOf(level.getBlockState(hit.blockPos)) != null -> hit.blockPos.above()
             else -> hit.blockPos
@@ -965,6 +969,11 @@ object GreenhousePlanner : SkyMyceModule() {
         // One line per reading, so water and cycle timing can be checked against the game later.
         SkyMyce.logger.info("Greenhouse diagnostics: {} {}/{} water={} lastsForMs={} enough={} nextStageMs={}", pending.plantId, stage, stages,
             diagnostics.water, diagnostics.lastsMs, diagnostics.enoughWater, diagnostics.nextStageMs)
+        // What the crop looks like at this stage, so its stage can later be told by sight.
+        pending.plot.anchor?.let { origin -> MC.instance.level?.let { level ->
+            val pos = cellPos(origin, pending.key / GREENHOUSE_SIZE, pending.key % GREENHOUSE_SIZE).above()
+            SkyMyce.logger.info("Greenhouse look: {} {}/{} block={} {}", pending.plantId, stage, stages, level.getBlockState(pos), GreenhouseWorld.describe(level, pos))
+        } }
         pending.plot.growth[pending.key] = reading
         revision++; dirty = true; save()
         val name = catalog?.get(pending.plantId)?.name ?: pending.plantId
@@ -1084,8 +1093,9 @@ object GreenhousePlanner : SkyMyceModule() {
             val key = placement.row * GREENHOUSE_SIZE + placement.col
             val reading = plot.growth[key]?.takeIf { it.at >= (plot.spawned[key] ?: 0L) } ?: continue
             val projected = reading.water?.let { it - drainFor(plot, key, placement.plantId) * (now - reading.at) / 3_600_000.0 }
-            // The bar only tells the segment; a stored level inside it is finer, so it stays.
-            if (projected != null && projected in water - 1..water + step + 1) continue
+            // The bar only tells the segment and rounds a level up into the next one (20 shows as 25), so a stored level
+            // within a segment either side is finer and stays.
+            if (projected != null && projected in water - step - 1..water + step + 1) continue
             val estimate = targetEstimate(plot, placement, now) ?: continue
             // A new level makes the tool's "enough water" verdict stale.
             plot.growth[key] = reading.copy(stage = estimate.stage.toInt(), at = now, water = water, enough = false)

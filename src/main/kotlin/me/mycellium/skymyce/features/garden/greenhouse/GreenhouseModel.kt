@@ -863,7 +863,7 @@ internal object GreenhouseWorld {
         .take(4).joinToString("; ") { entity ->
             val equipment = (entity as? ArmorStand)?.let { stand -> EquipmentSlot.entries.mapNotNull { slot -> stand.getItemBySlot(slot).takeUnless { it.isEmpty }?.let { "$slot=${itemKey(it)}" } } }
             "${BuiltInRegistries.ENTITY_TYPE.getKey(entity.type).path} at ${"%.2f".format(entity.y - pos.y)} name=${entity.customName?.string} invisible=${entity.isInvisible}" +
-                ((entity as? ArmorStand)?.let { " marker=${it.isMarker} small=${it.isSmall} equipment=$equipment" } ?: "")
+                ((entity as? ArmorStand)?.let { " marker=${it.isMarker} small=${it.isSmall} scale=${"%.2f".format(it.scale)} equipment=$equipment" } ?: "")
         }.ifEmpty { "block " + BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).block).path }
 
     /** The plant a fingerprint shows: learned first, then bundled head textures, SkyBlock item ids and vanilla crop blocks. */
