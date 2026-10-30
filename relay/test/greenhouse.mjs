@@ -121,6 +121,22 @@ test('one row per account: unchanged uploads write nothing, a due DM is one read
   assert.equal(store.view(discord, now), null);
 });
 
+test('a reminder due while the player is in game is left to the mod, not DMed', async () => {
+  let online = true;
+  const sql = sqlStorage(), store = new GreenhouseReminders(sql, () => 'token', () => online);
+  store.store(discord, validGreenhouseUpload(upload([ready]), now), now);
+  const posts = [];
+  globalThis.fetch = async (url, init) => { posts.push(JSON.parse(init.body)); return new Response(JSON.stringify({ id: '76543210987654321' }), { status: 200 }); };
+  await store.deliver(now);
+  assert.match(posts.at(-1).content, /reminders are on/);
+  posts.length = 0;
+  await store.deliver(ready.at);
+  assert.equal(posts.length, 0);
+  online = false;
+  await store.deliver(ready.at + hour);
+  assert.equal(posts.length, 0, 'it counts as shown and is not sent later');
+});
+
 test('a failed DM is retried once, then dropped', async () => {
   const sql = sqlStorage(), store = new GreenhouseReminders(sql, () => 'token');
   store.store(discord, validGreenhouseUpload(upload([ready]), now), now);

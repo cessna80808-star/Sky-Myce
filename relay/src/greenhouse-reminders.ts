@@ -171,7 +171,8 @@ function rowDue(dmAt: number | undefined, messages: SentMessage[], welcome: bool
 const json = <T>(text: string, fallback: T): T => { try { return JSON.parse(text) as T; } catch { return fallback; } };
 
 export class GreenhouseReminders {
-  constructor(private sql: SqlStorage, private token: () => string | undefined) {
+  /** [online] tells whether the account is in game right now; the mod then shows a due reminder itself instead of a DM. */
+  constructor(private sql: SqlStorage, private token: () => string | undefined, private online: (discordId: string, now: number) => boolean = () => false) {
     sql.exec(`CREATE TABLE IF NOT EXISTS greenhouse_reminders (discord_id TEXT PRIMARY KEY, schedule TEXT NOT NULL, next_at INTEGER,
       sent TEXT NOT NULL DEFAULT '[]', fired TEXT NOT NULL DEFAULT '[]', attempts INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS greenhouse_reminder_due ON greenhouse_reminders(next_at);`);
@@ -222,7 +223,11 @@ export class GreenhouseReminders {
         if (welcome.message) messages.push(welcome.message);
       }
       const due = nextGreenhouseDm(events, sent, now, schedule.quiet);
-      if (due && due.at <= now) {
+      if (due && due.at <= now && this.online(row.discord_id, now)) {
+        // Shown in game by the mod; it does not count toward the DM limits.
+        events = events.filter(e => !due.events.includes(e));
+        fired = [...fired, ...due.events.map(e => ({ plot: e.plot, kind: e.kind, at: e.at }))];
+      } else if (due && due.at <= now) {
         const result = token ? await this.send(token, row.discord_id, greenhouseDmText(due.events, schedule.plots), due.events.map(e => `${e.plot}:${e.kind}:${e.at}`).join(","), now)
           : { delivered: false, message: undefined };
         if (!result.delivered && row.attempts < 1) { attempts = 1; retryAt = now + GREENHOUSE_LIMITS.retryMs; }

@@ -52,7 +52,10 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   constructor(ctx: DurableObjectState, env: AccountsConfig) {
     super(ctx, env);
     this.prompts = new PromptJobs(ctx.storage, env);
-    this.greenhouse = new GreenhouseReminders(ctx.storage.sql, () => env.USER_BOT_TOKEN);
+    // In game: a live relay connection whose access lease has not run out.
+    this.greenhouse = new GreenhouseReminders(ctx.storage.sql, () => env.USER_BOT_TOKEN, (discordId, now) => ctx.storage.sql.exec(
+      `SELECT 1 FROM community_sessions s JOIN sky_accounts a ON a.account_id=s.account_id
+        WHERE a.discord_id=? AND s.connection_id IS NOT NULL AND s.revoked_at IS NULL AND s.access_expires_at>? LIMIT 1`, discordId, now).toArray().length > 0);
     ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS sky_accounts (account_id TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL,
         status TEXT NOT NULL DEFAULT 'active', license_status TEXT NOT NULL DEFAULT 'inactive', license_expires_at INTEGER,
