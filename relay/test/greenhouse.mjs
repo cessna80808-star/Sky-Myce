@@ -29,6 +29,19 @@ const plot = { name: '2', tickAt: now - 600_000, cycleMs: 2 * hour, plants: ['CO
 const ready = { plot: '2', kind: 'ready', at: now + 6 * hour, count: 11, total: 22 };
 const upload = (events, extra = {}) => ({ type: 'greenhouse_schedule', id, enabled: true, events, plots: [plot], ...extra });
 
+test('quiet hours hold a DM until they end, also across midnight', () => {
+  // now is 08:00 UTC.
+  const due = [{ ...ready, at: now }];
+  assert.equal(nextGreenhouseDm(due, [], now, [420, 600]).at, now + 2 * hour);
+  assert.equal(nextGreenhouseDm(due, [], now, [1380, 540]).at, now + hour);
+  assert.equal(nextGreenhouseDm(due, [], now, [600, 700]).at, now);
+  assert.equal(nextGreenhouseDm(due, [], now).at, now);
+  const later = { ...ready, kind: 'water', at: now + 90 * 60_000 };
+  assert.deepEqual(nextGreenhouseDm([...due, later], [], now, [420, 600]).events.map(e => e.kind), ['ready', 'water'], 'events due meanwhile ride along');
+  assert.deepEqual(validGreenhouseUpload(upload([ready], { quiet: [1380, 480] }), now).quiet, [1380, 480]);
+  for (const quiet of [[0, 0], [0, 1440], [1], 'night']) assert.equal(validGreenhouseUpload(upload([ready], { quiet }), now), null);
+});
+
 test('uploads are checked strictly at the trust boundary', () => {
   assert.deepEqual(validGreenhouseUpload(upload([ready]), now), { enabled: true, events: [ready], plots: [plot] });
   assert.deepEqual(validGreenhouseUpload({ type: 'greenhouse_schedule', id, enabled: false }, now), { enabled: false });
@@ -132,6 +145,12 @@ test('the view projects growth with the shared growth tick', () => {
   const view = greenhouseView([plot], now, now + 4 * hour);
   assert.match(view.embeds[0].description, /Coalroot\*\*: 1 ready · 1 growing \(stage ~7\/8\)/);
   assert.match(view.content, /ready/);
+  const planned = { ...plot, targets: [...plot.targets, [55, 1, 0, -1, 8, 0, 0, 0]] };
+  assert.ok(validGreenhouseUpload(upload([ready], { plots: [planned] }), now), 'a planned spot with nothing grown yet is accepted');
+  assert.equal(validGreenhouseUpload(upload([ready], { plots: [{ ...plot, targets: [[55, 1, 0, -2, 8, 0, 0, 0]] }] }), now), null);
+  const empty = greenhouseView([planned], now, now + 4 * hour).embeds[0].description;
+  assert.match(empty, /🟫/);
+  assert.match(empty, /1 not grown yet/);
 });
 
 test('the button only answers its own custom id and a real caller', async () => {

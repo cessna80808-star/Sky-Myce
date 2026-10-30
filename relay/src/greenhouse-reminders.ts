@@ -25,10 +25,12 @@ export const GREENHOUSE_LIMITS = {
 
 /** ready: the chosen share of a plot is ready; water: a growing one runs dry; wake: one stops until the player acts. */
 export type GreenhouseEvent = { plot: string; kind: "ready" | "water" | "wake"; at: number; count: number; total: number };
-/** cell, size, index into the plot's plants, stage, stages, readyAt, dryAt, waitAt; times are 0 when unknown or not expected. */
+/** cell, size, index into the plot's plants, stage (-1: not grown yet), stages, readyAt, dryAt, waitAt; times are 0 when unknown or not expected. */
 export type GreenhouseTarget = [number, number, number, number, number, number, number, number];
 export type GreenhousePlotView = { name: string; tickAt: number; cycleMs: number; plants: string[]; targets: GreenhouseTarget[] };
-export type GreenhouseUpload = { enabled: false } | { enabled: true; events: GreenhouseEvent[]; plots: GreenhousePlotView[] };
+/** Quiet hours as UTC minutes of the day [start, end); a DM due inside them waits for their end. */
+export type QuietHours = [number, number];
+export type GreenhouseUpload = { enabled: false } | { enabled: true; events: GreenhouseEvent[]; plots: GreenhousePlotView[]; quiet?: QuietHours };
 type Fired = { plot: string; kind: string; at: number };
 /** A DM the relay sent, so it can be deleted after a day. */
 type SentMessage = { channel: string; id: string; at: number };
@@ -41,9 +43,11 @@ const time = (value: unknown, now: number) => value === 0 || int(value, now - 30
 
 /** Strict shape check at the trust boundary; anything unexpected rejects the whole upload. */
 export function validGreenhouseUpload(raw: Record<string, unknown>, now = Date.now()): GreenhouseUpload | null {
-  if (!Object.keys(raw).every(key => ["type", "id", "enabled", "events", "plots"].includes(key)) || typeof raw.id !== "string" || !hex.test(raw.id)) return null;
+  if (!Object.keys(raw).every(key => ["type", "id", "enabled", "events", "plots", "quiet"].includes(key)) || typeof raw.id !== "string" || !hex.test(raw.id)) return null;
   if (raw.enabled === false) return { enabled: false };
   if (raw.enabled !== true || !Array.isArray(raw.events) || raw.events.length > 9 || !Array.isArray(raw.plots) || raw.plots.length > 3) return null;
+  const quiet = raw.quiet;
+  if (quiet !== undefined && !(Array.isArray(quiet) && quiet.length === 2 && int(quiet[0], 0, 1439) && int(quiet[1], 0, 1439) && quiet[0] !== quiet[1])) return null;
   const events: GreenhouseEvent[] = [];
   for (const value of raw.events) {
     const event = value as Record<string, unknown>;
@@ -64,23 +68,32 @@ export function validGreenhouseUpload(raw: Record<string, unknown>, now = Date.n
     for (const entry of plot.targets) {
       const t = entry as unknown[];
       if (!Array.isArray(t) || t.length !== 8 || !int(t[0], 0, 99) || !int(t[1], 1, 3) || !int(t[2], 0, plants.length - 1) ||
-        !int(t[4], 0, 1000) || !int(t[3], 0, t[4] as number) || !time(t[5], now) || !time(t[6], now) || !time(t[7], now)) return null;
+        !int(t[4], 0, 1000) || !(t[3] === -1 || int(t[3], 0, t[4] as number)) || !time(t[5], now) || !time(t[6], now) || !time(t[7], now)) return null;
       targets.push(t as GreenhouseTarget);
     }
     plots.push({ name: plot.name, tickAt: plot.tickAt as number, cycleMs: plot.cycleMs as number, plants, targets });
   }
-  return { enabled: true, events, plots };
+  return { enabled: true, events, plots, ...(quiet ? { quiet: quiet as QuietHours } : {}) };
 }
 
-/** The next DM: when it may go out and the events it carries, honouring the 30 minute window, 2 hour gap and 4 a day. */
-export function nextGreenhouseDm(events: GreenhouseEvent[], sent: number[], now: number): { at: number; events: GreenhouseEvent[] } | null {
+/** [at], or the end of the quiet hours it falls in. */
+export function afterQuietHours(at: number, quiet?: QuietHours): number {
+  if (!quiet) return at;
+  const [start, end] = quiet, minute = Math.floor(at / 60_000), ofDay = ((minute % 1440) + 1440) % 1440;
+  const inside = start < end ? ofDay >= start && ofDay < end : ofDay >= start || ofDay < end;
+  return inside ? (minute + (end - ofDay + 1440) % 1440) * 60_000 : at;
+}
+
+/** The next DM: when it may go out and the events it carries, honouring the 30 minute window, 2 hour gap, 8 a day and quiet hours. */
+export function nextGreenhouseDm(events: GreenhouseEvent[], sent: number[], now: number, quiet?: QuietHours): { at: number; events: GreenhouseEvent[] } | null {
   if (!events.length) return null;
   const sorted = [...events].sort((a, b) => a.at - b.at), first = sorted[0].at;
   let at = Math.max(...sorted.filter(e => e.at <= first + GREENHOUSE_LIMITS.coalesceMs).map(e => e.at));
   const recent = sent.filter(t => t > now - GREENHOUSE_LIMITS.dayMs).sort((a, b) => a - b);
   if (recent.length) at = Math.max(at, recent[recent.length - 1] + GREENHOUSE_LIMITS.gapMs);
   if (recent.length >= GREENHOUSE_LIMITS.perDay) at = Math.max(at, recent[recent.length - GREENHOUSE_LIMITS.perDay] + GREENHOUSE_LIMITS.dayMs);
-  // Events falling due while the limits hold the DM back ride along with it.
+  at = afterQuietHours(at, quiet);
+  // Events falling due while the limits or quiet hours hold the DM back ride along with it.
   return { at, events: sorted.filter(e => e.at <= at) };
 }
 
@@ -119,27 +132,27 @@ export function greenhouseView(plots: GreenhousePlotView[], uploadedAt: number, 
   if (!plots.length) return { content: "No Greenhouse plots have been shared yet. Analyze your mutations with the Plant Diagnostics Tool in game.", embeds: [] };
   const embeds = plots.map(plot => {
     const grid = Array<string>(100).fill("⬛");
-    const tally = new Map<string, { ready: number; growing: number; dry: number; waiting: number; unknown: number; stage: number; stages: number }>();
+    const tally = new Map<string, { ready: number; growing: number; dry: number; waiting: number; unknown: number; empty: number; stage: number; stages: number }>();
     for (const [cell, size, index, stage, stages, readyAt, dryAt, waitAt] of plot.targets) {
       const plant = plot.plants[index];
-      const state = readyAt && now >= readyAt ? "ready" : dryAt && now >= dryAt ? "dry" : waitAt && now >= waitAt ? "waiting" : !readyAt && !waitAt ? "unknown" : "growing";
-      const mark = { ready: "🟩", dry: "🟥", waiting: "🟪", unknown: "⬜", growing: "🟨" }[state];
+      const state = stage < 0 ? "empty" : readyAt && now >= readyAt ? "ready" : dryAt && now >= dryAt ? "dry" : waitAt && now >= waitAt ? "waiting" : !readyAt && !waitAt ? "unknown" : "growing";
+      const mark = { ready: "🟩", dry: "🟥", waiting: "🟪", unknown: "⬜", growing: "🟨", empty: "🟫" }[state];
       for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
         const row = Math.floor(cell / 10) + r, col = cell % 10 + c;
         if (row < 10 && col < 10) grid[row * 10 + col] = mark;
       }
-      const entry = tally.get(plant) ?? { ready: 0, growing: 0, dry: 0, waiting: 0, unknown: 0, stage: 0, stages };
+      const entry = tally.get(plant) ?? { ready: 0, growing: 0, dry: 0, waiting: 0, unknown: 0, empty: 0, stage: 0, stages };
       entry[state]++;
       if (state === "growing") entry.stage += Math.min(stages, stage + ticks(plot, uploadedAt, now));
       tally.set(plant, entry);
     }
     const lines = [...tally.entries()].map(([plant, t]) => `**${title(plant)}**: ` + [
       t.ready && `${t.ready} ready`, t.growing && `${t.growing} growing (stage ~${Math.floor(t.stage / t.growing)}/${t.stages})`,
-      t.dry && `${t.dry} out of water`, t.waiting && `${t.waiting} need you`, t.unknown && `${t.unknown} not timed`].filter(Boolean).join(" · "));
+      t.dry && `${t.dry} out of water`, t.waiting && `${t.waiting} need you`, t.unknown && `${t.unknown} not timed`, t.empty && `${t.empty} not grown yet`].filter(Boolean).join(" · "));
     const rows = Array.from({ length: 10 }, (_, r) => grid.slice(r * 10, r * 10 + 10).join("")).join("\n");
     return { title: `Plot ${plot.name}`, description: `${rows}\n\n${lines.join("\n") || "No mutations"}`, color: 0x4ca36e };
   });
-  return { content: `**Greenhouse** · as of ${discordTime(now)}\n-# 🟩 ready · 🟨 growing · 🟥 out of water · 🟪 needs you · ⬜ not timed. Estimated from your last readings.`, embeds };
+  return { content: `**Greenhouse** · as of ${discordTime(now)}\n-# 🟩 ready · 🟨 growing · 🟥 out of water · 🟪 needs you · ⬜ not timed · 🟫 not grown yet. Estimated from your last readings.`, embeds };
 }
 
 /** The view button; a DM also gets Dismiss, which deletes it. */
@@ -174,11 +187,11 @@ export class GreenhouseReminders {
     if (!upload.enabled) { this.sql.exec("DELETE FROM greenhouse_reminders WHERE discord_id=?", discordId); return { result: "deleted", next: null }; }
     const row = this.sql.exec<Row>("SELECT * FROM greenhouse_reminders WHERE discord_id=?", discordId).toArray()[0];
     const fired = json<Fired[]>(row?.fired ?? "[]", []).filter(f => f.at > now - GREENHOUSE_LIMITS.dayMs);
-    const schedule = JSON.stringify({ events: unsentEvents(upload.events, fired, now), plots: upload.plots });
+    const schedule = JSON.stringify({ events: unsentEvents(upload.events, fired, now), plots: upload.plots, quiet: upload.quiet });
     if (row?.schedule === schedule) return { result: "unchanged", next: null };
     if (row && now - row.updated_at < GREENHOUSE_LIMITS.writeGapMs) return { result: "throttled", next: null };
     // A new row (reminders just turned on) first gets a DM showing that they work.
-    const next = rowDue(nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now)?.at,
+    const next = rowDue(nextGreenhouseDm(json<{ events: GreenhouseEvent[] }>(schedule, { events: [] }).events, json<number[]>(row?.sent ?? "[]", []), now, upload.quiet)?.at,
       json<SentMessage[]>(row?.messages ?? "[]", []), !row || row.welcome === 1, now);
     this.sql.exec(`INSERT INTO greenhouse_reminders(discord_id,schedule,next_at,sent,fired,attempts,updated_at,welcome) VALUES(?,?,?,?,?,0,?,1)
       ON CONFLICT(discord_id) DO UPDATE SET schedule=excluded.schedule,next_at=excluded.next_at,fired=excluded.fired,attempts=0,updated_at=excluded.updated_at`,
@@ -195,7 +208,7 @@ export class GreenhouseReminders {
     const token = this.token();
     const rows = this.sql.exec<Row>("SELECT * FROM greenhouse_reminders WHERE next_at<=? ORDER BY next_at LIMIT 10", now).toArray();
     for (const row of rows) {
-      const schedule = json<{ events: GreenhouseEvent[]; plots: GreenhousePlotView[] }>(row.schedule, { events: [], plots: [] });
+      const schedule = json<{ events: GreenhouseEvent[]; plots: GreenhousePlotView[]; quiet?: QuietHours }>(row.schedule, { events: [], plots: [] });
       const sent = json<number[]>(row.sent, []).filter(t => t > now - GREENHOUSE_LIMITS.dayMs);
       let fired = json<Fired[]>(row.fired, []).filter(f => f.at > now - GREENHOUSE_LIMITS.dayMs), events = schedule.events, attempts = 0, retryAt: number | undefined;
       // DMs older than a day are deleted; one that fails is tried again until it is two days old.
@@ -208,7 +221,7 @@ export class GreenhouseReminders {
         const welcome = await this.send(token, row.discord_id, GREENHOUSE_WELCOME, `welcome:${row.updated_at}`, now);
         if (welcome.message) messages.push(welcome.message);
       }
-      const due = nextGreenhouseDm(events, sent, now);
+      const due = nextGreenhouseDm(events, sent, now, schedule.quiet);
       if (due && due.at <= now) {
         const result = token ? await this.send(token, row.discord_id, greenhouseDmText(due.events, schedule.plots), due.events.map(e => `${e.plot}:${e.kind}:${e.at}`).join(","), now)
           : { delivered: false, message: undefined };
@@ -222,7 +235,7 @@ export class GreenhouseReminders {
       }
       const kept = messages.slice(-GREENHOUSE_LIMITS.maxMessages);
       this.sql.exec("UPDATE greenhouse_reminders SET schedule=?,next_at=?,sent=?,fired=?,attempts=?,messages=?,welcome=0 WHERE discord_id=?",
-        JSON.stringify({ events, plots: schedule.plots }), rowDue(retryAt ?? nextGreenhouseDm(events, sent, now)?.at, kept, false, now),
+        JSON.stringify({ events, plots: schedule.plots, quiet: schedule.quiet }), rowDue(retryAt ?? nextGreenhouseDm(events, sent, now, schedule.quiet)?.at, kept, false, now),
         JSON.stringify(sent), JSON.stringify(fired), attempts, JSON.stringify(kept), row.discord_id);
     }
   }
