@@ -167,6 +167,10 @@ test('the view projects growth with the shared growth tick', () => {
   const planned = { ...plot, targets: [...plot.targets, [55, 1, 0, -1, 8, 0, 0, 0]] };
   assert.ok(validGreenhouseUpload(upload([ready], { plots: [planned] }), now), 'a planned spot with nothing grown yet is accepted');
   assert.equal(validGreenhouseUpload(upload([ready], { plots: [{ ...plot, targets: [[55, 1, 0, -2, 8, 0, 0, 0]] }] }), now), null);
+  // Row 1, column 2 is drawn like the in-game screen: rows left to right, so the third line, second square.
+  const lines = greenhouseView([{ ...plot, targets: [[12, 1, 0, 5, 8, now + 6 * hour, 0, 0]] }], now, now).embeds[0].description.split('\n');
+  assert.equal(Array.from(lines[2])[1], '🟨');
+  assert.equal(Array.from(lines[1])[2], '⬛');
   const empty = greenhouseView([planned], now, now + 4 * hour).embeds[0].description;
   assert.match(empty, /🟫/);
   assert.match(empty, /1 not grown yet/);

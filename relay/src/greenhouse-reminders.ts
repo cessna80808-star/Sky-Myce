@@ -143,7 +143,8 @@ export function greenhouseView(plots: GreenhousePlotView[], uploadedAt: number, 
       const mark = { ready: "🟩", dry: "🟥", waiting: "🟪", unknown: "⬜", growing: "🟨", empty: "🟫" }[state];
       for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
         const row = Math.floor(cell / 10) + r, col = cell % 10 + c;
-        if (row < 10 && col < 10) grid[row * 10 + col] = mark;
+        // Drawn like the in-game Greenhouses screen: the mod's rows run left to right, its columns top to bottom.
+        if (row < 10 && col < 10) grid[col * 10 + row] = mark;
       }
       const entry = tally.get(plant) ?? { ready: 0, growing: 0, dry: 0, waiting: 0, unknown: 0, empty: 0, stage: 0, stages };
       entry[state]++;
