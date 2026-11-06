@@ -68,9 +68,13 @@ object GeneralConfig : CategoryKt("General") {
 }
 
 object ThemeConfig : CategoryKt("Theme & Appearance") {
-    var preset by enum(ThemePreset.SIGNATURE) {
+    var preset by enum(ThemePreset.GLASS) {
         name = TranslatableValue.literal("Theme")
         description = TranslatableValue.literal("The palette and component style for every Sky-Myce menu and HUD widget.")
+    }
+    var glassMenus by boolean(true) {
+        name = TranslatableValue.literal("Glass menus")
+        description = TranslatableValue.literal("Tinted, translucent menu surfaces over Minecraft's background blur. Turn off for solid surfaces. Light graphics modes and opaque themes always stay solid; gameplay HUD widgets are unchanged.")
     }
     var graphicsQuality by enum(GuiQuality.AUTO) {
         name = TranslatableValue.literal("Graphics mode")

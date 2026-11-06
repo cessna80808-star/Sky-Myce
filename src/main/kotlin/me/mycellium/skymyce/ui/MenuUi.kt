@@ -69,7 +69,14 @@ enum class MenuPage(val title: String, val featureId: String) {
     DUNGEONS("Dungeons", "dungeon-tracker"), SPLITS("Dungeon Splits", "dungeon-splits"), CRUSH_CAMERA("Crush Camera", "healer-crush-camera"), JOURNAL("RNG Journal", "rng-journal"), AUCTIONS("Auctions", "auction-browser"), COSMETICS("Cosmetics", "cosmetics"), GREENHOUSE("Greenhouses", "greenhouse-planner"), HUD("HUD editor", "settings-hud")
 }
 
+/** Opaque palettes and low graphics modes keep their legibility without paying for background blur. */
+internal fun menuGlassEnabled(enabled: Boolean, palette: me.mycellium.skymyce.hud.ThemePalette, quality: GuiQuality) =
+    enabled && palette.opacity < 100 && palette.rounded && menuBlurAllowed(quality)
+
 object MenuTheme {
+    /** The live screen supplies Auto's tier; pure canvas painting never initializes client modules. */
+    internal var autoQuality = GuiQuality.MEDIUM
+    private val quality get() = ThemeConfig.graphicsQuality.let { if (it == GuiQuality.AUTO) autoQuality else it }
     val style get() = ThemeConfig.preset.palette.style
     private val palette get() = ThemeConfig.preset.palette
     val ACCENT get() = palette.primary
@@ -86,8 +93,9 @@ object MenuTheme {
     val PURPLE get() = SECONDARY
     val PADDING get() = style.menuPadding
     val RADIUS get() = if (ROUNDED) style.radius.coerceAtLeast(2) else 0
-    val SHADOW get() = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers > 0 && palette.shadow
-    val OPACITY get() = palette.opacity
+    val SHADOW get() = quality.shadowLayers > 0 && palette.shadow
+    val GLASS get() = menuGlassEnabled(ThemeConfig.glassMenus, palette, quality)
+    val OPACITY get() = if (GLASS) palette.opacity else 100
     val ROUNDED get() = palette.rounded
     val BORDERS get() = palette.borders
     fun blend(a: Int, b: Int, weight: Int) = me.mycellium.skymyce.hud.HudTheme.blend(a, b, weight)
@@ -138,7 +146,7 @@ object MenuTheme {
     fun shadow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
         if (!SHADOW || strength <= 0.0 || w <= 0 || h <= 0) return
         val profile = ThemeConfig.animationMode.profile
-        val qualityLayers = me.mycellium.skymyce.ui.AutoGraphics.quality.shadowLayers.coerceIn(0, 3)
+        val qualityLayers = quality.shadowLayers.coerceIn(0, 3)
         if (g is MenuGraphics && SkijaMenuFonts.active && qualityLayers >= 2 && profile.glowStrength > 0.0) {
             g.shadow(x, y + 2, w, h, RADIUS.toDouble(), if (profile.ambient) 4.0 else 3.0,
                 alpha(style.shadowTint, (strength.coerceIn(0.0, 1.0) * profile.shadowStrength * style.shadowOpacity).toInt()))
@@ -152,7 +160,7 @@ object MenuTheme {
     }
     fun glow(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double) {
         val profile = ThemeConfig.animationMode.profile
-        if (!me.mycellium.skymyce.ui.AutoGraphics.quality.glow || style.glow <= 0.0 || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
+        if (!quality.glow || style.glow <= 0.0 || profile.glowStrength <= 0.0 || strength <= 0.0 || w <= 0 || h <= 0) return
         if (g is MenuGraphics && SkijaMenuFonts.active) {
             g.shadow(x, y, w, h, RADIUS.toDouble(), if (profile.ambient) 5.0 else 4.0,
                 alpha(ACCENT, (strength.coerceIn(0.0, 1.0) * style.glow * 18).toInt()))
@@ -163,7 +171,7 @@ object MenuTheme {
     }
     /** Transparent lighting keeps the configured panel opacity intact. */
     fun sheen(g: OwoUIGraphics, x: Int, y: Int, w: Int, h: Int, strength: Double = 1.0) {
-        if (me.mycellium.skymyce.ui.AutoGraphics.quality == GuiQuality.EXTREMELY_LIGHT || style.sheen <= 0.0 || w < 10 || h < 10 || strength <= 0.0) return
+        if (quality == GuiQuality.EXTREMELY_LIGHT || style.sheen <= 0.0 || w < 10 || h < 10 || strength <= 0.0) return
         val opacity = (strength.coerceIn(0.0, 1.0) * style.sheen * OPACITY * .12).toInt()
         if (opacity == 0) return
         val tint = blend(ACCENT, SECONDARY, 55)
@@ -175,6 +183,14 @@ object MenuTheme {
         shadow(g, c.x(), c.y(), c.width(), c.height(), if (card) .35 else 1.0)
         box(g, c.x(), c.y(), c.width(), c.height(), if (card) CARD else PANEL)
         sheen(g, c.x(), c.y(), c.width(), c.height(), if (card) .65 else 1.0)
+    }
+    /** One glass shell; controls keep their stronger tint instead of stacking translucent panes. */
+    fun shell(): Surface = Surface { g, c ->
+        shadow(g, c.x(), c.y(), c.width(), c.height())
+        rounded(g, c.x(), c.y(), c.width(), c.height(), alpha(PANEL, if (GLASS) minOf(OPACITY, 86) else 100))
+        if (BORDERS && g is MenuGraphics) g.roundedBorder(c.x(), c.y(), c.width(), c.height(),
+            RADIUS.toDouble(), style.borderWidth, alpha(blend(BORDER, TEXT, if (GLASS) 22 else 0), 85))
+        sheen(g, c.x(), c.y(), c.width(), c.height(), .6)
     }
     fun tintedPanel(color: () -> Int): Surface = Surface { g, c -> rounded(g, c.x(), c.y(), c.width(), c.height(), color()) }
     val backdrop = Surface { g, c -> g.fill(c.x(), c.y(), c.x() + c.width(), c.y() + c.height(), alpha(blend(PANEL, 0, 60), 64)) }
@@ -386,7 +402,7 @@ internal open class MenuListRow(private val title: String, private val subtitle:
             titleLine = menuEllipsis(title, width - textLeft - 6, 10.0, true)
             subtitleLine = if (subtitle.isBlank()) "" else menuEllipsis(subtitle, width - textLeft - 6, 8.5, false)
         }
-        icon?.let { paintMenuIcon(canvas, it, x + 7.0, y + (height - 13) / 2.0, 13.0, MenuTheme.alpha(if (emphasis > .1 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)) }
+        icon?.let { paintMenuIcon(canvas, it, x + 5.5, y + (height - 16) / 2.0, 16.0, MenuTheme.alpha(if (emphasis > .1 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)) }
         val titleHeight = MenuCanvas.lineHeight(10.0)
         val total = titleHeight + if (subtitleLine.isEmpty()) 0 else MenuCanvas.lineHeight(8.5)
         val top = y + (height - total) / 2.0
@@ -395,7 +411,7 @@ internal open class MenuListRow(private val title: String, private val subtitle:
     }
 }
 
-/** A small square button drawn as a vector icon, so it never depends on a font having the glyph. */
+/** A small square button drawn with a custom PNG icon, so it never depends on a font having the glyph. */
 internal open class MenuIconButton(private val icon: Int, label: String, action: (ButtonComponent) -> Unit) : MenuButton(Component.literal(label), action) {
     /** Draw nothing while inactive (a Reset with nothing to reset), instead of a greyed icon. */
     var hiddenWhenInactive = false
@@ -404,8 +420,8 @@ internal open class MenuIconButton(private val icon: Int, label: String, action:
     override fun paint(graphics: MenuGraphics, delta: Float, hover: Double, chosen: Double, press: Double) {
         if (!active && hiddenWhenInactive) return
         val canvas = graphics.canvas
-        if (hover > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
-            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (hover * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
+        if (hover > 0.0 || chosen > 0.0 || press > 0.0) canvas.roundedRect(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble(), MenuTheme.RADIUS.toDouble(),
+            MenuTheme.alpha(MenuTheme.blend(MenuTheme.CARD, MenuTheme.ACCENT, (maxOf(hover, chosen) * MenuTheme.style.hoverWeight + press * 9).toInt()), MenuTheme.OPACITY))
         if (isFocused) MenuTheme.focus(graphics, x, y, width, height)
         val size = minOf(12.0, width - 4.0, height - 4.0)
         val color = if (!active) MenuTheme.alpha(MenuTheme.MUTED, 45) else MenuTheme.alpha(if (hover > .1 || chosen > .5 || isFocused) MenuTheme.ACCENT else MenuTheme.MUTED)

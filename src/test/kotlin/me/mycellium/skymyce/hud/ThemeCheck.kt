@@ -7,8 +7,19 @@ import me.mycellium.skymyce.config.misc.restoredThemePreset
 import me.mycellium.skymyce.hud.widget.parseWidgetConfig
 import me.mycellium.skymyce.ui.GuiMotion
 import me.mycellium.skymyce.ui.GuiQuality
+import me.mycellium.skymyce.ui.menuGlassEnabled
 
 fun checkThemes() {
+    // Transparency must never survive the off switch, an opaque palette, or a low graphics mode.
+    for (preset in ThemePreset.entries) for (quality in GuiQuality.entries) {
+        check(!menuGlassEnabled(false, preset.palette, quality))
+        if (preset.palette.opacity == 100 || !preset.palette.rounded || quality in listOf(GuiQuality.LIGHT, GuiQuality.EXTREMELY_LIGHT)) {
+            check(!menuGlassEnabled(true, preset.palette, quality))
+        }
+    }
+    check(menuGlassEnabled(true, ThemePreset.GLASS.palette, GuiQuality.MEDIUM))
+    check(menuGlassEnabled(true, ThemePreset.GLASS.palette, GuiQuality.HIGH))
+    check(restoredThemePreset(JsonParser.parseString("{}").asJsonObject, ThemePreset.GLASS) == ThemePreset.GLASS)
     check(ThemePreset.entries.map { it.name }.containsAll(listOf("DARK_GLASS", "MINIMAL", "LIGHT", "HIGH_CONTRAST")))
     check(ThemePreset.entries.size >= 7 && ThemePreset.SIGNATURE.toString() == "Signature")
     check(restoredThemePreset(JsonParser.parseString("{}").asJsonObject, ThemePreset.SIGNATURE) == ThemePreset.SIGNATURE)
@@ -94,5 +105,5 @@ fun checkThemes() {
         check(themed.siblings.map { it.style.color?.value } == listOf(HudTheme.ACCENT, HudTheme.TEXT, HudTheme.GREEN, HudTheme.RED))
         check(HudTheme.TEXT == ThemePreset.LIGHT.palette.text && HudTheme.ACCENT == ThemePreset.LIGHT.palette.primary)
     } finally { ThemeConfig.preset = previousPreset; ThemeConfig.graphicsQuality = previousQuality }
-    println("Theme checks passed: preset contrast, nearest-preset migration, motion by graphics mode and saved layout compatibility")
+    println("Theme checks passed: glass fallbacks, preset contrast, nearest-preset migration, motion by graphics mode and saved layout compatibility")
 }

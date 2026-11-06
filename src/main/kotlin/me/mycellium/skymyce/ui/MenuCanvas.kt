@@ -274,6 +274,7 @@ class MenuCanvas {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
         g.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
         g.scale(scale, scale)
     }
 
@@ -478,7 +479,10 @@ class MenuCanvas {
     }
     companion object {
         private fun gradientKey(paint: Paint) = paint.copy(transform = Transform(), clip = null, opacity = 1.0, group = null)
-        private val font: Font = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")!!.use { Font.createFont(Font.TRUETYPE_FONT, it) }.deriveFont(10f)
+        private fun bundledFont(name: String): Font = requireNotNull(MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/$name"))
+            .use { Font.createFont(Font.TRUETYPE_FONT, it) }.deriveFont(10f)
+        private val font = bundledFont("poppins-regular.ttf")
+        private val semibold = bundledFont("poppins-semibold.ttf")
         private val fallback = Font(Font.SANS_SERIF, Font.PLAIN, 10)
         private val frc = FontRenderContext(null, true, true)
         private data class FontKey(val size: Float, val style: Int, val fallback: Boolean)
@@ -505,7 +509,10 @@ class MenuCanvas {
             val key = lookup.copy()
             val text = String(Character.toChars(codepoint))
             val fontKey = FontKey(key.size, key.style, font.canDisplayUpTo(text) >= 0)
-            val styled = fonts.getOrPut(fontKey) { (if (fontKey.fallback) fallback else font).deriveFont(key.style, key.size) }
+            val styled = fonts.getOrPut(fontKey) {
+                if (fontKey.fallback) fallback.deriveFont(key.style, key.size)
+                else (if (bold) semibold else font).deriveFont(if (italic) Font.ITALIC else Font.PLAIN, key.size)
+            }
             val vector = styled.createGlyphVector(frc, text)
             return Glyph(vector, styled.getStringBounds(text, frc).width, vector.visualBounds).also { glyphs[key] = it }
         }
