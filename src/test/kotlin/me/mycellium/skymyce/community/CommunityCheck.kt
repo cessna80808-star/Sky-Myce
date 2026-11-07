@@ -55,6 +55,8 @@ fun main() {
     check(observationHash("linux-machine-id", raw) != observationHash("linux-dmi", raw))
     check(runCatching { observationHash("windows-smbios", "00000000-0000-0000-0000-000000000000") }.isFailure)
     val root = Files.createTempDirectory("sky-myce-community-check-")
+    // Holds a 256 MB fixture; a hook also cleans up after a failed check.
+    Runtime.getRuntime().addShutdownHook(Thread { root.toFile().deleteRecursively() })
     val store = CommunityStorage(root.resolve("sessions"), "a".repeat(32))
     val saved = JsonObject().apply { addProperty("refreshToken", "b".repeat(43)); addProperty("refreshExpiresAt", now + 900000) }
     store.write(saved)
