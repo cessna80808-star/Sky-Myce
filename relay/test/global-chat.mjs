@@ -44,6 +44,7 @@ export async function checkGlobalChat(script, proof) {
       const { method, args } = await request.json();
       if (method === "heartbeat") { await this.testOnlyGatewayHeartbeat(); return Response.json(null); }
       if (method === "deliver") { await this.globalChatDeliver(args[0]); return Response.json(null); }
+      if (method === "peerRows") return Response.json(this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM global_chat_delivered WHERE id LIKE 'peer:%'").one().n);
       const result = method === "session" ? this.testOnlyGlobalSession(args[0]) :
         method === "watches" ? this.testOnlyGlobalWatches(args[0], args[1]) : this.testOnlyGlobalPadding(args[0], args[1]);
       return Response.json(result ?? null);
@@ -340,6 +341,7 @@ export async function checkGlobalChat(script, proof) {
       }
       alice.ws.send(JSON.stringify({ type: 'ack', id: inboxId, to: 'Bob' })); assert.equal((await bobFriends.next()).id, inboxId);
       await clearQuota(); await discord(`Subscription survives concurrent ${feature} requests`);
+      assert.equal(await inspect('peerRows', []), 0, 'Global chat writes no per-recipient delivery rows');
     }
     // Completion order must not invert subscription intent, even when packet IDs are reused.
     for (const scope of ['global', undefined]) for (const method of ['session', 'irc']) {

@@ -103,6 +103,14 @@ export async function verifyBridge(request: Request, env: IrcConfig, room: strin
 export class RoomIrc {
   // Awaited handlers keep this instance active; restarts cancel them. Persist subscriptions, not in-flight ordering.
   private readonly subscriptionIntents = new WeakMap<WebSocket, Partial<Record<SubscriptionIntent["field"], symbol>>>();
+  /** Live-only: which connections already received a message during this instance's lifetime. The durable guard is the `room:` row. */
+  private readonly peerDeliveries = new Map<string, number>();
+  private peerDelivered(key: string, now: number): boolean { const expires = this.peerDeliveries.get(key); return expires !== undefined && expires > now; }
+  private notePeerDelivery(key: string, now: number): void {
+    if (this.peerDeliveries.size >= 10_000) for (const [name, expires] of this.peerDeliveries) if (expires <= now) this.peerDeliveries.delete(name);
+    if (this.peerDeliveries.size >= 10_000) this.peerDeliveries.delete(this.peerDeliveries.keys().next().value!);
+    this.peerDeliveries.set(key, now + 300_000);
+  }
   private readonly lifecycle: IrcLifecycle;
   constructor(private ctx: DurableObjectState, private env: IrcConfig,
       private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>, private cosmeticName?: (uuid: string) => string | null) {
@@ -581,14 +589,14 @@ export class RoomIrc {
       recipient = current;
       if (message.expiresAt <= Date.now()) break;
       const peerDelivery = `peer:${message.id}:${recipient.connectionId}`;
-      if (sql.exec("SELECT 1 FROM global_chat_delivered WHERE id=?", peerDelivery).toArray().length) continue;
+      if (this.peerDelivered(peerDelivery, Date.now())) continue;
       const isMentioned = !!recipient.discordId && message.mentions.includes(recipient.discordId);
       try {
         peer.send(current.richChatVersion === 1 ? JSON.stringify({ ...base, model: 1, room: GLOBAL_CHAT_ROOM,
           sourceId: message.sourceId ?? message.id, sender: message.identity ?? { name: message.from, discordId: message.discordId, ...(message.uuid ? { uuid: message.uuid } : {}) },
           media: message.media ?? ircMedia(message.text) ?? [], revision: message.revision ?? 0, reactions: [], mention: isMentioned,
           ...(message.reply ? { reply: message.reply } : {}) }) : isMentioned ? mentioned : normal);
-        sql.exec("INSERT OR IGNORE INTO global_chat_delivered VALUES(?,?)", peerDelivery, Date.now() + 300_000);
+        this.notePeerDelivery(peerDelivery, Date.now());
       } catch { /* Live clients reconnect without replaying history. */ }
     }
     sql.exec("INSERT OR IGNORE INTO global_chat_delivered VALUES(?,?)", roomDelivery, Date.now() + 300_000);
