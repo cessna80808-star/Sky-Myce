@@ -44,19 +44,20 @@ repositories {
 	// for more information about repositories.
 
 	// Hypixel API
-	maven("https://repo.hypixel.net/repository/Hypixel/")
-	maven("https://api.modrinth.com/maven")
+	maven("https://repo.hypixel.net/repository/Hypixel/") { content { includeGroup("net.hypixel") } }
+	maven("https://api.modrinth.com/maven") { content { includeGroup("maven.modrinth") } }
 
 	// Resourceful Config
-	maven("https://maven.teamresourceful.com/repository/maven-public/")
+	maven("https://maven.teamresourceful.com/repository/maven-public/") { content {
+		includeGroupByRegex("com\\.teamresourceful(\\..*)?"); includeGroupByRegex("tech\\.thatgravyboat(\\..*)?"); includeGroup("me.owdding") } }
 
 	// Devauth
-	maven("https://pkgs.dev.azure.com/djtheredstoner/DevAuth/_packaging/public/maven/v1")
+	maven("https://pkgs.dev.azure.com/djtheredstoner/DevAuth/_packaging/public/maven/v1") { content { includeGroup("me.djtheredstoner") } }
 
 	// owo lib
-	maven("https://maven.wispforest.io")
-	maven("https://jitpack.io")
-    maven("https://keksuccino.github.io/maven/")
+	maven("https://maven.wispforest.io") { content { includeGroupByRegex("io\\.wispforest(\\..*)?") } }
+	maven("https://jitpack.io") { content { includeGroupByRegex("com\\.github\\..*") } }
+	maven("https://keksuccino.github.io/maven/") { content { includeGroup("de.keksuccino") } }
 }
 
 val browserRuntime = configurations.create("browserRuntime") { isTransitive = false }
