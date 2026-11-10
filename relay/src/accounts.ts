@@ -270,6 +270,8 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   communityOAuthFinish(flow: string, user: { id: string; username: string; displayName: string }) { return this.community.finishOAuth(flow, user); }
   authorizeCommunitySession(input: { uuid: string; token: string; challenge: string; modVersion?: string }) { return this.community.authorize(input); }
   checkCommunitySession(input: CommunitySessionCheck) { return this.community.checkSession(input); }
+  /** One call for a room fan-out; answers are in input order. */
+  checkCommunitySessions(inputs: CommunitySessionCheck[]) { return inputs.slice(0, 128).map(input => this.community.checkSession(input)); }
   /** Every client message already passes this check; a Greenhouse upload rides along instead of making its own call. */
   async consumeCommunitySessionRequest(input: CommunitySessionCheck, greenhouse?: GreenhouseUpload) {
     const state = this.community.consumeRequest(input);

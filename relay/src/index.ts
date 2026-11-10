@@ -195,7 +195,7 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     });
     ctx.waitUntil(this.rngForward.arm());
     this.cosmetics = new PlayerCosmetics(ctx.storage);
-    this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session), uuid => this.cosmetics.get(uuid).name);
+    this.irc = new RoomIrc(ctx, env, (ws, session) => this.authorized(ws, session), uuid => this.cosmetics.get(uuid).name, pairs => this.authorizedMany(pairs));
     this.leapPov = new LeapPov(ctx, (ws, session) => this.authorized(ws, session));
     this.bazaarNotifications = new BazaarNotifications(env, (ws, session) => this.authorized(ws, session));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS account_migration_state (id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
@@ -744,39 +744,67 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     if (legacyRelay(this.env)) return true;
     if (ws.readyState !== WebSocket.OPEN) return false;
     try {
-      if (!session.accountId || !session.uuid || !session.communitySessionId || session.generation === undefined) {
-        ws.close(4007, "Connect Discord in Sky-Myce"); return false;
-      }
-      if (!Number.isSafeInteger(session.leaseExpiresAt) || session.leaseExpiresAt! <= Date.now()) {
-        ws.close(4006, "Authorization renewal required"); return false;
-      }
-      const input = { accountId: session.accountId,
-        uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation,
-        heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId };
+      const input = this.sessionInput(ws, session); if (!input) return false;
       const store = this.env.ACCOUNT_STORE.getByName("global");
       const state = !heartbeat ? await store.checkCommunitySession(input)
         : greenhouse?.upload ? await store.consumeCommunitySessionRequest(input, greenhouse.upload) : await store.consumeCommunitySessionRequest(input);
       if (greenhouse && "greenhouse" in state) greenhouse.result = String(state.greenhouse);
-      if (!state.ok) {
-        if (ws.readyState === WebSocket.OPEN) {
-          if (["rate_limited", "traffic_cooldown", "service_busy"].includes(state.error ?? "")) {
-            ws.close(1013, state.error!); return false;
-          }
-          ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error ?? "session_expired" }));
-          ws.close(state.error === "identity_blacklisted" ? 4005 : 4006, state.error ?? "session_expired");
-        }
-        return false;
-      }
-      if (session.leaseExpiresAt! <= Date.now()) {
-        if (ws.readyState === WebSocket.OPEN) ws.close(4006, "Authorization renewal required");
-        return false;
-      }
-      return ws.readyState === WebSocket.OPEN;
+      return this.applySessionState(ws, session, state);
     } catch {
       // An unavailable authority cannot grant online access, but it is not a revocation.
       if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Authorization service unavailable");
       return false;
     }
+  }
+
+  /** Local checks before asking the account store; closes the socket and returns null when it cannot be authorized. */
+  private sessionInput(ws: WebSocket, session: IrcSession) {
+    if (!session.accountId || !session.uuid || !session.communitySessionId || session.generation === undefined) {
+      ws.close(4007, "Connect Discord in Sky-Myce"); return null;
+    }
+    if (!Number.isSafeInteger(session.leaseExpiresAt) || session.leaseExpiresAt! <= Date.now()) {
+      ws.close(4006, "Authorization renewal required"); return null;
+    }
+    return { accountId: session.accountId,
+      uuid: session.uuid, sessionId: session.communitySessionId, generation: session.generation,
+      heartbeatAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime(), connectionId: session.connectionId };
+  }
+
+  private applySessionState(ws: WebSocket, session: IrcSession, state: { ok: boolean; error?: string }): boolean {
+    if (!state.ok) {
+      if (ws.readyState === WebSocket.OPEN) {
+        if (["rate_limited", "traffic_cooldown", "service_busy"].includes(state.error ?? "")) {
+          ws.close(1013, state.error!); return false;
+        }
+        ws.send(JSON.stringify({ type: "authorization_revoked", reason: state.error ?? "session_expired" }));
+        ws.close(state.error === "identity_blacklisted" ? 4005 : 4006, state.error ?? "session_expired");
+      }
+      return false;
+    }
+    if (session.leaseExpiresAt! <= Date.now()) {
+      if (ws.readyState === WebSocket.OPEN) ws.close(4006, "Authorization renewal required");
+      return false;
+    }
+    return ws.readyState === WebSocket.OPEN;
+  }
+
+  /** Same decisions as authorized() for each socket, using one account-store call. */
+  private async authorizedMany(pairs: [WebSocket, IrcSession][]): Promise<Set<WebSocket>> {
+    const allowed = new Set<WebSocket>(), pending: { ws: WebSocket; session: IrcSession; input: NonNullable<ReturnType<RelayRoom["sessionInput"]>> }[] = [];
+    for (const [ws, session] of pairs) {
+      if (session.bridge || legacyRelay(this.env)) { allowed.add(ws); continue; }
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const input = this.sessionInput(ws, session); if (input) pending.push({ ws, session, input });
+    }
+    if (!pending.length) return allowed;
+    try {
+      const states = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySessions(pending.map(entry => entry.input));
+      pending.forEach((entry, index) => { if (states[index] && this.applySessionState(entry.ws, entry.session, states[index])) allowed.add(entry.ws); });
+    } catch {
+      // An unavailable authority cannot grant online access, but it is not a revocation.
+      for (const entry of pending) if (entry.ws.readyState === WebSocket.OPEN) entry.ws.close(1013, "Authorization service unavailable");
+    }
+    return allowed;
   }
 
   private trafficDiagnostic(event: string): void {
@@ -862,14 +890,19 @@ export class RelayRoom extends DurableObject<RelayEnv> {
 
   private async broadcast(sender: WebSocket, packet: object, privacy?: {uuid: string; category: SharingCategory; recordedAt?: number}[]): Promise<void> {
     const text = JSON.stringify(packet);
+    if (!privacy) {
+      const recipients = this.ctx.getWebSockets().map(peer => [peer, peer.deserializeAttachment() as Session] as [WebSocket, Session])
+        .filter(([peer, session]) => peer !== sender && peer.readyState === WebSocket.OPEN && session.name && session.liveUpdates);
+      const allowed = await this.authorizedMany(recipients);
+      for (const [peer] of recipients) if (allowed.has(peer) && peer.readyState === WebSocket.OPEN) { try { peer.send(text); } catch { /* The recipient disconnected during delivery. */ } }
+      return;
+    }
     for (const peer of this.ctx.getWebSockets()) {
       const session = peer.deserializeAttachment() as Session;
       // Older clients reject unknown packet types. Opt-in survives hibernation with the socket.
       if (peer !== sender && peer.readyState === WebSocket.OPEN && session.name && session.liveUpdates) {
-        if (privacy) {
-          const policies = await this.sharingPermissions(peer, session, privacy);
-          if (peer.readyState !== WebSocket.OPEN || privacy.some((request, index) => !this.sharingCurrent(request.uuid, request.category, policies[index]))) continue;
-        } else if (!await this.authorized(peer, session)) continue;
+        const policies = await this.sharingPermissions(peer, session, privacy);
+        if (peer.readyState !== WebSocket.OPEN || privacy.some((request, index) => !this.sharingCurrent(request.uuid, request.category, policies[index]))) continue;
         try { peer.send(text); } catch { /* The recipient disconnected during delivery. */ }
       }
     }
@@ -885,11 +918,14 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     catch (error) { console.warn({ event: "room_alarm_delivery_failed", error: String(error).slice(0, 200) }); }
     let next = Infinity;
     let globalListener = false;
+    const named = this.ctx.getWebSockets().map(ws => [ws, ws.deserializeAttachment() as Session] as [WebSocket, Session])
+      .filter(([ws, session]) => !session.bridge && ws.readyState === WebSocket.OPEN && session.name);
+    const current = legacyRelay(this.env) ? new Set<WebSocket>() : await this.authorizedMany(named);
     for (const ws of this.ctx.getWebSockets()) {
       const session = ws.deserializeAttachment() as Session;
       if (session.bridge || ws.readyState !== WebSocket.OPEN) continue;
       if (session.name) {
-        if (!legacyRelay(this.env) && await this.authorized(ws, session)) {
+        if (current.has(ws) && ws.readyState === WebSocket.OPEN) {
           next = Math.min(next, Date.now() + 30_000, session.leaseExpiresAt!);
           if (currentIrcSession(ws, session)?.globalChatSubscribed) globalListener = true;
         }

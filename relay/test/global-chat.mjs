@@ -75,6 +75,11 @@ export async function checkGlobalChat(script, proof) {
   }\n  ${authorityAnchor}`);
   script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkCommunitySession(',
     'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSession(');
+  script = script.replace(`  ${authorityAnchor}`, `  async testOnlyDelayedCheckSessions(inputs) {
+    const states = []; for (const input of inputs.slice(0, 128)) states.push(await this.testOnlyDelayedCheckSession(input)); return states;
+  }\n  ${authorityAnchor}`);
+  script = script.replaceAll('this.env.ACCOUNT_STORE.getByName("global").checkCommunitySessions(',
+    'this.env.ACCOUNT_STORE.getByName("global").testOnlyDelayedCheckSessions(');
   assert.ok(script.includes('store.consumeCommunitySessionRequest(input)'));
   script = script.replaceAll('store.consumeCommunitySessionRequest(input)', 'store.testOnlyDelayedCheckSession(input, true)');
   script = script.replaceAll('store.checkCommunitySession(input)', 'store.testOnlyDelayedCheckSession(input)');

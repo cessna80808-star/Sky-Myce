@@ -113,7 +113,8 @@ export class RoomIrc {
   }
   private readonly lifecycle: IrcLifecycle;
   constructor(private ctx: DurableObjectState, private env: IrcConfig,
-      private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>, private cosmeticName?: (uuid: string) => string | null) {
+      private authorized: (ws: WebSocket, session: IrcSession) => Promise<boolean>, private cosmeticName?: (uuid: string) => string | null,
+      private authorizedMany?: (pairs: [WebSocket, IrcSession][]) => Promise<Set<WebSocket>>) {
     this.lifecycle = new IrcLifecycle(ctx.storage);
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS party_chat_consents (uuid TEXT NOT NULL, origin_room TEXT NOT NULL, connection_id TEXT NOT NULL,
       party_id TEXT NOT NULL, revision INTEGER NOT NULL, expires INTEGER NOT NULL, PRIMARY KEY(uuid,origin_room,connection_id))`);
@@ -580,10 +581,13 @@ export class RoomIrc {
     const base = { type: "irc_message", scope: "global", id: message.id, source: message.source, from: message.from, text: message.text, timestamp: message.timestamp,
       ...(message.reply ? { reply: { from: message.reply.from, text: message.reply.text } } : {}) };
     const normal = JSON.stringify({ ...base, mention: false }), mentioned = JSON.stringify({ ...base, mention: true });
+    const candidates = this.ctx.getWebSockets().map(peer => [peer, peer.deserializeAttachment() as IrcSession] as [WebSocket, IrcSession])
+      .filter(([peer, recipient]) => peer.readyState === WebSocket.OPEN && !recipient.bridge && recipient.globalChatSubscribed);
+    const allowed = this.authorizedMany ? await this.authorizedMany(candidates) : null;
     for (const peer of this.ctx.getWebSockets()) {
       if (peer.readyState !== WebSocket.OPEN) continue;
       let recipient = peer.deserializeAttachment() as IrcSession;
-      if (recipient.bridge || !recipient.globalChatSubscribed || !await this.authorized(peer, recipient)) continue;
+      if (recipient.bridge || !recipient.globalChatSubscribed || !(allowed ? allowed.has(peer) : await this.authorized(peer, recipient))) continue;
       const current = currentIrcSession(peer, recipient);
       if (!current || !current.globalChatSubscribed) continue;
       recipient = current;
