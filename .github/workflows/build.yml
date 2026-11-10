@@ -52,3 +52,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check
+  windows-update-check:
+    # The self-updater's file-replacement and restart paths differ on Windows.
+    runs-on: windows-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v6
+      - name: setup jdk
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - name: update and restart checks
+        run: ./gradlew.bat communityCheck
