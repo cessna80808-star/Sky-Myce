@@ -3,6 +3,19 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-051 (2026-11-10)
+- Fixed: when a party member types !coords, !fps, !tps or !ping, your answer now always goes to party chat. Before, it went to whichever chat channel you had selected, so with All chat or guild chat selected your coordinates, FPS, TPS or ping were posted there.
+- Fixed: !kick, !transfer, !promote and !demote now only act on a party member whose name matches exactly, or on the one member whose name starts with what was typed. Before, any member whose name just contained the typed letters could be picked, so !kick a could kick the first member with an "a" in their name.
+- Safe Kismet Reroll now protects you even when the chest profit overlay is turned off; before, it did nothing without telling you. It also blocks a reroll when one of the rewards has no known price yet, instead of treating that reward as worth nothing, and it says why in chat when it blocks one. Holding CTRL still rerolls anyway.
+- Stash Helper now leaves items with an unknown price alone instead of marking them as worthless and blocking you from picking them up. Item values use the Bazaar and Auction price types you chose in the dungeon tracker settings.
+- Global Chat: a message with several lines (these come from Discord) now shows as one chat entry, with " | " between the lines. Before, each extra line started a new chat row without the Global Chat prefix, so it could look like a different kind of message.
+- Fixed: if one saved Daily Digest entry was no longer valid after an update (for example an item the mod no longer recognises), the whole saved digest was reset: daily tasks, recent drops and the news cache. Now only that entry is dropped and the rest is kept.
+- Connecting Discord: the page that asks you to confirm which Minecraft account you are connecting can no longer be skipped. You continue with a button on that page, and a link that jumps straight past it no longer works. Nothing changes in how you start connecting from the mod.
+- The mod now only sends your community session to the official Sky-Myce service. If you had pointed the relay address at a different server, that server no longer receives it, so online features will not work through it.
+- Leaderboards: if you open them too quickly, you are now told you are being rate limited instead of seeing "community unavailable".
+- Discord bot: typing in the account unlink suggestions no longer uses up your command limit.
+- Player Guide: the guide now describes Party IRC (/sm party, or /sm pc), Minecraft-only chat with party members who also run Sky-Myce. The old note saying it was unavailable is gone.
+
 ## 2.8.0-beta-050 (2026-11-05)
 - Pickobulus Commission Spot is now called Pickobulus Helper. While you hold a tool with Pickobulus, it shows exactly which blocks a blast would break at the block you are aiming at (up to 20 blocks away) and how many. The calculation comes from Skyblocker's Pickobulus helper. It works in the Dwarven Mines, Glacite Tunnels and Great Glacite Lake, Crystal Hollows, Mineshafts, Gold Mines and Deep Caverns, and no longer needs an open commission.
 - The marker for the best spot for your open block commissions stays, with its arrow and the Pickobulus Direction widget, but it now picks the spot with that same exact calculation, so its block count is exact instead of an estimate.
