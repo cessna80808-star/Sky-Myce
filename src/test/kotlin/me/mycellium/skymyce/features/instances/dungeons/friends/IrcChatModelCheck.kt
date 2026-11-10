@@ -15,6 +15,10 @@ private fun change(id: String = "a".repeat(32), scope: String = "global", room: 
 """).asJsonObject
 
 fun checkIrcChatModel() {
+    check(ircSingleLine("hello") == "hello")
+    check(ircSingleLine("first\nsecond") == "first | second")
+    check(ircSingleLine("first  \n\n  Party > Friend: second") == "first | Party > Friend: second")   // runs of breaks collapse
+    check('\n' !in ircSingleLine("a\nb\nc\n"))
     check(richIrcCapability(JsonParser.parseString("{\"richChatVersion\":1}").asJsonObject))
     for (value in listOf("null", "\"1\"", "true", "1.0", "2"))
         check(!richIrcCapability(JsonParser.parseString("{\"richChatVersion\":$value}").asJsonObject))

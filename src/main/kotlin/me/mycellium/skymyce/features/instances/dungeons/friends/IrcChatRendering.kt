@@ -381,7 +381,7 @@ object IrcChatRendering {
                 if (!GlobalChatConfig.mediaPreviews && representedMedia.add(mediaIndex))
                     result.append(actionStyle("[${message.media[mediaIndex].type.uppercase()}]", IrcChatAction("media", message.scope, message.id, mediaIndex), "View media"))
             } else {
-                val text = if (url != null && trustedIrcGifUrl(url)) "[GIF]" else span.text
+                val text = if (url != null && trustedIrcGifUrl(url)) "[GIF]" else ircSingleLine(span.text)
                 for (readable in ircReadableText(text)) {
                     val part = Component.literal(readable.text).withColor(if (url == null) 0xE2E7EF else 0x68B9F5)
                     if (readable.emoji) part.withStyle { it.withFont(ircEmojiFont)

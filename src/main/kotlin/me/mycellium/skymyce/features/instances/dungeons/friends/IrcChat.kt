@@ -78,6 +78,10 @@ internal fun ircText(value: String, maximum: Int, multiline: Boolean = false): B
         else -> true
     } }
 
+private val ircLineBreaks = Regex("\\s*\\n\\s*")
+/** Remote text is drawn as one chat entry: a line break would start a row without the sender prefix. */
+internal fun ircSingleLine(text: String): String = if ('\n' in text) text.replace(ircLineBreaks, " | ") else text
+
 private fun JsonObject.ircString(key: String): String {
     val value = get(key); require(value != null && value.isJsonPrimitive && value.asJsonPrimitive.isString)
     return value.asString
