@@ -349,7 +349,7 @@ object DungeonFriendRelay {
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
                                                 "proof" to base64.encodeToString(proof),
                                                 "profile" to textures.value(), "profileSignature" to textures.signature()) +
-                                                if (relayTokenAllowed(relayUri(DungeonFriendsSettings.relayUrl),
+                                                if (relayTokenAllowed(uri,
                                                         runCatching { URI(CommunityClient.configuration.getProperty("backend")) }.getOrNull())) CommunityClient.relayAuthorization() else emptyMap()
                                         }.whenComplete { proof, error -> MC.instance.execute {
                                             if (token == generation) {
