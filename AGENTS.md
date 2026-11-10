@@ -16,13 +16,25 @@ This file is the repository's development reference. Prefer code and build confi
 | `src/main/kotlin/me/mycellium/skymyce/SkyMyce.kt` | Fabric client entry point, module initialization and the `SkyMyceModule`/`ModuleManager` lifecycle |
 | `.../api/` | SkyBlock API integration and shared events |
 | `.../config/` | Resourceful Config categories, persistence and settings UI |
-| `.../features/general/` | General client features, auction browser and widgets |
-| `.../features/instances/dungeons/` | Dungeon features, friends and tracker |
+| `.../features/general/` | General client features, auction browser, overlays and price history |
+| `.../features/instances/dungeons/` | Dungeon features: tracker, splits, routing, Goldor, leap menu, camera |
+| `.../features/instances/dungeons/friends/` | Dungeon friends, plus the relay client and IRC/Global/Party chat (`DungeonFriendRelay.kt`, `IrcChat*.kt`, `IrcMedia.kt`, `IrcEmoji.kt`) |
+| `.../features/garden/greenhouse/` | Greenhouse Planner: model and layout solver, planner module, screen |
+| `.../features/mining/` | Mining helpers |
+| `.../features/social/` | Cosmetics: custom names, capes and the studio screen |
+| `.../features/browser/` | In-game browser |
+| `.../features/dev/` | Developer tooltips and the runtime profiler |
+| `.../features/troll/` | Easter-egg modules |
 | `.../features/digest/` | Daily Digest and RNG tracking |
 | `.../community/` | Optional Discord connection, sharing, leaderboards and signed Fabric updates |
-| `.../hud/` | HUD widgets and theme/editor UI |
+| `.../ui/` | The `/sm` menu: catalog, search, navigation, canvas, Skija renderer, motion, shortcuts |
+| `.../commands/` | The `/sm` command tree and help |
+| `.../hud/` | HUD renderer and theme |
+| `.../hud/widget/` | HUD widgets and the widget editor |
 | `.../utils/` | Shared Minecraft, item, text and persistence helpers |
+| `src/main/java/me/mycellium/skymyce/` | Java-only pieces: update installer and restart helper, secondary camera rendering, Skija GL state |
 | `src/main/java/me/mycellium/mixin/` | Narrow Minecraft UI/input integrations |
+| `shared/` | ESM helpers shared by the relay and scripts (RNG presentation and delivery) |
 | `src/test/kotlin/` | Lightweight executable checks; this project does not use a test framework |
 | `relay/src/` | Worker routes and feature handlers |
 | `relay/test/` | Relay tests |

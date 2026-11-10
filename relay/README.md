@@ -15,11 +15,15 @@ through the signed `/discord/bridge?room=global-chat` endpoint; only the
 configured global channel belongs to this bridge. Discord bot projects and
 operator documentation are maintained locally outside Git tracking.
 
-Current Hypixel party membership cannot be verified by this backend. Readiness
-therefore advertises `partyChat: false` and
-`partyChatError: "party_membership_unverified"`. Party chat requests receive an
-explicit party-scoped rejection, never legacy room or global delivery. Existing
-Party Finder `party_set`/`party_get` policies do not establish membership.
+Party chat uses roster consent. A rich client (`richChatVersion: 1`) subscribes
+with `scope: "party"`, the member UUID list and the leader; the party id is a
+digest of that roster, and the sender must be in it. Only clients that
+registered the identical roster share a party room. Readiness advertises
+`partyChat: true` and `partyChatVersion: 1` to connected accounts. The backend
+does not verify Hypixel party membership itself. Legacy `irc_send` packets with
+`scope: "party"` are refused with `party_membership_unverified`, never
+delivered to a room or to global chat. Party Finder `party_set`/`party_get`
+policies do not establish membership.
 
 From this directory, run the locked dependencies and existing checks:
 
