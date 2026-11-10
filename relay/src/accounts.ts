@@ -230,9 +230,14 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   communityCosmeticActiveAsset(assetId: string, player: string) { return this.cosmeticAssets.active(assetId, player); }
   communityCosmeticPreviewAsset(token: string, assetId: string, player: string) { return this.cosmeticAssets.preview(token, assetId, player); }
   async communityCosmeticDelete(token: string, assetId: string, raw: Record<string, unknown>) { const result = await this.cosmeticAssets.remove(token, assetId, raw); await this.armCosmeticCleanup(); return result; }
+  /** Sets the alarm when none is pending, a later one is, or a stale one stopped firing (see RelayRoom.fetch). */
+  private async arm(due: number): Promise<void> {
+    const now = Date.now(), at = Math.max(now + 1000, due), current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at || current < now - 300_000) await this.ctx.storage.setAlarm(at);
+  }
   private async armCosmeticCleanup(): Promise<void> {
-    const due = this.cosmeticAssets.nextCleanup(), existing = await this.ctx.storage.getAlarm();
-    if (due !== null && (existing === null || due < existing)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+    const due = this.cosmeticAssets.nextCleanup();
+    if (due !== null) await this.arm(due);
   }
   async cleanupCosmeticAssets(): Promise<void> {
     const keys = this.cosmeticAssets.cleanupKeys();
@@ -272,9 +277,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   }
   greenhouseView(discordId: string) { return snowflake.test(discordId) ? this.greenhouse.view(discordId) : null; }
   private async armGreenhouse(due = this.greenhouse.nextDue()): Promise<void> {
-    if (due === null) return;
-    const current = await this.ctx.storage.getAlarm(), next = Math.max(Date.now() + 1000, due);
-    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+    if (due !== null) await this.arm(due);
   }
   reportCommunityTrafficViolation(input: CommunitySessionCheck) { return this.community.reportTrafficViolation(input); }
   markCommunitySessionOffline(sessionId: string, connectionId: string) { this.community.markOffline(sessionId, connectionId); }
@@ -334,7 +337,8 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     return this.ctx.storage.transactionSync(() => {
       const current = this.community.checkSession({ sessionId: session.sessionId!, accountId: session.accountId!, uuid: session.uuid!, generation: session.generation! });
       if (!current.ok) return { ok: false, error: current.error };
-      this.limit(`leaderboards:${session.accountId}`, 60);
+      try { this.limit(`leaderboards:${session.accountId}`, 60); }
+      catch (error) { if (error instanceof AuthorizationError) return { ok: false, error: error.code }; throw error; }
       if (query.category === "rng" && (query.metric === undefined || query.metric === "rng_drops")) this.leaderboards.restoreAcceptedRng(session.uuid!, session.sessionId!);
       return this.leaderboards.query(query);
     });
@@ -387,15 +391,17 @@ export class AccountStore extends DurableObject<AccountsConfig> {
     const result = this.prompts.runner(input, nonce); await this.prompts.arm(); return result;
   }
   async alarm(): Promise<void> {
-    await this.prompts.alarm();
-    await Promise.all(this.claimAccountAlerts(4).map(async alert => {
-      this.completeAccountAlert(alert.id, alert.claimToken, await deliverAccountAlert(this.env, alert));
-    }));
-    const due = this.nextAccountAlertAt(), current = await this.ctx.storage.getAlarm();
-    if (due !== null && (current === null || due < current)) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, due));
+    try { await this.prompts.alarm(); } catch (error) { console.warn({ event: "prompt_alarm_failed", error: String(error).slice(0, 200) }); }
+    try {
+      await Promise.all(this.claimAccountAlerts(4).map(async alert => {
+        this.completeAccountAlert(alert.id, alert.claimToken, await deliverAccountAlert(this.env, alert));
+      }));
+    } catch (error) { console.warn({ event: "account_alert_delivery_failed", error: String(error).slice(0, 200) }); }
+    const due = this.nextAccountAlertAt(); if (due !== null) await this.arm(due);
     try { await this.greenhouse.deliver(); } catch (error) { console.warn({ event: "greenhouse_delivery_failed", error: String(error).slice(0, 200) }); }
     await this.armGreenhouse();
-    await this.cleanupCosmeticAssets();
+    try { await this.cleanupCosmeticAssets(); } catch (error) { console.warn({ event: "cosmetic_cleanup_failed", error: String(error).slice(0, 200) }); }
+    await this.prompts.arm();
   }
   private byDiscord(discordId: string): AccountRow | undefined {
     return this.ctx.storage.sql.exec<AccountRow>("SELECT * FROM sky_accounts WHERE discord_id=?", discordId).toArray()[0];
@@ -477,8 +483,7 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   }
   private async armAccountAlerts(): Promise<void> {
     const due = this.nextAccountAlertAt(); if (due === null) return;
-    const alarm = await this.ctx.storage.getAlarm(), next = Math.max(Date.now() + 1000, due);
-    if (alarm === null || alarm > next) await this.ctx.storage.setAlarm(next);
+    await this.arm(due);
   }
   private auditEvent(row: Record<string, SqlStorageValue>): AuditEvent {
     return { id: Number(row.id), at: Number(row.at), actor: String(row.actor), account_id: row.account_id === null ? null : String(row.account_id),

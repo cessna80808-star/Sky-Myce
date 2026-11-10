@@ -785,6 +785,6 @@ export class RoomIrc {
   private async armGlobal(): Promise<void> {
     const next = this.nextGlobalAlarm(); if (next === null) return;
     const current = await this.ctx.storage.getAlarm();
-    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+    if (current === null || current > next || current < Date.now() - 300_000) await this.ctx.storage.setAlarm(next);
   }
 }

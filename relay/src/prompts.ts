@@ -426,7 +426,7 @@ export class PromptJobs {
     const due = Math.min(delivery ?? Infinity, this.nextCleanup() ?? Infinity);
     if (!Number.isFinite(due)) return;
     const current = await this.storage.getAlarm(), at = Math.max(Date.now() + 1000, due);
-    if (current === null || current > at) await this.storage.setAlarm(at);
+    if (current === null || current > at || current < Date.now() - 300_000) await this.storage.setAlarm(at);
   }
   async alarm(): Promise<void> {
     this.cleanup();

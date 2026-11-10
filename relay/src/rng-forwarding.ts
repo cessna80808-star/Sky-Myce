@@ -44,7 +44,7 @@ export class RngForwardQueue {
   async arm(): Promise<void> {
     const next = this.nextAlarm(); if (next === null) return;
     const current = await this.storage.getAlarm();
-    if (current === null || current > next) await this.storage.setAlarm(Math.max(Date.now() + 1, next));
+    if (current === null || current > next || current < Date.now() - 300_000) await this.storage.setAlarm(Math.max(Date.now() + 1, next));
   }
   async drain(): Promise<void> {
     if (this.running) return;

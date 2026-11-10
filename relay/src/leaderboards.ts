@@ -288,7 +288,7 @@ export async function handleLeaderboardsRequest(request: Request, env: Config): 
   }
   if ([...url.searchParams.keys()].some(key => !["category", "metric", "period", "page", "limit", "search", "identity", "floor"].includes(key))) return Response.json({ ok: false, error: "invalid_leaderboard" }, { status: 400 });
   const result = await env.ACCOUNT_STORE.getByName("global").communityLeaderboard(token, Object.fromEntries(url.searchParams));
-  return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_leaderboard" ? 400 : 401, headers: { "Cache-Control": "no-store" } });
+  return Response.json(result, { status: result.ok ? 200 : result.error === "invalid_leaderboard" ? 400 : result.error === "rate_limited" ? 429 : 401, headers: { "Cache-Control": "no-store" } });
 }
 /** Same bridge credential, distinct domain separator, exact body, short timestamp and persisted nonce. No bot token in the Worker. */
 export async function handleCommunityFeed(request: Request, env: Config): Promise<Response | null> {
