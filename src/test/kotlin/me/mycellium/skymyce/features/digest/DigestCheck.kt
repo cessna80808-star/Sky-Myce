@@ -261,6 +261,17 @@ fun checkDigestLifecycleAndNews() {
         store.save(state)
         check(store.load() == state && !store.recovered)
         check(Files.list(directory).use { files -> files.anyMatch { it.fileName.toString().startsWith("state.json.corrupt-") } })
+        // One entry the catalog no longer accepts must not cost the rest of the saved state.
+        val stale = com.google.gson.Gson().toJsonTree(state).asJsonObject
+        stale.getAsJsonObject("profiles").getAsJsonObject(mainProfile).getAsJsonArray("history")
+            .add(com.google.gson.Gson().toJsonTree(entry.copy(id = "c".repeat(32), item = "DIRT")))
+        Files.writeString(file, stale.toString())
+        val partial = DigestStateStore(file)
+        check(partial.load() == state && partial.recovered) { "A single invalid RNG entry discarded the saved digest" }
+        val before = Files.list(directory).use { it.count() }
+        partial.save(partial.load())
+        check(Files.list(directory).use { it.count() } > before) { "The original file was not preserved before rewriting" }
+        check(DigestStateStore(file).let { it.load() == state && !it.recovered })
         val queued = mutableListOf<() -> Unit>()
         val writerStore = DigestStateStore(directory.resolve("queued.json"))
         val writer = DigestStateWriter(writerStore, queued::add)

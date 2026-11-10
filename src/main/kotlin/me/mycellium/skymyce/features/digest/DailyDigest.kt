@@ -552,7 +552,12 @@ class DigestStateStore(private val file: Path) {
                     if (!item.asJsonObject.has("links")) item.asJsonObject.add("links", JsonArray())
                 }
             }
-            gson.fromJson(json, DigestSavedState::class.java).also(::validate)
+            val parsed = gson.fromJson(json, DigestSavedState::class.java)
+            val repaired = repair(parsed)
+            validate(repaired)
+            // Keep the original file (save() copies it aside) when anything had to be dropped.
+            if (repaired != parsed) recovered = true
+            repaired
         }
     } catch (_: Exception) {
         recovered = true
@@ -575,33 +580,47 @@ class DigestStateStore(private val file: Path) {
         } finally { Files.deleteIfExists(temporary) }
     }
 
+    private fun requireTask(task: DailyTask) {
+        require(requireNotNull(task.id).length in 1..32 && requireNotNull(task.title).length <= 100)
+        require(task.state in DailyState.entries && requireNotNull(task.detail).length <= 1000 && requireNotNull(task.source).length <= 200)
+        require(task.updatedAt >= 0 && task.readyAt >= 0 && task.progress >= 0 && task.total in 0..100)
+        require(requireNotNull(task.slots).size <= 7)
+        task.slots.forEach { require(it.index in 0..7 && requireNotNull(it.item).length <= 160 && it.state in DailyState.entries && it.readyAt >= 0) }
+    }
+
+    private fun requireNewsItem(source: String, item: DigestNewsItem) {
+        require(item.source.wire == source && requireNotNull(item.id).length in 1..80 && requireNotNull(item.title).length in 1..160)
+        require(requireNotNull(item.content).length <= 2500 && item.publishedAt > 0 && (item.url == null || safeDigestNewsUrl(item.url, item.source) != null))
+        require(item.thumbnailUrl == null || item.source == NewsSource.DERAILIOUS && safeDigestVideoUrl(item.thumbnailUrl, true) != null)
+        require(requireNotNull(item.links).size <= 8 && item.links.distinct().size == item.links.size)
+        require(item.links.sumOf { it.length } <= 1024)
+        require(item.links.all { BrowserLinks.trusted(it) != null })
+    }
+
+    /** Drops entries that no longer validate (a renamed catalog item, a link host no longer trusted) and keeps the rest. */
+    private fun repair(state: DigestSavedState): DigestSavedState {
+        fun <T> List<T>.valid(rule: (T) -> Unit) = filter { entry -> runCatching { rule(entry) }.isSuccess }
+        return state.copy(
+            profiles = state.profiles.mapValues { (_, profile) -> profile.copy(
+                tasks = profile.tasks.valid(::requireTask),
+                history = profile.history.valid { require(validDigestRng(it, Long.MAX_VALUE / 2)) }) },
+            news = state.news.mapValues { (source, news) -> news.copy(items = news.items.valid { requireNewsItem(source, it) }) })
+    }
+
     private fun validate(state: DigestSavedState) {
         require(state.version == 1 && requireNotNull(state.lastOpened).size <= 64 && requireNotNull(state.profiles).size <= 64)
         state.lastOpened.forEach { (account, date) -> require(account.matches(digestAccount)); LocalDate.parse(date) }
         state.profiles.forEach { (key, profile) ->
             require(key.length in 1..128 && key.none(Char::isISOControl))
             require(requireNotNull(profile.tasks).size <= 6 && requireNotNull(profile.history).size <= 530)
-            profile.tasks.forEach { task ->
-                require(requireNotNull(task.id).length in 1..32 && requireNotNull(task.title).length <= 100)
-                require(task.state in DailyState.entries && requireNotNull(task.detail).length <= 1000 && requireNotNull(task.source).length <= 200)
-                require(task.updatedAt >= 0 && task.readyAt >= 0 && task.progress >= 0 && task.total in 0..100)
-                require(requireNotNull(task.slots).size <= 7)
-                task.slots.forEach { require(it.index in 0..7 && requireNotNull(it.item).length <= 160 && it.state in DailyState.entries && it.readyAt >= 0) }
-            }
+            profile.tasks.forEach(::requireTask)
             profile.history.forEach { require(validDigestRng(it, Long.MAX_VALUE / 2)) }
         }
         require(requireNotNull(state.news).size <= NewsSource.entries.size)
         state.news.forEach { (source, news) ->
             require(source in NewsSource.entries.map { it.wire } && news.fetchedAt >= 0 && news.retryAt >= 0)
             require(requireNotNull(news.items).size <= 8)
-            news.items.forEach { item ->
-                require(item.source.wire == source && requireNotNull(item.id).length in 1..80 && requireNotNull(item.title).length in 1..160)
-                require(requireNotNull(item.content).length <= 2500 && item.publishedAt > 0 && (item.url == null || safeDigestNewsUrl(item.url, item.source) != null))
-                require(item.thumbnailUrl == null || item.source == NewsSource.DERAILIOUS && safeDigestVideoUrl(item.thumbnailUrl, true) != null)
-                require(requireNotNull(item.links).size <= 8 && item.links.distinct().size == item.links.size)
-                require(item.links.sumOf { it.length } <= 1024)
-                require(item.links.all { BrowserLinks.trusted(it) != null })
-            }
+            news.items.forEach { requireNewsItem(source, it) }
         }
         state.global?.let { global ->
             require(global.mayor == null || global.mayor.length <= 100)
