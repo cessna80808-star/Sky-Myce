@@ -324,8 +324,8 @@ export async function handleAccountAutocomplete(data: Record<string, unknown>, e
     const query = focused[0].value.toLowerCase();
     let choices: { name: string; value: string }[] = [];
     if (kind === "user" && command.name === "account" && sub.name === "unlink" && focused[0].name === "uuid") {
-      const result = await store.communityUserCommand(actor, "status", {}) as CommunityResult;
-      choices = result.identity?.uuids.filter(mc => mc.name.toLowerCase().includes(query) || mc.uuid.includes(query.replaceAll("-", "")))
+      const account = await store.getAccountByDiscordId(actor.id);
+      choices = account?.uuids.filter(mc => mc.name.toLowerCase().includes(query) || mc.uuid.includes(query.replaceAll("-", "")))
         .map(mc => ({ name: mc.name.slice(0, 100), value: mc.uuid })) ?? [];
     } else if (kind === "backend" && command.name === "skyhawk" && sub.name === "search" && focused[0].name === "query") {
       if (!query.trim()) return empty();

@@ -222,10 +222,11 @@ test('device history is paginated, bounded to Discord limits and absent from ord
   assert.ok(characters <= 6000); assert.ok(report.reply.embeds[0].fields.every(field => field.value.length <= 1024));
   assert.ok(report.reply.components[0].components.some(button => button.custom_id === `sky:page:devices:${target}:2`));
   const reads = [], env = { ...config, ACCOUNT_STORE: { getByName: () => ({ communityUserCommand: async (caller, action) => {
-    reads.push({ caller: caller.id, action }); return { ok: true, identity: { ...identity, discordId: actor.id } }; } }) } };
+    reads.push({ caller: caller.id, action }); return { ok: true, identity: { ...identity, discordId: actor.id } }; },
+    getAccountByDiscordId: async id => { reads.push({ caller: id, action: 'account' }); return { discordId: id, uuids: identity.uuids }; } }) } };
   const data = { ...command('account', 'unlink', [{ name: 'uuid', type: 3, value: 'Example', focused: true }]), type: 4 };
   assert.deepEqual(await (await handleAccountAutocomplete(data, env, 'user')).json(), { type: 8, data: { choices: [{ name: 'ExamplePlayer', value: mcUuid }] } });
-  assert.deepEqual(reads, [{ caller: actor.id, action: 'status' }]);
+  assert.deepEqual(reads, [{ caller: actor.id, action: 'account' }]);
 });
 
 test('admin autocomplete reveals no registered account to nonadmins or the User Bot', async () => {
