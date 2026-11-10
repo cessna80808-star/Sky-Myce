@@ -25,7 +25,17 @@ fun checkDungeonChestProfit() {
     check(!DungeonChestProfitCalculator.blocks(0.0, 0.0))
     check(!DungeonChestProfitCalculator.blocks(-100.0, 100.0))
     check(DungeonChestProfitCalculator.blocks(-100.01, 100.0))
-    println("Dungeon chest profit checks passed: estimation, missing data, break-even and configurable loss thresholds")
+    val allow = DungeonChestProfitCalculator.RerollVerdict.ALLOW
+    val valuable = DungeonChestProfitCalculator.RerollVerdict.VALUABLE
+    val unknownPrice = DungeonChestProfitCalculator.RerollVerdict.UNKNOWN_PRICE
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("A" to 2, "B" to 1), 5_000_000.0, prices::get) == allow)
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("A" to 2, "B" to 10), 5_000_000.0, prices::get) == valuable)   // 10 × 500k
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("B" to 1), 500_000.0, prices::get) == valuable)                // exactly at the threshold
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("A" to 1, "unknown" to 1), 5_000_000.0, prices::get) == unknownPrice)
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("B" to 10, "unknown" to 1), 5_000_000.0, prices::get) == valuable) // a known valuable item wins
+    check(DungeonChestProfitCalculator.rerollVerdict(mapOf("A" to 1), 5_000_000.0) { 0.0 } == unknownPrice)               // zero is not a price
+    check(DungeonChestProfitCalculator.rerollVerdict(emptyMap<String, Int>(), 5_000_000.0, prices::get) == unknownPrice)
+    println("Dungeon chest profit checks passed: estimation, missing data, break-even, configurable loss thresholds and reroll verdicts")
 }
 
 fun main() = checkDungeonChestProfit()

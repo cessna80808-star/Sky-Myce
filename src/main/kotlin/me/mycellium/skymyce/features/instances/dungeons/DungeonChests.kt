@@ -15,6 +15,7 @@ import me.mycellium.skymyce.utils.ItemUtils.getPrice
 import me.mycellium.skymyce.utils.ItemUtils.getPriceOrNull
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
+import me.mycellium.skymyce.utils.Utils.displayModMessage
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.player.Inventory
@@ -61,14 +62,15 @@ object DungeonChestOverlay : SkyMyceModule() {
     fun onChestReroll(event: DungeonChestRerollEvent) {
         if (!DungeonsConfig.safeReroll) return
         if (MC.instance.hasControlDown()) return
-        if (items != null) {
-            for ((_, overlay) in items) {
-                if (overlay.totalValue >= rerollThreshold) {
-                    clickedTimestamp = System.currentTimeMillis()
-                    event.cancel()
-                }
-            }
+        val verdict = DungeonChestProfitCalculator.rerollVerdict(event.contents, rerollThreshold.toDouble()) { id ->
+            id.getPriceOrNull(DungeonTrackerConfig.bazaarPriceType, DungeonTrackerConfig.auctionPriceType)
         }
+        if (verdict == DungeonChestProfitCalculator.RerollVerdict.ALLOW) return
+        clickedTimestamp = System.currentTimeMillis()
+        event.cancel()
+        displayModMessage(if (verdict == DungeonChestProfitCalculator.RerollVerdict.VALUABLE)
+            "§cReroll blocked: this chest holds a reward worth at least ${DungeonsConfig.safeRerollThreshold}M. §7Hold CTRL to reroll anyway."
+        else "§cReroll blocked: a reward has no known price yet. §7Hold CTRL to reroll anyway.")
     }
 
     @Subscription
@@ -110,6 +112,20 @@ object DungeonChestProfitCalculator {
     sealed interface Result {
         data class Available(val estimate: Estimate) : Result
         data class Unavailable(val reason: String) : Result
+    }
+
+    enum class RerollVerdict { ALLOW, VALUABLE, UNKNOWN_PRICE }
+
+    /** A reroll destroys the current rewards, so a reward that cannot be valued blocks it just like a valuable one. */
+    fun <T : Any> rerollVerdict(contents: Map<T, Int>, threshold: Double, priceOf: (T) -> Double?): RerollVerdict {
+        if (contents.isEmpty() || !threshold.isFinite()) return RerollVerdict.UNKNOWN_PRICE
+        var unknown = false
+        for ((reward, count) in contents) {
+            val unitPrice = priceOf(reward)?.takeIf { it.isFinite() && it > 0.0 }
+            if (unitPrice == null) unknown = true
+            else if (unitPrice * count >= threshold) return RerollVerdict.VALUABLE
+        }
+        return if (unknown) RerollVerdict.UNKNOWN_PRICE else RerollVerdict.ALLOW
     }
 
     fun <T : Any> calculate(
