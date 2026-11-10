@@ -50,3 +50,5 @@ fun checkAuctions() {
     check(restored.search.query == "Saved" && restored.search.minPrice == null && restored.favorites.size == 1)
     println("Auction checks passed: requested pages, later-page discovery, coherent snapshots, bounded item data, stable filters and saved searches")
 }
+
+fun main() = checkAuctions()

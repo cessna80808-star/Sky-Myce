@@ -626,3 +626,5 @@ private fun checkLifetimeDungeonSummary() {
     val filteredChest = dungeonTrackerLifetimeSummary(archive, listOf(historical), "F7", chest = "WOOD")
     check(filteredChest.chests == 0 && filteredChest.gross == 0.0 && filteredChest.chestCost == 0.0 && filteredChest.profitIncomplete)
 }
+
+fun main() = checkTracker()

@@ -412,3 +412,9 @@ private fun checkLocalRngHistory() {
     check(digestLocalRngHistory(events, emptyList(), null, now).any { it.id == imported.id }) // Old local records need no game or community connection.
     check(events.size == 5 && recent.size == 4 && recent.last().community) // Rendering cannot clear archives or turn a received report into a personal one.
 }
+
+fun main() {
+    checkDigestActivities()
+    checkDigestRng()
+    checkDigestLifecycleAndNews()
+}

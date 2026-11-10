@@ -64,7 +64,7 @@ Use Java 25 for Gradle. A Java 21 Gradle invocation can fail before compiling pr
 
 `check` compiles the project and runs the repository's executable check tasks (including dungeon, HUD and community checks). For a focused pure-logic check, run its Gradle task when one exists, for example `./gradlew dungeonChestProfitCheck`.
 
-The lightweight checks are ordinary top-level Kotlin functions with a `main()` entry point, registered as `JavaExec` tasks in `build.gradle.kts`. Add coverage to the most relevant existing check or define a corresponding task and wire it into `check`.
+The lightweight checks are ordinary top-level Kotlin functions with a `main()` entry point, registered as `JavaExec` tasks in `build.gradle.kts`. Add coverage to the most relevant existing check, or register a new one with `registerCheck(name, mainClass, description)` in `build.gradle.kts`, which also wires it into `check`. Focused tasks exist for suites that `dungeonFriendsCheck` also runs: `digestCheck`, `trackerCheck`, `auctionCheck`, `cosmeticsCheck`.
 
 For relay changes, run from `relay/`:
 

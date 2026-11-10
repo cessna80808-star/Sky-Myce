@@ -328,3 +328,5 @@ private fun checkCapeValidation(): ByteArray {
     invalid.forEachIndexed { index, bytes -> check(runCatching { validateCapePng(bytes) }.isFailure) { "Unsafe cape PNG case $index was accepted" } }
     return valid
 }
+
+fun main() = checkCosmetics()

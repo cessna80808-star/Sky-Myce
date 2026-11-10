@@ -180,6 +180,20 @@ java {
 	targetCompatibility = JavaVersion.VERSION_25
 }
 
+/** Registers a JavaExec check on the test classpath and, unless [inCheck] is false, makes `check` depend on it. */
+fun registerCheck(name: String, main: String, about: String? = null, inCheck: Boolean = true, configure: JavaExec.() -> Unit = {}): TaskProvider<JavaExec> {
+    val task = tasks.register<JavaExec>(name) {
+        group = "verification"
+        about?.let { description = it }
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass = main
+        configure()
+    }
+    if (inCheck) tasks.check { dependsOn(task) }
+    return task
+}
+
 tasks.jar {
 	val projectName = project.name
 	inputs.property("projectName", projectName)
@@ -235,107 +249,51 @@ val communityPackagingCheck by tasks.registering {
         }
     }
 }
-val communityCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.community.CommunityCheckKt"
-}
-tasks.check { dependsOn(communityPackagingCheck, communityCheck) }
+registerCheck("communityCheck", "me.mycellium.skymyce.community.CommunityCheckKt")
+tasks.check { dependsOn(communityPackagingCheck) }
 
-val dungeonFriendsCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks dungeon friend scanning, profile parsing, filters, sorting and messages"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsCheckKt"
+registerCheck("dungeonFriendsCheck", "me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendsCheckKt",
+    "Checks dungeon friend scanning, profile parsing, filters, sorting and messages") {
     // The cosmetic checks start Minecraft logging, which writes logs/ into the working directory.
     workingDir = layout.buildDirectory.dir("dungeon-friends-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
 
-val dungeonChestProfitCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks dungeon chest reward estimates and loss thresholds"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonChestProfitCheckKt"
-}
+registerCheck("dungeonChestProfitCheck", "me.mycellium.skymyce.features.instances.dungeons.DungeonChestProfitCheckKt",
+    "Checks dungeon chest reward estimates and loss thresholds")
 
-val dungeonSplitsCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks dungeon split triggers, ordering, personal bests, theoretical best, averages, storage and 300 score"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsCheckKt"
-}
+registerCheck("dungeonSplitsCheck", "me.mycellium.skymyce.features.instances.dungeons.splits.DungeonSplitsCheckKt",
+    "Checks dungeon split triggers, ordering, personal bests, theoretical best, averages, storage and 300 score")
 
-val dungeonWinSummaryCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks the dungeon win screen summary, splits comparison and target level progress"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.DungeonWinSummaryCheckKt"
-}
+registerCheck("dungeonWinSummaryCheck", "me.mycellium.skymyce.features.instances.dungeons.DungeonWinSummaryCheckKt",
+    "Checks the dungeon win screen summary, splits comparison and target level progress")
 
-val goldorCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks Goldor coordination: role routes, the S2 decision table, pre-leap timing, chat protocol and run state"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCheckKt"
-}
+registerCheck("goldorCheck", "me.mycellium.skymyce.features.instances.dungeons.goldor.GoldorCheckKt",
+    "Checks Goldor coordination: role routes, the S2 decision table, pre-leap timing, chat protocol and run state")
 
-val priceHistoryCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks price history parsing, endpoints, downsampling and stats"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.general.pricehistory.PriceHistoryCheckKt"
-}
+registerCheck("priceHistoryCheck", "me.mycellium.skymyce.features.general.pricehistory.PriceHistoryCheckKt",
+    "Checks price history parsing, endpoints, downsampling and stats")
 
-val hudCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks dynamic owo HUD layout and saved widget configuration"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.hud.HudCheckKt"
+registerCheck("hudCheck", "me.mycellium.skymyce.hud.HudCheckKt",
+    "Checks dynamic owo HUD layout and saved widget configuration") {
     workingDir = layout.buildDirectory.dir("hud-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
 
-val menuMotionCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks GUI motion timing, interruption, accessibility and input transforms"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.MenuMotionCheckKt"
+registerCheck("menuMotionCheck", "me.mycellium.skymyce.ui.MenuMotionCheckKt",
+    "Checks GUI motion timing, interruption, accessibility and input transforms") {
     workingDir = layout.buildDirectory.dir("menu-motion-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
-val runtimeProfilerCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks opt-in developer profiling counters, JFR lifecycle and cleanup"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.dev.RuntimeProfilerCheckKt"
-}
-val menuNavigationCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks living card navigation geometry, input transforms and rendered previews"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.MenuNavigationCheckKt"
+registerCheck("runtimeProfilerCheck", "me.mycellium.skymyce.features.dev.RuntimeProfilerCheckKt",
+    "Checks opt-in developer profiling counters, JFR lifecycle and cleanup")
+registerCheck("menuNavigationCheck", "me.mycellium.skymyce.ui.MenuNavigationCheckKt",
+    "Checks living card navigation geometry, input transforms and rendered previews") {
     workingDir = layout.buildDirectory.dir("menu-navigation-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
-val menuCatalogCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks canonical feature ownership, config compatibility and search deep links"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.MenuCatalogCheckKt"
-}
+registerCheck("menuCatalogCheck", "me.mycellium.skymyce.ui.MenuCatalogCheckKt",
+    "Checks canonical feature ownership, config compatibility and search deep links")
 val featureList by tasks.registering(JavaExec::class) {
     group = "documentation"
     description = "Writes build/feature-list.md from the menu catalog for the Discord #features channel"
@@ -343,51 +301,28 @@ val featureList by tasks.registering(JavaExec::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "me.mycellium.skymyce.ui.FeatureListExportKt"
 }
-val menuShortcutsCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks bounded shortcut identities, ordering and atomic persistence"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.MenuShortcutsCheckKt"
-}
-val featureWorkCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks feature work invalidation, bounded identities and hot-path allocation"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.performance.FeatureWorkCheckKt"
-}
-val menuCanvasBenchmark by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Measures warmed 60-card canvas work without enforcing noisy timing thresholds"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.hud.MenuCanvasBenchmark"
+registerCheck("menuShortcutsCheck", "me.mycellium.skymyce.ui.MenuShortcutsCheckKt",
+    "Checks bounded shortcut identities, ordering and atomic persistence")
+registerCheck("featureWorkCheck", "me.mycellium.skymyce.features.performance.FeatureWorkCheckKt",
+    "Checks feature work invalidation, bounded identities and hot-path allocation")
+registerCheck("menuCanvasBenchmark", "me.mycellium.skymyce.hud.MenuCanvasBenchmark",
+    "Measures warmed 60-card canvas work without enforcing noisy timing thresholds", inCheck = false) {
     workingDir = layout.buildDirectory.dir("menu-canvas-benchmark").get().asFile
     systemProperty("java.awt.headless", "true")
     args("current", ".", "bulk")
     doFirst { workingDir.mkdirs() }
 }
-val skijaRendererCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks native menu primitives, transitions, typography and bounded resources"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.SkijaRendererCheckKt"
+registerCheck("skijaRendererCheck", "me.mycellium.skymyce.ui.SkijaRendererCheckKt",
+    "Checks native menu primitives, transitions, typography and bounded resources") {
     systemProperty("java.awt.headless", "true")
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
-val skijaGpuCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Explicit desktop GPU check of native composition and OpenGL state restoration"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.ui.SkijaGpuCheck"
+registerCheck("skijaGpuCheck", "me.mycellium.skymyce.ui.SkijaGpuCheck",
+    "Explicit desktop GPU check of native composition and OpenGL state restoration", inCheck = false) {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     workingDir = layout.buildDirectory.dir("skija-gpu-check").get().asFile
     doFirst { workingDir.mkdirs() }
 }
-tasks.check { dependsOn(skijaRendererCheck) }
 
 // Test-only Fabric entrypoint captures real screens in an isolated, offline client.
 val guiVisualCheckMod by tasks.registering(Jar::class) {
@@ -416,86 +351,46 @@ val dungeonRoutingCheck by tasks.registering {
     description = "Checks room recognition, wall-aware routes, collision safety and lifecycle stability"
 }
 for (checkName in listOf("RoomNavigation", "RoomTemplates", "RoomWorldGeometry", "RoomRoutingUpdates", "DungeonRouteContinuation")) {
-    val routingCheck = tasks.register<JavaExec>(checkName.replaceFirstChar { it.lowercase() } + "Check") {
-        group = "verification"
-        dependsOn(tasks.testClasses)
-        classpath = sourceSets.test.get().runtimeClasspath
-        mainClass = "me.mycellium.skymyce.features.instances.dungeons.routing.${checkName}CheckKt"
-    }
+    val routingCheck = registerCheck(checkName.replaceFirstChar { it.lowercase() } + "Check",
+        "me.mycellium.skymyce.features.instances.dungeons.routing.${checkName}CheckKt", inCheck = false)
     dungeonRoutingCheck { dependsOn(routingCheck) }
 }
-val globalChatCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks global chat payloads, mentions, replies, safe links and deduplication"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.GlobalChatCheckKt"
+tasks.check { dependsOn(dungeonRoutingCheck) }
+registerCheck("globalChatCheck", "me.mycellium.skymyce.features.instances.dungeons.friends.GlobalChatCheckKt",
+    "Checks global chat payloads, mentions, replies, safe links and deduplication")
+for (checkName in listOf("IrcChatModel", "IrcGif", "IrcMedia")) {
+    registerCheck(checkName.replaceFirstChar { it.lowercase() } + "Check",
+        "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt", "Checks bounded IRC message and media behavior")
 }
-val ircChecks = listOf("IrcChatModel", "IrcGif", "IrcMedia").map { checkName ->
-    tasks.register<JavaExec>(checkName.replaceFirstChar { it.lowercase() } + "Check") {
-        group = "verification"
-        description = "Checks bounded IRC message and media behavior"
-        dependsOn(tasks.testClasses)
-        classpath = sourceSets.test.get().runtimeClasspath
-        mainClass = "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt"
-    }
-}
-tasks.check { dependsOn(dungeonFriendsCheck, dungeonChestProfitCheck, dungeonSplitsCheck, dungeonWinSummaryCheck, priceHistoryCheck, goldorCheck, hudCheck, menuMotionCheck, menuNavigationCheck, menuCatalogCheck, menuShortcutsCheck, runtimeProfilerCheck, featureWorkCheck, dungeonRoutingCheck, globalChatCheck, ircChecks) }
 // Assertions run via the check tasks; this project does not use a test framework.
-val cameraRenderCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks independent secondary camera projection, target bounds and strict viewpoints"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck"
-}
-val healerCrushCameraCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks Crush Camera timing, class selection and encounter cleanup"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt"
-}
-val cameraViewpointCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks saved world-space camera views and HUD sizing/resize bounds"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.camera.CameraViewpointCheckKt"
-}
-tasks.check { dependsOn(cameraRenderCheck, healerCrushCameraCheck, cameraViewpointCheck) }
-val leapMenuCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks Spirit Leap identities, stable quadrants, camera transforms and bounded preview scheduling"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenuCheckKt"
-}
-tasks.check { dependsOn(leapMenuCheck) }
-val greenhouseCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks the Greenhouse catalog, skymutations.eu profit formula, layout solver parity and layout persistence"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.garden.GreenhouseCheckKt"
-}
-tasks.check { dependsOn(greenhouseCheck) }
-val miningCheck by tasks.registering(JavaExec::class) {
-    group = "verification"
-    description = "Checks the Mining Spread follow-up pick and Pickobulus commission spot ranking"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "me.mycellium.skymyce.features.mining.MiningCheckKt"
-}
-tasks.check { dependsOn(miningCheck) }
+registerCheck("cameraRenderCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck",
+    "Checks independent secondary camera projection, target bounds and strict viewpoints")
+registerCheck("healerCrushCameraCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt",
+    "Checks Crush Camera timing, class selection and encounter cleanup")
+registerCheck("cameraViewpointCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.CameraViewpointCheckKt",
+    "Checks saved world-space camera views and HUD sizing/resize bounds")
+registerCheck("leapMenuCheck", "me.mycellium.skymyce.features.instances.dungeons.leap.LeapMenuCheckKt",
+    "Checks Spirit Leap identities, stable quadrants, camera transforms and bounded preview scheduling")
+registerCheck("greenhouseCheck", "me.mycellium.skymyce.features.garden.GreenhouseCheckKt",
+    "Checks the Greenhouse catalog, skymutations.eu profit formula, layout solver parity and layout persistence")
+registerCheck("miningCheck", "me.mycellium.skymyce.features.mining.MiningCheckKt",
+    "Checks the Mining Spread follow-up pick and Pickobulus commission spot ranking")
 for (browserCheckName in listOf("BrowserLinks", "BrowserExtension")) {
-    val browserCheck = tasks.register<JavaExec>(browserCheckName.replaceFirstChar { it.lowercase() } + "Check") {
-        group = "verification"
-        dependsOn(tasks.testClasses)
-        classpath = sourceSets.test.get().runtimeClasspath
-        mainClass = "me.mycellium.skymyce.features.browser.${browserCheckName}CheckKt"
+    registerCheck(browserCheckName.replaceFirstChar { it.lowercase() } + "Check",
+        "me.mycellium.skymyce.features.browser.${browserCheckName}CheckKt")
+}
+
+// Focused entry points for suites that `dungeonFriendsCheck` also runs; not in `check`, so nothing runs twice.
+for ((name, main) in listOf(
+    "digestCheck" to "me.mycellium.skymyce.features.digest.DigestCheckKt",
+    "trackerCheck" to "me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerCheckKt",
+    "auctionCheck" to "me.mycellium.skymyce.features.general.auction.AuctionCheckKt",
+    "cosmeticsCheck" to "me.mycellium.skymyce.features.social.CosmeticsCheckKt")) {
+    registerCheck(name, main, inCheck = false) {
+        // Some of these start Minecraft logging, which writes logs/ into the working directory.
+        workingDir = layout.buildDirectory.dir(name).get().asFile
+        doFirst { workingDir.mkdirs() }
     }
-    tasks.check { dependsOn(browserCheck) }
 }
 tasks.test { failOnNoDiscoveredTests = false }
 
