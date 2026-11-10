@@ -121,6 +121,11 @@ fun relayUri(text: String): URI? = runCatching {
     }
 }.getOrNull()
 
+/** The community session token is a backend credential: it goes only to the compiled backend host, over TLS. */
+fun relayTokenAllowed(relay: URI?, backend: URI?): Boolean = relay != null && backend != null && relay.scheme == "wss" &&
+    !relay.host.isNullOrBlank() && relay.host.equals(backend.host, ignoreCase = true) &&
+    (relay.port.takeIf { it != -1 } ?: 443) == (backend.port.takeIf { it != -1 } ?: 443)
+
 /** Only a receipt from the addressed player's mod cancels the fallback. */
 class RelayDeliveries {
     private data class Pending(val name: String, var deadline: Long, val received: () -> Unit,
@@ -343,7 +348,9 @@ object DungeonFriendRelay {
                                                 "publicKey" to base64.encodeToString(certificate.key().encoded),
                                                 "keySignature" to base64.encodeToString(certificate.keySignature()),
                                                 "proof" to base64.encodeToString(proof),
-                                                "profile" to textures.value(), "profileSignature" to textures.signature()) + CommunityClient.relayAuthorization()
+                                                "profile" to textures.value(), "profileSignature" to textures.signature()) +
+                                                if (relayTokenAllowed(relayUri(DungeonFriendsSettings.relayUrl),
+                                                        runCatching { URI(CommunityClient.configuration.getProperty("backend")) }.getOrNull())) CommunityClient.relayAuthorization() else emptyMap()
                                         }.whenComplete { proof, error -> MC.instance.execute {
                                             if (token == generation) {
                                                 if (error != null) {

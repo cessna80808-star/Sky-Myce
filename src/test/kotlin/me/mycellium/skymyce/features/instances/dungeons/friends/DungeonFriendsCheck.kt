@@ -14,6 +14,7 @@ import net.minecraft.util.StringDecomposer
 import net.minecraft.ChatFormatting
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonClass.*
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.*
+import java.net.URI
 import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
 import kotlin.time.Duration
@@ -129,6 +130,14 @@ fun main() {
     check(relayUri("ws://127.0.0.1:8787/websocket?room=testing") != null)
     listOf("http://example.com/websocket", "ws://example.com/websocket", "wss://user:password@example.com/websocket",
         "wss://example.com/websocket#fragment", "wss://example.com/wrong", "wss://example.com/websocket?token=secret").forEach { check(relayUri(it) == null) }
+    val backend = URI("https://sky-myce-backend.skyblock-relay.workers.dev")
+    check(relayTokenAllowed(relayUri(currentRelayUrl(null)), backend))
+    check(relayTokenAllowed(relayUri("wss://SKY-MYCE-BACKEND.skyblock-relay.workers.dev/websocket?room=testing"), backend))
+    check(!relayTokenAllowed(relayUri("wss://example.workers.dev/websocket"), backend))
+    check(!relayTokenAllowed(relayUri("wss://sky-myce-backend.skyblock-relay.workers.dev.evil.example/websocket"), backend))
+    check(!relayTokenAllowed(relayUri("wss://sky-myce-backend.skyblock-relay.workers.dev:8443/websocket"), backend))
+    check(!relayTokenAllowed(relayUri("ws://127.0.0.1:8787/websocket"), URI("https://127.0.0.1:8787")))
+    check(!relayTokenAllowed(null, backend) && !relayTokenAllowed(relayUri(currentRelayUrl(null)), null))
     val deliveries = RelayDeliveries()
     var acknowledged = 0
     var fallback = 0
