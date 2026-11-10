@@ -542,23 +542,29 @@ export async function handleCommunityRequest(request: Request, env: CommunityCon
     return json(result);
   }
   if (!url.pathname.startsWith("/community/oauth/")) return null;
-  if (request.method !== "GET") return html("<p>This connection could not be completed. Start again in Minecraft.</p>", 400);
+  const authorize = url.pathname === "/community/oauth/authorize";
+  if (request.method !== (authorize ? "POST" : "GET")) return html("<p>This connection could not be completed. Start again in Minecraft.</p>", 400);
   if (!env.DISCORD_OAUTH_CLIENT_ID || !env.DISCORD_OAUTH_CLIENT_SECRET || !env.DISCORD_OAUTH_REDIRECT_URI) return html("<p>Browser connection is unavailable. Use the one-time code with the Sky-Myce Discord bot.</p>", 503);
+  const oauthCookie = request.headers.get("Cookie")?.split(";").map(value => value.trim()).find(value => value.startsWith("__Host-SkyMyceOAuth="))?.slice("__Host-SkyMyceOAuth=".length) ?? "";
   if (url.pathname === "/community/oauth/start") {
     const flow = url.searchParams.get("flow") ?? "", result = await store.communityOAuthPreview(flow);
-    return result.ok ? html(`<h1>Connect Discord</h1><p>Connect your Discord identity to Minecraft account <strong>${htmlEscape(String(result.minecraftName))}</strong>. Only continue if you started this request in Sky-Myce.</p><a href="/community/oauth/authorize?flow=${htmlEscape(encodeURIComponent(flow))}">Continue with Discord</a>`) : html("<p>This connection expired. Start again in Minecraft.</p>", 400);
+    if (!result.ok) return html("<p>This connection expired. Start again in Minecraft.</p>", 400);
+    const cookie = randomToken();
+    return html(`<h1>Connect Discord</h1><p>Connect your Discord identity to Minecraft account <strong>${htmlEscape(String(result.minecraftName))}</strong>. Only continue if you started this request in Sky-Myce.</p><form method="post" action="/community/oauth/authorize?flow=${htmlEscape(encodeURIComponent(flow))}"><button type="submit">Continue with Discord</button></form>`, 200,
+      { "Set-Cookie": `__Host-SkyMyceOAuth=${cookie}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`,
+        "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://discord.com" });
   }
-  if (url.pathname === "/community/oauth/authorize") {
-    const cookie = randomToken(), result = await store.communityOAuthBegin(url.searchParams.get("flow") ?? "", cookie);
+  if (authorize) {
+    const site = request.headers.get("Sec-Fetch-Site");
+    if (site !== null && site !== "same-origin") return html("<p>This connection expired. Start again in Minecraft.</p>", 400);
+    const result = await store.communityOAuthBegin(url.searchParams.get("flow") ?? "", oauthCookie);
     if (!result.ok) return html("<p>This connection expired. Start again in Minecraft.</p>", 400);
     const authorization = new URL("https://discord.com/oauth2/authorize");
     for (const [key, value] of Object.entries({ client_id: env.DISCORD_OAUTH_CLIENT_ID, response_type: "code", redirect_uri: env.DISCORD_OAUTH_REDIRECT_URI, scope: "identify", state: String(result.state), prompt: "consent" })) authorization.searchParams.set(key, value);
-    return new Response(null, { status: 302, headers: { Location: authorization.toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-      "Set-Cookie": `__Host-SkyMyceOAuth=${cookie}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600` } });
+    return new Response(null, { status: 303, headers: { Location: authorization.toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
   }
   if (url.pathname !== "/community/oauth/callback" || new URL(env.DISCORD_OAUTH_REDIRECT_URI).origin !== url.origin || new URL(env.DISCORD_OAUTH_REDIRECT_URI).pathname !== url.pathname) return html("<p>Invalid connection response.</p>", 400);
-  const cookie = request.headers.get("Cookie")?.split(";").map(value => value.trim()).find(value => value.startsWith("__Host-SkyMyceOAuth="))?.slice("__Host-SkyMyceOAuth=".length) ?? "";
-  const claim = await store.communityOAuthClaim(url.searchParams.get("state") ?? "", cookie), code = url.searchParams.get("code");
+  const claim = await store.communityOAuthClaim(url.searchParams.get("state") ?? "", oauthCookie), code = url.searchParams.get("code");
   if (!claim.ok || !code || code.length > 1024 || url.searchParams.has("error")) return html("<p>Connection cancelled or expired. Start again in Minecraft.</p>", 400);
   try {
     const response = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded" },

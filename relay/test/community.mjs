@@ -212,9 +212,16 @@ export async function checkCommunity(script, proof) {
     assert.equal((await managed('blacklist_remove', first, { kind: 'discord', identity: first })).ok, true);
     const oauth = await start('Alice', physical);
     const browser = await mf.dispatchFetch(oauth.browserUrl); assert.equal(browser.status, 200); assert.match(await browser.text(), /Alice/);
+    assert.match(browser.headers.get('Content-Security-Policy'), /form-action 'self' https:\/\/discord\.com/);
+    const cookie = browser.headers.get('Set-Cookie').split(';')[0];
     const launch = new URL(oauth.browserUrl).searchParams.get('flow');
-    const redirect = await mf.dispatchFetch(`https://community.test/community/oauth/authorize?flow=${launch}`, { redirect: 'manual' }); assert.equal(redirect.status, 302);
-    const state = new URL(redirect.headers.get('Location')).searchParams.get('state'), cookie = redirect.headers.get('Set-Cookie').split(';')[0];
+    const authorizeUrl = `https://community.test/community/oauth/authorize?flow=${launch}`;
+    assert.equal((await mf.dispatchFetch(authorizeUrl, { redirect: 'manual' })).status, 400, 'A link to authorize does nothing');
+    assert.equal((await mf.dispatchFetch(authorizeUrl, { method: 'POST', redirect: 'manual' })).status, 400, 'Authorize needs the confirmation page cookie');
+    assert.equal((await mf.dispatchFetch(authorizeUrl, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site' } })).status, 400, 'Cross-site submissions are refused');
+    const redirect = await mf.dispatchFetch(authorizeUrl, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' } }); assert.equal(redirect.status, 303);
+    assert.equal(redirect.headers.get('Set-Cookie'), null);
+    const state = new URL(redirect.headers.get('Location')).searchParams.get('state');
     const callbackUrl = `https://community.test/community/oauth/callback?code=synthetic-code&state=${state}`;
     assert.equal((await mf.dispatchFetch(callbackUrl)).status, 400); assert.equal(oauthCalls, 0, 'Unbound OAuth state never reaches token exchange');
     const callback = await mf.dispatchFetch(callbackUrl, { headers: { Cookie: cookie } }); assert.equal(callback.status, 200); assert.equal(oauthCalls, 2);
