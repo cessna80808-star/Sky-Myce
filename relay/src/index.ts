@@ -788,22 +788,32 @@ export class RelayRoom extends DurableObject<RelayEnv> {
     return ws.readyState === WebSocket.OPEN;
   }
 
+  /** Closes one socket as "authority unavailable" without letting a failing close affect other sockets. */
+  private authorityUnavailable(ws: WebSocket): void {
+    try { if (ws.readyState === WebSocket.OPEN) ws.close(1013, "Authorization service unavailable"); } catch { /* The socket closed while it was being closed. */ }
+  }
+
   /** Same decisions as authorized() for each socket, using one account-store call. */
   private async authorizedMany(pairs: [WebSocket, IrcSession][]): Promise<Set<WebSocket>> {
     const allowed = new Set<WebSocket>(), pending: { ws: WebSocket; session: IrcSession; input: NonNullable<ReturnType<RelayRoom["sessionInput"]>> }[] = [];
     for (const [ws, session] of pairs) {
       if (session.bridge || legacyRelay(this.env)) { allowed.add(ws); continue; }
       if (ws.readyState !== WebSocket.OPEN) continue;
-      const input = this.sessionInput(ws, session); if (input) pending.push({ ws, session, input });
+      try { const input = this.sessionInput(ws, session); if (input) pending.push({ ws, session, input }); }
+      catch { this.authorityUnavailable(ws); }
     }
     if (!pending.length) return allowed;
-    try {
-      const states = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySessions(pending.map(entry => entry.input));
-      pending.forEach((entry, index) => { if (states[index] && this.applySessionState(entry.ws, entry.session, states[index])) allowed.add(entry.ws); });
-    } catch {
+    let states: Awaited<ReturnType<AccountStore["checkCommunitySessions"]>>;
+    try { states = await this.env.ACCOUNT_STORE.getByName("global").checkCommunitySessions(pending.map(entry => entry.input)); }
+    catch {
       // An unavailable authority cannot grant online access, but it is not a revocation.
-      for (const entry of pending) if (entry.ws.readyState === WebSocket.OPEN) entry.ws.close(1013, "Authorization service unavailable");
+      for (const entry of pending) this.authorityUnavailable(entry.ws);
+      return allowed;
     }
+    pending.forEach((entry, index) => {
+      try { if (states[index] && this.applySessionState(entry.ws, entry.session, states[index])) allowed.add(entry.ws); }
+      catch { allowed.delete(entry.ws); this.authorityUnavailable(entry.ws); }
+    });
     return allowed;
   }
 
