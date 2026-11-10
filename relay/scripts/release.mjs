@@ -15,6 +15,17 @@ function envelope(manifest, key, kid) {
   assert.ok(verify(null, bytes, createPublicKey(key), signature));
   return { payload: encode(bytes), signature: encode(signature), kid };
 }
+/** Returns the manifest when the envelope, key and bytes all agree; otherwise throws with a plain reason. */
+function verifyRelease(signed, kid, publicKeyBase64, artifact) {
+  if (!signed || signed.kid !== kid) fail("key id differs from the pinned key id");
+  const key = createPublicKey({ key: Buffer.from(publicKeyBase64, "base64"), format: "der", type: "spki" });
+  const bytes = Buffer.from(String(signed.payload), "base64url");
+  if (!verify(null, bytes, key, Buffer.from(String(signed.signature), "base64url"))) fail("signature does not verify");
+  const manifest = JSON.parse(bytes.toString("utf8"));
+  if (manifest.size !== artifact.length) fail("artifact size differs from the manifest");
+  if (manifest.sha256 !== createHash("sha256").update(artifact).digest("hex")) fail("artifact SHA-256 differs from the manifest");
+  return manifest;
+}
 function fabricMetadata(archive) {
   // Read the ZIP central directory, avoiding matches inside arbitrary entry data.
   let end = archive.length - 22;
@@ -58,13 +69,35 @@ try {
       issuedAt: now, expiresAt: now + 7 * 86400000, notes };
     await writeFile(output, JSON.stringify(envelope(manifest, key, kid)) + "\n", { flag: "wx" });
     console.log(`Signed normal Fabric manifest written. Upload ${manifest.artifact} first, then releases/community-current.json. No loader or license is required.`);
+  } else if (args[0] === "verify") {
+    // Public data only (public key, public routes), so failures may be printed in full.
+    const [, origin, artifactPath, kid, publicKey] = args;
+    try {
+      if (args.length !== 5 || new URL(origin).protocol !== "https:") fail("usage: node scripts/release.mjs verify <https-backend-origin> <jar-path> <key-id> <public-key-base64>");
+      const local = await readFile(artifactPath);
+      const signed = await (await fetch(new URL("/community/release", origin))).json();
+      const manifest = verifyRelease(signed, kid, publicKey, local);
+      if (fabricMetadata(local).version !== manifest.version) fail("local JAR version differs from the live manifest");
+      if (manifest.expiresAt <= Date.now()) fail("live manifest has expired");
+      const response = await fetch(new URL(`/community/artifact?version=${encodeURIComponent(manifest.version)}`, origin));
+      if (!response.ok) fail(`artifact download returned ${response.status}`);
+      verifyRelease(signed, kid, publicKey, Buffer.from(await response.arrayBuffer()));
+      console.log(`Live release verified: ${manifest.version}, ${manifest.size} bytes, expires ${new Date(manifest.expiresAt).toISOString()}`);
+    } catch (error) { console.error(`Release verification failed: ${error.message}`); process.exitCode = 1; }
   } else if (args[0] === "check") {
     const key = generateKeyPairSync("ed25519").privateKey, signed = envelope({ product: "sky-myce", sha256: "a".repeat(64) }, key, "test");
     const bytes = Buffer.from(signed.payload, "base64url"), signature = Buffer.from(signed.signature, "base64url");
     assert.ok(verify(null, bytes, createPublicKey(key), signature)); bytes[0] ^= 1;
     assert.equal(verify(null, bytes, createPublicKey(key), signature), false);
+    const pair = generateKeyPairSync("ed25519"), jar = Buffer.from("synthetic artifact");
+    const publicKey = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const live = envelope({ version: "1.2.3", size: jar.length, sha256: createHash("sha256").update(jar).digest("hex") }, pair.privateKey, "pinned");
+    assert.equal(verifyRelease(live, "pinned", publicKey, jar).version, "1.2.3");
+    assert.throws(() => verifyRelease(live, "other", publicKey, jar));
+    assert.throws(() => verifyRelease(live, "pinned", publicKey, Buffer.from("synthetic artifacT")));
+    assert.throws(() => verifyRelease({ ...live, payload: encode(Buffer.from(JSON.stringify({ version: "9.9.9", size: jar.length, sha256: "0".repeat(64) }))) }, "pinned", publicKey, jar));
     console.log("Sky-Myce release signing check passed.");
-  } else fail("Commands: keygen, sign-community, check.");
+  } else fail("Commands: keygen, sign-community, verify, check.");
 } catch (error) {
   // Crypto/fs exceptions can contain local private-key paths. Never print key material or raw runtime errors.
   console.error(error instanceof assert.AssertionError ? "Release signing self-check failed." : "Sky-Myce release command failed. Check arguments, versions, file permissions, and existing output files.");

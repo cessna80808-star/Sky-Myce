@@ -28,6 +28,6 @@ Deploy the backend only with `npx wrangler deploy --env backend --keep-vars --st
 3. Upload `releases/Sky-Myce-<version>.jar` to the production `sky-myce-private-artifacts` bucket.
 4. Deploy `sky-myce-backend` if backend code changed.
 5. Only then upload the signed manifest to `releases/community-current.json` to activate it.
-6. Read back the current manifest and artifact. Verify the Ed25519 signature, version, size and SHA-256 against the JAR before calling the release complete.
+6. Read back the current manifest and artifact. Verify the Ed25519 signature, version, size and SHA-256 against the JAR before calling the release complete. `node scripts/release.mjs verify <backend origin> <jar> <key id> <public key>` does this read-back; the key id and public key are `skyMyceSigningKeyId` and `skyMyceSigningPublicKey` in the root `gradle.properties`.
 
 Use a new version each time. Keep older JARs. Do not publish signing keys, credentials, runtime data or user records. Do not print secrets or `.wrangler` auth files in logs.
