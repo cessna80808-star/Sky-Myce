@@ -29,6 +29,8 @@ export type AccountAlert = { id: string; auditId: number; recipientId: string; c
 type RuntimeRow = { installation_id: string; uuid: string; account_id: string; session_id: string; build_id: string; loader_version: string;
   generation: number; lease_issued_at: number; lease_expires_at: number; connected_at: number | null; last_heartbeat: number | null; connection_id: string | null };
 const snowflake = /^[0-9]{17,20}$/, uuid = /^[a-f0-9]{32}$/;
+/** Limits that may reset when the object restarts. Everything else (link codes, account and admin commands) stays in SQL. */
+const memoryLimits = /^(bazaar|bazaar-discord|leaderboards-discord|rng-carousel|community-read|studio-save|cape-delete):/;
 function failure(error: unknown): { ok: false; error: string } {
   if (error instanceof AuthorizationError) return { ok: false, error: error.code };
   // Name only: messages can echo stored or client values.
@@ -39,6 +41,7 @@ function failure(error: unknown): { ok: false; error: string } {
 /** Identity uniqueness is one coordination atom, shared across all relay rooms.
  * ponytail: one SQL coordinator serializes global uniqueness; move to a global SQL service if identity throughput outgrows it. */
 export class AccountStore extends DurableObject<AccountsConfig> {
+  private readonly windows = new Map<string, { started: number; count: number }>();
   private readonly prompts: PromptJobs;
   private readonly community: CommunityAccounts;
   private readonly sharing: CommunitySharingStore;
@@ -524,6 +527,13 @@ export class AccountStore extends DurableObject<AccountsConfig> {
   }
   private limit(id: string, maximum: number, interval = 60000): void {
     const now = Date.now();
+    if (memoryLimits.test(id)) {
+      if (this.windows.size > 10_000) for (const [key, value] of this.windows) if (value.started < now - 3600000) this.windows.delete(key);
+      const row = this.windows.get(id), started = row && row.started > now - interval ? row.started : now, count = started === row?.started ? row.count + 1 : 1;
+      this.windows.set(id, { started, count });
+      if (count > maximum) deny("rate_limited");
+      return;
+    }
     this.ctx.storage.sql.exec("DELETE FROM account_limits WHERE started<?", now - 3600000);
     const row = this.ctx.storage.sql.exec<{ started: number; count: number }>("SELECT * FROM account_limits WHERE id=?", id).toArray()[0];
     const started = row && row.started > now - interval ? row.started : now;

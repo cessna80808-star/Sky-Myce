@@ -58,6 +58,8 @@ function device(raw: unknown): Device | null {
 /** Discord identity is shared with the existing account store. Device observations never participate in authorization. */
 export class CommunityAccounts {
   private readonly traffic: CommunityTraffic;
+  /** Pending Minecraft-proof challenges. Memory only: a lost challenge is invalid and the client asks for a new one. */
+  private readonly challenges = new Map<string, { id: string; purpose: string; nonce: string; expiresAt: number; used: boolean }>();
   constructor(private sql: SqlStorage, private transaction: <T>(fn: () => T) => T, private env: CommunityConfig, private hooks: Hooks) {
     this.traffic = new CommunityTraffic(sql, (accountId, retryAt) => this.hooks.audit("system", accountId, "traffic_cooldown", { retryAt, reason: "Repeated incoming traffic limit violations", source: "backend" }));
     sql.exec(`CREATE TABLE IF NOT EXISTS community_challenges(id TEXT PRIMARY KEY,purpose TEXT NOT NULL,nonce TEXT NOT NULL,expires_at INTEGER NOT NULL,used_at INTEGER);
@@ -123,24 +125,25 @@ export class CommunityAccounts {
   challenge(raw: Record<string, unknown>): CommunityResult {
     try {
       if (!["connect", "refresh", "disconnect"].includes(String(raw.purpose)) || typeof raw.clientNonce !== "string" || !token.test(raw.clientNonce)) deny("invalid_request");
-      const challengeId = crypto.randomUUID(), nonce = randomToken(), expiresAt = Date.now() + 300000;
-      this.sql.exec("DELETE FROM community_challenges WHERE expires_at<=?", Date.now());
-      this.sql.exec("INSERT INTO community_challenges VALUES(?,?,?,?,NULL)", challengeId, String(raw.purpose), nonce, expiresAt);
+      const now = Date.now(), challengeId = crypto.randomUUID(), nonce = randomToken(), expiresAt = now + 300000;
+      if (this.challenges.size >= 2048) for (const [key, value] of this.challenges) if (value.expiresAt <= now) this.challenges.delete(key);
+      if (this.challenges.size >= 2048) deny("service_busy");
+      this.challenges.set(challengeId, { id: challengeId, purpose: String(raw.purpose), nonce, expiresAt, used: false });
       return { ok: true, challengeId, nonce, expiresAt };
     } catch (error) { return failure(error); }
   }
   private async proof(raw: Record<string, unknown>, purpose: string) {
-    const row = this.sql.exec<{ id: string; nonce: string; purpose: string; expires_at: number; used_at: number | null }>("SELECT * FROM community_challenges WHERE id=?", String(raw.challengeId)).toArray()[0];
-    if (!row || row.purpose !== purpose || row.used_at !== null || row.expires_at <= Date.now()) deny("invalid_challenge");
+    const row = this.challenges.get(String(raw.challengeId));
+    if (!row || row.purpose !== purpose || row.used || row.expiresAt <= Date.now()) deny("invalid_challenge");
     if (!raw.minecraftProof || typeof raw.minecraftProof !== "object" || Array.isArray(raw.minecraftProof)) deny("minecraft_proof_required");
     const profile = await verifyAccount(raw.minecraftProof as Record<string, unknown>, row.nonce);
     if ("error" in profile) deny(profile.retryable ? "minecraft_verification_unavailable" : "minecraft_proof_invalid");
     return { row, profile };
   }
   private consumeChallenge(challengeId: string): void {
-    const row = this.sql.exec<{ used_at: number | null; expires_at: number }>("SELECT used_at,expires_at FROM community_challenges WHERE id=?", challengeId).toArray()[0];
-    if (!row || row.used_at !== null || row.expires_at <= Date.now()) deny("invalid_challenge");
-    this.sql.exec("UPDATE community_challenges SET used_at=? WHERE id=?", Date.now(), challengeId);
+    const row = this.challenges.get(challengeId);
+    if (!row || row.used || row.expiresAt <= Date.now()) deny("invalid_challenge");
+    row.used = true;
   }
   async start(raw: Record<string, unknown>): Promise<CommunityResult> {
     try {
