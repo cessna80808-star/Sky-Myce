@@ -123,13 +123,13 @@ object PartyCommands : SkyMyceModule() {
                     }
                 }
 
-                PartyCommandTypes.COORDS -> sendMessage("x: ${MC.player.blockX}, y: ${MC.player.blockY}, z: ${MC.player.blockZ}")
+                PartyCommandTypes.COORDS -> sendMessage("x: ${MC.player.blockX}, y: ${MC.player.blockY}, z: ${MC.player.blockZ}", ChatChannel.PARTY)
 
-                PartyCommandTypes.FPS -> sendMessage("FPS: ${MC.fps}")
+                PartyCommandTypes.FPS -> sendMessage("FPS: ${MC.fps}", ChatChannel.PARTY)
 
-                PartyCommandTypes.TPS -> sendMessage("TPS: ${round(ServerUtils.tps * 100) / 100}")
+                PartyCommandTypes.TPS -> sendMessage("TPS: ${round(ServerUtils.tps * 100) / 100}", ChatChannel.PARTY)
 
-                PartyCommandTypes.PING -> sendMessage("Ping: ${ServerUtils.currentPing}ms")
+                PartyCommandTypes.PING -> sendMessage("Ping: ${ServerUtils.currentPing}ms", ChatChannel.PARTY)
 
                 PartyCommandTypes.DUNGEONS -> {
                     val floor = DungeonFloor.getByName(args.firstOrNull() ?: return@let)
@@ -161,7 +161,7 @@ object PartyCommands : SkyMyceModule() {
 
     fun targetArgument(arg: String, default: String) = if (arg.isBlank()) default else findPartyMember(arg)
 
-    fun findPartyMember(name: String) = PartyAPI.members.firstOrNull { it.name?.contains(name, true) ?: false }?.name ?: name
+    fun findPartyMember(name: String) = matchPartyMember(PartyAPI.members.mapNotNull { it.name }, name)
 }
 
 enum class PartyCommandTypes(val aliases: Set<String>) {
@@ -187,3 +187,12 @@ enum class PartyCommandTypes(val aliases: Set<String>) {
         fun fromAlias(alias: String): PartyCommandTypes? = entries.firstOrNull { alias.lowercase() in it.aliases }
     }
 }
+
+/**
+ * Resolves what a party member typed to a member name: an exact name (any case), otherwise the only member
+ * whose name starts with it. Anything else is returned unchanged so the server resolves or rejects it.
+ */
+internal fun matchPartyMember(members: List<String>, query: String): String =
+    members.firstOrNull { it.equals(query, ignoreCase = true) }
+        ?: members.filter { it.startsWith(query, ignoreCase = true) }.singleOrNull()
+        ?: query

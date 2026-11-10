@@ -24,6 +24,7 @@ fun main() {
     me.mycellium.skymyce.community.checkCommunitySharing()
     checkFriendWork()
     me.mycellium.skymyce.features.general.checkPersonalBestCommand()
+    me.mycellium.skymyce.features.general.checkPartyCommands()
     me.mycellium.skymyce.features.general.auction.checkAuctions()
     me.mycellium.skymyce.features.instances.dungeons.tracker.checkTracker()
     me.mycellium.skymyce.features.instances.dungeons.checkPartyMatcher()
