@@ -197,8 +197,7 @@ internal data class SplitHudRun(val marks: Map<SplitMilestone, Long>, val ticks:
  * brackets (real time when [clock] is server time) and the lag lost.
  */
 internal data class SplitHudOptions(val comparison: SplitComparison? = SplitComparison.BEST, val upcoming: Boolean = true, val total: Boolean = true,
-                                    val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL,
-                                    val pace: Boolean = false)
+                                    val precise: Boolean = true, val server: Boolean = true, val clock: SplitClock = SplitClock.REAL)
 
 /** Real time of a span, then its server time; each is null when an end was not seen. [to] null means "until now". */
 private fun span(run: SplitHudRun, from: SplitMilestone, to: SplitMilestone?): Pair<Long?, Long?> {
@@ -341,13 +340,11 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
             footer += when (comparison) {
                 SplitComparison.AVERAGE -> "§7Average §f${time(it.averageTotal?.toLong())} §8· §7PB §f${time(it.actualPb?.duration)}"
                 SplitComparison.WORST -> "§7Worst §f${time(it.worstTotal?.duration)} §8· §7PB §f${time(it.actualPb?.duration)}"
-                else -> "§7PB §f${time(it.actualPb?.duration)} §8· §7Best possible §f${time(it.theoreticalPb)}"
+                // Pace: this run's times so far plus the last 10 runs' average for each split still to come.
+                else -> "§7PB §f${time(it.actualPb?.duration)}" + (paceStats?.let { averages -> splitPace(definition, run, averages, options.clock) }
+                    ?.let { pace -> " §8· §7Pace §f${time(pace)}" } ?: "")
             }
         }
-    }
-    if (options.pace && !run.finished && run.startObserved) {
-        val pace = paceStats?.let { splitPace(definition, run, it, options.clock) }
-        footer += "§7Pace §f${time(pace)} §8(est. · last 10 avg)"
     }
     return SplitHudView("§b§l${definition.floor} Splits", rows, footer)
 }
@@ -409,15 +406,15 @@ object DungeonSplitsHud : SkyMyceModule() {
         if (builtRevision == DungeonSplits.revision && (run.timeline.finished || now - builtAt < 100_000_000L)) return@Widget live.panel
         builtRevision = DungeonSplits.revision; builtAt = now
         val clock = Settings.bestsClock
-        val key = listOf(DungeonSplitStore.revision, run.definition.floor, clock, Settings.averageWindow, Settings.pace)
+        val key = listOf(DungeonSplitStore.revision, run.definition.floor, clock, Settings.averageWindow)
         if (key != statsKey) {
             statsKey = key; stats = floorSplitStats(DungeonSplitStore.runs, run.definition, Settings.averageWindow, clock)
-            paceStats = if (Settings.pace) floorSplitStats(DungeonSplitStore.runs, run.definition, SplitWindow.LAST_10, clock) else null
+            paceStats = floorSplitStats(DungeonSplitStore.runs, run.definition, SplitWindow.LAST_10, clock)
         }
         val timeline = run.timeline
         live.show(splitHudView(run.definition, SplitHudRun(timeline.marks, timeline.ticks, timeline.startObserved, timeline.elapsed(now),
             timeline.elapsedTicks(DungeonSplits.serverTicks), timeline.finished, run.estimate, run.lag.shown, run.scoreExact), stats,
-            SplitHudOptions(Settings.comparison.target, Settings.showUpcoming, Settings.showTotal, Settings.precise, Settings.showServerTime, clock, Settings.pace),
+            SplitHudOptions(Settings.comparison.target, Settings.showUpcoming, Settings.showTotal, Settings.precise, Settings.showServerTime, clock),
             paceStats))
     }
 

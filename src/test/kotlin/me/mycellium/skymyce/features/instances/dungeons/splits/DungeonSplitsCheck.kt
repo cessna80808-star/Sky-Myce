@@ -369,9 +369,10 @@ private fun checkPace() {
     check(splitPace(m7, live(18_000L), floorSplitStats(emptyList(), m7, SplitWindow.LAST_10), SplitClock.REAL) == null) { "No history, no pace" }
     check(splitPace(m7, live(18_000L, finished = true), averages, SplitClock.REAL) == null)
     check(splitPace(m7, live(18_000L), averages, SplitClock.SERVER) == null) { "No server ticks, no server pace" }
-    val view = splitHudView(m7, live(18_000L), null, SplitHudOptions(comparison = null, pace = true), averages)
-    check(view.footer.any { "Pace" in it && formatSplitTime(15_000L + (n - 1) * 20_000L) in it && "est." in it }) { view.footer.toString() }
-    check(splitHudView(m7, live(18_000L), null, SplitHudOptions(comparison = null), averages).footer.none { "Pace" in it }) { "Off by default" }
+    // The HUD's PB line shows pace in place of Best possible; a finished run has no pace.
+    val view = splitHudView(m7, live(18_000L), averages, SplitHudOptions(), averages)
+    check(view.footer.any { "PB" in it && "Pace §f${formatSplitTime(15_000L + (n - 1) * 20_000L)}" in it } && view.footer.none { "Best possible" in it }) { view.footer.toString() }
+    check(splitHudView(m7, live(18_000L, finished = true), averages, SplitHudOptions(), averages).footer.none { "Pace" in it }) { "No pace once finished" }
     // Chat summary: real time, server time and the lag between them.
     val ended = run("s", "M7", 1, mapOf(END to 300_000L)).copy(ticks = mapOf(START to 0L, END to 5_900L))
     val summary = splitRunSummary(ended)!!

@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-053 (2026-11-22)
+- The Dungeon Splits HUD now shows your pace next to your PB instead of Best possible: your splits so far in this run, plus your average over your last 10 runs for each split still to come. The separate Pace Timer setting is gone, since pace is always shown there now.
+
 ## 2.8.0-beta-052 (2026-11-22)
 - Sky-Myce now also runs on Minecraft 26.2. It is a separate jar from the 26.1.2 one, and each updates from its own channel: a 26.2 install only gets 26.2 builds, and a 26.1.2 install keeps getting 26.1.2 builds. Nothing changes if you stay on 26.1.2.
 - On 26.2, the live player views in the Leap menu (Leap POV) and the Crush Camera are not available yet and show as unavailable. Everything else works the same as on 26.1.2.
