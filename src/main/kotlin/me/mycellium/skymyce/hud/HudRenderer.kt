@@ -30,11 +30,12 @@ import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
+import me.mycellium.skymyce.utils.guiHidden
 
 object HudRenderer : SkyMyceModule() {
     private var pressedWidget: Widget? = null
     private val failedWidgets = mutableMapOf<String, Long>()
-    private val interactive get() = isEnabled() && MC.screen is ChatScreen && !MC.instance.options.hideGui && MC.instance.player != null
+    private val interactive get() = isEnabled() && MC.screen is ChatScreen && !MC.instance.guiHidden && MC.instance.player != null
 
     override fun init() {
         HudElementRegistry.attachElementBefore(
@@ -84,7 +85,7 @@ object HudRenderer : SkyMyceModule() {
 
     fun render(context: GuiGraphicsExtractor, partialTicks: Float) {
         RuntimeProfiler.measure(RuntimeProfiler.Area.HUD) {
-        if (!isEnabled() || MC.instance.options.hideGui || MC.instance.player == null || MC.screen is WidgetEditorScreen) return
+        if (!isEnabled() || MC.instance.guiHidden || MC.instance.player == null || MC.screen is WidgetEditorScreen) return
         val window = MC.instance.window
         val mouseX = if (interactive) (MC.instance.mouseHandler.xpos() * window.guiScaledWidth / window.screenWidth).toInt() else -1000000
         val mouseY = if (interactive) (MC.instance.mouseHandler.ypos() * window.guiScaledHeight / window.screenHeight).toInt() else -1000000

@@ -15,6 +15,10 @@ import net.minecraft.network.protocol.ping.ClientboundPongResponsePacket
 import net.minecraft.network.protocol.ping.ServerboundPingRequestPacket
 import net.minecraft.util.Util
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Item
+import net.minecraft.world.level.block.Block
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.resources.Identifier
 import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.events.level.PacketEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
@@ -49,9 +53,9 @@ object Utils {
     }
 
     fun displayTitle(title: Component, subtitle: Component) {
-        MC.instance.gui.setTitle(title)
-        MC.instance.gui.setSubtitle(subtitle)
-        MC.instance.gui.setTimes(10, 40, 10)
+        MC.instance.hud.setTitle(title)
+        MC.instance.hud.setSubtitle(subtitle)
+        MC.instance.hud.setTimes(10, 40, 10)
     }
 }
 
@@ -60,8 +64,8 @@ object MC {
     val connection get() = instance.connection
     val fps get() = instance.fps
     val font get() = instance.font
-    var screen get() = instance.screen
-        set(value) = instance.setScreen(value)
+    var screen get() = instance.currentScreen
+        set(value) = instance.openScreen(value)
     val player get() = instance.player!!
 }
 
@@ -180,3 +184,7 @@ object ServerUtils : SkyMyceModule() {
         connection.send(ServerboundPingRequestPacket(Util.getMillis()))
     }
 }
+
+// Looked up by id because 26.2 replaced the per-colour Blocks/Items constants with colour collections.
+fun vanillaBlock(id: String): Block = BuiltInRegistries.BLOCK.getValue(Identifier.withDefaultNamespace(id))
+fun vanillaItem(id: String): Item = BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace(id))

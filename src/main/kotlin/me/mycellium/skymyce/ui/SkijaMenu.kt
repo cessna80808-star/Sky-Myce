@@ -5,7 +5,6 @@ import com.mojang.blaze3d.systems.RenderSystem
 import com.mojang.blaze3d.textures.FilterMode
 import com.mojang.blaze3d.textures.GpuTexture
 import com.mojang.blaze3d.textures.GpuTextureView
-import com.mojang.blaze3d.textures.TextureFormat
 import io.github.humbleui.skija.*
 import io.github.humbleui.skija.BackendRenderTarget
 import io.github.humbleui.skija.Canvas
@@ -40,6 +39,7 @@ import org.lwjgl.glfw.GLFW
 import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11C
 import org.lwjgl.opengl.GL30C
+import me.mycellium.skymyce.utils.GpuCompat
 
 /** Interaction snapshots are flattened once on the render thread, never read back to the CPU. */
 internal class SkijaMenuSnapshot(commands: List<MenuCanvas.Paint>, val region: Rectangle, val scale: Double) : AutoCloseable {
@@ -397,9 +397,8 @@ internal class SkijaMenuTexture : AutoCloseable {
     }
 
     private class Target(val width: Int, val height: Int) : AutoCloseable {
-        val texture: GpuTexture = RenderSystem.getDevice().createTexture("Sky-Myce Skija menu",
-            GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING,
-            TextureFormat.RGBA8, width, height, 1, 1)
+        val texture: GpuTexture = GpuCompat.createRgbaTexture("Sky-Myce Skija menu",
+            GpuTexture.USAGE_RENDER_ATTACHMENT or GpuTexture.USAGE_TEXTURE_BINDING, width, height)
         val view: GpuTextureView = try { RenderSystem.getDevice().createTextureView(texture) }
             catch (failure: Throwable) { texture.close(); throw failure }
         val ownerContext = GLFW.glfwGetCurrentContext()
@@ -490,7 +489,7 @@ internal class SkijaMenuTexture : AutoCloseable {
             }
             initialized = true
             try {
-                check(RenderSystem.getDevice().backendName.equals("OpenGL", ignoreCase = true)) {
+                check(GpuCompat.backendName.equals("OpenGL", ignoreCase = true)) {
                     "The Minecraft graphics backend is not OpenGL"
                 }
                 check(GLFW.glfwGetCurrentContext() != 0L && GL.getCapabilities().OpenGL33) {

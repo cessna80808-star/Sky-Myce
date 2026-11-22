@@ -50,6 +50,9 @@ import net.minecraft.util.FormattedCharSequence
 import net.minecraft.world.entity.player.ChatVisiblity
 import org.joml.Matrix3x2f
 import org.lwjgl.glfw.GLFW
+import me.mycellium.skymyce.utils.openScreen
+import me.mycellium.skymyce.utils.hud
+import me.mycellium.skymyce.utils.guiHidden
 
 internal const val IRC_THUMBNAIL_WIDTH = 96
 internal const val IRC_THUMBNAIL_HEIGHT = 72
@@ -260,7 +263,7 @@ object IrcChatRendering {
         ClientLifecycleEvents.CLIENT_STOPPING.register { clear() }
     }
 
-    private fun accessor() = MC.instance.gui.chat as IrcChatAccessor
+    private fun accessor() = MC.instance.hud.chat as IrcChatAccessor
     internal fun add(message: GlobalChatMessage) {
         val tag = GuiMessageTag(0x4A8EFF, null, Component.literal(ircPrefix(message.scope)), message.key.tag)
         withTaggedMessage {
@@ -294,7 +297,7 @@ object IrcChatRendering {
         val scroll = chat.`skymyce$getScroll`()
         withRefreshMessages { chat.`skymyce$refreshMessages`() }
         chat.`skymyce$setScroll`(scroll.coerceAtLeast(0))
-        MC.instance.gui.chat.scrollChat(0) // Native clamp after an edit or preference removes wrapped lines.
+        MC.instance.hud.chat.scrollChat(0) // Native clamp after an edit or preference removes wrapped lines.
     }
     fun clear() {
         IrcInlineControls.clear()
@@ -439,11 +442,11 @@ object IrcChatRendering {
         return action.takeIf { it.kind != "media" || message.media.getOrNull(it.mediaIndex ?: -1) != null }
     }
     private fun clickStyleAt(mouseX: Int, mouseY: Int): net.minecraft.network.chat.Style? {
-        if (MC.screen !is ChatScreen || MC.instance.options.hideGui || MC.instance.player == null) return null
+        if (MC.screen !is ChatScreen || MC.instance.guiHidden || MC.instance.player == null) return null
         if (suggestionsVisible()) return null
         val client = MC.instance
         val finder = ActiveTextCollector.ClickableStyleFinder(client.font, mouseX, mouseY)
-        client.gui.chat.captureClickableText(finder, client.window.guiScaledHeight, client.gui.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
+        client.hud.chat.captureClickableText(finder, client.window.guiScaledHeight, client.hud.guiTicks, ChatComponent.DisplayMode.FOREGROUND)
         return finder.result()
     }
     private fun supportedLinkAt(mouseX: Int, mouseY: Int) =
@@ -453,11 +456,11 @@ object IrcChatRendering {
         val client = MC.instance
         if (!client.options.chatLinks().get()) return true
         val generation = IrcMediaAssets.generation
-        client.gui.chat.preserveCurrentChatScreen()
-        if (client.options.chatLinksPrompt().get()) client.setScreen(ConfirmLinkScreen({ confirmed ->
-            if (generation != IrcMediaAssets.generation) client.setScreen(null)
+        client.hud.chat.preserveCurrentChatScreen()
+        if (client.options.chatLinksPrompt().get()) client.openScreen(ConfirmLinkScreen({ confirmed ->
+            if (generation != IrcMediaAssets.generation) client.openScreen(null)
             else if (confirmed && client.options.chatLinks().get()) InGameBrowser.open(screen, uri.toString())
-            else client.setScreen(screen)
+            else client.openScreen(screen)
         }, uri.toString(), false))
         else InGameBrowser.open(screen, uri.toString())
         return true
@@ -473,7 +476,7 @@ object IrcChatRendering {
 
     private fun render(output: GuiGraphicsExtractor) {
         frame++
-        if (!GlobalChatConfig.mediaPreviews || MC.instance.options.hideGui || MC.instance.options.chatVisibility().get() == ChatVisiblity.HIDDEN ||
+        if (!GlobalChatConfig.mediaPreviews || MC.instance.guiHidden || MC.instance.options.chatVisibility().get() == ChatVisiblity.HIDDEN ||
             MC.instance.player == null || suggestionsVisible()) return
         // Walking every visible chat line for attachment anchors is wasted while no stored message has one.
         if (!RelayMessages.chatStore.hasMedia()) return
@@ -481,8 +484,8 @@ object IrcChatRendering {
         val lineSpacing = MC.instance.options.chatLineSpacing().get()
         val lineHeight = (MC.instance.font.lineHeight * (lineSpacing + 1)).toInt()
         val collector = IrcThumbnailCollector(lineHeight, lineSpacing)
-        MC.instance.gui.chat.captureClickableText(collector, MC.instance.window.guiScaledHeight,
-            MC.instance.gui.guiTicks, if (MC.screen is ChatScreen) ChatComponent.DisplayMode.FOREGROUND else ChatComponent.DisplayMode.BACKGROUND)
+        MC.instance.hud.chat.captureClickableText(collector, MC.instance.window.guiScaledHeight,
+            MC.instance.hud.guiTicks, if (MC.screen is ChatScreen) ChatComponent.DisplayMode.FOREGROUND else ChatComponent.DisplayMode.BACKGROUND)
         val anchors = collector.anchors
         if (anchors.isEmpty()) return
         output.nextStratum()
@@ -726,7 +729,7 @@ internal class IrcMessageControlsScreen(private val previous: Screen?, private v
         if (feedback.text().string != status) feedback.text(Component.literal(status))
     }
     override fun tick() { super.tick(); if (::edit.isInitialized && !menuClosing) updateControls() }
-    override fun onClose() { closeMenuTo(if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous) }
+    override fun onClose() { closeMenuTo(if (previous is ChatScreen) minecraft.hud.chat.restoreChatScreen() ?: previous else previous) }
     private fun label(text: String, color: Int = MenuTheme.TEXT) = MenuLabel(Component.literal(text).withColor(color)).apply { horizontalSizing(Sizing.fill()) }
     private fun button(text: String, action: () -> Unit) = MenuButton(Component.literal(text)) { action() }.apply { sizing(Sizing.fill(), Sizing.fixed(22)) }
 }

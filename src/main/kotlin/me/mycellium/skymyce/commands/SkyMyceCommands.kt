@@ -28,6 +28,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
+import me.mycellium.skymyce.utils.currentScreen
 
 /** Player-facing commands only: chat-button callbacks, legacy aliases and developer tools stay out of help. */
 internal data class CommandHelp(val command: String, val description: String, val everyday: Boolean, val keywords: String = "")
@@ -104,7 +105,7 @@ object SkyMyceCommands : SkyMyceModule() {
     override fun init() {
         settingsKey = KeyMappingHelper.registerKeyMapping(KeyMapping("Open Sky-Myce Menu", Config.openConfigKey, KeyMapping.Category.MISC))
         ClientTickEvents.END_CLIENT_TICK.register { client -> RuntimeProfiler.measure(RuntimeProfiler.Area.COMMAND_TICK) {
-            while (settingsKey.consumeClick()) if (isEnabled() && client.screen == null && client.player != null) openMenu()
+            while (settingsKey.consumeClick()) if (isEnabled() && client.currentScreen == null && client.player != null) openMenu()
             // One shared scheduler, including explicit lookups without the party-finder module or Hypixel.
             if (isEnabled() && client.player != null) DungeonFriendStatsCache.tick()
             PersonalBestCommand.tick(isEnabled())

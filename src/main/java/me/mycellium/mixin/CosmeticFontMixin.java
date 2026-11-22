@@ -18,7 +18,7 @@ import java.util.List;
 public abstract class CosmeticFontMixin {
     @ModifyVariable(method = {"width(Lnet/minecraft/util/FormattedCharSequence;)I",
         "prepareText(Lnet/minecraft/util/FormattedCharSequence;FFIZZI)Lnet/minecraft/client/gui/Font$PreparedText;",
-        "drawInBatch8xOutline"}, at = @At("HEAD"), argsOnly = true)
+        "drawInBatch8xOutline", "prepare8xTextOutline"}, at = @At("HEAD"), argsOnly = true)
     private FormattedCharSequence skymyce$sequence(FormattedCharSequence text) { return CosmeticNames.display(text); }
 
     @ModifyVariable(method = "width(Lnet/minecraft/network/chat/FormattedText;)I", at = @At("HEAD"), argsOnly = true)

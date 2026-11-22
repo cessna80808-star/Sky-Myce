@@ -28,6 +28,7 @@ import tech.thatgravyboat.skyblockapi.api.events.base.Subscription
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
+import me.mycellium.skymyce.utils.hud
 
 data class CosmeticProfile(val uuid: UUID, val name: String?, val scale: Float, val revision: Long, val updatedAt: Long,
     val nameStyle: Component? = name?.let(Component::literal), val scaleX: Float = scale, val scaleY: Float = scale, val scaleZ: Float = scale,
@@ -194,7 +195,7 @@ object CosmeticsClient : SkyMyceModule() {
         if (!rescalePending || now < nextRescale) return
         rescalePending = false; nextRescale = now + 2_000
         // Never during the tick's own iteration of chat state (a ConcurrentModificationException was seen there).
-        MC.instance.execute { MC.instance.gui.chat.rescaleChat() }
+        MC.instance.execute { MC.instance.hud.chat.rescaleChat() }
     }
 
     override fun tick() {

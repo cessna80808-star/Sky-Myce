@@ -19,6 +19,7 @@ import java.util.PriorityQueue
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
+import me.mycellium.skymyce.utils.vanillaBlock
 
 data class RoomSegment(val x: Int, val z: Int)
 data class DungeonDoor(val from: Set<RoomSegment>, val to: Set<RoomSegment>, val door: GridCell,
@@ -402,7 +403,7 @@ object RoomDungeonContext {
             else world.getBlockState(BlockPos(cell.x, cell.y, cell.z)).let { state ->
                 when {
                     state.`is`(Blocks.COAL_BLOCK) -> 119
-                    state.`is`(Blocks.RED_TERRACOTTA) -> 18
+                    state.`is`(vanillaBlock("red_terracotta")) -> 18
                     state.isAir || state.`is`(Blocks.BARRIER) -> 0
                     else -> -1
                 }

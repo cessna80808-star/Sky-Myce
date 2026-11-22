@@ -29,6 +29,32 @@ assert.equal((await handleCommunityRelease(new Request('https://example.test/com
 const beta = { ...base, version: '2.8.0-beta-001', artifact: 'releases/Sky-Myce-2.8.0-beta-001.jar' };
 assert.deepEqual(await verifyCommunityManifest(signed(beta), env), beta);
 await assert.rejects(verifyCommunityManifest(signed({ ...beta, version: '2.8.0-rc-1', artifact: 'releases/Sky-Myce-2.8.0-rc-1.jar' }), env));
+// 26.2 has its own signed pointer and artifact; it never serves or accepts the default 26.1.2 release.
+const next = { ...base, minecraft: '26.2', artifact: 'releases/Sky-Myce-2.5.1-mc26.2.jar' };
+let nextEnvelope = signed(next);
+const channelEnv = { ...env, PRIVATE_ARTIFACTS: { get: async path => {
+  fetched.push(path);
+  if (path === 'releases/community-current.json') return { size: 2048, text: async () => JSON.stringify(envelope) };
+  if (path === 'releases/community-current-26.2.json') return { size: 2048, text: async () => JSON.stringify(nextEnvelope) };
+  if (path === base.artifact || path === next.artifact) return { size: 4, body: new Uint8Array([80,75,3,4]) };
+  throw Error('Unexpected private object read');
+} } };
+envelope = signed(base); fetched = [];
+assert.deepEqual(await verifyCommunityManifest(nextEnvelope, channelEnv, Date.now(), '26.2'), next);
+await assert.rejects(verifyCommunityManifest(nextEnvelope, channelEnv), 'A 26.2 manifest is not a 26.1.2 release');
+await assert.rejects(verifyCommunityManifest(envelope, channelEnv, Date.now(), '26.2'), 'A 26.1.2 manifest is not a 26.2 release');
+await assert.rejects(verifyCommunityManifest(signed({ ...next, artifact: base.artifact }), channelEnv, Date.now(), '26.2'), '26.2 cannot point at the 26.1.2 jar');
+assert.equal((await handleCommunityRelease(new Request('https://example.test/community/release?minecraft=26.2'), channelEnv)).status, 200);
+assert.equal((await handleCommunityRelease(new Request('https://example.test/community/artifact?version=2.5.1&minecraft=26.2'), channelEnv)).headers.get('Content-Disposition'), 'attachment; filename="Sky-Myce-2.5.1-mc26.2.jar"');
+assert.equal((await handleCommunityRelease(new Request('https://example.test/community/release?minecraft=26.1.2'), channelEnv)).status, 200);
+assert.deepEqual(fetched, ['releases/community-current-26.2.json', 'releases/community-current-26.2.json', next.artifact, 'releases/community-current.json']);
+for (const minecraft of ['1.21', '../secret', '']) {
+  fetched = [];
+  assert.equal((await handleCommunityRelease(new Request(`https://example.test/community/release?minecraft=${encodeURIComponent(minecraft)}`), channelEnv)).status, 503);
+  assert.deepEqual(fetched, [], 'Unknown targets read nothing from R2');
+}
+nextEnvelope = signed(base);
+assert.equal((await handleCommunityRelease(new Request('https://example.test/community/release?minecraft=26.2'), channelEnv)).status, 503, 'A 26.1.2 manifest in the 26.2 pointer is rejected');
 envelope = signed(base); fetched = [];
 const cached = new Map(), pending = [], previousCaches = globalThis.caches;
 globalThis.caches = { default: {
@@ -56,4 +82,4 @@ try {
   cached.set(selectedKey, Response.json(signed({ ...base, expiresAt: Date.now() - 1 })));
   assert.equal((await cachedRequest('/community/artifact?version=2.5.1')).status, 503, 'An expired signature cannot expose a cached artifact');
 } finally { if (previousCaches === undefined) delete globalThis.caches; else globalThis.caches = previousCaches; }
-console.log('Community release checks passed: signature policy, selected artifact only, canonical metadata/artifact cache, private bucket isolation and expired/loader/traversal/tamper rejection.');
+console.log('Community release checks passed: signature policy, per-Minecraft channels, selected artifact only, canonical metadata/artifact cache, private bucket isolation and expired/loader/traversal/tamper rejection.');

@@ -22,6 +22,7 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
+import me.mycellium.skymyce.utils.McCompatKt;
 
 /** Input stays real editable text; the chat field paints bundled emoji with matching raw-index metrics. */
 @Mixin(EditBox.class)
@@ -47,7 +48,7 @@ public class CosmeticEditBoxMixin {
 
     @Unique
     private boolean skymyce$emojiInput() {
-        return Minecraft.getInstance().screen instanceof ChatScreen screen &&
+        return McCompatKt.getCurrentScreen(Minecraft.getInstance()) instanceof ChatScreen screen &&
             ((IrcChatScreenAccessor) screen).skymyce$getInput() == (Object) this && IrcEmojiInput.layout(value).getHasEmoji();
     }
 

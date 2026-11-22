@@ -24,6 +24,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.renderer.texture.DynamicTexture
 import net.minecraft.util.ARGB
 import org.lwjgl.system.MemoryUtil
+import me.mycellium.skymyce.utils.GpuCompat
 
 /** Retained menu commands shared by the native GPU painter and compatibility fallback. */
 class MenuCanvas {
@@ -652,8 +653,7 @@ class MenuTexture : AutoCloseable {
                     nativePixels!!.position((region.y + row) * image.width + region.x)
                         .put(pixels, row * region.width, region.width)
                 }
-                RenderSystem.getDevice().createCommandEncoder().writeToTexture(current.texture, current.pixels,
-                    0, 0, region.x, region.y, region.width, region.height, region.x, region.y)
+                GpuCompat.writeRegion(current.texture, current.pixels, region.x, region.y, region.width, region.height)
             }
             uploadedRevision = revision
         }

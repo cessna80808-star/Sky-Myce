@@ -78,6 +78,9 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import me.mycellium.skymyce.utils.hud
+import net.minecraft.network.chat.TextColor
+import me.mycellium.skymyce.utils.collectFrameGizmos
 
 /**
  * Greenhouse planner. Client-local and visual only: it reads the world and the held item and never places blocks. The
@@ -1165,7 +1168,7 @@ object GreenhousePlanner : SkyMyceModule() {
             var rgb = style.color?.value ?: 0xFFFFFF
             var i = 0
             while (i < part.length) {
-                if (part[i] == '\u00a7' && i + 1 < part.length) { ChatFormatting.getByCode(part[i + 1])?.color?.let { rgb = it }; i += 2; continue }
+                if (part[i] == '\u00a7' && i + 1 < part.length) { ChatFormatting.getByCode(part[i + 1])?.let(TextColor::fromLegacyFormat)?.let { rgb = it.value }; i += 2; continue }
                 out += part[i] to rgb; i++
             }
             java.util.Optional.empty()
@@ -1701,7 +1704,7 @@ object GreenhousePlanner : SkyMyceModule() {
             if (plot.locked[cell]) return false
             val plan = layout.cells[cell]
             val reason = wrongSlot(plan, plan?.let { catalog[it.plantId] }, held, crop, soils, ::soilName) ?: return false
-            MC.instance.gui.setOverlayMessage(Component.literal("§cBlocked: $reason"), false)
+            MC.instance.hud.setOverlayMessage(Component.literal("§cBlocked: $reason"), false)
             return true
         }
         return false
@@ -1889,7 +1892,7 @@ object GreenhousePlanner : SkyMyceModule() {
         if (shown.isEmpty() && labels.isEmpty()) return
         val limit = square(GreenhouseConfig.renderDistance).toDouble()
         val labelLimit = square(LABEL_DISTANCE).toDouble()
-        MC.instance.levelRenderer.collectPerFrameGizmos().use {
+        MC.instance.collectFrameGizmos().use {
             for (ghost in shown) if (ghost.box.center.distanceToSqr(event.cameraPosition) <= limit) Gizmos.cuboid(ghost.box, GizmoStyle.fill(ghost.color))
             // 0.4 is 0.025 blocks per font pixel, the size of a name tag; lines stack 11 pixels apart.
             for (label in labels) if (label.pos.distanceToSqr(event.cameraPosition) <= labelLimit) label.lines.forEachIndexed { i, line ->

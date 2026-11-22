@@ -28,6 +28,7 @@ import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.input.PreeditEvent
 import net.minecraft.network.chat.Component
 import org.lwjgl.glfw.GLFW
+import me.mycellium.skymyce.utils.openScreen
 
 /** Whether the vanilla world blur may run behind Sky-Myce menus at this quality. */
 internal fun menuBlurAllowed(quality: GuiQuality) = quality != GuiQuality.EXTREMELY_LIGHT && quality != GuiQuality.LIGHT
@@ -561,7 +562,7 @@ fun openMenuFeature(id: String, configure: Boolean = false) {
     val parent = menuBackScreen(menuBackTarget(feature.category, openedFromHome = MC.screen is MenuHomeScreen))
     if (!configure && feature.tool == "global-chat") {
         // The composer selector only replaces gameplay or an existing ChatScreen.
-        MC.instance.setScreen(null)
+        MC.instance.openScreen(null)
         me.mycellium.skymyce.features.instances.dungeons.friends.RelayMessages.selectGlobal()
         return
     }
@@ -601,7 +602,7 @@ fun navigateMenu(destination: net.minecraft.client.gui.screens.Screen?) {
     if (previous === destination) return
     if (destination is MenuScreen) destination.canonicalFeatureId?.let(MenuShortcuts::visit)
     if (previous is MenuScreen && destination is MenuScreen) previous.prepareNavigation(destination)
-    MC.instance.setScreen(destination)
+    MC.instance.openScreen(destination)
 }
 
 internal data class MenuRect(val x: Double, val y: Double, val width: Double, val height: Double) {

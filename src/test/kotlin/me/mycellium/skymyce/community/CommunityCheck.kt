@@ -50,6 +50,14 @@ fun main() {
         check(runCatching { verifyCommunityRelease(signed(changed), config, now) }.isFailure)
     val tampered = signed(manifest).apply { addProperty("payload", Base64.getUrlEncoder().withoutPadding().encodeToString(manifest.deepCopy().apply { addProperty("size", 1000) }.toString().toByteArray())) }
     check(runCatching { verifyCommunityRelease(tampered, config, now) }.isFailure)
+    // 26.2 builds read their own channel and never accept the 26.1.2 artifact or manifest.
+    val nextConfig = Properties().apply { putAll(config); setProperty("minecraft", "26.2") }
+    val nextManifest = manifest.deepCopy().apply { addProperty("minecraft", "26.2"); addProperty("artifact", "releases/Sky-Myce-2.5.1-mc26.2.jar") }
+    check(verifyCommunityRelease(signed(nextManifest), nextConfig, now).version == "2.5.1")
+    check(runCatching { verifyCommunityRelease(signed(manifest), nextConfig, now) }.isFailure)
+    check(runCatching { verifyCommunityRelease(signed(nextManifest), config, now) }.isFailure)
+    check(runCatching { verifyCommunityRelease(signed(nextManifest.deepCopy().apply { addProperty("artifact", "releases/Sky-Myce-2.5.1.jar") }), nextConfig, now) }.isFailure)
+    check(communityChannel("26.1.2", '?') == "" && communityChannel("26.2", '?') == "?minecraft=26.2" && communityChannel("26.2", '&') == "&minecraft=26.2")
     val raw = "12345678-1234-4234-9234-123456789abc"
     check(observationHash("windows-smbios", raw.uppercase()) == observationHash("linux-dmi", "{$raw}"))
     check(observationHash("linux-machine-id", raw) != observationHash("linux-dmi", raw))

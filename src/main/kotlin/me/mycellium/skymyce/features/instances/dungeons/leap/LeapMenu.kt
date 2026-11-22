@@ -38,6 +38,8 @@ import tech.thatgravyboat.skyblockapi.api.events.screen.ContainerInitializedEven
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.helpers.McClient
+import me.mycellium.skymyce.utils.currentScreen
+import me.mycellium.skymyce.utils.currentOverlay
 
 /** Keeps the server's inventory open; a card sends exactly one ordinary, revalidated slot click. */
 object LeapMenu : SkyMyceModule() {
@@ -113,7 +115,7 @@ object LeapMenu : SkyMyceModule() {
             if (!client.isWindowActive) earlyKeys.clear()
             validIntent(System.nanoTime())
             state?.let {
-                if (client.screen !== it.screen || !available(it.screen) || client.level !== it.level) dispose()
+                if (client.currentScreen !== it.screen || !available(it.screen) || client.level !== it.level) dispose()
                 else { update(it); selectQueued(it) }
             }
         }
@@ -127,11 +129,11 @@ object LeapMenu : SkyMyceModule() {
     @JvmStatic
     fun manualInput(key: InputConstants.Key) {
         val client = MC.instance
-        if (client.screen != null) return
+        if (client.currentScreen != null) return
         val options = client.options
         if (key == KeyMappingHelper.getBoundKeyOf(options.keyUse)) {
             val id = client.player?.mainHandItem?.getData(DataTypes.ID)
-            if (contextAvailable() && client.isWindowActive && client.overlay == null &&
+            if (contextAvailable() && client.isWindowActive && client.currentOverlay == null &&
                 id in spiritLeapIds) armIntent(System.nanoTime())
             else clearIntent()
         } else if (listOf(options.keyUp, options.keyDown, options.keyLeft, options.keyRight,
@@ -145,7 +147,7 @@ object LeapMenu : SkyMyceModule() {
             state?.keys?.release(key)
             return false
         }
-        if (MC.instance.screen != null || !validIntent(System.nanoTime())) return false
+        if (MC.instance.currentScreen != null || !validIntent(System.nanoTime())) return false
         val quadrant = leapKeyQuadrant(key) ?: return false
         if (action == GLFW.GLFW_PRESS) {
             earlyKeys.add(key)
@@ -166,7 +168,7 @@ object LeapMenu : SkyMyceModule() {
     @Subscription
     fun onMenuContents(event: ContainerInitializedEvent) {
         val client = MC.instance
-        if (client.screen !== event.screen || !leapTitle(event.screen) || client.level == null) return
+        if (client.currentScreen !== event.screen || !leapTitle(event.screen) || client.level == null) return
         initializedScreen = event.screen
         initializedLevel = client.level
         if (!available(event.screen)) return
@@ -188,8 +190,8 @@ object LeapMenu : SkyMyceModule() {
 
     private fun validIntent(now: Long): Boolean {
         val client = MC.instance
-        val screen = client.screen
-        if (!intent.active(now) || !contextAvailable() || !client.isWindowActive || client.overlay != null ||
+        val screen = client.currentScreen
+        if (!intent.active(now) || !contextAvailable() || !client.isWindowActive || client.currentOverlay != null ||
             intentLevel !== client.level || intentPlayer !== client.player ||
             (screen != null && (screen !is AbstractContainerScreen<*> || !available(screen)))) {
             clearIntent()
@@ -208,7 +210,7 @@ object LeapMenu : SkyMyceModule() {
 
     private fun available(screen: AbstractContainerScreen<*>): Boolean {
         val client = MC.instance
-        return contextAvailable() && client.screen === screen && leapTitle(screen) &&
+        return contextAvailable() && client.currentScreen === screen && leapTitle(screen) &&
             client.player?.containerMenu === screen.menu && screen.menu.carried.isEmpty
     }
 
@@ -284,7 +286,7 @@ object LeapMenu : SkyMyceModule() {
     /** Only the actual, populated server menu may authorize receiving a teammate's shared pose. */
     fun sharedTargets(): Map<UUID, String> {
         if (!Settings.povEnabled) return emptyMap()
-        val screen = MC.instance.screen as? AbstractContainerScreen<*> ?: return emptyMap()
+        val screen = MC.instance.currentScreen as? AbstractContainerScreen<*> ?: return emptyMap()
         val active = current(screen)?.takeIf { it.contentsReady } ?: return emptyMap()
         val connection = MC.instance.connection ?: return emptyMap()
         update(active)

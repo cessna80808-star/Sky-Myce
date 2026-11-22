@@ -10,13 +10,14 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import me.mycellium.skymyce.utils.McCompatKt;
 
 @Mixin(MouseHandler.class)
 public abstract class LeapMenuMouseMixin {
     @Inject(method = "onScroll", at = @At("HEAD"))
     private void skyMyce$cancelChoiceOnScroll(long window, double horizontal, double vertical, CallbackInfo callback) {
         var client = Minecraft.getInstance();
-        if (window == client.getWindow().handle() && client.screen == null && (horizontal != 0 || vertical != 0)) LeapMenu.cancelEarlyChoice();
+        if (window == client.getWindow().handle() && McCompatKt.getCurrentScreen(client) == null && (horizontal != 0 || vertical != 0)) LeapMenu.cancelEarlyChoice();
     }
 
     @WrapOperation(method = "onButton", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/KeyMapping;click(Lcom/mojang/blaze3d/platform/InputConstants$Key;)V"))

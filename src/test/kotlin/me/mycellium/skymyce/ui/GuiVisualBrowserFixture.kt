@@ -15,6 +15,7 @@ import net.minecraft.client.input.MouseButtonInfo
 import net.minecraft.sounds.SoundSource
 import org.cef.browser.CefDevToolsClient
 import java.util.concurrent.CompletableFuture
+import me.mycellium.skymyce.utils.currentScreen
 
 /** The real Chromium paints a self-contained page; no website, game server or community session is opened. */
 internal class GuiVisualBrowserFixture {
@@ -39,7 +40,7 @@ internal class GuiVisualBrowserFixture {
         check(!runtimeStatus.startsWith("Browser unavailable") && !runtimeStatus.startsWith("Chromium could not start") &&
             !runtimeStatus.startsWith("Browser runtime was started")) { "Native browser setup failed: $runtimeStatus" }
         check(System.nanoTime() < deadline) { "Native browser check timed out at phase $phase: $runtimeStatus" }
-        check(client.screen === screen)
+        check(client.currentScreen === screen)
         val session = screen.session?.takeIf { it.ready } ?: return false
         if (!session.browser.isTextureReady) return false
         if (tools == null) tools = session.browser.devToolsClient
@@ -146,7 +147,7 @@ internal class GuiVisualBrowserFixture {
         pending?.cancel(false); pending = null
         tools?.close(); tools = null
         screen.onClose()
-        check(client.screen === parent && screen.session == null) { "Closing the browser retained its page or lost its return screen" }
+        check(client.currentScreen === parent && screen.session == null) { "Closing the browser retained its page or lost its return screen" }
         scale?.let { client.options.guiScale().set(it); client.resizeGui() }; scale = null
         println("Native browser GUI checks passed: muted offline Chromium pixels, DOM, mouse, text, wheel, resize and close")
     }

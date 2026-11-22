@@ -18,6 +18,7 @@ import tech.thatgravyboat.skyblockapi.api.events.screen.ScreenKeyPressedEvent
 import tech.thatgravyboat.skyblockapi.utils.Scheduling.schedule
 import tech.thatgravyboat.skyblockapi.utils.text.TextProperties.stripped
 import kotlin.time.Duration.Companion.seconds
+import me.mycellium.skymyce.utils.vanillaItem
 
 object LoadoutKeybinds : SkyMyceModule() {
 
@@ -89,7 +90,7 @@ object LoadoutKeybinds : SkyMyceModule() {
             val lore = slot.item.get(DataComponents.LORE)?.lines.orEmpty()
 
             val canEquip = lore.any { it.stripped == EQUIP_TEXT }
-            val isEmpty = (slot.item.item == Items.RED_DYE || lore.any { it.stripped == EMPTY_TEXT })
+            val isEmpty = (slot.item.item == vanillaItem("red_dye") || lore.any { it.stripped == EMPTY_TEXT })
 
 
             if (!canEquip && !isEmpty) {

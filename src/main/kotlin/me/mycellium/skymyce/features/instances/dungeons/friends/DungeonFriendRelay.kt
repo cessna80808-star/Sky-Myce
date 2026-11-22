@@ -35,6 +35,9 @@ import tech.thatgravyboat.skyblockapi.api.events.hypixel.PartyInfoEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.friends.FriendsAPI
 import tech.thatgravyboat.skyblockapi.api.profile.party.PartyAPI
+import me.mycellium.skymyce.utils.currentScreen
+import me.mycellium.skymyce.utils.openScreen
+import me.mycellium.skymyce.utils.hud
 
 internal class RelayRetry {
     private var authenticatedAt: Long? = null
@@ -871,7 +874,7 @@ object RelayMessages {
         reactionRequests.clear(); IrcInlineControls.clear(); chatStore.clearPending()
         conversations.relayDisconnected(); nextSend = 0; globalSubscription.reset(); partySubscription.reset(); replyDraft = null
         partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
-        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.setScreen(null)
+        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.openScreen(null)
     }
     private fun session() {
         val account = MC.instance.user.profileId
@@ -957,8 +960,8 @@ object RelayMessages {
         // Queue after vanilla closes the command input, without opening over another menu.
         client.schedule {
             if (client.connection === connection && client.user.profileId == account && client.player != null &&
-                conversations.chatTarget == name && (client.screen == null || client.screen is ChatScreen)) {
-                client.setScreen(ChatScreen("", false))
+                conversations.chatTarget == name && (client.currentScreen == null || client.currentScreen is ChatScreen)) {
+                client.openScreen(ChatScreen("", false))
             }
         }
     }
@@ -1018,7 +1021,7 @@ object RelayMessages {
         activeParty = id; partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0; partySubscription.reset()
         if (replyDraft?.scope == "party") replyDraft = null
         chatStore.clearScope("party"); IrcChatRendering.clearScope("party")
-        if ((MC.screen as? IrcMediaViewerScreen)?.messageKey?.scope == "party" || (MC.screen as? IrcMessageControlsScreen)?.scope == "party") MC.instance.setScreen(null)
+        if ((MC.screen as? IrcMediaViewerScreen)?.messageKey?.scope == "party" || (MC.screen as? IrcMessageControlsScreen)?.scope == "party") MC.instance.openScreen(null)
         old.flatMap { it.media }.forEach { media -> IrcMediaAssets.cancel(media, false); IrcMediaAssets.cancel(media, true) }
     }
 
@@ -1029,7 +1032,7 @@ object RelayMessages {
         replyDraft = null
         partySubscribedId = ""; partySubscribedUntil = 0; nextPartySubscribe = 0
         IrcMediaAssets.reset(boundary)
-        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.setScreen(null)
+        if (MC.screen is IrcMediaViewerScreen || MC.screen is IrcMessageControlsScreen) MC.instance.openScreen(null)
         IrcChatRendering.clear()
     }
 
@@ -1117,9 +1120,9 @@ object RelayMessages {
         val account = client.user.profileId
         client.schedule {
             if (client.connection === connection && client.user.profileId == account && client.player != null &&
-                irc.selected && (if (scope == "global") irc.global else irc.party) && (client.screen == null || client.screen is ChatScreen)) {
-                val screen = client.screen as? ChatScreen
-                if (screen != null) IrcInlineControls.focusComposer(screen) else client.setScreen(ChatScreen("", false))
+                irc.selected && (if (scope == "global") irc.global else irc.party) && (client.currentScreen == null || client.currentScreen is ChatScreen)) {
+                val screen = client.currentScreen as? ChatScreen
+                if (screen != null) IrcInlineControls.focusComposer(screen) else client.openScreen(ChatScreen("", false))
             }
         }
     }
@@ -1221,7 +1224,7 @@ object RelayMessages {
         reactionRequests.observe(next)
         if (next.deleted && replyDraft == next.key) replyDraft = null
         if (previous.media != next.media || next.deleted) {
-            if ((MC.screen as? IrcMediaViewerScreen)?.messageKey == next.key) MC.instance.setScreen(MC.instance.gui.chat.restoreChatScreen())
+            if ((MC.screen as? IrcMediaViewerScreen)?.messageKey == next.key) MC.instance.openScreen(MC.instance.hud.chat.restoreChatScreen())
             previous.media.filter { it !in next.media }.forEach { media -> IrcMediaAssets.cancel(media, false); IrcMediaAssets.cancel(media, true) }
         }
         IrcChatRendering.update(next)
@@ -1235,19 +1238,19 @@ object RelayMessages {
         if (message.model == 1 && DungeonFriendRelay.richChatAvailable) {
             if (action.kind == "reply") { prepareReply(key); return }
             if (action.kind == "react") {
-                if (MC.screen !is ChatScreen) MC.instance.setScreen(ChatScreen("", false))
+                if (MC.screen !is ChatScreen) MC.instance.openScreen(ChatScreen("", false))
                 IrcInlineControls.open(key, mouseX ?: 4, mouseY ?: (MC.instance.window.guiScaledHeight - 48))
                 return
             }
         }
-        if (MC.screen is ChatScreen) MC.instance.gui.chat.preserveCurrentChatScreen()
+        if (MC.screen is ChatScreen) MC.instance.hud.chat.preserveCurrentChatScreen()
         if (action.kind == "media") {
             val media = message.media.getOrNull(action.mediaIndex ?: return) ?: return
             val context = message.reply?.let { "Reply to ${it.from}: ${it.text.orEmpty().replace('\n', ' ').take(96)}" }
                 ?: message.text.replace('\n', ' ').take(160)
-            MC.instance.setScreen(IrcMediaViewerScreen(MC.screen, media, message.from, "${ircPrefix(message.scope)} $context", key))
+            MC.instance.openScreen(IrcMediaViewerScreen(MC.screen, media, message.from, "${ircPrefix(message.scope)} $context", key))
         } else if (action.kind == "manage" && canManage(key))
-            MC.instance.setScreen(IrcMessageControlsScreen(MC.screen, key))
+            MC.instance.openScreen(IrcMessageControlsScreen(MC.screen, key))
     }
     internal fun prepareReply(key: IrcKey) {
         if (!currentIrcChannel(key) || chatStore.get(key)?.deleted != false || !DungeonFriendRelay.richChatAvailable) return
@@ -1257,7 +1260,7 @@ object RelayMessages {
         IrcInlineControls.clear()
         val screen = MC.screen as? ChatScreen
         if (screen != null) IrcInlineControls.focusComposer(screen)
-        else MC.instance.setScreen(ChatScreen("", false))
+        else MC.instance.openScreen(ChatScreen("", false))
     }
     internal fun replyMessage(): GlobalChatMessage? = replyDraft?.takeIf {
         irc.selected && (if (it.scope == "global") irc.global else irc.party) && currentIrcChannel(it)
@@ -1323,7 +1326,7 @@ object RelayMessages {
     private fun error(text: String) = display(Component.literal(text).withColor(HudTheme.RED))
     private fun display(message: Component, prefix: String = "[Sky-Hawk] ") {
         val previous = quiet.get(); quiet.set(true)
-        try { MC.instance.gui.chat.addClientSystemMessage(Component.literal(prefix).withColor(HudTheme.ACCENT).append(message)) }
+        try { MC.instance.hud.chat.addClientSystemMessage(Component.literal(prefix).withColor(HudTheme.ACCENT).append(message)) }
         finally { quiet.set(previous) }
     }
 }

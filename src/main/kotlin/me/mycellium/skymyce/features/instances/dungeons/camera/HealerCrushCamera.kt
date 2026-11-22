@@ -32,6 +32,7 @@ import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import me.mycellium.skymyce.utils.currentScreen
 
 /** Automatic activation only reads encounter events; it never sends packets or moves the player. */
 object HealerCrushCamera : SkyMyceModule() {
@@ -301,7 +302,7 @@ object HealerCrushCameraHud : SkyMyceModule() {
             if (manualStage != null && (client.level !== manualLevel || client.player?.isAlive != true || System.nanoTime() >= previewExpires)) stopPreview()
             val warmView = if (manualStage == null && widget.visible && HealerCrushCamera.warming()) crushView("purple") else null
             if (warmView != null) SecondaryWorldCamera.prewarm(warmView, Settings.width, Settings.height, client.window.guiScale.toDouble() * widget.scale)
-            else if (activeStage() == null && client.screen !is WidgetEditorScreen || !widget.visible && client.screen !is WidgetEditorScreen) SecondaryWorldCamera.stop()
+            else if (activeStage() == null && client.currentScreen !is WidgetEditorScreen || !widget.visible && client.currentScreen !is WidgetEditorScreen) SecondaryWorldCamera.stop()
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, client -> client.execute { stopPreview(); SecondaryWorldCamera.stop() } }
     }

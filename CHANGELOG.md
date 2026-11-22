@@ -3,6 +3,11 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-052 (2026-11-22)
+- Sky-Myce now also runs on Minecraft 26.2. It is a separate jar from the 26.1.2 one, and each updates from its own channel: a 26.2 install only gets 26.2 builds, and a 26.1.2 install keeps getting 26.1.2 builds. Nothing changes if you stay on 26.1.2.
+- On 26.2, the live player views in the Leap menu (Leap POV) and the Crush Camera are not available yet and show as unavailable. Everything else works the same as on 26.1.2.
+- Minecraft 26.2 uses Vulkan graphics by default. With Vulkan, Sky-Myce draws its menus with its simpler fallback renderer, because the normal one needs OpenGL. Menus still work; switching graphics back to OpenGL in Video Settings brings the normal renderer back.
+
 ## 2.8.0-beta-051 (2026-11-10)
 - Fixed: when a party member types !coords, !fps, !tps or !ping, your answer now always goes to party chat. Before, it went to whichever chat channel you had selected, so with All chat or guild chat selected your coordinates, FPS, TPS or ping were posted there.
 - Fixed: !kick, !transfer, !promote and !demote now only act on a party member whose name matches exactly, or on the one member whose name starts with what was typed. Before, any member whose name just contained the typed letters could be picked, so !kick a could kick the first member with an "a" in their name.

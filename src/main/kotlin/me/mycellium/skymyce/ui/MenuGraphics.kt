@@ -68,12 +68,16 @@ internal fun menuTextRuns(text: FormattedCharSequence, color: Int): List<MenuCan
 }
 
 /** Owo supplies retained layout/input; all paint goes to our canvas, never its native render state. */
+private const val UNSET_SIZE = 1 shl 20
+
 class MenuGraphics(val canvas: MenuCanvas, mouseX: Int, mouseY: Int, private val menuWidth: Int = Minecraft.getInstance().window.guiScaledWidth,
                    private val menuHeight: Int = Minecraft.getInstance().window.guiScaledHeight,
                    private val tooltipMotion: MenuTooltipMotion? = null) :
     OwoUIGraphics(Minecraft.getInstance(), GuiRenderState(), mouseX, mouseY, {}) {
-    override fun guiWidth() = menuWidth
-    override fun guiHeight() = menuHeight
+    // 26.2 sizes its scissor stack from these during the super constructor, before our fields are set;
+    // an unbounded size there keeps the 26.1.2 behaviour of no outer clip.
+    override fun guiWidth() = if (menuWidth > 0) menuWidth else UNSET_SIZE
+    override fun guiHeight() = if (menuHeight > 0) menuHeight else UNSET_SIZE
     override fun getMatrixStack() = pose()
     internal val canvasClip get(): MenuCanvas.Clip? { sync(); return canvas.clip }
     /** Compose effects without changing retained layout, focus, or component state. */

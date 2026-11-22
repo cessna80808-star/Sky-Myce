@@ -15,6 +15,7 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerScope
 import net.minecraft.client.Minecraft
 import net.minecraft.client.input.KeyEvent
 import org.lwjgl.glfw.GLFW
+import me.mycellium.skymyce.utils.currentScreen
 
 /** Synthetic local rows exercise the real journal controls without writing acquisition records. */
 internal class GuiVisualJournalFixture(private val details: Boolean = false, private val narrow: Boolean = false) {
@@ -52,7 +53,7 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
         check(client.connection == null) { "Journal visual checks must stay offline" }
         check(++ticks < 240) { "Journal visual controls did not finish stage $stage" }
         checkIntact()
-        val screen = client.screen as? RngJournalScreen ?: return false
+        val screen = client.currentScreen as? RngJournalScreen ?: return false
         val adapter = adapter(screen)
         val components = arrayListOf<UIComponent>().apply { adapter.rootComponent.collectDescendants(this) }
         val view = RngJournalScreen::class.java.getDeclaredField("view").apply { isAccessible = true }.get(screen) as JournalView

@@ -27,14 +27,34 @@ private fun checkCommunityConfiguration(configuration: Properties) {
     }
 }
 
+// -Pmc=<version> builds against versions/<version>.properties, which overrides gradle.properties; the default stays 26.1.2.
+val minecraftTarget: String? = providers.gradleProperty("mc").orNull
+val targetProperties = Properties().apply { minecraftTarget?.let { file("versions/$it.properties").reader().use(::load) } }
+fun prop(name: String): String = targetProperties.getProperty(name) ?: providers.gradleProperty(name).get()
+
 plugins {
 	id("net.fabricmc.fabric-loom")
 	`maven-publish`
 	id("org.jetbrains.kotlin.jvm") version "2.4.0"
 }
 
-version = providers.gradleProperty("mod_version").get()
-group = providers.gradleProperty("maven_group").get()
+version = prop("mod_version")
+// Separate outputs so both targets can be built from one checkout without clobbering each other.
+minecraftTarget?.let { layout.buildDirectory = layout.projectDirectory.dir("build/mc$it") }
+group = prop("maven_group")
+
+// Small per-version shims for Minecraft APIs that moved between targets.
+// 26.2 rebuilt the world renderer, so its build leaves out the secondary camera and src/mc/26.2 stubs it as unavailable.
+// SecondaryCameraGuiInvoker stays: the Skija menu blits through it too.
+val secondaryCamera = prop("secondary_camera").toBoolean()
+fun isSecondaryCameraSource(path: String) = path.startsWith("me/mycellium/skymyce/features/instances/dungeons/camera/render/") ||
+    Regex("""me/mycellium/mixin/Secondary(Camera(?!GuiInvoker)\w*|\w*DispatcherAccessor)\.java""").matches(path)
+sourceSets.main {
+    kotlin.srcDir("src/mc/${prop("minecraft_version")}/kotlin")
+    java.srcDir("src/mc/${prop("minecraft_version")}/java")
+    if (!secondaryCamera) java.exclude { it.file.startsWith(file("src/main/java")) && isSecondaryCameraSource(it.path) }
+}
+if (!secondaryCamera) sourceSets.test { java.exclude { isSecondaryCameraSource(it.path) } }
 
 repositories {
 	// Add repositories to retrieve artifacts from in here.
@@ -69,7 +89,7 @@ val prepareBrowserRuntime by tasks.registering {
     doLast {
         ZipFile(original.get()).use { source ->
             val config = JsonSlurper().parseText(source.getInputStream(source.getEntry("rinku.mixins.json")).reader().use { it.readText() }) as MutableMap<String, Any>
-            val startup = setOf("MixinClientPackSource", "MixinMinecraft")
+            val startup = prop("rinku_startup_mixins").split(",").toSet()
             val mixins = config["client"] as List<*>
             check(mixins.containsAll(startup)) { "Review Rinku startup hooks after upgrading the browser runtime" }
             // Download and initialize Chromium only when a browser is opened, so local features stay usable offline.
@@ -88,10 +108,10 @@ val prepareBrowserRuntime by tasks.registering {
 }
 
 dependencies {
-    add(browserRuntime.name, "de.keksuccino:rinku-fabric:${providers.gradleProperty("rinku_version").get()}")
+    add(browserRuntime.name, "de.keksuccino:rinku-fabric:${prop("rinku_version")}")
     implementation(files(prepareBrowserRuntime))
-    include("de.keksuccino:rinku-fabric:${providers.gradleProperty("rinku_version").get()}") { isTransitive = false }
-    val skijaVersion = providers.gradleProperty("skija_version").get()
+    include("de.keksuccino:rinku-fabric:${prop("rinku_version")}") { isTransitive = false }
+    val skijaVersion = prop("skija_version")
     implementation("io.github.humbleui:skija-shared:$skijaVersion")
     include("io.github.humbleui:skija-shared:$skijaVersion")
     include("io.github.humbleui:types:0.2.0")
@@ -100,41 +120,42 @@ dependencies {
         include("io.github.humbleui:skija-$platform:$skijaVersion") { isTransitive = false }
     }
 	// To change the versions see the gradle.properties file
-	minecraft("com.mojang:minecraft:${providers.gradleProperty("minecraft_version").get()}")
-	implementation("net.fabricmc:fabric-loader:${providers.gradleProperty("loader_version").get()}")
+	minecraft("com.mojang:minecraft:${prop("minecraft_version")}")
+	implementation("net.fabricmc:fabric-loader:${prop("loader_version")}")
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
-	implementation("net.fabricmc.fabric-api:fabric-api:${providers.gradleProperty("fabric_api_version").get()}")
-    implementation("net.fabricmc:fabric-language-kotlin:${providers.gradleProperty("fabric_kotlin_version").get()}")
+	implementation("net.fabricmc.fabric-api:fabric-api:${prop("fabric_api_version")}")
+    implementation("net.fabricmc:fabric-language-kotlin:${prop("fabric_kotlin_version")}")
 
 	// Dev Auth
-	runtimeOnly("me.djtheredstoner:DevAuth-fabric:${providers.gradleProperty("devauth_version").get()}")
+	runtimeOnly("me.djtheredstoner:DevAuth-fabric:${prop("devauth_version")}")
 
 	// Hypixel API
-	implementation("net.hypixel:mod-api:${providers.gradleProperty("hypixel_mod_api_version").get()}")
-	include("net.hypixel:mod-api:${providers.gradleProperty("hypixel_mod_api_version").get()}")
+	implementation("net.hypixel:mod-api:${prop("hypixel_mod_api_version")}")
+	include("net.hypixel:mod-api:${prop("hypixel_mod_api_version")}")
 
 	// Skyblock API
-	api("tech.thatgravyboat:skyblock-api:${providers.gradleProperty("skyblock_api_version").get()}") {
-		capabilities { requireCapability("tech.thatgravyboat:skyblock-api-26.1") }
+	api("tech.thatgravyboat:skyblock-api:${prop("skyblock_api_version")}") {
+		capabilities { requireCapability("tech.thatgravyboat:skyblock-api-${prop("skyblock_api_target")}") }
 	}
-	include("tech.thatgravyboat:skyblock-api:${providers.gradleProperty("skyblock_api_version").get()}") {
-		capabilities { requireCapability("tech.thatgravyboat:skyblock-api-26.1") }
+	include("tech.thatgravyboat:skyblock-api:${prop("skyblock_api_version")}") {
+		capabilities { requireCapability("tech.thatgravyboat:skyblock-api-${prop("skyblock_api_target")}") }
 	}
 
 	// Optional at runtime (players install it themselves); pinned by Modrinth version ID so the dev client has it.
-	runtimeOnly("maven.modrinth:skyblock-profile-viewer:${providers.gradleProperty("skyblockpv_version").get()}")
+	// SkyBlockPv has no 26.2 build yet, so the 26.2 target leaves skyblockpv_version empty.
+	prop("skyblockpv_version").takeIf { it.isNotEmpty() }?.let { runtimeOnly("maven.modrinth:skyblock-profile-viewer:$it") }
 
 	// Resourceful Config
-	implementation("com.teamresourceful.resourcefulconfig:resourcefulconfig-fabric-26.1:${providers.gradleProperty("resourceful_config_version").get()}")
-	include("com.teamresourceful.resourcefulconfig:resourcefulconfig-fabric-26.1:${providers.gradleProperty("resourceful_config_version").get()}")
+	implementation("com.teamresourceful.resourcefulconfig:resourcefulconfig-fabric-${prop("resourceful_config_target")}:${prop("resourceful_config_version")}")
+	include("com.teamresourceful.resourcefulconfig:resourcefulconfig-fabric-${prop("resourceful_config_target")}:${prop("resourceful_config_version")}")
 
-	implementation("com.teamresourceful.resourcefulconfigkt:resourcefulconfigkt-26.1-rc-1:${providers.gradleProperty("resourceful_config_kt_version").get()}")
-	include("com.teamresourceful.resourcefulconfigkt:resourcefulconfigkt-26.1-rc-1:${providers.gradleProperty("resourceful_config_kt_version").get()}")
+	implementation("com.teamresourceful.resourcefulconfigkt:resourcefulconfigkt-${prop("resourceful_config_kt_target")}:${prop("resourceful_config_kt_version")}")
+	include("com.teamresourceful.resourcefulconfigkt:resourcefulconfigkt-${prop("resourceful_config_kt_target")}:${prop("resourceful_config_kt_version")}")
 
 	// owo lib
-	implementation("io.wispforest:owo-lib:${providers.gradleProperty("owo_version").get()}")
-	include("io.wispforest:owo-lib:${providers.gradleProperty("owo_version").get()}")
+	implementation("io.wispforest:owo-lib:${prop("owo_version")}")
+	include("io.wispforest:owo-lib:${prop("owo_version")}")
 }
 
 // Keep Loom's module coordinates/capabilities and normal nesting/metadata machinery.
@@ -143,7 +164,7 @@ tasks.named<NestableJarGenerationTask>("processIncludeJars") {
     dependsOn(prepareBrowserRuntime)
     inputs.files(prepareBrowserRuntime)
     doLast {
-        val browserName = "rinku-fabric-${providers.gradleProperty("rinku_version").get()}.jar"
+        val browserName = "rinku-fabric-${prop("rinku_version")}.jar"
         prepareBrowserRuntime.get().outputs.files.singleFile.copyTo(outputDirectory.file(browserName).get().asFile, overwrite = true)
     }
 }
@@ -152,10 +173,13 @@ tasks.processResources {
 	val version = version
 	inputs.property("version", version)
 
+	if (!secondaryCamera) filesMatching("skymyce.mixins.json") {
+		filter { line -> if (Regex("""\s*"Secondary(Camera(?!GuiInvoker)\w*|\w*DispatcherAccessor)",""").matches(line)) null else line }
+	}
 	filesMatching("fabric.mod.json") {
-		expand("version" to version, "minecraft_version" to providers.gradleProperty("minecraft_version").get(),
-            "fabric_api_version" to providers.gradleProperty("fabric_api_version").get(),
-            "loader_version" to providers.gradleProperty("loader_version").get())
+		expand("version" to version, "minecraft_version" to prop("minecraft_version"),
+            "fabric_api_version" to prop("fabric_api_version"),
+            "loader_version" to prop("loader_version"))
 	}
 	// The Daily Digest's What's New card reads the same changelog the release notes and Discord posts come from.
 	from("CHANGELOG.md") { into("assets/skymyce") }
@@ -207,9 +231,9 @@ tasks.jar {
 val communityResources = layout.buildDirectory.dir("generated/community")
 val generateCommunityResources by tasks.registering {
     val values = mapOf(
-        "backend" to providers.gradleProperty("skyMyceBackend").get(),
-        "minecraft" to providers.gradleProperty("minecraft_version").get(),
-        "key." + providers.gradleProperty("skyMyceSigningKeyId").get() to providers.gradleProperty("skyMyceSigningPublicKey").get()
+        "backend" to prop("skyMyceBackend"),
+        "minecraft" to prop("minecraft_version"),
+        "key." + prop("skyMyceSigningKeyId") to prop("skyMyceSigningPublicKey")
     )
     inputs.properties(values)
     outputs.dir(communityResources)
@@ -364,7 +388,7 @@ for (checkName in listOf("IrcChatModel", "IrcGif", "IrcMedia")) {
         "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt", "Checks bounded IRC message and media behavior")
 }
 // Assertions run via the check tasks; this project does not use a test framework.
-registerCheck("cameraRenderCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck",
+if (secondaryCamera) registerCheck("cameraRenderCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck",
     "Checks independent secondary camera projection, target bounds and strict viewpoints")
 registerCheck("healerCrushCameraCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt",
     "Checks Crush Camera timing, class selection and encounter cleanup")

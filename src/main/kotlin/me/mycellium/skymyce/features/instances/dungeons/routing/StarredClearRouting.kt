@@ -50,6 +50,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.sqrt
 import kotlin.time.Duration.Companion.milliseconds
+import me.mycellium.skymyce.utils.collectFrameGizmos
 
 /** Client-local routing. World reads stay on the client thread; only immutable graph math is scheduled. */
 object StarredClearRouting : SkyMyceModule() {
@@ -1489,7 +1490,7 @@ object StarredClearRouting : SkyMyceModule() {
             val color = HudTheme.alpha(HudTheme.blend(HudTheme.RED, 0xFFFFFF, 20), Settings.opacity)
             // Match Noamm's real DoorTile bounds, without the route-height offset or an approach marker.
             val box = AABB(door.x - 1.0, door.y.toDouble(), door.z - 1.0, door.x + 2.0, door.y + 4.0, door.z + 2.0)
-            MC.instance.levelRenderer.collectPerFrameGizmos().use {
+            MC.instance.collectFrameGizmos().use {
                 Gizmos.cuboid(box, GizmoStyle.strokeAndFill(color, Settings.thickness.toFloat() + 1.5f,
                     HudTheme.alpha(color, 15))).setAlwaysOnTop()
             }
@@ -1503,7 +1504,7 @@ object StarredClearRouting : SkyMyceModule() {
         val healer = HudTheme.alpha(HudTheme.blend(HudTheme.GREEN, 0xFFFFFF, 20), Settings.opacity)
         val planned = HudTheme.alpha(HudTheme.blend(HudTheme.YELLOW, 0xFFFFFF, 15), Settings.opacity)
         val heightOffset = roomRouteLineOffset(Settings.lineHeight)
-        MC.instance.levelRenderer.collectPerFrameGizmos().use {
+        MC.instance.collectFrameGizmos().use {
             if (Settings.showRoute) {
                 var count = 0
                 var index = 0

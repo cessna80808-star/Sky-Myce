@@ -209,7 +209,7 @@ enum class DungeonRank(val label: String, val color: ChatFormatting, val texture
     companion object {
         fun fromLabel(label: String) = entries.firstOrNull { it.label == label } ?: UNKNOWN
 
-        fun DungeonRank.formatted() = "§${this.color.char}§l${this.label}"
+        fun DungeonRank.formatted() = "${this.color}§l${this.label}"
     }
 }
 

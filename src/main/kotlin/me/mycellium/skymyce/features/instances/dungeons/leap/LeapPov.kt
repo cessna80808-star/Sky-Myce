@@ -21,6 +21,7 @@ import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
+import me.mycellium.skymyce.utils.currentScreen
 
 // Compiled once: LeapPovSharing checks these every tick in the Catacombs.
 internal val leapServerId = Regex("[A-Za-z0-9_-]{1,64}")
@@ -250,7 +251,7 @@ object LeapPovSharing : SkyMyceModule() {
             .filter { info -> keys.any { it.equals(info.profile.name, ignoreCase = true) } }
             .map { LeapIdentity(it.profile.name, it.profile.id) }, roster.members.toSet(),
             LeapIdentity(player.gameProfile.name, client.user.profileId)) ?: return null
-        val menu = client.screen?.takeIf { LeapMenu.active(it) }
+        val menu = client.currentScreen?.takeIf { LeapMenu.active(it) }
         val watching = if (Settings.povEnabled && menu != null) LeapMenu.sharedTargets() else emptyMap()
         if (watching.size > 4 || watching.keys.any { it == client.user.profileId || it !in members } ||
             watching.any { (uuid, name) -> normalizedLeapName(name) != normalizedLeapName(members.getValue(uuid)) }) return null
@@ -265,7 +266,7 @@ object LeapPovSharing : SkyMyceModule() {
         ProfileAPI.profileId == lease.scope.profileId && ProfileAPI.profileName == lease.scope.profileName &&
         LocationAPI.island == SkyBlockIsland.THE_CATACOMBS && LocationAPI.serverId == lease.scope.server &&
         DungeonAPI.dungeonFloor?.name == lease.scope.floor && LocationAPI.onAlpha == lease.scope.alpha &&
-        (lease.scope.menu == null || MC.instance.screen === lease.scope.menu)
+        (lease.scope.menu == null || MC.instance.currentScreen === lease.scope.menu)
 
     private fun networkCurrent(scope: Scope): Boolean = CommunityClient.connected &&
         CommunityClient.sessionToken == scope.authorization && CommunityClient.sessionGeneration == scope.communityGeneration &&

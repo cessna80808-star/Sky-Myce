@@ -4,6 +4,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.lang.management.ManagementFactory
 import java.net.URI
+import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -156,7 +157,7 @@ object CommunityUpdates {
         busy = true; checked = true; status = "Checking for updates…"
         worker.submit {
             val result = runCatching {
-                val response = http.send(HttpRequest.newBuilder(endpoint("/community/release")).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofInputStream())
+                val response = http.send(HttpRequest.newBuilder(endpoint("/community/release${communityChannel(CommunityClient.configuration.getProperty("minecraft"), '?')}")).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofInputStream())
                 val bytes = readCommunityBody(response.body(), 65536, Duration.ofSeconds(20))
                 require(response.statusCode() == 200)
                 verifyCommunityRelease(JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject, CommunityClient.configuration)
@@ -246,7 +247,7 @@ object CommunityUpdates {
         Files.createDirectories(directory)
         val staging = directory.toRealPath(); require(staging.parent == mods.parent)
         val next = staging.resolve("Sky-Myce-${release.version}-${communityNonce().take(8)}.jar")
-        val response = http.send(HttpRequest.newBuilder(endpoint("/community/artifact?version=${release.version}")).timeout(Duration.ofMinutes(3)).GET().build(), HttpResponse.BodyHandlers.ofInputStream())
+        val response = http.send(HttpRequest.newBuilder(endpoint("/community/artifact?version=${release.version}${communityChannel(CommunityClient.configuration.getProperty("minecraft"), '&')}")).timeout(Duration.ofMinutes(3)).GET().build(), HttpResponse.BodyHandlers.ofInputStream())
         var downloaded = false
         try {
             require(response.statusCode() == 200)
@@ -292,6 +293,12 @@ internal fun newerCommunityVersion(next: String, current: String): Boolean {
     val left = communityVersion(next); val right = communityVersion(current)
     return left.zip(right).firstOrNull { it.first != it.second }?.let { it.first > it.second } ?: false
 }
+// Mirrors the relay's community-release.ts: 26.1.2 keeps the original channel; other targets have their own.
+private const val DEFAULT_COMMUNITY_MINECRAFT = "26.1.2"
+internal fun communityArtifact(version: String, minecraft: String) =
+    if (minecraft == DEFAULT_COMMUNITY_MINECRAFT) "releases/Sky-Myce-$version.jar" else "releases/Sky-Myce-$version-mc$minecraft.jar"
+internal fun communityChannel(minecraft: String, separator: Char) =
+    if (minecraft == DEFAULT_COMMUNITY_MINECRAFT) "" else "${separator}minecraft=${URLEncoder.encode(minecraft, Charsets.UTF_8)}"
 /** Authenticate the exact payload bytes before trusting any download metadata. */
 internal fun verifyCommunityRelease(envelope: JsonObject, configuration: Properties, now: Long = System.currentTimeMillis()): CommunityRelease {
     val kid = envelope["kid"].asString
@@ -303,9 +310,10 @@ internal fun verifyCommunityRelease(envelope: JsonObject, configuration: Propert
     require(Signature.getInstance("Ed25519").run { initVerify(key); update(payload); verify(signature) })
     val data = JsonParser.parseString(payload.toString(Charsets.UTF_8)).asJsonObject
     require(data["product"].asString == "sky-myce" && data["protocol"].asInt == 4 && data["installation"].asString == "fabric")
-    require(data["minecraft"].asString == configuration.getProperty("minecraft"))
+    val minecraft = configuration.getProperty("minecraft")
+    require(data["minecraft"].asString == minecraft)
     val version = data["version"].asString; communityVersion(version)
-    require(data["artifact"].asString == "releases/Sky-Myce-$version.jar" && !data.has("minimumLoaderVersion"))
+    require(data["artifact"].asString == communityArtifact(version, minecraft) && !data.has("minimumLoaderVersion"))
     val size = data["size"].asLong; require(size in 4..MAX_COMMUNITY_JAR)
     val hash = data["sha256"].asString; require(hash.matches(Regex("[a-f0-9]{64}")))
     val issued = data["issuedAt"].asLong; val expires = data["expiresAt"].asLong

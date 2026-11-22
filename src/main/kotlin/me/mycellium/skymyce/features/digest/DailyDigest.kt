@@ -38,6 +38,8 @@ import tech.thatgravyboat.skyblockapi.api.events.profile.ProfileChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
 import tech.thatgravyboat.skyblockapi.api.profile.profile.ProfileAPI
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import me.mycellium.skymyce.utils.currentScreen
+import me.mycellium.skymyce.utils.openScreen
 
 /** Client-thread coordinator. All file work runs on SBAPI's scheduler; the menu reads immutable snapshots. */
 object DailyDigest : SkyMyceModule() {
@@ -173,7 +175,7 @@ object DailyDigest : SkyMyceModule() {
         wake = null
         news.cancel()
         resetSubscription()
-        if (MC.instance.screen is DailyDigestScreen) MC.instance.setScreen(null)
+        if (MC.instance.currentScreen is DailyDigestScreen) MC.instance.openScreen(null)
         changed()
     }
 
@@ -212,12 +214,12 @@ object DailyDigest : SkyMyceModule() {
         if (!isEnabled() || !LocationAPI.isOnSkyBlock || MC.instance.player == null) return
         synchronizeContext()
         val now = System.currentTimeMillis()
-        if (MC.instance.screen is DailyDigestScreen) {
+        if (MC.instance.currentScreen is DailyDigestScreen) {
             gate.opened(MC.instance.user.profileId.toString(), DigestDailyGate.localDate(now))
             persist()
         }
         if (gate.shouldOpen(MC.instance.user.profileId.toString(), now, DigestDailyGate.localDate(now),
-                DailyDigestConfig.automatic, loaded, contextReady(), MC.instance.screen == null)) open()
+                DailyDigestConfig.automatic, loaded, contextReady(), MC.instance.currentScreen == null)) open()
         // Briefly tolerate delayed profile packets; later profile/menu events retry without continuous polling.
         if ((!loaded || !contextReady() || now < joinedAt + DailyDigestConfig.openingDelay * 1000L) && now - joinedAt < 60000)
             scheduleWake(2000)

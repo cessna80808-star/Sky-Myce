@@ -79,6 +79,9 @@ import java.net.http.WebSocket
 import java.lang.reflect.Proxy
 import java.util.concurrent.CompletableFuture
 import java.io.IOException
+import me.mycellium.skymyce.utils.currentOverlay
+import me.mycellium.skymyce.utils.currentScreen
+import me.mycellium.skymyce.utils.mainTarget
 
 /** Only loaded by runGuiVisualCheck; no world or community session is opened. */
 class GuiVisualCheckClient : ClientModInitializer {
@@ -87,8 +90,12 @@ class GuiVisualCheckClient : ClientModInitializer {
             client.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0)
             client.soundManager.updateCategoryVolume(SoundSource.MASTER, 0f)
             val sodium = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
-            check(me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck.checkSodiumChunkEventsCompatibility() == sodium)
-            println("GUI visual check: transformed Sodium chunk events verified=$sodium")
+            // The 26.2 build has no secondary camera, so this check only exists in the 26.1.2 build.
+            val cameraCheck = runCatching { Class.forName("me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck") }.getOrNull()
+            if (cameraCheck != null) {
+                check(cameraCheck.getMethod("checkSodiumChunkEventsCompatibility").invoke(null) == sodium)
+                println("GUI visual check: transformed Sodium chunk events verified=$sodium")
+            }
         }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)
@@ -255,7 +262,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             return field.get(screen) as OwoUIAdapter<*>
         }
         fun press(title: String, navigation: Boolean = false) {
-            val screen = checkNotNull(net.minecraft.client.Minecraft.getInstance().screen)
+            val screen = checkNotNull(net.minecraft.client.Minecraft.getInstance().currentScreen)
             val ui = adapter(screen)
             val components = ArrayList<UIComponent>()
             ui.rootComponent.collectDescendants(components)
@@ -271,7 +278,7 @@ class GuiVisualCheckClient : ClientModInitializer {
         }
         fun clickBreadcrumb(title: String) {
             val client = Minecraft.getInstance()
-            val screen = client.screen as SettingsScreen
+            val screen = client.currentScreen as SettingsScreen
             val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
             val control = components.filterIsInstance<MenuButton>().single { !it.navigation && it.message.string == title }
             fun pose(name: String) = MenuScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen) as MotionPose
@@ -283,10 +290,10 @@ class GuiVisualCheckClient : ClientModInitializer {
                 (shell.pivotY + (y - shell.pivotY) * shell.scale + shell.y) * client.window.guiScaledHeight / screen.height,
                 MouseButtonInfo(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0))
             check(screen.mouseClicked(mouse, false)) { "Breadcrumb $title did not handle its painted mouse position" }
-            client.screen?.mouseReleased(mouse)
+            client.currentScreen?.mouseReleased(mouse)
         }
         fun checkBreadcrumbDirectory(section: String?) {
-            val screen = checkNotNull(Minecraft.getInstance().screen)
+            val screen = checkNotNull(Minecraft.getInstance().currentScreen)
             check(screen is MenuDirectoryScreen) { "Breadcrumb did not open its category directory" }
             val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
             check(components.filterIsInstance<MenuButton>().any { it.message.string == (section ?: "All sections") }) {
@@ -298,15 +305,15 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
         }
         fun trackerFilter() = DungeonScreen::class.java.getDeclaredField("filter").apply { isAccessible = true }
-            .get(checkNotNull(Minecraft.getInstance().screen) as DungeonScreen) as TrackerFilter
+            .get(checkNotNull(Minecraft.getInstance().currentScreen) as DungeonScreen) as TrackerFilter
         fun trackerView() = DungeonScreen::class.java.getDeclaredField("view").apply { isAccessible = true }
-            .get(checkNotNull(Minecraft.getInstance().screen) as DungeonScreen) as TrackerView
+            .get(checkNotNull(Minecraft.getInstance().currentScreen) as DungeonScreen) as TrackerView
         fun leaderboardState(screen: LeaderboardScreen) = listOf("category", "metric", "period", "page", "query").map { name ->
             LeaderboardScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen)
         }
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             if (!started) {
-                if (client.screen == null || client.overlay != null) return@register
+                if (client.currentScreen == null || client.currentOverlay != null) return@register
                 checkImmediateSendFailure(client)
                 checkMenuItemModels(client)
                 started = true
@@ -335,7 +342,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 navigateMenu(next)
             }
             if (current.name == "home-keyboard-narrow" && ticks in listOf(12, 14)) {
-                val screen = client.screen as MenuScreen
+                val screen = client.currentScreen as MenuScreen
                 val field = BaseOwoScreen::class.java.getDeclaredField("uiAdapter").apply { isAccessible = true }
                 val adapter = field.get(screen) as OwoUIAdapter<*>
                 val handler = checkNotNull(adapter.rootComponent.focusHandler())
@@ -355,7 +362,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name.startsWith("settings-routing-breadcrumbs")) when (ticks) {
                 8 -> {
-                    val screen = checkNotNull(client.screen)
+                    val screen = checkNotNull(client.currentScreen)
                     val components = arrayListOf<UIComponent>().apply { adapter(screen).rootComponent.collectDescendants(this) }
                     val links = components.filterIsInstance<MenuButton>().filter { it.message.string in listOf("Dungeons", "→ Routes and Navigation", "→ Dungeon Routing") && !it.navigation }
                     check(links.size == 3 && links.all { link ->
@@ -368,10 +375,10 @@ class GuiVisualCheckClient : ClientModInitializer {
                 12, 22 -> navigateMenu(SettingsScreen.forFeature(null, "starred-routes"))
                 18 -> { clickBreadcrumb("→ Routes and Navigation"); checkBreadcrumbDirectory("Routes and Navigation") }
                 28 -> {
-                    val previous = client.screen
+                    val previous = client.currentScreen
                     press("→ Dungeon Routing")
-                    check(client.screen is SettingsScreen && client.screen !== previous &&
-                        (client.screen as MenuScreen).canonicalFeatureId == "starred-routes") {
+                    check(client.currentScreen is SettingsScreen && client.currentScreen !== previous &&
+                        (client.currentScreen as MenuScreen).canonicalFeatureId == "starred-routes") {
                         "Keyboard activation of the feature breadcrumb did not open its canonical settings"
                     }
                     println("Visual breadcrumb check passed: mouse category/section, keyboard feature and ${current.width}px layout")
@@ -382,7 +389,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 6 -> { press("Dungeon runs"); press("Average Run Time") }
                 7 -> { press("All time"); press("This week • UTC") }
                 8 -> {
-                    val screen = client.screen as LeaderboardScreen
+                    val screen = client.currentScreen as LeaderboardScreen
                     val components = ArrayList<UIComponent>()
                     adapter(screen).rootComponent.collectDescendants(components)
                     components.filterIsInstance<MenuTextBox>().single().text("fixture")
@@ -390,18 +397,18 @@ class GuiVisualCheckClient : ClientModInitializer {
                     LeaderboardScreen::class.java.getDeclaredField("page").apply { isAccessible = true }.setInt(screen, 3)
                     leaderboardOrigin = screen; leaderboardView = leaderboardState(screen)
                     press("Connect Discord")
-                    communityOrigin = client.screen as CommunityScreen
+                    communityOrigin = client.currentScreen as CommunityScreen
                 }
                 10 -> press("Sharing settings")
                 12 -> {
-                    check(client.screen is SettingsScreen)
-                    client.screen!!.onClose()
-                    check(client.screen === communityOrigin) { "Sharing settings discarded its Community origin" }
+                    check(client.currentScreen is SettingsScreen)
+                    client.currentScreen!!.onClose()
+                    check(client.currentScreen === communityOrigin) { "Sharing settings discarded its Community origin" }
                 }
                 14 -> press("Done")
                 16 -> {
-                    check(client.screen === leaderboardOrigin) { "Community Done replaced the originating leaderboard" }
-                    check(leaderboardState(client.screen as LeaderboardScreen) == leaderboardView) {
+                    check(client.currentScreen === leaderboardOrigin) { "Community Done replaced the originating leaderboard" }
+                    check(leaderboardState(client.currentScreen as LeaderboardScreen) == leaderboardView) {
                         "The Discord connection detour reset leaderboard category, metric, period, page or search"
                     }
                 }
@@ -409,12 +416,12 @@ class GuiVisualCheckClient : ClientModInitializer {
             if (current.name == "daily-rng-local-history") when (ticks) {
                 5 -> {
                     val components = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                     components.filterIsInstance<MenuTextBox>().single().text("implosion")
                 }
                 6 -> {
                     val components = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                     val buttons = components.filterIsInstance<MenuButton>()
                     val tabs = buttons.filter { it.message.string in listOf("Local history", "Community") &&
                         generateSequence(it.parent()) { parent -> parent.parent() }.none { parent -> parent is MenuNavigation } }
@@ -431,7 +438,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 }
                 8, 16 -> {
                     val components = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                     check(components.filterIsInstance<MenuLabel>().any { it.text().string.contains("Implosion") }) {
                         "Saved Implosion was missing from offline RNG Activity"
                     }
@@ -443,7 +450,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name == "daily-news-video" && ticks == 18) {
                 val components = arrayListOf<UIComponent>()
-                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                 check(components.filterIsInstance<MenuButton>().any { it.message.string == "Watch Video" })
                 check(components.filterIsInstance<MenuButton>().any { it.message.string == "Watch Video 1" })
                 check(components.filterIsInstance<MenuButton>().any { it.message.string == "Open Hypixel 2" })
@@ -454,7 +461,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name == "dungeon-tracker-timeline-load-older" && ticks in listOf(10, 15)) {
                 val components = arrayListOf<UIComponent>()
-                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                 val records = components.count { it.id()?.startsWith("timeline-event-") == true }
                 check(records == if (ticks == 10) 100 else 120) { "Continuous timeline loaded $records records at tick $ticks" }
                 checkNotNull(trackerHistoryFixture).checkIntact()
@@ -479,7 +486,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                     check(trackerFilter().let { it.query.isEmpty() && it.floor == null && it.scope == TrackerScope.ALL_LOCAL_PROFILES &&
                         it.legacyTotals && it.sort == LootOrder.NAME && it.ascending && it.oldestFirst }) { "Clearing constraints changed the loot source or sorting" }
                     val components = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                     check(components.filterIsInstance<MenuButton>().none { it.message.string in listOf("Show historical totals", "Show new tracking") })
                     checkNotNull(trackerHistoryFixture).checkIntact()
                 }
@@ -491,13 +498,13 @@ class GuiVisualCheckClient : ClientModInitializer {
                         it.rateSample?.completedRuns == 20L && it.observedRate == 0.1
                     }) { "The personal percentage ignored its separate dated run sample" }
                     val labels = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(labels)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(labels)
                     check(labels.filterIsInstance<MenuLabel>().any { it.text().string.contains("Market value (estimated)") })
                     check(labels.filterIsInstance<MenuLabel>().any { it.text().string.contains("Personal rate") })
                     check(labels.filterIsInstance<MenuLabel>().any { it.text().string.startsWith("All saved loot") })
                     press("RNG Museum", navigation = true)
                     val components = arrayListOf<UIComponent>()
-                    adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                    adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                     components.filterIsInstance<MenuTextBox>().single().text("shadow warp")
                 }
                 21 -> press("History")
@@ -515,9 +522,9 @@ class GuiVisualCheckClient : ClientModInitializer {
                     println("Visual tracker filter check passed: item history returns, clearing preserves source, no saved loot changes")
                 }
             }
-            if (current.name.startsWith("dungeon-tracker-") && client.screen is DungeonScreen && ticks == 24) {
+            if (current.name.startsWith("dungeon-tracker-") && client.currentScreen is DungeonScreen && ticks == 24) {
                 val components = arrayListOf<UIComponent>()
-                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                 check(AcquisitionRepository.state === trackerArchiveSnapshot) { "A tracker view changed the acquisition archive" }
                 if (trackerFilter().page == TrackerPage.TIMELINE) {
                     val shown = trackerView()
@@ -574,7 +581,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name == "item-models-skyblock" && ticks == 30) {
                 val components = arrayListOf<UIComponent>()
-                adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(components)
+                adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(components)
                 for (id in listOf("IMPLOSION_SCROLL", "WITHER_SHIELD_SCROLL", "SHADOW_WARP_SCROLL", "TARANTULA_CATALYST")) {
                     val icon = components.filterIsInstance<MenuItem>().single { it.id() == "model-$id" }
                     val images = MenuItem::class.java.getDeclaredField("modelArt").apply { isAccessible = true }.get(icon) as List<*>
@@ -586,7 +593,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 }
             }
             if (current.name == "search-results" && ticks in listOf(6, 14)) {
-                val components = arrayListOf<UIComponent>().apply { adapter(checkNotNull(client.screen)).rootComponent.collectDescendants(this) }
+                val components = arrayListOf<UIComponent>().apply { adapter(checkNotNull(client.currentScreen)).rootComponent.collectDescendants(this) }
                 if (ticks == 6) components.filterIsInstance<MenuTextBox>().single().text("graphics")
                 else {
                     // One query reaches a preset, a feature, its settings and a command, each as a compact row.
@@ -595,7 +602,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 }
             }
             if (current.name == "home-flyout" && ticks in listOf(10, 24)) {
-                val screen = checkNotNull(client.screen)
+                val screen = checkNotNull(client.currentScreen)
                 val components = arrayListOf<UIComponent>()
                 adapter(screen).rootComponent.collectDescendants(components)
                 if (ticks == 10) {
@@ -610,7 +617,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
             if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == 18) {
                 check(trackerView().loot.single { it.item == "SHADOW_WARP_SCROLL" }.rateSample != null)
-                val screen = checkNotNull(client.screen)
+                val screen = checkNotNull(client.currentScreen)
                 val components = arrayListOf<UIComponent>()
                 adapter(screen).rootComponent.collectDescendants(components)
                 check(components.filterIsInstance<MenuLabel>().any { it.text().string.startsWith("Rate sample:") }) {
@@ -631,7 +638,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 else -> 25
             }
             if (current.name == "dungeon-tracker-personal-rate-tooltip" && ticks == captureTick) {
-                val tooltip = MenuScreen::class.java.getDeclaredField("tooltip").apply { isAccessible = true }.get(client.screen)
+                val tooltip = MenuScreen::class.java.getDeclaredField("tooltip").apply { isAccessible = true }.get(client.currentScreen)
                 check(MenuTooltipMotion::class.java.getDeclaredField("key").apply { isAccessible = true }.get(tooltip) != null) {
                     "Personal-rate screenshot did not show its hover tooltip"
                 }
@@ -640,7 +647,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             if (current.name.startsWith("journal-") && journalFixture?.advance(client) != true) return@register
             if (ticks >= captureTick) {
                 pending = true
-                Screenshot.takeScreenshot(client.mainRenderTarget) { image ->
+                Screenshot.takeScreenshot(client.mainTarget) { image ->
                     val captured = runCatching {
                         image.use {
                             it.writeToFile(output.resolve("${current.name}.png"))

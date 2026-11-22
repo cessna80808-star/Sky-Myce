@@ -36,6 +36,7 @@ import tech.thatgravyboat.skyblockapi.api.events.base.predicates.OnlyIn
 import tech.thatgravyboat.skyblockapi.api.events.chat.ChatReceivedEvent
 import tech.thatgravyboat.skyblockapi.api.events.location.IslandChangeEvent
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
+import me.mycellium.skymyce.utils.guiHidden
 
 object DungeonWinOverlay : SkyMyceModule() {
     private const val RANK_WIDTH = 96
@@ -124,7 +125,7 @@ object DungeonWinOverlay : SkyMyceModule() {
     fun render(graphics: GuiGraphicsExtractor) {
         if (!DungeonsConfig.dungeonWinScreen) return
         if (!showOverlay) return
-        if (MC.instance.options.hideGui) return
+        if (MC.instance.guiHidden) return
         refreshDetails()
 
         animateReveal()

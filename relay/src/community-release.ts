@@ -4,7 +4,17 @@ export type CommunityReleaseConfig = { PRIVATE_ARTIFACTS?: R2Bucket; DRM_PUBLIC_
   COMMUNITY_RELEASE_MANIFEST_KEY?: string; ARTIFACT_MANIFEST_KEY?: string; MINECRAFT_VERSION?: string };
 type Manifest = { product: string; protocol: number; installation: string; minecraft: string; version: string;
   artifact: string; size: number; sha256: string; issuedAt: number; expiresAt: number; notes?: string };
-export async function verifyCommunityManifest(envelope: any, env: CommunityReleaseConfig, now = Date.now()): Promise<Manifest> {
+/** Extra Minecraft targets with their own signed release channel; the default target keeps the original pointer and artifact names. */
+const EXTRA_MINECRAFT_TARGETS = new Set(["26.2"]);
+const defaultMinecraft = (env: CommunityReleaseConfig) => env.MINECRAFT_VERSION ?? "26.1.2";
+/** Returns the requested Minecraft target, or null when the relay has no channel for it. */
+export function communityMinecraft(requested: string | null, env: CommunityReleaseConfig): string | null {
+  if (requested === null || requested === defaultMinecraft(env)) return defaultMinecraft(env);
+  return EXTRA_MINECRAFT_TARGETS.has(requested) ? requested : null;
+}
+export const communityArtifactName = (version: string, minecraft: string, env: CommunityReleaseConfig) =>
+  minecraft === defaultMinecraft(env) ? `Sky-Myce-${version}.jar` : `Sky-Myce-${version}-mc${minecraft}.jar`;
+export async function verifyCommunityManifest(envelope: any, env: CommunityReleaseConfig, now = Date.now(), minecraft = defaultMinecraft(env)): Promise<Manifest> {
   if (!envelope || !/^[A-Za-z0-9_-]{1,64}$/.test(envelope.kid ?? "")) throw Error("invalid_manifest");
   const keys = JSON.parse(env.DRM_PUBLIC_KEYS ?? "{}");
   if (!Object.hasOwn(keys, envelope.kid)) throw Error("invalid_signature");
@@ -12,8 +22,8 @@ export async function verifyCommunityManifest(envelope: any, env: CommunityRelea
   if (signature.length !== 64 || !await crypto.subtle.verify("Ed25519", await installationKey(keys[envelope.kid]), signature, payload)) throw Error("invalid_signature");
   const manifest = JSON.parse(new TextDecoder().decode(payload));
   if (manifest.product !== "sky-myce" || manifest.protocol !== 4 || manifest.installation !== "fabric" ||
-    manifest.minecraft !== (env.MINECRAFT_VERSION ?? "26.1.2") || !/^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-beta-\d{1,5})?$/.test(manifest.version) ||
-    manifest.artifact !== `releases/Sky-Myce-${manifest.version}.jar` || Object.hasOwn(manifest, "minimumLoaderVersion") ||
+    manifest.minecraft !== minecraft || !/^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-beta-\d{1,5})?$/.test(manifest.version) ||
+    manifest.artifact !== `releases/${communityArtifactName(manifest.version, minecraft, env)}` || Object.hasOwn(manifest, "minimumLoaderVersion") ||
     !Number.isSafeInteger(manifest.size) || manifest.size < 4 || manifest.size > 128 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(manifest.sha256) ||
     !Number.isSafeInteger(manifest.issuedAt) || !Number.isSafeInteger(manifest.expiresAt) || manifest.issuedAt > now + 300000 ||
     manifest.expiresAt <= now || manifest.expiresAt <= manifest.issuedAt || manifest.expiresAt - manifest.issuedAt > 14 * 86400000 ||
@@ -28,7 +38,10 @@ export async function handleCommunityRelease(request: Request, env: CommunityRel
   try {
     if (!env.PRIVATE_ARTIFACTS) throw Error("release_unavailable");
     const cache = ctx ? caches.default : undefined;
-    const pointer = env.COMMUNITY_RELEASE_MANIFEST_KEY ?? "releases/community-current.json";
+    const minecraft = communityMinecraft(url.searchParams.get("minecraft"), env);
+    if (!minecraft) throw Error("release_unavailable");
+    const pointer = minecraft === defaultMinecraft(env) ? env.COMMUNITY_RELEASE_MANIFEST_KEY ?? "releases/community-current.json"
+      : `releases/community-current-${minecraft}.json`;
     // Canonical keys prevent arbitrary query strings from forcing additional private R2 reads.
     const selectionKey = new URL("/community/cache/selection", url.origin);
     selectionKey.searchParams.set("pointer", pointer);
@@ -41,13 +54,14 @@ export async function handleCommunityRelease(request: Request, env: CommunityRel
       envelope = JSON.parse(await object.text());
     }
     // Recheck the signature, key policy and expiry even when metadata came from our cache.
-    const manifest = await verifyCommunityManifest(envelope, env);
+    const manifest = await verifyCommunityManifest(envelope, env, Date.now(), minecraft);
     const remaining = Math.max(0, Math.floor((manifest.expiresAt - Date.now()) / 1000));
     const metadata = Response.json(envelope, { headers: { "Cache-Control": `public, max-age=${Math.min(60, remaining)}` } });
     if (!selected && cache) ctx!.waitUntil(cache.put(selectionKey.toString(), metadata.clone()).catch(() => {}));
     if (url.pathname === "/community/release") return metadata;
     if (url.searchParams.get("version") !== manifest.version) return Response.json({ ok: false, error: "release_changed" }, { status: 409 });
     const artifactKey = new URL("/community/cache/artifact", url.origin);
+    artifactKey.searchParams.set("minecraft", minecraft);
     artifactKey.searchParams.set("version", manifest.version);
     artifactKey.searchParams.set("sha256", manifest.sha256);
     const cached = await cache?.match(artifactKey.toString());
@@ -55,7 +69,7 @@ export async function handleCommunityRelease(request: Request, env: CommunityRel
     const artifact = await env.PRIVATE_ARTIFACTS.get(manifest.artifact);
     if (!artifact || artifact.size !== manifest.size) throw Error("release_unavailable");
     const response = new Response(artifact.body, { headers: { "Content-Type": "application/java-archive", "Content-Length": String(artifact.size),
-      "Content-Disposition": `attachment; filename="Sky-Myce-${manifest.version}.jar"`, "Cache-Control": `public, max-age=${Math.min(3600, remaining)}`,
+      "Content-Disposition": `attachment; filename="${communityArtifactName(manifest.version, minecraft, env)}"`, "Cache-Control": `public, max-age=${Math.min(3600, remaining)}`,
       "ETag": `"${manifest.sha256}"`, "X-Content-Type-Options": "nosniff" } });
     if (cache) ctx!.waitUntil(cache.put(artifactKey.toString(), response.clone()).catch(() => {}));
     return response;

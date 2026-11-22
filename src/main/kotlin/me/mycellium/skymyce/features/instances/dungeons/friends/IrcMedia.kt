@@ -56,6 +56,9 @@ import net.minecraft.network.chat.Component
 import net.minecraft.util.Util
 import org.w3c.dom.Node
 import tech.thatgravyboat.skyblockapi.utils.Scheduling
+import me.mycellium.skymyce.utils.currentScreen
+import me.mycellium.skymyce.utils.openScreen
+import me.mycellium.skymyce.utils.hud
 
 internal enum class IrcMediaAssetStatus { IDLE, LOADING, READY, FAILED, UNSUPPORTED, UNAVAILABLE }
 internal data class IrcMediaAssetState(val status: IrcMediaAssetStatus, val asset: IrcGif? = null, val detail: String? = null)
@@ -860,7 +863,7 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
     private var elapsedNanos = 0L
     private var lastTickNanos = System.nanoTime()
     private var paused = !GlobalChatConfig.animateGifs
-    private val previousChatScroll = if (previous is ChatScreen) (MC.instance.gui.chat as IrcChatAccessor).`skymyce$getScroll`() else null
+    private val previousChatScroll = if (previous is ChatScreen) (MC.instance.hud.chat as IrcChatAccessor).`skymyce$getScroll`() else null
     private var preference = GlobalChatConfig.animateGifs
     private val generation = IrcMediaAssets.generation
     private var browserDisabled = false
@@ -906,15 +909,15 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
             if (BrowserLinks.supported(original.toString()) != null) InGameBrowser.open(this, original.toString())
             else {
                 Util.getPlatform().openUri(original)
-                if (minecraft.screen !== this) minecraft.setScreen(this)
+                if (minecraft.currentScreen !== this) minecraft.openScreen(this)
             }
         }
         if (minecraft.options.chatLinksPrompt().get()) {
-            minecraft.setScreen(ConfirmLinkScreen({ confirmed ->
+            minecraft.openScreen(ConfirmLinkScreen({ confirmed ->
                 if (!current()) closeExpired()
                 else {
                     if (confirmed && minecraft.options.chatLinks().get()) open()
-                    else minecraft.setScreen(this)
+                    else minecraft.openScreen(this)
                 }
             }, original.toString(), false))
         } else open()
@@ -1054,19 +1057,19 @@ internal class IrcMediaViewerScreen(private val previous: Screen?, private val m
         super.removed()
     }
     private fun closeExpired() {
-        if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen()
-        minecraft.setScreen(null)
+        if (previous is ChatScreen) minecraft.hud.chat.restoreChatScreen()
+        minecraft.openScreen(null)
     }
     override fun tick() { if (!current()) closeExpired() else super.tick() }
     override fun onClose() {
         if (!current()) closeExpired()
         else {
-            val returned = if (previous is ChatScreen) minecraft.gui.chat.restoreChatScreen() ?: previous else previous
-            minecraft.setScreen(returned)
+            val returned = if (previous is ChatScreen) minecraft.hud.chat.restoreChatScreen() ?: previous else previous
+            minecraft.openScreen(returned)
             if (returned is ChatScreen && previousChatScroll != null) {
                 // ChatScreen.init resets scrolling; restore the captured position after reopening it.
-                (minecraft.gui.chat as IrcChatAccessor).`skymyce$setScroll`(previousChatScroll)
-                minecraft.gui.chat.scrollChat(0)
+                (minecraft.hud.chat as IrcChatAccessor).`skymyce$setScroll`(previousChatScroll)
+                minecraft.hud.chat.scrollChat(0)
             }
         }
     }

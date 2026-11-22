@@ -9,6 +9,10 @@ const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
 const fail = message => { throw new Error(message); };
 const encode = value => Buffer.from(value).toString("base64url");
+// Mirrors src/community-release.ts: 26.1.2 keeps the original names; other targets get their own pointer and artifact.
+const DEFAULT_MINECRAFT = "26.1.2";
+const artifactName = (version, minecraft) => minecraft === DEFAULT_MINECRAFT ? `Sky-Myce-${version}.jar` : `Sky-Myce-${version}-mc${minecraft}.jar`;
+const pointerName = minecraft => minecraft === DEFAULT_MINECRAFT ? "community-current.json" : `community-current-${minecraft}.json`;
 function envelope(manifest, key, kid) {
   const bytes = Buffer.from(JSON.stringify(manifest));
   const signature = sign(null, bytes, key);
@@ -65,24 +69,27 @@ try {
     if (metadata.id !== "skymyce" || metadata.version !== modVersion || Object.hasOwn(metadata.depends ?? {}, "skymyce-loader")) fail("A matching standalone Fabric mod is required");
     const notes = notesPath === "-" ? "" : await readFile(notesPath, "utf8"); if (notes.length > 8000) fail("Release notes too long");
     const now = Date.now(), manifest = { product: "sky-myce", protocol: 4, installation: "fabric", minecraft, version: modVersion,
-      artifact: `releases/Sky-Myce-${modVersion}.jar`, size: artifact.length, sha256: createHash("sha256").update(artifact).digest("hex"),
+      artifact: `releases/${artifactName(modVersion, minecraft)}`, size: artifact.length, sha256: createHash("sha256").update(artifact).digest("hex"),
       issuedAt: now, expiresAt: now + 7 * 86400000, notes };
     await writeFile(output, JSON.stringify(envelope(manifest, key, kid)) + "\n", { flag: "wx" });
-    console.log(`Signed normal Fabric manifest written. Upload ${manifest.artifact} first, then releases/community-current.json. No loader or license is required.`);
+    console.log(`Signed normal Fabric manifest written. Upload ${manifest.artifact} first, then releases/${pointerName(minecraft)}. No loader or license is required.`);
   } else if (args[0] === "verify") {
     // Public data only (public key, public routes), so failures may be printed in full.
-    const [, origin, artifactPath, kid, publicKey] = args;
+    const [, origin, artifactPath, kid, publicKey, minecraft = DEFAULT_MINECRAFT] = args;
     try {
-      if (args.length !== 5 || new URL(origin).protocol !== "https:") fail("usage: node scripts/release.mjs verify <https-backend-origin> <jar-path> <key-id> <public-key-base64>");
+      if (args.length < 5 || args.length > 6 || new URL(origin).protocol !== "https:" || !/^\d{1,5}\.\d{1,5}(?:\.\d{1,5})?$/.test(minecraft))
+        fail("usage: node scripts/release.mjs verify <https-backend-origin> <jar-path> <key-id> <public-key-base64> [minecraft]");
+      const target = minecraft === DEFAULT_MINECRAFT ? "" : `&minecraft=${encodeURIComponent(minecraft)}`;
       const local = await readFile(artifactPath);
-      const signed = await (await fetch(new URL("/community/release", origin))).json();
+      const signed = await (await fetch(new URL(`/community/release?${target.slice(1)}`, origin))).json();
       const manifest = verifyRelease(signed, kid, publicKey, local);
       if (fabricMetadata(local).version !== manifest.version) fail("local JAR version differs from the live manifest");
       if (manifest.expiresAt <= Date.now()) fail("live manifest has expired");
-      const response = await fetch(new URL(`/community/artifact?version=${encodeURIComponent(manifest.version)}`, origin));
+      if (manifest.minecraft !== minecraft || manifest.artifact !== `releases/${artifactName(manifest.version, minecraft)}`) fail("live manifest is for a different Minecraft target");
+      const response = await fetch(new URL(`/community/artifact?version=${encodeURIComponent(manifest.version)}${target}`, origin));
       if (!response.ok) fail(`artifact download returned ${response.status}`);
       verifyRelease(signed, kid, publicKey, Buffer.from(await response.arrayBuffer()));
-      console.log(`Live release verified: ${manifest.version}, ${manifest.size} bytes, expires ${new Date(manifest.expiresAt).toISOString()}`);
+      console.log(`Live release verified: ${manifest.version} for Minecraft ${minecraft}, ${manifest.size} bytes, expires ${new Date(manifest.expiresAt).toISOString()}`);
     } catch (error) { console.error(`Release verification failed: ${error.message}`); process.exitCode = 1; }
   } else if (args[0] === "check") {
     const key = generateKeyPairSync("ed25519").privateKey, signed = envelope({ product: "sky-myce", sha256: "a".repeat(64) }, key, "test");

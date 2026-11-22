@@ -55,11 +55,12 @@ import org.cef.handler.CefRequestHandler.TerminationStatus
 import org.cef.misc.BoolRef
 import org.cef.network.CefRequest
 import org.lwjgl.glfw.GLFW
+import me.mycellium.skymyce.utils.openScreen
 
 object InGameBrowser {
     fun open(parent: Screen, url: String) {
         val target = BrowserLinks.supported(url) ?: return
-        Minecraft.getInstance().setScreen(InGameBrowserScreen(parent, target.toASCIIString()))
+        Minecraft.getInstance().openScreen(InGameBrowserScreen(parent, target.toASCIIString()))
     }
 }
 
@@ -230,7 +231,7 @@ internal class InGameBrowserScreen(private val parent: Screen, private val initi
         return super.charTyped(event)
     }
 
-    override fun onClose() { minecraft.setScreen(parent) }
+    override fun onClose() { minecraft.openScreen(parent) }
     override fun isPauseScreen() = false
     override fun removed() {
         val previous = session

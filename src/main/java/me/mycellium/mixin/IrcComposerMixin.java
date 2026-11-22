@@ -7,6 +7,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import me.mycellium.skymyce.utils.McCompatKt;
 
 /** Capture selected IRC before other chat mods rewrite messages intended for Minecraft's server. */
 @Mixin(value = ChatScreen.class, priority = 800)
@@ -17,6 +18,6 @@ public class IrcComposerMixin {
         String normalized = ((ChatScreen) (Object) this).normalizeChatMessage(text);
         if (RelayMessages.allowComposerChat(normalized)) return;
         ci.cancel();
-        if (addToHistory && !normalized.isEmpty()) Minecraft.getInstance().gui.getChat().addRecentChat(normalized);
+        if (addToHistory && !normalized.isEmpty()) McCompatKt.getHud(Minecraft.getInstance()).getChat().addRecentChat(normalized);
     }
 }

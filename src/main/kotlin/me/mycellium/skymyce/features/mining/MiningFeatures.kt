@@ -83,6 +83,9 @@ import kotlin.math.floor
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import me.mycellium.skymyce.utils.collectFrameGizmos
+import me.mycellium.skymyce.utils.reloadChunks
+import me.mycellium.skymyce.utils.vanillaBlock
 
 object MiningFeatures : SkyMyceModule() {
     val crystalRegex = Regex("^\\s*✦ CRYSTAL FOUND \\((\\d+)/(\\d+)\\)$")
@@ -155,14 +158,14 @@ object MiningFeatures : SkyMyceModule() {
     private val blastDirectionContent by lazy { hudPanel(decorated = false) }
     private val blastDirectionPreview by lazy { hudPanel(decorated = false).updateTextLines(listOf("§6↗ §7Pickobulus · 14 blocks · 12m")) }
     private val BLAST_MINES_BLOCKS by lazy {
-        setOf(Blocks.STONE, Blocks.COBBLESTONE, Blocks.POLISHED_DIORITE, Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, Blocks.CYAN_TERRACOTTA,
-            Blocks.LIGHT_BLUE_WOOL, Blocks.GRAY_WOOL, Blocks.LAPIS_BLOCK, Blocks.GOLD_BLOCK, Blocks.IRON_BLOCK, Blocks.DIAMOND_BLOCK, Blocks.EMERALD_BLOCK, Blocks.REDSTONE_BLOCK,
+        setOf(Blocks.STONE, Blocks.COBBLESTONE, Blocks.POLISHED_DIORITE, Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, vanillaBlock("cyan_terracotta"),
+            vanillaBlock("light_blue_wool"), vanillaBlock("gray_wool"), Blocks.LAPIS_BLOCK, Blocks.GOLD_BLOCK, Blocks.IRON_BLOCK, Blocks.DIAMOND_BLOCK, Blocks.EMERALD_BLOCK, Blocks.REDSTONE_BLOCK,
             Blocks.COAL_BLOCK, Blocks.QUARTZ_BLOCK, Blocks.GOLD_ORE, Blocks.IRON_ORE, Blocks.COAL_ORE, Blocks.LAPIS_ORE, Blocks.REDSTONE_ORE, Blocks.DIAMOND_ORE, Blocks.EMERALD_ORE,
             Blocks.NETHER_QUARTZ_ORE, Blocks.NETHERRACK, Blocks.GLOWSTONE, Blocks.OBSIDIAN, Blocks.END_STONE)
     }
     private val BLAST_TUNNEL_BLOCKS by lazy {
-        setOf(Blocks.POLISHED_DIORITE, Blocks.INFESTED_STONE, Blocks.LIGHT_GRAY_CARPET, Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, Blocks.LIGHT_BLUE_WOOL,
-            Blocks.GRAY_WOOL, Blocks.CYAN_TERRACOTTA, Blocks.BROWN_TERRACOTTA, Blocks.TERRACOTTA, Blocks.SMOOTH_RED_SANDSTONE, Blocks.INFESTED_COBBLESTONE, Blocks.CLAY)
+        setOf(Blocks.POLISHED_DIORITE, Blocks.INFESTED_STONE, vanillaBlock("light_gray_carpet"), Blocks.PRISMARINE, Blocks.PRISMARINE_BRICKS, Blocks.DARK_PRISMARINE, vanillaBlock("light_blue_wool"),
+            vanillaBlock("gray_wool"), vanillaBlock("cyan_terracotta"), vanillaBlock("brown_terracotta"), Blocks.TERRACOTTA, Blocks.SMOOTH_RED_SANDSTONE, Blocks.INFESTED_COBBLESTONE, Blocks.CLAY)
     }
 
     /** Keeps pointing at the spot once it is off screen, which the marks in the world cannot do. */
@@ -221,7 +224,7 @@ object MiningFeatures : SkyMyceModule() {
         val wanted = MiningConfig.gemstoneWool && LocationAPI.island in GEMSTONE_ISLANDS
         if (wanted == gemstoneWool) return
         gemstoneWool = wanted
-        MC.instance.levelRenderer.allChanged()
+        MC.instance.reloadChunks()
     }
 
     @Subscription
@@ -509,7 +512,7 @@ object MiningFeatures : SkyMyceModule() {
         val now = System.nanoTime()
         val mode = ThemeConfig.animationMode
         val burstNanos = if (mode == GuiMotion.REDUCED) 200_000_000L else 450_000_000L
-        MC.instance.levelRenderer.collectPerFrameGizmos().use {
+        MC.instance.collectFrameGizmos().use {
             highlight.forEach { Gizmos.cuboid(AABB(it).inflate(0.002), GizmoStyle.fill(HudTheme.alpha(COMMISSION_COLOR, 22))) }
             mobs.forEach { mob -> Gizmos.cuboid(mob.boundingBox.inflate(0.05), GizmoStyle.stroke(HudTheme.alpha(MOB_COLOR, 90), 2f)).setAlwaysOnTop() }
             // Blocks the spread just took flash and expand away, so you see each proc.
