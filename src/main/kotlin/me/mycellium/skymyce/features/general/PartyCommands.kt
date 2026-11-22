@@ -167,7 +167,7 @@ object PartyCommands : SkyMyceModule() {
 enum class PartyCommandTypes(val aliases: Set<String>) {
     INVITE(setOf("invite", "inv", "i")),
     KICK(setOf("kick", "k")),
-    ALLINVITE(setOf("allinvite", "allinv")),
+    ALLINVITE(setOf("allinvite", "allinv", "ai")),
     DISBAND(setOf("disband")),
     WARP(setOf("warp", "w")),
     TRANSFER(setOf("transfer", "pt", "ptme")),

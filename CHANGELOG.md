@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-054 (2026-11-22)
+- `!ai` in party chat now works as a short form of `!allinvite`, toggling the party's All Invite setting when you are the leader.
+
 ## 2.8.0-beta-053 (2026-11-22)
 - The Dungeon Splits HUD now shows your pace next to your PB instead of Best possible: your splits so far in this run, plus your average over your last 10 runs for each split still to come. The separate Pace Timer setting is gone, since pace is always shown there now.
 
