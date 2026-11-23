@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-055 (2026-11-23)
+- The Dungeon Splits pace now follows your recent runs more closely: for each split still to come it leaves out the best and worst of your last 10 times and counts newer runs more than older ones, so pace adjusts within a few runs when you switch parties.
+
 ## 2.8.0-beta-054 (2026-11-22)
 - `!ai` in party chat now works as a short form of `!allinvite`, toggling the party's All Invite setting when you are the leader.
 

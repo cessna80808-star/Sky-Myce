@@ -878,6 +878,8 @@ data class SectionStats(
     override val average: Double?,
     val samples: Int,
     override val worst: SectionBest? = null,
+    /** The windowed times as [paceAverage] weighs them. */
+    val pace: Long? = null,
 ) : SpanStats
 
 /** A marker such as 300 score, or a checkpoint such as boss entry, timed from the run start and kept out of the theoretical total. */
@@ -928,6 +930,22 @@ internal fun spanDuration(record: SplitRunRecord, from: SplitMilestone, to: Spli
 }
 
 /**
+ * Average of [newestFirst] without its fastest and slowest time (from three times on; the oldest of equal ones goes),
+ * each older time counting 70% of the next newer one so pace follows a change of party within a few runs.
+ */
+internal fun paceAverage(newestFirst: List<Long>): Long? {
+    if (newestFirst.isEmpty()) return null
+    val kept = newestFirst.toMutableList()
+    if (kept.size >= 3) {
+        kept.removeAt(kept.lastIndexOf(kept.max()))
+        kept.removeAt(kept.lastIndexOf(kept.min()))
+    }
+    var weight = 1.0; var weights = 0.0; var sum = 0.0
+    for (time in kept) { sum += time * weight; weights += weight; weight *= 0.7 }
+    return Math.round(sum / weights)
+}
+
+/**
  * Actual PB, per-section PBs with their source runs, the theoretical PB and windowed averages for one floor, all on
  * one [clock]. [runs] may contain any floor and definition; only matching records are used.
  */
@@ -949,7 +967,7 @@ fun floorSplitStats(runs: List<SplitRunRecord>, definition: SplitDefinition, win
         val timed = eligible.mapNotNull { run -> durations.getValue(run.id)[section.milestone]?.let { SectionBest(it, run.id, run.recordedAt) } }
         // Conflicting runs never contribute; partial runs only contribute sections they observed directly.
         val observed = windowed(floorRuns.filter { it.conflicts == 0 }.mapNotNull { durations.getValue(it.id)[section.milestone] })
-        SectionStats(section, fastest(timed), observed.takeIf { it.isNotEmpty() }?.average(), observed.size, slowest(timed))
+        SectionStats(section, fastest(timed), observed.takeIf { it.isNotEmpty() }?.average(), observed.size, slowest(timed), paceAverage(observed))
     }
     val groups = definition.groups.map { group ->
         val timed = eligible.mapNotNull { run -> spanDuration(run, group.from, group.to, clock)?.let { SectionBest(it, run.id, run.recordedAt) } }

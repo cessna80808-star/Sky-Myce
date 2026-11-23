@@ -212,8 +212,8 @@ private fun span(run: SplitHudRun, from: SplitMilestone, to: SplitMilestone?): P
 }
 
 /**
- * Estimated finish on [clock] if nothing goes wrong: the time so far plus each remaining section's average from
- * [averages] (the last 10 runs); the running section counts at least its time so far. Null without a start, before any
+ * Estimated finish on [clock] if nothing goes wrong: the time so far plus each remaining section's [paceAverage]
+ * from [averages] (the last 10 runs); the running section counts at least its time so far. Null without a start, before any
  * remaining section has an average, or once the run is over.
  */
 internal fun splitPace(definition: SplitDefinition, run: SplitHudRun, averages: FloorSplitStats, clock: SplitClock): Long? {
@@ -226,7 +226,7 @@ internal fun splitPace(definition: SplitDefinition, run: SplitHudRun, averages: 
     definition.sections.forEachIndexed { index, _ ->
         val position = index + 1
         if (position <= latest) return@forEachIndexed
-        val average = averages.sections[index].average?.toLong() ?: return null
+        val average = averages.sections[index].pace ?: return null
         total += if (position == latest + 1) maxOf(average, elapsed - done) else average
     }
     return total
@@ -340,7 +340,7 @@ internal fun splitHudView(definition: SplitDefinition, run: SplitHudRun, stats: 
             footer += when (comparison) {
                 SplitComparison.AVERAGE -> "§7Average §f${time(it.averageTotal?.toLong())} §8· §7PB §f${time(it.actualPb?.duration)}"
                 SplitComparison.WORST -> "§7Worst §f${time(it.worstTotal?.duration)} §8· §7PB §f${time(it.actualPb?.duration)}"
-                // Pace: this run's times so far plus the last 10 runs' average for each split still to come.
+                // Pace: this run's times so far plus the recency-weighted last 10 for each split still to come.
                 else -> "§7PB §f${time(it.actualPb?.duration)}" + (paceStats?.let { averages -> splitPace(definition, run, averages, options.clock) }
                     ?.let { pace -> " §8· §7Pace §f${time(pace)}" } ?: "")
             }

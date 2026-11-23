@@ -269,7 +269,7 @@ object DungeonSplitsConfig : CategoryKt("Dungeon Splits") {
 
     val showTotal by boolean(true) {
         name = TranslatableValue.literal("Show Run Total")
-        description = TranslatableValue.literal("Show the run's elapsed time, your PB and your pace: this run's splits so far plus your last 10 runs' average for the rest")
+        description = TranslatableValue.literal("Show the run's elapsed time, your PB and your pace: this run's splits so far plus your last 10 runs' average for the rest, leaning on the newest and leaving out each split's best and worst. Pace replaces Best possible unless the HUD compares with your average or worst")
     }
 
     val chatSummary by boolean(true) {

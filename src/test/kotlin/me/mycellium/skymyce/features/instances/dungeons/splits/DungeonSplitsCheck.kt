@@ -369,6 +369,18 @@ private fun checkPace() {
     check(splitPace(m7, live(18_000L), floorSplitStats(emptyList(), m7, SplitWindow.LAST_10), SplitClock.REAL) == null) { "No history, no pace" }
     check(splitPace(m7, live(18_000L, finished = true), averages, SplitClock.REAL) == null)
     check(splitPace(m7, live(18_000L), averages, SplitClock.SERVER) == null) { "No server ticks, no server pace" }
+    // Pace averages drop one best and one worst, then weigh each older run 70% of the next newer one.
+    check(paceAverage(emptyList()) == null && paceAverage(listOf(10L)) == 10L)
+    check(paceAverage(listOf(1_000L, 2_000L)) == 1_412L) { "Two runs are too few to trim" }
+    check(paceAverage(listOf(20_000L, 1_000L, 99_000L)) == 20_000L) { "Best and worst are dropped" }
+    check(paceAverage(listOf(2_000L, 500L, 1_000L, 9_000L)) == 1_588L) { "Newer runs weigh more" }
+    check(paceAverage(List(10) { 20_000L }) == 20_000L)
+    // Three runs with a faster party already outweigh seven older ones, despite the trimming.
+    check(paceAverage(List(3) { 10_000L } + List(7) { 20_000L })!! < 15_000L)
+    val switched = floorSplitStats(List(3) { run("new$it", "M7", 100L - it, chained(m7, List(n) { 10_000L })) } +
+        List(7) { run("old$it", "M7", 50L - it, chained(m7, List(n) { 20_000L })) }, m7, SplitWindow.LAST_10)
+    check(switched.sections.all { it.pace!! < 15_000L && it.average == 17_000.0 }) { "Newest runs come first; plain averages are unchanged" }
+    check(splitPace(m7, live(18_000L), switched, SplitClock.REAL) == 15_000L + switched.sections.drop(1).mapIndexed { i, it -> if (i == 0) maxOf(it.pace!!, 3_000L) else it.pace!! }.sum())
     // The HUD's PB line shows pace in place of Best possible; a finished run has no pace.
     val view = splitHudView(m7, live(18_000L), averages, SplitHudOptions(), averages)
     check(view.footer.any { "PB" in it && "Pace §f${formatSplitTime(15_000L + (n - 1) * 20_000L)}" in it } && view.footer.none { "Best possible" in it }) { view.footer.toString() }
