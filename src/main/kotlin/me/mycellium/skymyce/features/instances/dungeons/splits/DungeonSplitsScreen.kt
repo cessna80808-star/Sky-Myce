@@ -110,7 +110,7 @@ class DungeonSplitsScreen(startClock: SplitClock? = null) : MenuScreen(Component
                 stats.completedRuns == 0 -> "Needs a complete run"
                 else -> "A section has no complete time yet"
             }).wrappedTooltip(Component.literal("Your best boss entry, one run's whole clear, plus your best time for each boss section from any fully split completed run. The clear's fastest sections rarely happen together, so they are not added up.")))
-            child(card("Average run", average(stats.averageTotal), "${window.title} · ${stats.averageSamples} run${if (stats.averageSamples == 1) "" else "s"}"))
+            child(card("Average run", average(stats.averageTotal), if (window != SplitWindow.ALL) window.title else "${window.title} · ${stats.averageSamples} run${if (stats.averageSamples == 1) "" else "s"}"))
         })
         body.child(label(listOfNotNull("${stats.completedRuns} completed · ${stats.savedRuns} saved on ${definition.floor}",
             stats.averageLag?.let { "lag lost ${formatSplitDelta(it.toLong())} per run on average" }).joinToString(" · "), MenuTheme.MUTED))
