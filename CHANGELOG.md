@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-056 (2026-11-23)
+- NPC Dialogue has a new Hide Repeated Lines option, on by default. Each of Mort's lines at the start of a dungeon now opens the dialogue box only the first time, and other NPC lines have a small [Hide] button after them in chat that keeps that line out of the box from then on. [Show] on the line brings it back.
+
 ## 2.8.0-beta-055 (2026-11-23)
 - The Dungeon Splits pace now follows your recent runs more closely: for each split still to come it leaves out the best and worst of your last 10 times and counts newer runs more than older ones, so pace adjusts within a few runs when you switch parties.
 

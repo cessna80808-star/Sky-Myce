@@ -3,6 +3,8 @@ package me.mycellium.skymyce.features.general
 import com.google.gson.Gson
 import me.mycellium.skymyce.config.misc.SignsConfig.EnterConfirms
 import me.mycellium.skymyce.features.general.overlays.DialogueOption
+import me.mycellium.skymyce.features.general.overlays.NpcLine
+import me.mycellium.skymyce.features.general.overlays.NpcLineMemory
 import me.mycellium.skymyce.features.general.overlays.bars.*
 import me.mycellium.skymyce.features.general.overlays.dialogueDuration
 import me.mycellium.skymyce.features.general.overlays.isOptionsLine
@@ -162,6 +164,15 @@ private fun checkSkillAndDialogue() {
     val options = optionsFrom(listOf("Select an option: " to null, "[" to yes, "YES" to yes, "]" to yes, " " to null, "[NO]" to no))
     check(options == listOf(DialogueOption("YES", yes), DialogueOption("NO", no))) { options.toString() }
     check(dialogueDuration("one two three", 180, 2000) == 2000L && dialogueDuration(List(60) { "w" }.joinToString(" "), 120, 2000) == 30_000L)
+    // Mort's dungeon lines show once; other lines (puzzle clues) repeat until hidden, and hiding can be undone and survives a save.
+    val mort = NpcLine("Mort", "Good luck."); val clue = NpcLine("Baxter", "My chest has the reward.")
+    val seen = NpcLineMemory().see(mort.key).see(clue.key)
+    check(!NpcLineMemory().skips(mort, true) && seen.skips(mort, true) && !seen.skips(mort, false) && !seen.skips(clue, true))
+    val hidden = seen.hide(clue.key).hide(clue.key)
+    check(hidden.skips(clue, true) && hidden.skips(clue, false) && hidden.hidden.size == 1 && hidden.show(clue.key) == seen)
+    check(NpcLineMemory.parse(hidden.json()) == hidden && NpcLineMemory.parse(null) == NpcLineMemory())
+    check((1..600).fold(NpcLineMemory()) { m, i -> m.hide("$i") }.hidden.let { it.size == 500 && it.last() == "600" })
+    check(hidden + NpcLineMemory(listOf("a")) == NpcLineMemory(listOf(clue.key, "a"), hidden.seen))
     check(revealedChars(40, 0, 3000) == 0 && revealedChars(40, 500, 3000) == 20 && revealedChars(40, 1500, 3000) == 40)
 }
 

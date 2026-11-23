@@ -156,6 +156,13 @@ object SkyMyceCommands : SkyMyceModule() {
             .then(relayChannelCommand("party", RelayMessages::selectParty, RelayMessages::sendParty))
             .then(literal("ircstatus").executes { RelayMessages.ircStatus(); 1 })
             .then(literal("irccancel").executes { RelayMessages.cancelReply(); 1 })
+            .then(literal("npcline")
+                .then(literal("hide").then(argument("line", StringArgumentType.greedyString()).executes {
+                    me.mycellium.skymyce.features.general.overlays.NpcDialogue.setHidden(StringArgumentType.getString(it, "line"), true); 1
+                }))
+                .then(literal("show").then(argument("line", StringArgumentType.greedyString()).executes {
+                    me.mycellium.skymyce.features.general.overlays.NpcDialogue.setHidden(StringArgumentType.getString(it, "line"), false); 1
+                })))
             .then(literal("ircaction").then(argument("action", StringArgumentType.greedyString()).executes {
                 RelayMessages.chatAction("/sm ircaction " + StringArgumentType.getString(it, "action")); 1
             }))

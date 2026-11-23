@@ -1,5 +1,8 @@
 package me.mycellium.skymyce.features.general.overlays
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.mojang.blaze3d.platform.InputConstants
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
@@ -8,8 +11,11 @@ import me.mycellium.skymyce.config.misc.ThemeConfig
 import me.mycellium.skymyce.features.social.CosmeticNames
 import me.mycellium.skymyce.hud.HudTheme
 import me.mycellium.skymyce.ui.GuiMotion
+import me.mycellium.skymyce.utils.AtomicJsonFile
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.PlayerUtils
+import me.mycellium.skymyce.utils.StateWriter
+import me.mycellium.skymyce.utils.Utils.displayModMessage
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
 import net.minecraft.client.gui.Font
@@ -19,6 +25,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.client.gui.screens.inventory.InventoryScreen
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Style
 import net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket
 import net.minecraft.resources.Identifier
@@ -32,11 +39,43 @@ import tech.thatgravyboat.skyblockapi.api.events.location.ServerDisconnectEvent
 import tech.thatgravyboat.skyblockapi.api.events.render.RenderScreenForegroundEvent
 import tech.thatgravyboat.skyblockapi.api.events.time.TickEvent
 import tech.thatgravyboat.skyblockapi.api.location.LocationAPI
+import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
+import tech.thatgravyboat.skyblockapi.utils.Scheduling
 import java.util.Optional
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 /** One NPC line: who spoke and what they said. */
-internal data class NpcLine(val name: String, val message: String)
+internal data class NpcLine(val name: String, val message: String) {
+    val key get() = "$name: $message"
+}
+
+/** The lines kept out of the box: [hidden] by the player, and Mort's dungeon lines already [seen] once. Oldest first. */
+internal data class NpcLineMemory(val hidden: List<String> = emptyList(), val seen: List<String> = emptyList()) {
+    fun hide(key: String) = copy(hidden = (hidden - key + key).takeLast(LIMIT))
+    fun show(key: String) = copy(hidden = hidden - key)
+    fun see(key: String) = if (key in seen) this else copy(seen = (seen + key).takeLast(LIMIT))
+    /** Whether the box skips [line]; only Mort repeats by himself, as other dungeon NPCs give puzzle clues. */
+    fun skips(line: NpcLine, inDungeon: Boolean) = line.key in hidden || repeatsItself(line, inDungeon) && line.key in seen
+    operator fun plus(other: NpcLineMemory) = NpcLineMemory((hidden + other.hidden).distinct().takeLast(LIMIT), (seen + other.seen).distinct().takeLast(LIMIT))
+
+    fun json() = JsonObject().apply {
+        addProperty("version", 1)
+        add("hidden", JsonArray().apply { hidden.forEach(::add) })
+        add("seen", JsonArray().apply { seen.forEach(::add) })
+    }
+
+    companion object {
+        private const val LIMIT = 500
+        fun repeatsItself(line: NpcLine, inDungeon: Boolean) = inDungeon && line.name == "Mort"
+        fun parse(json: JsonElement?): NpcLineMemory {
+            val root = json?.asJsonObject ?: return NpcLineMemory()
+            require(root["version"].asInt == 1)
+            fun lines(name: String) = root[name].asJsonArray.map { it.asString }.takeLast(LIMIT)
+            return NpcLineMemory(lines("hidden"), lines("seen"))
+        }
+    }
+}
 
 /** An NPC's offered choice and what clicking it in chat does. */
 internal data class DialogueOption(val label: String, val click: ClickEvent?)
@@ -101,10 +140,50 @@ object NpcDialogue : SkyMyceModule() {
     private var wrappedWidth = 0
     private var wrapped: List<FormattedCharSequence> = emptyList()
     private var wrappedLengths = IntArray(0)
+    private var memory = NpcLineMemory()
+    private var memoryLoaded = false
+    private val memoryFile by lazy { AtomicJsonFile(SkyMyce.configPath.resolve("npc_lines.json"), 4 * 1024 * 1024) }
+    private val memoryWriter by lazy {
+        StateWriter<NpcLineMemory>({ memoryFile.write(it.json()) }, { work -> Scheduling.schedule(500.milliseconds) { work() } },
+            { SkyMyce.logger.warn("Could not save hidden NPC lines; previous file retained") }).also { writer ->
+            Runtime.getRuntime().addShutdownHook(Thread({ runCatching { writer.flush() } }, "Sky-Myce-Npc-Lines-Save"))
+        }
+    }
 
     private fun active() = isEnabled() && Settings.enabled && LocationAPI.isOnSkyBlock
 
+    private fun inDungeon() = LocationAPI.island == SkyBlockIsland.THE_CATACOMBS
+
+    private fun remember(next: NpcLineMemory) {
+        if (next == memory) return
+        memory = next
+        if (memoryLoaded) memoryWriter.submit(next)
+    }
+
+    /** Keeps the line [key] out of the box from now on, or lets it back in. */
+    internal fun setHidden(key: String, hidden: Boolean) {
+        remember(if (hidden) memory.hide(key) else memory.show(key))
+        if (hidden) {
+            queue.removeAll { it.key == key }
+            if (current?.key == key) until = 0
+        }
+        displayModMessage(Component.literal(if (hidden) "§7That line no longer opens the dialogue box. " else "§7That line opens the dialogue box again. ")
+            .append(button(key, hidden)))
+    }
+
+    private fun button(key: String, hidden: Boolean) = Component.literal(if (hidden) "§8[§aShow§8]" else "§8[§cHide§8]").withStyle {
+        it.withClickEvent(ClickEvent.RunCommand("/sm npcline ${if (hidden) "show" else "hide"} $key"))
+            .withHoverEvent(HoverEvent.ShowText(Component.literal(if (hidden) "Show this line in the dialogue box again" else "Keep this line out of the dialogue box from now on")))
+    }
+
     override fun init() {
+        Scheduling.schedule(0.milliseconds) {
+            val saved = runCatching { NpcLineMemory.parse(memoryFile.read()) }.getOrElse { memoryFile.preserveOriginal(); NpcLineMemory() }
+            MC.instance.execute {
+                memory = saved + memory; memoryLoaded = true
+                if (memory != saved) memoryWriter.submit(memory)
+            }
+        }
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.fromNamespaceAndPath(SkyMyce.MOD_ID, "npc_dialogue")) { graphics, _ ->
             val screen = MC.screen
             if (active() && (screen == null || screen is ChatScreen)) draw(graphics, graphics.guiWidth() / 2, graphics.guiHeight() - 70, centred = true, maxWidth = graphics.guiWidth() / 3)
@@ -116,8 +195,11 @@ object NpcDialogue : SkyMyceModule() {
         if (!active()) return
         val stripped = event.component.string.replace(formatting, "")
         parseNpcLine(stripped)?.let { line ->
-            queue.addLast(line)
-            while (queue.size > 20) queue.removeFirst()
+            if (!Settings.hideRepeats || !memory.skips(line, inDungeon())) {
+                queue.addLast(line)
+                while (queue.size > 20) queue.removeFirst()
+            }
+            if (NpcLineMemory.repeatsItself(line, inDungeon())) remember(memory.see(line.key))
             if (Settings.hideChat) event.cancel()
             return
         }
@@ -130,6 +212,15 @@ object NpcDialogue : SkyMyceModule() {
                 if (Settings.hideOptions) event.cancel()
             }
         }
+    }
+
+    /** Adds the hide or show button once every feature has read the line as the server sent it. */
+    @Subscription
+    fun onChatShown(event: ChatReceivedEvent.Post) {
+        if (!active() || !Settings.hideRepeats) return
+        val line = parseNpcLine(event.component.string.replace(formatting, "")) ?: return
+        if (NpcLineMemory.repeatsItself(line, inDungeon())) return
+        event.component = event.component.copy().append(" ").append(button(line.key, line.key in memory.hidden))
     }
 
     /** Queues a line from Sky-Myce itself (a Greenhouse reminder); false while the box is not showing, so the caller uses chat. */
