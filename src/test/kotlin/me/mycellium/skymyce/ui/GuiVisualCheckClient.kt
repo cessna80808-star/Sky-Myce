@@ -98,7 +98,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             }
         }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
-                         val scale: Int = 2, val screen: () -> Screen)
+                         val scale: Int = 2, val glass: Boolean = true, val screen: () -> Screen)
         var trackerHistoryFixture: GuiVisualTrackerHistoryFixture? = null
         var newsFixture: GuiVisualNewsFixture? = null
         var browserFixture: GuiVisualBrowserFixture? = null
@@ -114,6 +114,9 @@ class GuiVisualCheckClient : ClientModInitializer {
             return DungeonScreen()
         }
         val allScenes = ThemePreset.entries.map { Scene("home-${it.name.lowercase()}", it) { MenuHomeScreen() } } + listOf(
+            Scene("dungeons-glass", ThemePreset.GLASS) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
+            Scene("dungeons-solid", ThemePreset.GLASS, glass = false) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
+            Scene("themes-glass", ThemePreset.GLASS) { SettingsScreen.forFeature(null, "settings-appearance") },
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
@@ -336,6 +339,7 @@ class GuiVisualCheckClient : ClientModInitializer {
                 client.options.guiScale().set(current.scale)
                 client.resizeGui()
                 ThemeConfig.preset = current.theme
+                ThemeConfig.glassMenus = current.glass
                 HudTheme.changed()
                 val next = current.screen()
                 trackerArchiveSnapshot = if (next is DungeonScreen) AcquisitionRepository.state else null

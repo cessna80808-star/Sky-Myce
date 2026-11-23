@@ -1,0 +1,23 @@
+# Custom PNG menu icons
+
+Created with the built-in imagegen tool, followed by a background-extraction edit with transparency enabled. No third-party icon pack or SVG renderer is used. The original logo was not edited. The shipped asset is `src/main/resources/assets/skymyce/textures/ui/menu-icons.png`; its companion JSON contains source rectangles. Runtime code retains source views rather than creating images during painting.
+
+## Generation prompt
+
+Use case: stylized-concept.
+Asset type: ONE production PNG icon atlas for the Sky-Myce Minecraft game mod. This is one sprite-sheet asset, not a UI mockup. Landscape 5:4 canvas, preferably 2000 x 1600 pixels. Exactly FIVE equal-width columns and FOUR equal-height rows. Twenty icons total. Place each subject precisely at the center of its cell, occupying about 65% of that cell with ample transparent padding; nothing crosses a cell boundary. No labels, no letters, no numbers, no visible grid, no backgrounds or square icon tiles. Genuinely transparent canvas around every subject.
+
+Art direction: original premium hand-painted fantasy game inventory icons. Filled solid silhouettes, gentle material shading, compact readable shapes, subtly beveled carved forms, warm ivory/steel, desaturated jade, leather brown and restrained antique-gold accents. Cohesive art direction, top-left lighting, slight three-quarter perspective. More personality than generic line icons but restrained, not glossy toy plastic. Beautiful small painted illustrations designed to remain clear when reduced to 20–28 screen pixels. Crisp alpha edges and restrained thin dark edge definition to read on light or dark menus. NOT SVG line art. NOT hollow outlines. NOT pixel art. NOT emoji. No sparkles, bloom, auras or elaborate ornaments. Each icon looks like part of the same deliberately art-directed game interface.
+
+Exact placement, left to right, top to bottom:
+
+- Row 1: (1) small stone-and-timber cottage with jade roof, front door visible; (2) three simple friendly adventurer portrait medallions grouped together, for community; (3) two small adventurer busts with a single jade pennant, for party finder; (4) two clasped leather-gloved hands, for friends; (5) two crossed short steel swords with jade hilts, for dungeons.
+- Row 2: (6) small stack of antique gold coins, for economy; (7) faceted jade crystal with ivory rim, for appearance; (8) a small slate screen divided into clean filled panels, for panels; (9) chunky satin steel gear with a clearly open center, for settings; (10) compact brass compass with ivory dial and jade needle, for gameplay.
+- Row 3: (11) elegant filled steel magnifying glass with a subtle pale-jade lens; (12) three tiny filled jade-and-steel slider controls, for quick settings; (13) slate HUD layout panel with two raised pale-jade widgets and a tiny stylus, for edit HUD; (14) three small polished jade dots in a horizontal row, for more; (15) single thick jade curved return arrow, for reset.
+- Row 4: (16) single thick beveled ivory arrowhead pointing right, for next; (17) small steel and jade pushpin diagonally placed, for pin; (18) folded ivory parchment map with a simple jade route and one landmark, for dungeon routes; (19) small dark-wood treasure chest with brass latch and jade inset, for loot and chest profit; (20) compact ivory parchment scroll with a jade seal and three tiny dark tally strokes, for run summary.
+
+Ensure all twenty cells contain exactly one complete isolated icon. Equal visual weight and consistent material treatment. The compass, gear, chest, swords, map and cottage must have exceptionally clear silhouettes. Transparent background throughout.
+
+## Final background-extraction prompt
+
+Use case: background-extraction. Edit this production 5-column, 4-row icon sprite sheet. ONLY remove the pale off-white background and its haze between and around every icon. Replace all empty canvas background with alpha 0, genuinely fully transparent pixels. The previous output had partially transparent whitish background across the whole canvas; that is unusable for dark menus. Need ZERO-alpha clean empty space, with no gray/white matte, no checkerboard baked in, no haze, no full-canvas shadow. Preserve every existing painted icon's exact artwork, colors, shapes, edges and positions and keep the exact 5 by 4 order. Preserve solid ivory details inside icons. Crop nothing, move nothing, add nothing. Keep the canvas same aspect ratio and complete twenty icons. This is background removal only. All twenty icons must be clean cutout PNG sprites, opaque inside their objects, alpha 0 in all background gaps and cell margins.

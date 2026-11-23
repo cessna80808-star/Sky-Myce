@@ -148,7 +148,11 @@ internal object SkijaMenuPainter {
             3 -> SkijaMenuFonts.draw(canvas, p.runs, p.x, p.y, p.width, p.opacity)
             4 -> canvas.drawLine(p.x.toFloat(), p.y.toFloat(), p.width.toFloat(), p.height.toFloat(), brush(p.color, p.opacity)
                 .setStrokeWidth(p.extra.toFloat()).setStrokeCap(PaintStrokeCap.ROUND))
-            5 -> canvas.drawImageRect(image(checkNotNull(p.picture)), rect, brush(opacity = p.opacity))
+            5 -> {
+                val source = image(checkNotNull(p.picture))
+                canvas.drawImageRect(source, Rect.makeWH(source.width.toFloat(), source.height.toFloat()), rect,
+                    SamplingMode.LINEAR, brush(opacity = p.opacity), true)
+            }
             6 -> canvas.drawImageRect(checkNotNull(p.snapshot).image(context), rect, brush(opacity = p.opacity))
             7, 8 -> {
                 val style = brush(p.color, p.opacity)
@@ -228,7 +232,7 @@ object SkijaMenuFonts {
     /** One blob per consecutive same-typeface stretch of a run; offsets are from the run start. */
     private class RunBlob(val pieces: Array<TextBlob>, val offsets: FloatArray, val width: Double)
     private data class Metrics(val ascent: Double, val height: Int)
-    private var base: Typeface? = null
+    private val bases = HashMap<Boolean, Typeface>()
     /** System fallback faces stay open so run blobs can be built from them; bounded by installed fonts. */
     private val fallbackFaces = HashMap<Int, Typeface>()
     private var textPaint: Paint? = null
@@ -250,13 +254,14 @@ object SkijaMenuFonts {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Float, Metrics>?) = size > 32
     }
 
-    private fun base(): Typeface = base ?: run {
-        val bytes = requireNotNull(javaClass.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")) {
-            "The bundled Lato menu font is missing."
+    private fun base(bold: Boolean = false): Typeface = bases.getOrPut(bold) {
+        val file = if (bold) "poppins-semibold.ttf" else "poppins-regular.ttf"
+        val bytes = requireNotNull(javaClass.getResourceAsStream("/assets/skymyce/font/$file")) {
+            "The bundled Poppins menu font is missing."
         }.use { it.readBytes() }
         Data.makeFromBytes(bytes).use { data ->
-            requireNotNull(FontMgr.getDefault().makeFromData(data)) { "Skija could not load the bundled Lato menu font." }
-        }.also { base = it }
+            requireNotNull(FontMgr.getDefault().makeFromData(data)) { "Skija could not load the bundled Poppins menu font." }
+        }
     }
     private fun fontSize(value: Double): Float = if (value.isFinite()) value.coerceIn(.5, 256.0).toFloat() else 10f
     private fun style(value: Int) = when (value) {
@@ -267,7 +272,6 @@ object SkijaMenuFonts {
     }
     private fun font(face: Typeface, size: Float, style: Int): Font = fonts.getOrPut(FontKey(face.uniqueId, size, style)) {
         Font(face, size).setSubpixel(true).setMetricsLinear(true)
-            .setEmboldened(style and 1 != 0 && !face.isBold)
             .setSkewX(if (style and 2 != 0 && !face.isItalic) -.25f else 0f)
     }
     private fun glyph(codepoint: Int, bold: Boolean, italic: Boolean, size: Double): Glyph {
@@ -275,7 +279,7 @@ object SkijaMenuFonts {
         lookup.codepoint = codepoint; lookup.size = fontSize(size); lookup.style = (if (bold) 1 else 0) or (if (italic) 2 else 0)
         glyphs[lookup]?.let { return it }
         val key = lookup.copy()
-        val base = base()
+        val base = base(bold)
         val face = if (base.getUTF32Glyph(codepoint).toInt() == 0)
             FontMgr.getDefault().matchFamilyStyleCharacter(null, style(key.style), null, codepoint)?.let { found ->
                 fallbackFaces[found.uniqueId]?.also { found.close() } ?: found.also { fallbackFaces[it.uniqueId] = it }
@@ -362,7 +366,7 @@ object SkijaMenuFonts {
         fallbackFaces.values.forEach(Typeface::close); fallbackFaces.clear()
         fonts.values.forEach { it.close() }; fonts.clear(); metrics.clear()
         textPaint?.close(); textPaint = null
-        base?.close(); base = null
+        bases.values.forEach(Typeface::close); bases.clear()
     }
 }
 

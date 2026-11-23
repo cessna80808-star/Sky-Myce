@@ -12,14 +12,19 @@ import java.awt.image.BufferedImage
 
 /** Compare the cached rasterizer with the original per-codepoint Java2D path. */
 internal fun checkMenuPerformance() {
-    val regular = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/lato-regular.ttf")!!.use {
+    val regular = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/poppins-regular.ttf")!!.use {
+        Font.createFont(Font.TRUETYPE_FONT, it).deriveFont(10f)
+    }
+    val semibold = MenuCanvas::class.java.getResourceAsStream("/assets/skymyce/font/poppins-semibold.ttf")!!.use {
         Font.createFont(Font.TRUETYPE_FONT, it).deriveFont(10f)
     }
     val fallback = Font(Font.SANS_SERIF, Font.PLAIN, 10)
     val frc = FontRenderContext(null, true, true)
-    fun font(text: String, bold: Boolean, italic: Boolean, size: Double): Font =
-        (if (regular.canDisplayUpTo(text) < 0) regular else fallback).deriveFont(
-            (if (bold) Font.BOLD else 0) or (if (italic) Font.ITALIC else 0), size.toFloat())
+    fun font(text: String, bold: Boolean, italic: Boolean, size: Double): Font {
+        val face = if (bold) semibold else regular
+        return if (face.canDisplayUpTo(text) < 0) face.deriveFont(if (italic) Font.ITALIC else Font.PLAIN, size.toFloat())
+        else fallback.deriveFont((if (bold) Font.BOLD else 0) or (if (italic) Font.ITALIC else 0), size.toFloat())
+    }
     fun width(text: String, bold: Boolean, italic: Boolean, size: Double) = text.codePoints().toArray().sumOf {
         val glyph = String(Character.toChars(it))
         font(glyph, bold, italic, size).getStringBounds(glyph, frc).width

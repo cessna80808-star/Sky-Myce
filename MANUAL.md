@@ -33,6 +33,12 @@ The in-game menu has six areas: **Dungeons**, **Combat**, **Economy**, **Cosmeti
 
 The Healer Crush Camera has saved viewpoints and a preview for setup; configure it in `/sm crush-camera`. Test and calibrate it before relying on it in a live run.
 
+## Menu appearance
+
+New installations use the **Glass** theme and Poppins typography. In Appearance, turn **Glass menus** off for solid menu surfaces, or choose another theme. Existing saved theme choices are kept. Light and Extremely Light graphics modes, Minimal, Light, High contrast and other opaque themes stay solid. Glass uses Minecraft's existing background blur; if that blur is disabled in Minecraft, the tinted surfaces remain translucent. The switch only affects menus, not gameplay HUD backgrounds.
+
+The original PNG logo is retained at its source resolution and filtered when scaled. Menu surfaces, text, custom painted PNG icons and the logo are drawn through Skia (Skija) on Minecraft's existing OpenGL context, with the existing Java2D compatibility renderer available if native rendering cannot initialize.
+
 ## Common commands
 
 | Command | What it does |

@@ -90,7 +90,7 @@ fun checkSettings() {
     check(commandRows.map { it.path }.distinct().size == commandRows.size)
     check(commandRows.none { it.path.endsWith("/themeVersion") || it.path.endsWith("/menuIntroPlayed") })
     check(commandRows.filter { it.path.startsWith("Theme & Appearance/") }.map { it.path }.toSet() ==
-        setOf("Theme & Appearance/preset", "Theme & Appearance/graphicsQuality", "Theme & Appearance/motion")) { "Appearance must expose exactly Theme, Graphics mode and Animations" }
+        setOf("Theme & Appearance/preset", "Theme & Appearance/glassMenus", "Theme & Appearance/graphicsQuality", "Theme & Appearance/motion")) { "Appearance must expose Theme, Glass menus, Graphics mode and Animations" }
     val categoryPaths = me.mycellium.skymyce.ui.MenuCategory.entries.flatMap {
         commandCenterSettings(catalog, commandRows, it, "").map { row -> row.path }
     }
@@ -122,7 +122,7 @@ fun checkSettings() {
     check(settingsTab("Theme & Appearance/preset") == SettingsTab.THEME)
     check(rows.any { it.path == "General/Party Commands/hypixelApiKey" }) // Existing storage path retained.
     check(settingGroups(rows, "settings-controls").values.flatten().single().path == "openConfigKey")
-    check(settingGroups(rows, "settings-appearance").values.flatten().map { it.path } == listOf("Theme & Appearance/preset")) { settingGroups(rows, "settings-appearance").toString() }
+    check(settingGroups(rows, "settings-appearance").values.flatten().map { it.path } == listOf("Theme & Appearance/preset", "Theme & Appearance/glassMenus")) { settingGroups(rows, "settings-appearance").toString() }
     check(settingGroups(rows, "settings-graphics").values.flatten().map { it.path } == listOf("Theme & Appearance/graphicsQuality"))
     check(settingsTab("Theme & Appearance/graphicsQuality") == SettingsTab.THEME)
     check(settingGroups(rows, "party-finder").values.flatten().all {

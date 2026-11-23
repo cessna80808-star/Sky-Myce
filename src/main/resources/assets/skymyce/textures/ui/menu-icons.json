@@ -1,0 +1,166 @@
+{
+  "width": 1402,
+  "height": 1122,
+  "icons": [
+    {
+      "id": 0,
+      "name": "home",
+      "x": 33,
+      "y": 49,
+      "width": 247,
+      "height": 238
+    },
+    {
+      "id": 1,
+      "name": "community",
+      "x": 298,
+      "y": 49,
+      "width": 256,
+      "height": 234
+    },
+    {
+      "id": 2,
+      "name": "party",
+      "x": 573,
+      "y": 44,
+      "width": 251,
+      "height": 240
+    },
+    {
+      "id": 3,
+      "name": "friends",
+      "x": 847,
+      "y": 75,
+      "width": 254,
+      "height": 196
+    },
+    {
+      "id": 4,
+      "name": "dungeons",
+      "x": 1143,
+      "y": 59,
+      "width": 215,
+      "height": 213
+    },
+    {
+      "id": 5,
+      "name": "economy",
+      "x": 37,
+      "y": 344,
+      "width": 238,
+      "height": 215
+    },
+    {
+      "id": 6,
+      "name": "appearance",
+      "x": 327,
+      "y": 316,
+      "width": 197,
+      "height": 248
+    },
+    {
+      "id": 7,
+      "name": "panels",
+      "x": 573,
+      "y": 340,
+      "width": 252,
+      "height": 202
+    },
+    {
+      "id": 8,
+      "name": "settings",
+      "x": 854,
+      "y": 320,
+      "width": 242,
+      "height": 242
+    },
+    {
+      "id": 9,
+      "name": "gameplay",
+      "x": 1135,
+      "y": 311,
+      "width": 220,
+      "height": 259
+    },
+    {
+      "id": 10,
+      "name": "search",
+      "x": 39,
+      "y": 593,
+      "width": 228,
+      "height": 232
+    },
+    {
+      "id": 11,
+      "name": "quick-settings",
+      "x": 315,
+      "y": 607,
+      "width": 217,
+      "height": 191
+    },
+    {
+      "id": 12,
+      "name": "edit-hud",
+      "x": 569,
+      "y": 610,
+      "width": 253,
+      "height": 194
+    },
+    {
+      "id": 13,
+      "name": "more",
+      "x": 866,
+      "y": 663,
+      "width": 213,
+      "height": 69
+    },
+    {
+      "id": 14,
+      "name": "reset",
+      "x": 1133,
+      "y": 600,
+      "width": 225,
+      "height": 211
+    },
+    {
+      "id": 15,
+      "name": "next",
+      "x": 45,
+      "y": 868,
+      "width": 220,
+      "height": 195
+    },
+    {
+      "id": 16,
+      "name": "pin",
+      "x": 330,
+      "y": 854,
+      "width": 230,
+      "height": 223
+    },
+    {
+      "id": 17,
+      "name": "routes",
+      "x": 560,
+      "y": 863,
+      "width": 252,
+      "height": 208
+    },
+    {
+      "id": 18,
+      "name": "loot",
+      "x": 847,
+      "y": 857,
+      "width": 248,
+      "height": 214
+    },
+    {
+      "id": 19,
+      "name": "summary",
+      "x": 1123,
+      "y": 852,
+      "width": 236,
+      "height": 234
+    }
+  ]
+}

@@ -63,10 +63,38 @@ fun main() {
         check(at(20, 80) == 0xFF00FFFF.toInt() && at(48, 80) == 0xFFFF00FF.toInt())
         check(alpha(at(70, 80)) == 0 && alpha(at(77, 80)) > 200) { "Ring lost its transparent centre" }
         check(red(at(94, 78)) > 240 && blue(at(94, 90)) > 240) { "Prepared image channels or orientation changed" }
+        // PNGs must interpolate at non-integer display sizes, rather than snapping to source pixels.
+        check(red(at(99, 78)) in 30..220 && green(at(99, 78)) in 30..220) { "Scaled PNGs use nearest-neighbour sampling" }
+        check(MenuBrand.logo.width == 512 && MenuBrand.logo.height == 530) { "The original PNG logo was replaced or downsampled" }
         check(abs(alpha(at(106, 90)) - 128) <= 1 && red(at(106, 90)) > 250) { "Prepared image alpha was not preserved" }
+        // Exercise the actual atlas source views, full-color native painting and caller fade ownership.
+        check(MenuIcons.image(-1) === MenuIcons.image(8))
+        fun icons() {
+            canvas.begin()
+            repeat(MenuIcons.COUNT) { id ->
+                val sprite = MenuIcons.image(id)
+                check(sprite === MenuIcons.image(id)) { "PNG icon source views were recreated during paint" }
+                check(sprite.colorModel.hasAlpha())
+                val source = sprite.getRGB(0, 0, sprite.width, sprite.height, null, 0, sprite.width)
+                check(source.any { alpha(it) == 0 } && source.any { alpha(it) > 200 }) { "PNG icon lost its cutout alpha" }
+                paintMenuIcon(canvas, id, 4.0 + id % 10 * 28, 4.0 + id / 10 * 28, 20.0, -1)
+            }
+        }
+        icons()
+        val iconFrame = canvas.finishFrame(284, 60, 1.5)
+        check(iconFrame.commands.size == MenuIcons.COUNT && iconFrame.commands.all { it.kind == 5 })
+        check(pixels(iconFrame).any { alpha(it) > 200 }) { "Custom PNG icons did not reach the native canvas" }
+        icons()
+        check(canvas.finishFrame(284, 60, 1.5) === iconFrame) { "Idle PNG icons invalidated the retained frame" }
+        canvas.begin(); canvas.opacity = .4
+        paintMenuIcon(canvas, 4, 0.0, 0.0, 20.0, 0x80FFFFFF.toInt())
+        check(canvas.opacity == .4) { "Icon paint leaked its disabled/fade opacity" }
+        check(abs(canvas.finishFrame(24, 24, 1.0).commands.single().opacity - .4 * 128 / 255) < .000001)
         repeat(30) {
             primitives()
-            check(canvas.finishFrame(128, 96, 1.0) === first) { "An unchanged frame was rebuilt" }
+            val retained = canvas.finishFrame(128, 96, 1.0)
+            primitives()
+            check(canvas.finishFrame(128, 96, 1.0) === retained) { "An unchanged frame was rebuilt" }
         }
         primitives()
         val scaled = canvas.finishFrame(128, 96, 1.5)
@@ -150,7 +178,7 @@ fun main() {
         for (codepoint in 0x3000 until 0x4100) SkijaMenuFonts.width(codepoint, false, false, 8.0 + codepoint % 80 / 4.0)
         repeat(80) { SkijaMenuFonts.lineHeight(8.0 + it / 4.0) }
         check(SkijaMenuFonts.cacheSizes().let { it.getValue("glyphs") <= 4096 && it.getValue("fonts") <= 64 && it.getValue("lineMetrics") <= 32 }) { "Native font resources grew without bounds" }
-        val firstRun = MenuCanvas.Run("Lato · 你好 · ✈ ", -1, bold = true, italic = true)
+        val firstRun = MenuCanvas.Run("Poppins · 你好 · ✈ ", -1, bold = true, italic = true)
         val nextRun = MenuCanvas.Run("aligned", 0xFF00FF00.toInt(), underline = true)
         val advance = firstRun.text.codePoints().toArray().sumOf { SkijaMenuFonts.width(it, firstRun.bold, firstRun.italic, 18.0) }
         fun textPixels(separate: Boolean): IntArray = Surface.makeRaster(io.github.humbleui.skija.ImageInfo.makeN32Premul(400, 64)).use { surface ->

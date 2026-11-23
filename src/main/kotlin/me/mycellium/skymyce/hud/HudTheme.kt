@@ -104,6 +104,12 @@ data class ThemePalette(val primary: Int = 0xBDA5EC, val secondary: Int = 0xDED0
 
 enum class ThemePreset(val title: String, val palette: ThemePalette, val description: String) {
 
+    GLASS("Glass", ThemePalette(primary = 0xACD5B4, secondary = 0xC6D8D0, panel = 0x15191C, card = 0x22282B,
+        text = 0xF1F3EF, muted = 0xB2BFBC, border = 0x4D5B59, opacity = 90, padding = 6, shadow = true,
+        success = 0xACD5B4, warning = 0xE8CD88, error = 0xF1A5A5, sidebar = 0x101517,
+        style = ThemeStyle(radius = 8, menuPadding = 10, sheen = .12, glow = 0.0,
+            shadowTint = 0x030607, shadowOpacity = 14, hoverWeight = 10, selectionWeight = 18, transitionMillis = 150)),
+        "Tinted graphite glass, soft mint accents and crisp Poppins typography. Disable Glass menus for solid surfaces."),
     DARK_GLASS("Dark glass", ThemePalette(sidebar = 0x12101B, shadow = true,
         style = ThemeStyle(radius = 7, sheen = .5, glow = .12, shadowTint = 0x100A19)),
         "Soft violet glass, layered surfaces and gentle highlights."),
