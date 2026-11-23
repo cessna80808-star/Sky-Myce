@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-058 (2026-11-23)
+- The Hide Repeated Lines setting for NPC Dialogue has a shorter, clearer description.
+
 ## 2.8.0-beta-057 (2026-11-23)
 - The Average run card in Dungeon Splits only shows the number of runs for All time; Last 10 and the other windows just show their name.
 

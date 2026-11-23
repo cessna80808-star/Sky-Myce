@@ -382,7 +382,7 @@ object NpcDialogueConfig : CategoryKt("NPC Dialogue") {
     }
     val hideRepeats by boolean(true) {
         name = TranslatableValue.literal("Hide Repeated Lines")
-        description = TranslatableValue.literal("Show each of Mort's dungeon lines in the box only once, and add a [Hide] button after other [NPC] lines in chat to keep that line out of the box from then on ([Show] brings it back). The buttons need Hide From Chat off. Turning this off shows every line again")
+        description = TranslatableValue.literal("Hide NPC lines you don't want to see again with the [Hide] button after them in chat. Repeated dungeon start lines are hidden automatically. Needs Hide From Chat off for the buttons")
     }
     val optionKeys by boolean(true) {
         name = TranslatableValue.literal("Number Keys Choose Options")
