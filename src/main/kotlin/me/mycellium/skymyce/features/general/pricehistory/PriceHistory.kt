@@ -21,6 +21,7 @@ import java.util.concurrent.Executors
 import me.mycellium.mixin.BazaarAssistContainerAccessor
 import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
+import me.mycellium.skymyce.api.normalizeChestText
 import me.mycellium.skymyce.config.misc.PriceHistoryConfig as Settings
 import me.mycellium.skymyce.ui.navigateMenu
 import me.mycellium.skymyce.utils.MC
@@ -53,6 +54,13 @@ object PriceHistoryFeature : SkyMyceModule() {
         val screen = event.screen as? AbstractContainerScreen<*> ?: return
         if (screen.focused is EditBox) return
         val stack = (screen as BazaarAssistContainerAccessor).`skymyce$getHoveredSlot`()?.item?.takeUnless { it.isEmpty } ?: return
+        // Essence has no item ID in menus, only its name.
+        essenceProduct(stack.hoverName.string)?.takeIf { BazaarAPI.getProduct(it) != null }?.let { tag ->
+            event.cancel()
+            val name = tag.removePrefix("ESSENCE_").lowercase().replaceFirstChar(Char::uppercase) + " Essence"
+            navigateMenu(PriceHistoryScreen(screen, tag, name, PriceMarket.BAZAAR, Settings.defaultRange))
+            return
+        }
         val id = stack.getSkyBlockId() ?: return
         val market = if (BazaarAPI.getProduct(id.bazaarId) != null) PriceMarket.BAZAAR else PriceMarket.AUCTION
         val tag = coflnetTag(id.bazaarId, id.isPet) ?: return
@@ -143,6 +151,12 @@ fun coflnetTag(bazaarId: String, pet: Boolean): String? {
     if (!id.matches(Regex("[A-Z0-9_;:\\-]{1,96}"))) return null
     return if (pet) "PET_" + id.substringBefore(';').removePrefix("PET_") else id
 }
+
+private val essenceName = Regex("(?:[0-9][0-9,.]*[kKmM]?x? )?([A-Za-z]+) Essence(?:(?: |: ?)x?[0-9][0-9,.]*[kKmM]?)?")
+
+/** The Bazaar product of an essence named as menus show it, with or without an amount; null for any other item. */
+fun essenceProduct(name: String): String? =
+    normalizeChestText(name)?.let(essenceName::matchEntire)?.let { "ESSENCE_" + it.groupValues[1].uppercase() }
 
 /** Coflnet's history endpoint for [tag]; Bazaar month and all-time use the plain history with and without a window. */
 fun priceHistoryUrl(tag: String, market: PriceMarket, range: PriceRange, now: Long): String {

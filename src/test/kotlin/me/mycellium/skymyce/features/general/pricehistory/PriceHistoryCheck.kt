@@ -36,6 +36,10 @@ private fun checkEndpoints() {
         "https://sky.coflnet.com/api/bazaar/ENCHANTED_DIAMOND/history?start=2026-09-17T19:00:00&end=2026-10-17T19:00:00")
     check(coflnetTag("golden_dragon;4", pet = true) == "PET_GOLDEN_DRAGON")
     check(coflnetTag("ENCHANTMENT_SHARPNESS_7", pet = false) == "ENCHANTMENT_SHARPNESS_7")
+    for (name in listOf("§dWither Essence", "Wither Essence x102", "Wither Essence: 1,234", "1.2k Wither Essence"))
+        check(essenceProduct(name) == "ESSENCE_WITHER") { name }
+    for (name in listOf("Essence", "Essence Shop", "Wither Essence Shop", "Aspect of the End"))
+        check(essenceProduct(name) == null) { name }
     check(coflnetTag("../admin", pet = false) == null && coflnetTag("", pet = false) == null) { "Only plain item ids reach a URL" }
 }
 

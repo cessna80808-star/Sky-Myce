@@ -115,6 +115,7 @@ Everything here is also in the /sm menu. These are just shortcuts.
 - `/sm dungeon`: Dungeon Tracker: your runs, loot and rewards
 - `/sm splits`: Dungeon Splits: live splits and personal bests
 - `/sm m7pb [player]`: Look up someone's M7 personal best
+- `/sm m7pb party`: M7 personal bests of everyone in your party
 - `/sm ah`: Opens the Auction Browser
 - `/sm greenhouse`: Greenhouse profit ranking; /sm greenhouse gui opens the planner
 - `/sm journal`: Opens the RNG Journal

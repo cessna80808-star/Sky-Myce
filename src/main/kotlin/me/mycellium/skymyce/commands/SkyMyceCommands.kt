@@ -42,6 +42,7 @@ internal val commandHelp = listOf(
     CommandHelp("/sm splits", "Dungeon Splits: live splits and personal bests", true, "timer pb"),
     CommandHelp("/sm crush-camera", "Crush Camera views for F7/M7 Storm", false, "healer storm"),
     CommandHelp("/sm m7pb [player]", "Look up an M7 personal best", true, "pb lookup"),
+    CommandHelp("/sm m7pb party", "M7 personal bests of everyone in your party", true, "pb lookup"),
     CommandHelp("/sm ah", "Auction Browser", true, "auction house market"),
     CommandHelp("/sm greenhouse", "Greenhouse profit ranking; /sm greenhouse gui opens the planner", true, "garden mutation planner"),
     CommandHelp("/sm greenhouse help", "All greenhouse shortcuts (plan, auto, anchor, missing, unlock…)", false, "garden mutation planner"),
@@ -209,6 +210,7 @@ object SkyMyceCommands : SkyMyceModule() {
 
     private fun m7PbCommand() = literal("m7pb")
         .executes { PersonalBestCommand.lookupM7(); 1 }
+        .then(literal("party").executes { PersonalBestCommand.lookupPartyM7(); 1 })
         .then(argument("player", StringArgumentType.word()).suggests { _, builder ->
             MC.connection?.onlinePlayers?.map { it.profile.name }
                 ?.filter { it.startsWith(builder.remaining, true) }?.forEach(builder::suggest)

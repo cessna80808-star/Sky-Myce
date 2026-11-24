@@ -3,7 +3,6 @@ package me.mycellium.skymyce.features.general
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStats
 import me.mycellium.skymyce.features.instances.dungeons.friends.DungeonFriendStatsCache
 import me.mycellium.skymyce.features.instances.dungeons.friends.StatsState
-import me.mycellium.skymyce.features.instances.dungeons.friends.formatDungeonTime
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7
 import java.util.UUID
 
@@ -13,9 +12,9 @@ fun checkPersonalBestCommand() {
     val stats = DungeonFriendStats(StatsState.AVAILABLE, catacombs = 50,
         completionTimes = mapOf(M7 to 100000), sPlusTimes = mapOf(M7 to 305678))
     val result = m7PbMessage("Alice", stats)
-    check("M7 S+ PB: ${formatDungeonTime(305678)}" in result && "selected profile" in result)
-    check(formatDungeonTime(100000) !in result) // A faster non-S+ completion is not the S+ PB.
-    check("No published M7 S+ PB" in m7PbMessage("Alice", stats.copy(sPlusTimes = emptyMap())))
+    check(result == "Alice — M7 S+ PB: 5:05:678")
+    check("1:40" !in result) // A faster non-S+ completion is not the S+ PB.
+    check("No M7 S+ PB" in m7PbMessage("Alice", stats.copy(sPlusTimes = emptyMap())))
     check("hidden" in m7PbMessage("Alice", DungeonFriendStats(StatsState.HIDDEN)))
     check("No SkyBlock profile" in m7PbMessage("Alice", DungeonFriendStats(StatsState.NO_PROFILE)))
     check("Could not load" in m7PbMessage("Alice", DungeonFriendStats(StatsState.UNAVAILABLE)))
