@@ -323,6 +323,11 @@ object DungeonTrackerConfig : CategoryKt("Dungeons Tracker") {
         description = TranslatableValue.literal("Show a dungeon tracker summary widget in the dungeon hub or after a run is completed")
     }
 
+    var widgetPeriod by enum(me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerPeriod.TOTAL) {
+        name = TranslatableValue.literal("Widget Time Frame")
+        description = TranslatableValue.literal("Which runs the widget counts: everything, since you started the game, or today, this week (from Monday), this month or this year in your local time. Clicking the widget with chat open also changes it")
+    }
+
     val targetLevel by int(50) {
         name = TranslatableValue.literal("Target Level")
         description = TranslatableValue.literal("Catacombs level to work toward. The widget and tracker show the experience left and estimated runs to reach it (levels past 50 take 200M each)")

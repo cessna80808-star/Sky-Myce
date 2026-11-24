@@ -3,11 +3,16 @@ package me.mycellium.skymyce.features.instances.dungeons.tracker
 import io.wispforest.owo.ui.base.BaseUIComponent
 import io.wispforest.owo.ui.core.OwoUIGraphics
 import io.wispforest.owo.ui.core.Sizing
+import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 import kotlin.math.abs
+import me.mycellium.skymyce.SkyMyce
 import me.mycellium.skymyce.SkyMyceModule
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import me.mycellium.skymyce.config.instances.dungeons.DungeonsConfig
@@ -22,6 +27,8 @@ import me.mycellium.skymyce.hud.updateTextLines
 import me.mycellium.skymyce.hud.widget.Widget
 import me.mycellium.skymyce.utils.MC
 import me.mycellium.skymyce.utils.NumberUtils
+import net.minecraft.client.input.MouseButtonEvent
+import net.minecraft.network.chat.Component
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonAPI
 import tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor
 import tech.thatgravyboat.skyblockapi.api.location.SkyBlockIsland
@@ -33,6 +40,36 @@ internal fun dungeonTrackerDisplayFloor(current: DungeonFloor?, api: DungeonFloo
     context: AcquisitionContext?): DungeonFloor? = current ?: api ?: context?.let { verified ->
     runs.asSequence().filter { it.trackingVersion == 2 && it.completedAt != null && verified.matches(it.context) && DungeonFloor.getByName(it.floor) != null }
         .maxByOrNull { it.completedAt!! }?.floor?.let { DungeonFloor.getByName(it) }
+}
+
+/** Saved by name. */
+enum class TrackerPeriod(val title: String) {
+    TOTAL("Total"), SESSION("Session"), DAY("Today"), WEEK("This week"), MONTH("This month"), YEAR("This year");
+    override fun toString() = title
+
+    /** When this time frame began in local time, or null for everything. */
+    internal fun since(sessionStart: Long, now: Long, zone: ZoneId = ZoneId.systemDefault()): Long? {
+        fun start(day: LocalDate) = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        return when (this) {
+            TOTAL -> null
+            SESSION -> sessionStart
+            DAY -> start(today)
+            WEEK -> start(today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)))
+            MONTH -> start(today.withDayOfMonth(1))
+            YEAR -> start(today.withDayOfYear(1))
+        }
+    }
+}
+
+/** The widget's totals since [since]. Saved totals without dates only count toward everything (null). */
+internal fun dungeonTrackerWidgetTotals(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, floor: String?, since: Long?,
+    context: AcquisitionContext?): TrackerView {
+    val filter = TrackerFilter(floor = floor, scope = TrackerScope.ALL_LOCAL_PROFILES)
+    if (since == null) return trackerView(archive, legacy, filter, context)
+    val runs = archive.runs.filter { (it.completedAt ?: it.startedAt ?: it.chests.firstOrNull()?.time ?: 0) >= since }
+    val from = Instant.ofEpochMilli(since).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    return trackerView(archive.copy(runs = runs), legacy, filter.copy(from = from), context)
 }
 
 /** Average Catacombs experience per tracked run, or null without runs that granted experience. */
@@ -101,7 +138,8 @@ internal data class TrackerHudView(
     val heading: String get() = if (badge != null) "$badge $title" else title
 }
 
-internal fun dungeonTrackerWidgetView(floor: DungeonFloor?, stats: TrackerSummary, target: String? = null): TrackerHudView {
+internal fun dungeonTrackerWidgetView(floor: DungeonFloor?, stats: TrackerSummary, target: String? = null,
+    period: TrackerPeriod = TrackerPeriod.TOTAL): TrackerHudView {
     fun count(value: Long) = String.format(Locale.ROOT, "%,d", value.coerceAtLeast(0))
     fun rate(value: Double): String = stats.estimatedHourly(value)
         ?.let(::formatCompactNumber)?.takeUnless { it == "—" }?.let { "$it/h" } ?: "—"
@@ -143,7 +181,7 @@ internal fun dungeonTrackerWidgetView(floor: DungeonFloor?, stats: TrackerSummar
     )
     return TrackerHudView(
         badge = floor?.name,
-        title = if (floor != null) "Tracker" else "All floors Tracker",
+        title = (if (floor != null) "Tracker" else "All floors Tracker") + if (period == TrackerPeriod.TOTAL) "" else " · ${period.title}",
         rows = rows,
         targetLine = target,
     )
@@ -161,7 +199,7 @@ internal const val DUNGEON_TRACKER_PREVIEW_RATE = 400_000.0
 internal fun dungeonTrackerPreviewView(enabled: Boolean): TrackerHudView? = dungeonTrackerPreview.takeIf { enabled }
 
 /** Retained header and aligned 3-column stats table; remeasured only when data changes, zero per-frame allocations. */
-internal class DungeonTrackerBody : BaseUIComponent() {
+internal class DungeonTrackerBody(private val onClick: (() -> Unit)? = null) : BaseUIComponent() {
     private var view: TrackerHudView = dungeonTrackerPreview
     private var boldTitle = ""
     private var displayValues = emptyList<String>()
@@ -206,6 +244,12 @@ internal class DungeonTrackerBody : BaseUIComponent() {
         bodyWidth = width.coerceAtLeast(preferredWidth())
         sizing(Sizing.fixed(bodyWidth), Sizing.fixed(bodyHeight))
         return this
+    }
+
+    override fun onMouseDown(click: MouseButtonEvent, doubled: Boolean): Boolean {
+        val action = onClick
+        if (action == null || click.button() != 0) return super.onMouseDown(click, doubled)
+        action(); return true
     }
 
     override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
@@ -265,7 +309,9 @@ internal class DungeonTrackerBody : BaseUIComponent() {
 }
 
 object DungeonTrackerWidget : SkyMyceModule() {
-    private val body by lazy { DungeonTrackerBody() }
+    /** Set when the module registers at startup. */
+    private val sessionStart = System.currentTimeMillis()
+    private val body by lazy { DungeonTrackerBody(::nextPeriod).apply { tooltip(Component.literal("Click to change the time frame")) } }
     private val card by lazy { DungeonLevelCard() }
     private val fallback by lazy { hudLabel() }
     private val content by lazy { hudPanel(padding = 6).apply { gap(4); child(body) } }
@@ -282,7 +328,14 @@ object DungeonTrackerWidget : SkyMyceModule() {
     private var seenShowTarget: Boolean? = null
     private var seenTargetLevel = -1
     private var nextMarketRefresh = 0L
-    private var cachedViews: Pair<DungeonFloor?, TrackerView>? = null
+    private var seenPeriod: TrackerPeriod? = null
+    private var cachedSince: Long? = null
+    private var cachedViews: Triple<DungeonFloor?, TrackerView, TrackerSummary>? = null
+
+    private fun nextPeriod() {
+        DungeonTrackerConfig.widgetPeriod = TrackerPeriod.entries.let { it[(DungeonTrackerConfig.widgetPeriod.ordinal + 1) % it.size] }
+        SkyMyce.config.save()
+    }
 
     val widget = Widget("dungeon_tracker", "Dungeon Tracker", 200, 100, previewBuilder = {
         val view = dungeonTrackerPreviewView(DungeonTrackerConfig.dungeonTrackerWidget) ?: return@Widget null
@@ -304,26 +357,31 @@ object DungeonTrackerWidget : SkyMyceModule() {
         val activeFloor = DungeonTracker.currentFloor ?: DungeonAPI.dungeonFloor
         val bazaar = DungeonTrackerConfig.bazaarPriceType; val auction = DungeonTrackerConfig.auctionPriceType
         val showTarget = DungeonTrackerConfig.showTarget; val targetLevel = DungeonTrackerConfig.targetLevel
+        val period = DungeonTrackerConfig.widgetPeriod
         val now = System.currentTimeMillis()
         val dataChanged = seenRevision != AcquisitionRepository.revision || seenHistoricalRevision != DungeonTracker.revision || seenFloor != activeFloor || seenContext != context
-        if (dataChanged || seenBazaar != bazaar || seenAuction != auction || seenShowTarget != showTarget || seenTargetLevel != targetLevel || now >= nextMarketRefresh) {
+        if (dataChanged || seenBazaar != bazaar || seenAuction != auction || seenShowTarget != showTarget || seenTargetLevel != targetLevel || seenPeriod != period || now >= nextMarketRefresh) {
             seenRevision = AcquisitionRepository.revision; seenHistoricalRevision = DungeonTracker.revision; seenFloor = activeFloor; seenContext = context
-            seenBazaar = bazaar; seenAuction = auction; seenShowTarget = showTarget; seenTargetLevel = targetLevel; nextMarketRefresh = now + 10_000
+            seenBazaar = bazaar; seenAuction = auction; seenShowTarget = showTarget; seenTargetLevel = targetLevel; seenPeriod = period; nextMarketRefresh = now + 10_000
+            val since = period.since(sessionStart, now)
             // The run history only changes with the data; the 10 s refresh is for prices and reuses it.
-            val views = cachedViews?.takeIf { !dataChanged } ?: run {
+            val views = cachedViews?.takeIf { !dataChanged && cachedSince == since } ?: run {
                 val floor = dungeonTrackerDisplayFloor(activeFloor, null, AcquisitionRepository.state.runs, context)
-                floor to trackerView(AcquisitionRepository.state, legacyTrackerView(), TrackerFilter(floor = floor?.name, scope = TrackerScope.ALL_LOCAL_PROFILES), context)
-            }.also { cachedViews = it }
-            val (floor, selected) = views
+                val legacy = legacyTrackerView()
+                Triple(floor, dungeonTrackerWidgetTotals(AcquisitionRepository.state, legacy, floor?.name, since, context),
+                    dungeonTrackerLifetimeSummary(AcquisitionRepository.state, legacy, floor?.name))
+            }.also { cachedViews = it; cachedSince = since }
+            val (floor, selected, total) = views
             val prices = selected.loot.map { it.item }.distinct().associateWith { cachedLootUnitPrice(it, bazaar, auction) }
             val pricedLoot = marketValuedLoot(selected.loot, prices::get)
             val summary = marketValuedTrackerSummary(selected.summary, pricedLoot)
-            val rate = trackedXpPerRun(summary)
+            // The level estimate keeps every run, so a new day or session does not lose it.
+            val rate = trackedXpPerRun(total)
             val xp = if (showTarget) DungeonTargetLevel.experience() else null
             val level = xp?.let { levelRow("Catacombs", null, it, targetLevel, rate) }
             // Without a profile reading the card cannot draw; one line says why instead.
             val targetLine = if (showTarget && xp == null) dungeonTargetLine(targetLevel, null, DungeonTargetLevel.unavailableReason) else null
-            val view = dungeonTrackerWidgetView(floor, summary, targetLine)
+            val view = dungeonTrackerWidgetView(floor, summary, targetLine, period)
             body.update(view)
             if (level != null) {
                 card.update(level, rate)

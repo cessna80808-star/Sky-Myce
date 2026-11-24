@@ -566,7 +566,34 @@ private fun checkDungeonWidgetRates() {
     check(archive.runs.first() == timed && historical.summary.timedRuns == 19L) // This is a read-only projection.
 }
 
+private fun checkWidgetPeriods() {
+    val zone = ZoneId.systemDefault()
+    fun at(date: String, hour: Int = 12) = LocalDate.parse(date).atTime(hour, 0).atZone(zone).toInstant().toEpochMilli()
+    val now = at("2026-11-25") // A Wednesday.
+    fun since(period: TrackerPeriod, time: Long = now) = period.since(at("2026-11-25", 10), time)
+    check(since(TrackerPeriod.TOTAL) == null && since(TrackerPeriod.SESSION) == at("2026-11-25", 10))
+    check(since(TrackerPeriod.DAY) == at("2026-11-25", 0) && since(TrackerPeriod.WEEK) == at("2026-11-23", 0))
+    check(since(TrackerPeriod.MONTH) == at("2026-11-01", 0) && since(TrackerPeriod.YEAR) == at("2026-01-01", 0))
+    check(since(TrackerPeriod.WEEK, at("2026-11-23")) == at("2026-11-23", 0) && since(TrackerPeriod.WEEK, at("2026-11-22")) == at("2026-11-16", 0))
+    val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
+    val times = listOf(at("2026-11-25", 11), at("2026-11-25", 9), at("2026-11-23", 0), at("2026-11-02"), at("2026-03-01"), at("2025-12-31"))
+    val claim = DungeonRunRecord("claim", "s", context, "M7", chests = listOf(ChestReceipt("later", now, "BEDROCK", 100.0, listOf(RunLoot("LOOT", 1, 1_000.0)))))
+    val archive = AcquisitionArchive(runs = times.mapIndexed { i, time -> DungeonRunRecord("r$i", "s", context, "M7", time - 60_000, time, 60_000) } + claim)
+    val legacy = listOf(LegacyFloorView("M7", TrackerSummary(runs = 100), emptyMap(), emptyMap(), emptyMap(), emptyMap()))
+    val expected = mapOf(TrackerPeriod.TOTAL to 106L, TrackerPeriod.SESSION to 1L, TrackerPeriod.DAY to 2L, TrackerPeriod.WEEK to 3L,
+        TrackerPeriod.MONTH to 4L, TrackerPeriod.YEAR to 5L)
+    expected.forEach { (period, runs) ->
+        val view = dungeonTrackerWidgetTotals(archive, legacy, "M7", since(period), context)
+        check(view.summary.runs == runs && view.summary.chests == 1) { "$period ${view.summary}" }
+        check(view.loot.single().count == 1L)
+    }
+    // A chest claimed before the time frame stays out of it.
+    check(dungeonTrackerWidgetTotals(archive, legacy, "M7", now + 1, context).summary.let { it.runs == 0L && it.chests == 0 })
+    check(dungeonTrackerWidgetView(null, TrackerSummary(), period = TrackerPeriod.DAY).heading == "All floors Tracker · Today")
+}
+
 private fun checkLifetimeDungeonSummary() {
+    checkWidgetPeriods()
     val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
     val other = context.copy(profileName = "Pear")
     val historical = LegacyFloorView("F7", TrackerSummary(runs = 20, time = 1200000, timedRuns = 20, cataXp = 10000.0, rerolls = 2),

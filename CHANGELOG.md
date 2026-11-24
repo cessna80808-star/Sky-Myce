@@ -3,6 +3,9 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-061 (2026-11-24)
+- The Dungeon Tracker HUD can show a time frame instead of your total: this session, today, this week, this month or this year. Open chat and click the HUD to switch, or pick one in the Dungeon Tracker settings.
+
 ## 2.8.0-beta-060 (2026-11-24)
 - New Blood timer, on by default: counts down to 20 seconds after Blood opens in server time, so it stops while the server lags. Choose how many seconds it counts (3 by default) in Dungeon Routing settings, and move it in the HUD editor.
 - The Dungeon Tracker HUD is cleaned up, and its coins per hour is fixed. It showed 0/h because chests opened at Croesus were left out of the rate.
