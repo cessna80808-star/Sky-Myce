@@ -3,6 +3,11 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-059 (2026-11-24)
+- The RNG Journal is redesigned. Trends now has stat cards, a drops chart, drops by item with icons and rarity colors, a rarity bar and a table of recent runs, and History is tidier.
+- Price History works on essence.
+- New `/m7pb party` command (also `/sm m7pb party`) that shows the M7 S+ PB of everyone in your party. M7 PB lookups no longer post a "Looking up" message or "(selected profile)".
+
 ## 2.8.0-beta-058 (2026-11-23)
 - The Hide Repeated Lines setting for NPC Dialogue has a shorter, clearer description.
 

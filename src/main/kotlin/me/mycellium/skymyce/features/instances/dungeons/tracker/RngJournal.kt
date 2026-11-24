@@ -724,7 +724,8 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
             add(StatCard("This month", if (profileMissing) "—" else formatInt(periodCounts[JournalPeriod.MONTH] ?: 0L), "UTC month"))
             add(StatCard("Est. value", valueText, valueSub, tip = "Estimated at drop time. Unpriced drops are not counted as zero."))
             if (filter.activity != "slayer" && view.observedRuns > 0) {
-                val ratio = if (totalDrops > 0) "${"%.1f".format(Locale.ROOT, view.observedRuns.toDouble() / totalDrops)} / drop" else "completed"
+                val dungeonDrops = view.events.filter { it.origin == "confirmed" && it.activity == "dungeon" }.sumOf { it.quantity.toLong() }
+                val ratio = if (dungeonDrops > 0) "${"%.1f".format(Locale.ROOT, view.observedRuns.toDouble() / dungeonDrops)} / drop" else "completed"
                 add(StatCard("Runs", formatInt(view.observedRuns.toLong()), ratio, tip = "Completed dungeon runs in this period. Observed ratio, not drop rate."))
             }
         }
@@ -984,7 +985,7 @@ class RngJournalScreen : MenuScreen(Component.literal("Sky-Myce RNG Journal"), M
         comparisonKey = key; nextComparison = Long.MAX_VALUE; comparison = null
         val boundary = ++comparisonEpoch; comparisonWorker.cancel(this)
         if (period == null || !CommunityClient.connected || token == null || identity == null) {
-            comparisonStatus = if (period == null) "Clear search, activity, floor and imported filters to compare."
+            comparisonStatus = if (period == null) "To compare, pick all time, this week or this month and clear the search, activity, floor and imported filters."
                 else "Connect Discord to compare with shared drops."
             renderResults(); return
         }
