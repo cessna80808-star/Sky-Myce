@@ -588,8 +588,6 @@ object DigestRngParser {
         "THIRD_MASTER_STAR" to DigestRareItem("Third Master Star", "dungeon", public = false),
         "FOURTH_MASTER_STAR" to DigestRareItem("Fourth Master Star", "dungeon", public = false),
         "FIFTH_MASTER_STAR" to DigestRareItem("Fifth Master Star", "dungeon", public = false),
-        "MASTER_SKULL_TIER_5" to DigestRareItem("Master Skull - Tier 5", "dungeon", public = false),
-        "AUTO_RECOMBOBULATOR" to DigestRareItem("Auto Recombobulator", "dungeon", public = false),
         "WARDEN_HEART" to DigestRareItem("Warden Heart", "slayer"),
         "JUDGEMENT_CORE" to DigestRareItem("Judgement Core", "slayer"),
         "OVERFLUX_CAPACITOR" to DigestRareItem("Overflux Capacitor", "slayer"),

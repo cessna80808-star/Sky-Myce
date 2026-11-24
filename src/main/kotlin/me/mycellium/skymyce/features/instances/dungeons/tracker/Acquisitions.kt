@@ -236,7 +236,7 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
         val sessionRuns = if (session == null) emptySet() else runs.filter { it.session == session }.mapTo(hashSetOf()) { it.id }
         val savedHistory = legacyTotals || scope != TrackerScope.CURRENT_PROFILE
         return values.filter {
-        (page != TrackerPage.TIMELINE || it.item != "RECOMBOBULATOR_3000") &&
+        (page != TrackerPage.TIMELINE || it.item !in TIMELINE_COMMON) &&
         (it.origin == "confirmed" || savedHistory) && floorMatches(it.floor) &&
             (scopeMatches(it.context, current) || savedHistory && scope == TrackerScope.ALL_LOCAL_PROFILES && it.context == null) && dateMatches(it.occurredAt) && (chest == null || chest == it.chest) &&
             (activity == null || activity == it.activity) && (session == null || it.run in sessionRuns) &&
@@ -245,6 +245,8 @@ data class TrackerFilter(val page: TrackerPage = TrackerPage.OVERVIEW, val floor
     }.sortedWith((if (oldestFirst) compareBy<AcquisitionEvent> { it.occurredAt } else compareByDescending { it.occurredAt }).thenBy { it.id })
     }
 }
+/** Saved in the loot history, but too common for the RNG timeline. */
+private val TIMELINE_COMMON = setOf("RECOMBOBULATOR_3000", "AUTO_RECOMBOBULATOR", "MASTER_SKULL_TIER_5")
 data class TrackerLootRow(val item: String, val count: Long, val value: Double?, val acquiredChests: Int?, val sampledChests: Int,
     val rateSample: PersonalRateSample? = null) {
     val observedRate get() = if (rateSample != null) rateSample.itemCounts[item]?.toDouble()?.div(rateSample.completedRuns)
@@ -257,7 +259,7 @@ fun sortedLoot(rows: List<TrackerLootRow>, filter: TrackerFilter): List<TrackerL
         LootOrder.VALUE -> compareBy { it.value ?: 0.0 }
         LootOrder.OBSERVED_RATE -> compareBy { it.observedRate ?: 0.0 }
     }.let { if (filter.ascending) it else it.reversed() }
-    return rows.filter { (filter.page != TrackerPage.TIMELINE || it.item != "RECOMBOBULATOR_3000") &&
+    return rows.filter { (filter.page != TrackerPage.TIMELINE || it.item !in TIMELINE_COMMON) &&
         (filter.query.isBlank() || "${it.item} ${DigestRngParser.catalog[it.item]?.name.orEmpty()}".contains(filter.query, true)) &&
         (!filter.rareOnly || it.item in DigestRngParser.catalog) && (!filter.valuableOnly || it.value?.let { value -> value >= 1_000_000 } == true)
     }.sortedWith(compareBy<TrackerLootRow> { when (filter.sort) { LootOrder.VALUE -> it.value == null; LootOrder.OBSERVED_RATE -> it.observedRate == null; else -> false } }

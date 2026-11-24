@@ -394,6 +394,9 @@ data class TrackerSummary(val runs: Long = 0, val time: Long = 0, val timedRuns:
     val net get() = knownNet.takeUnless { profitIncomplete }
     fun hourlyRate(value: Double): Double? = if (completeTiming && value.isFinite())
         (value * 3600000 / time).takeIf(Double::isFinite) else null
+    /** Over every run, counting those without a recorded time at the average; chests claimed later are saved apart from their run. */
+    fun estimatedHourly(value: Double): Double? = average?.takeIf { it > 0 && runs > 0 && value.isFinite() }
+        ?.let { (value * 3600000 / (it * runs)).takeIf(Double::isFinite) }
 }
 data class LegacyFloorView(val floor: String, val summary: TrackerSummary, val loot: Map<String, List<TrackerLootRow>>,
     val chestCosts: Map<String, Double>, val rerollCosts: Map<String, Double>, val chestCounts: Map<String, Int>)
@@ -408,16 +411,6 @@ data class TrackerView(val summary: TrackerSummary = TrackerSummary(), val loot:
 /** Market presentation replaces frozen recorded values; it never changes the saved profit ledger. */
 internal fun marketValuedTrackerSummary(recorded: TrackerSummary, marketLoot: List<TrackerLootRow>) = recorded.copy(
     gross = marketLoot.sumOf { it.value ?: 0.0 }, incompleteValues = marketLoot.any { it.value == null }, preservedProfit = 0.0)
-
-/** Incomplete historical timing cannot assign its loot or XP to the runs whose durations survived. */
-internal fun dungeonTrackerRateSample(archive: AcquisitionArchive, legacy: List<LegacyFloorView>, floor: String?): TrackerView {
-    val filter = TrackerFilter(floor = floor, scope = TrackerScope.ALL_LOCAL_PROFILES)
-    val runs = filter.runs(archive.runs, null).filter { it.completedAt != null && it.duration != null && it.duration in 1..MAX_DUNGEON_RUN_MILLIS }
-        .distinctBy { it.id }
-    val historical = legacy.filter { filter.floorMatches(it.floor) && it.summary.completeTiming }
-    val sample = trackerView(AcquisitionArchive(runs = runs), historical, filter, null)
-    return sample.copy(summary = sample.summary.copy(xpTimingComplete = runs.all { it.cataXp != null }))
-}
 
 /** A saved paid receipt can outlive its journal write; this projection is never persisted or published. */
 private fun trackerHistoryEvents(archive: AcquisitionArchive, filter: TrackerFilter, context: AcquisitionContext?): List<AcquisitionEvent> {

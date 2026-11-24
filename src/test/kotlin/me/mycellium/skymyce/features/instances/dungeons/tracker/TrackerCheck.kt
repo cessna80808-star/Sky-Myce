@@ -368,28 +368,32 @@ private fun checkTimelineRecombobulators() {
     val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
     val time = 1_000_000L
     val standard = "RECOMBOBULATOR_3000"
-    val auto = "AUTO_RECOMBOBULATOR"
+    val rare = "IMPLOSION_SCROLL"
     val run = DungeonRunRecord("run", "session", context, "M7", chests = listOf(
-        ChestReceipt("paid", time, "BEDROCK", 0.0, listOf(RunLoot(standard, 2), RunLoot(auto, 1)))))
+        ChestReceipt("paid", time, "BEDROCK", 0.0, listOf(RunLoot(standard, 2), RunLoot(rare, 1)))))
     val standardEvent = AcquisitionEvent("e".repeat(32), standard, time, "dungeon", context, "M7", "BEDROCK", quantity = 2, run = run.id)
-    val autoEvent = standardEvent.copy(id = "f".repeat(32), item = auto, quantity = 1)
-    val archive = AcquisitionArchive(events = listOf(standardEvent, autoEvent), runs = listOf(run))
+    val rareEvent = standardEvent.copy(id = "f".repeat(32), item = rare, quantity = 1)
+    val archive = AcquisitionArchive(events = listOf(standardEvent, rareEvent), runs = listOf(run))
     val legacy = LegacyFloorView("M7", TrackerSummary(), mapOf("BEDROCK" to listOf(
-        TrackerLootRow(standard, 5, 0.0, null, 5), TrackerLootRow(auto, 2, 0.0, null, 2))), emptyMap(), emptyMap(), emptyMap())
+        TrackerLootRow(standard, 5, 0.0, null, 5), TrackerLootRow(rare, 2, 0.0, null, 2))), emptyMap(), emptyMap(), emptyMap())
     val before = Gson().toJson(archive) to Gson().toJson(legacy)
     val filter = TrackerFilter(page = TrackerPage.TIMELINE, floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
-    for (query in listOf("", "recomb", "AUTO_RECOMBOBULATOR")) {
+    for (query in listOf("", "implosion", "IMPLOSION_SCROLL")) {
         val selected = filter.copy(query = query)
         val timeline = trackerView(archive, listOf(legacy), selected, null)
-        check(timeline.events == listOf(autoEvent) && timeline.loot.single().let { it.item == auto && it.count == 3L })
-        check(standard !in timeline.undatedLoot && selected.events(archive.events, null, archive.runs) == listOf(autoEvent))
+        check(timeline.events == listOf(rareEvent) && timeline.loot.single().let { it.item == rare && it.count == 3L })
+        check(standard !in timeline.undatedLoot && selected.events(archive.events, null, archive.runs) == listOf(rareEvent))
+    }
+    for (common in listOf("AUTO_RECOMBOBULATOR", "MASTER_SKULL_TIER_5")) {
+        check(!me.mycellium.skymyce.features.digest.DigestRngCatalog.valid(common, "dungeon"))
+        check(filter.events(listOf(rareEvent.copy(item = common)), null, emptyList()).isEmpty())
     }
     val searched = trackerView(archive, listOf(legacy), filter.copy(query = standard), null)
     check(searched.events.isEmpty() && searched.loot.isEmpty() && searched.undatedLoot.isEmpty())
     for (page in listOf(TrackerPage.OVERVIEW, TrackerPage.LOOT, TrackerPage.MUSEUM)) {
         val other = trackerView(archive, listOf(legacy), filter.copy(page = page), null)
         check(other.events.toSet() == archive.events.toSet())
-        check(other.loot.associate { it.item to it.count } == mapOf(standard to 7L, auto to 3L))
+        check(other.loot.associate { it.item to it.count } == mapOf(standard to 7L, rare to 3L))
     }
     val standardOnly = archive.copy(events = listOf(standardEvent), runs = listOf(run.copy(chests = run.chests.map {
         it.copy(loot = it.loot.filter { item -> item.item == standard })
@@ -546,38 +550,18 @@ private fun checkDungeonWidgetRates() {
     val archive = AcquisitionArchive(runs = listOf(timed, untimed,
         timed.copy(id = "old-copy", trackingVersion = 1), timed.copy(id = "other-floor", floor = "F7"),
         timed.copy(id = "not-completed", completedAt = null), timed.copy(id = "no-duration", duration = 0)))
-    val sample = dungeonTrackerRateSample(archive, listOf(historical), "M7")
-    check(sample.summary.runs == 1L && sample.summary.time == 60_000L && sample.summary.cataXp == 1_000.0)
-    check(sample.loot.single().count == 1L && sample.summary.chestCost == 100.0 && sample.summary.knownRerollCost == 50.0)
-    fun valued(view: TrackerView) = marketValuedTrackerSummary(view.summary, marketValuedLoot(view.loot) { 1_000.0 })
-    val rates = valued(sample)
-    check(rates.knownNet == 850.0 && rates.hourlyRate(rates.knownNet) == 51_000.0 && rates.hourlyRate(rates.cataXp) == 60_000.0)
-    val total = valued(trackerView(archive, listOf(historical), TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES), null))
-    val rows = dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, total, rates)
-        .map { it.replace(Regex("§."), "") }
-    check(rows.size == 9 && rows.none { "≥" in it } && rows[3].contains("recorded"))
-    check(rows[4].contains("60/h") && rows[6] == "Rates: 1/${total.runs} matched runs")
-    check(rows[7].contains("51K/h") && rows[8].contains("60K/h")) // Hourly values use this one run, never lifetime profit/XP.
-    check(total.knownNet != rates.knownNet && total.cataXp > rates.cataXp && total.gross == 123_000.0)
-    val duplicated = dungeonTrackerRateSample(archive.copy(runs = listOf(timed, timed)), emptyList(), "M7")
-    check(duplicated.summary.runs == 1L && duplicated.summary.time == 60_000L && duplicated.loot.single().count == 1L)
-    val completeHistorical = historical.copy(summary = historical.summary.copy(time = 1_200_000, timedRuns = 20))
-    val imported = dungeonTrackerRateSample(AcquisitionArchive(), listOf(completeHistorical), "M7")
-    check(imported.summary.runs == 20L && imported.summary.time == 1_200_000L && imported.loot.single().count == 20L)
-    check(valued(imported).hourlyRate(imported.summary.cataXp) == 270_000.0) // Complete imported totals use their own complete timing.
-    val incompleteImported = dungeonTrackerRateSample(AcquisitionArchive(), listOf(historical), "M7")
-    check(incompleteImported.summary.runs == 0L && incompleteImported.summary.hourlyRate(100.0) == null)
-    val noElapsed = dungeonTrackerRateSample(archive.copy(runs = listOf(untimed, timed.copy(duration = 0))), emptyList(), "M7")
-    check(noElapsed.summary.time == 0L && noElapsed.summary.hourlyRate(1.0) == null)
-    val unknownPrice = marketValuedTrackerSummary(sample.summary, marketValuedLoot(sample.loot) { null })
-    val unknownCost = valued(dungeonTrackerRateSample(archive.copy(runs = listOf(timed.copy(rerollCost = null))), emptyList(), "M7"))
-    for (unknown in listOf(unknownPrice, unknownCost)) {
-        check(unknown.profitIncomplete && unknown.net == null)
-        val uncertain = dungeonTrackerWidgetLines(null, total, unknown)
-        check(uncertain[7].contains("—") && !uncertain[4].contains("—") && !uncertain[8].contains("—"))
-    }
-    val unknownXp = dungeonTrackerRateSample(archive.copy(runs = listOf(timed.copy(cataXp = null))), emptyList(), "M7")
-    check(!unknownXp.summary.xpTimingComplete && dungeonTrackerWidgetLines(null, total, valued(unknownXp))[8].contains("—"))
+    val filter = TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
+    val total = trackerView(archive, listOf(historical), filter, null).summary
+    val rows = dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, total).map { it.replace(Regex("§."), "") }
+    check(rows.none { "matched" in it || "—" in it }) { rows }
+    // Chests claimed at Croesus are saved without a duration; the rate divides all profit by all run time.
+    val claimed = AcquisitionArchive(runs = listOf(timed.copy(chests = emptyList()),
+        DungeonRunRecord("claim", "session", context, "M7", chests = listOf(ChestReceipt("later", 70_000, "BEDROCK", 100.0, listOf(RunLoot("LOOT", 1, 1_000.0)))))))
+    val claims = trackerView(claimed, emptyList(), filter, null).summary
+    check(claims.runs == 1L && claims.knownNet == 850.0 && claims.estimatedHourly(claims.knownNet) == 51_000.0) { claims }
+    // Runs without a time count at the average; with no times at all there is no rate.
+    check(TrackerSummary(runs = 4, time = 600_000, timedRuns = 2).estimatedHourly(100.0) == 300.0)
+    check(TrackerSummary(runs = 4).estimatedHourly(100.0) == null && TrackerSummary().estimatedHourly(1.0) == null)
     check(archive.runs.first() == timed && historical.summary.timedRuns == 19L) // This is a read-only projection.
 }
 

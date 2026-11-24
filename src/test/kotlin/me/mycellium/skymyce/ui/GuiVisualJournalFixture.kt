@@ -36,9 +36,9 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
             AcquisitionEvent("02".padStart(32, '0'), "FIFTH_MASTER_STAR", time - 27 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 92_000_000.0, 20_000_000.0, run = "trend-run-2", player = "Fixture_Player", rarity = "EPIC"),
             AcquisitionEvent("03".padStart(32, '0'), "SHADOW_WARP_SCROLL", time - 25 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 220_000_000.0, 50_000_000.0, run = "trend-run-3", player = "Fixture_Player", rarity = "EPIC"),
             AcquisitionEvent("04".padStart(32, '0'), "NECRON_HANDLE", time - 25 * dayMs + 3_600_000L, "dungeon", context, "M7", "BEDROCK", 1, 610_000_000.0, 100_000_000.0, run = "trend-run-4", player = "Fixture_Player", rarity = "LEGENDARY"),
-            AcquisitionEvent("05".padStart(32, '0'), "MASTER_SKULL_TIER_5", time - 20 * dayMs, "dungeon", context, "M7", "OBSIDIAN", 1, 28_500_000.0, 15_000_000.0, run = "trend-run-5", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("05".padStart(32, '0'), "SHADOW_FURY", time - 20 * dayMs, "dungeon", context, "M7", "OBSIDIAN", 1, 28_500_000.0, 15_000_000.0, run = "trend-run-5", player = "Fixture_Player", rarity = "EPIC"),
             AcquisitionEvent("06".padStart(32, '0'), "WITHER_SHIELD_SCROLL", time - 4 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 205_000_000.0, 50_000_000.0, run = "trend-run-6", player = "Fixture_Player", rarity = "EPIC"),
-            AcquisitionEvent("07".padStart(32, '0'), "AUTO_RECOMBOBULATOR", time - 2 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, null, 10_000_000.0, run = "trend-run-7", player = "Fixture_Player", rarity = "LEGENDARY"),
+            AcquisitionEvent("07".padStart(32, '0'), "DARK_CLAYMORE", time - 2 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, null, 10_000_000.0, run = "trend-run-7", player = "Fixture_Player", rarity = "LEGENDARY"),
             AcquisitionEvent("08".padStart(32, '0'), "IMPLOSION_SCROLL", time - 1 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 230_000_000.0, 50_000_000.0, run = "trend-run-8", player = "Fixture_Player", rarity = "EPIC"),
             AcquisitionEvent("09".padStart(32, '0'), "WARDEN_HEART", time - 1 * dayMs + 7_200_000L, "slayer", context, null, null, 1, 145_000_000.0, null, run = null, player = "Fixture_Player", rarity = "MYTHIC"),
             AcquisitionEvent("0a".padStart(32, '0'), "SHADOW_WARP_SCROLL", time - 10_000L, "dungeon", context, "M7", "BEDROCK", 1, 218_000_000.0, 50_000_000.0, run = "trend-run-9", player = "Fixture_Player", rarity = null),
@@ -50,7 +50,7 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
             DungeonRunRecord("trend-run-8", "sess", context, "M7", time - dayMs - 295_000L, time - dayMs, 295_000L,
                 chests = listOf(ChestReceipt("c8", time - dayMs, "BEDROCK", 50_000_000.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 230_000_000.0))))),
             DungeonRunRecord("trend-run-7", "sess", context, "M7", time - 2 * dayMs - 340_000L, time - 2 * dayMs, 340_000L,
-                chests = listOf(ChestReceipt("c7", time - 2 * dayMs, "BEDROCK", 10_000_000.0, listOf(RunLoot("AUTO_RECOMBOBULATOR", 1, null))))),
+                chests = listOf(ChestReceipt("c7", time - 2 * dayMs, "BEDROCK", 10_000_000.0, listOf(RunLoot("DARK_CLAYMORE", 1, null))))),
             DungeonRunRecord("trend-run-6", "sess", context, "M7", time - 4 * dayMs - 280_000L, time - 4 * dayMs, 280_000L,
                 chests = listOf(ChestReceipt("c6", time - 4 * dayMs, "BEDROCK", 50_000_000.0, listOf(RunLoot("WITHER_SHIELD_SCROLL", 1, 205_000_000.0)))))
         ) + List(116) { idx ->

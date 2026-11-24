@@ -61,7 +61,7 @@ fun main() {
     val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
     // Status bars, the skill XP bar, NPC dialogue and sign Enter.
     me.mycellium.skymyce.features.general.overlaysCheck()
-    check(plainPreview.size == 9 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
+    check(plainPreview.size == 8 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
     // The level card replaces the target line: Cata 52 at 86.2% toward 53, 27.6M (69 runs at 400k) to go.
     val level = me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLevel
     check(level.level == 52 && level.target == 53 && me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardPercent(level) == "86.2%")
@@ -72,15 +72,15 @@ fun main() {
     check(farFooter.size == 2 && farFooter[1].startsWith("Cata 30: ~") && farFooter[1].contains("runs")) { farFooter }
     check(me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(
         me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1e12, 50, null), null) == listOf("Cata 50 reached"))
-    check(plainPreview[2].isEmpty() && plainPreview[6].isEmpty())
+    check(plainPreview[2].isEmpty())
     check(plainPreview[3] == "Time: 1h (6m/run)" && plainPreview[4] == "Runs: 10 (10/h)")
-    check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[7].contains("12M") && plainPreview[8].contains("400K"))
+    check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[6].contains("12M/h") && plainPreview[7].contains("400K/h"))
     check(plainPreview.none { it.contains("Editor preview") || it.contains("Historical") || it.contains("Inherited") || it.contains("profile") })
     val partial = TrackerSummary(runs = 2, timedRuns = 1, time = 300_000, gross = 50_000.0, chestCost = 10_000.0, incompleteValues = true)
     val partialRows = dungeonTrackerWidgetLines(DungeonFloor.M7, partial).map { it.replace(Regex("§."), "") }
-    check(partialRows.size == 9 && partialRows[3] == "Time: 5m recorded (5m/run)" && partialRows[6] == "Rates need matched run times")
-    check(partialRows[4].contains("—/h") && partialRows[7].contains("40K + ?") && partialRows[7].contains("—/h"))
-    check(dungeonTrackerWidgetLines(DungeonFloor.M7, TrackerSummary())[3].contains("0s") && plainPreview[7].contains("~"))
+    check(partialRows.size == 8 && partialRows[3] == "Time: 5m recorded (5m/run)")
+    check(partialRows[4].contains("12/h") && partialRows[6].contains("40K + ?") && partialRows[6].contains("240K/h"))
+    check(dungeonTrackerWidgetLines(DungeonFloor.M7, TrackerSummary())[3].contains("0s") && plainPreview[6].contains("~"))
     for (value in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
         val rows = dungeonTrackerWidgetLines(null, TrackerSummary(gross = value, cataXp = value, time = Long.MAX_VALUE, timedRuns = 1))
         check(rows.none { it.contains("NaN") || it.contains("Infinity") || it.contains("∞") })
