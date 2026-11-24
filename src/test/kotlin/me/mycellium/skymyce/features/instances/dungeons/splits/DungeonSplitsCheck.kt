@@ -334,7 +334,17 @@ private fun checkLagMeter() {
     check(live.footer[1] == "§7Lag lost §c+1.00") { "${live.footer}" }
 }
 
+private fun checkBloodTimer() {
+    fun at(ticks: Long, seconds: Int = 3) = me.mycellium.skymyce.features.instances.dungeons.bloodCountdown(ticks, seconds)
+    check(at(0) == null && at(339) == null && at(340) == 3 && at(359) == 3 && at(360) == 2 && at(380) == 1 && at(399) == 1 && at(400) == null) {
+        "3 counts from 17 s and ends at 20 s"
+    }
+    check(at(0, 20) == 20 && at(20, 20) == 19 && at(379, 1) == null && at(380, 1) == 1)
+    check(at(-5, 20) == null) { "A clock from another world shows nothing" }
+}
+
 private fun checkServerClock() {
+    checkBloodTimer()
     val clock = ServerTickClock()
     clock.ping()
     check(clock.now == null) { "Pings alone are not a clock" }

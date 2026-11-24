@@ -6,7 +6,7 @@ Find a party, route through the floor, coordinate bosses, and track your runs an
 - **Spirit Leap Menu**: Pick who to leap to from a menu with four gameplay previews, rendered on your own client.
 
 **Routes and Navigation**
-- **Dungeon Routing**: Shows the way through the doors to Blood, and can take you past starred mobs on the way if you want.
+- **Dungeon Routing**: Shows the way through the doors to Blood, and can take you past starred mobs on the way if you want. A Blood timer counts down to 20 seconds after Blood opens, in server time.
 
 **Run Tracking and Splits**
 - **Dungeon Tracker**: Your run history, what you looted, and an estimate of what each run was worth.

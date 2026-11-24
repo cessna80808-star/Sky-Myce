@@ -3,6 +3,11 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.8.0-beta-060 (2026-11-24)
+- New Blood timer, on by default: counts down to 20 seconds after Blood opens in server time, so it stops while the server lags. Choose how many seconds it counts (3 by default) in Dungeon Routing settings, and move it in the HUD editor.
+- The Dungeon Tracker HUD is cleaned up, and its coins per hour is fixed. It showed 0/h because chests opened at Croesus were left out of the rate.
+- Auto Recombobulators and Master Skull Tier 5 no longer count as rare drops.
+
 ## 2.8.0-beta-059 (2026-11-24)
 - The RNG Journal is redesigned. Trends now has stat cards, a drops chart, drops by item with icons and rarity colors, a rarity bar and a table of recent runs, and History is tidier.
 - Price History works on essence.

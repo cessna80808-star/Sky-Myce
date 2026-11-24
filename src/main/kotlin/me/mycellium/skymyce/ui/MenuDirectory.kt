@@ -538,6 +538,7 @@ class MenuCatalog(rows: List<SettingRow>) {
         val routingSettingGroups = linkedMapOf(
             "Route" to listOf("enabled", "bloodRushClassesOnly", "routeThroughMobs", "routeThroughStarredMinibosses", "showRoute"),
             "Mob markers" to listOf("showTargets", "showNumbers", "showCleared"),
+            "Blood timer" to listOf("bloodTimer", "bloodTimerSeconds"),
             "Appearance" to listOf("thickness", "opacity", "lineHeight"),
             "Advanced" to listOf("showHealer", "automaticRecalculation", "debug"),
         )

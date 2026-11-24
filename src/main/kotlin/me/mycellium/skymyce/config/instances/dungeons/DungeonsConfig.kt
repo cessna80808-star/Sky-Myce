@@ -631,6 +631,15 @@ object StarredClearRoutingConfig : CategoryKt("Starred Clear Routing") {
         name = TranslatableValue.literal("Show Blood guidance")
         description = TranslatableValue.literal("Include the route toward Blood and the Mage's Blood-door highlight before and after opening, except while inside Blood. Turn off to show only the route between selected starred mobs and minibosses.")
     }
+    val bloodTimer by boolean(true) {
+        name = TranslatableValue.literal("Blood timer")
+        description = TranslatableValue.literal("Count down to 20 seconds after Blood opens, in server time so it stops while the server lags. Works on every class and without the route.")
+    }
+    val bloodTimerSeconds by int(3) {
+        name = TranslatableValue.literal("Blood timer length")
+        description = TranslatableValue.literal("How many seconds to count down for. 3 starts counting from 3 at 17 seconds.")
+        range = 1..20; slider = true
+    }
     val automaticRecalculation by boolean(true) {
         name = TranslatableValue.literal("Recalculate off route")
         description = TranslatableValue.literal("Find a new path when you leave the current one. Rooms, mobs, obstacles and teleports always update the route.")

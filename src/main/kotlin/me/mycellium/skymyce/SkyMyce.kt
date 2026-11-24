@@ -98,6 +98,7 @@ object SkyMyce : ClientModInitializer {
             GreenhousePlanner,
             DungeonSplits,
             DungeonSplitsHud,
+            me.mycellium.skymyce.features.instances.dungeons.BloodTimer,
             GoldorCoordinator,
             GoldorHud,
             HealerCrushCamera,
