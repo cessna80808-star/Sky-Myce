@@ -8,9 +8,12 @@ import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionArchi
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionEvent
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionRepository
+import me.mycellium.skymyce.features.instances.dungeons.tracker.ChestReceipt
+import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
 import me.mycellium.skymyce.features.instances.dungeons.tracker.JournalFilter
 import me.mycellium.skymyce.features.instances.dungeons.tracker.JournalView
 import me.mycellium.skymyce.features.instances.dungeons.tracker.RngJournalScreen
+import me.mycellium.skymyce.features.instances.dungeons.tracker.RunLoot
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerScope
 import net.minecraft.client.Minecraft
 import net.minecraft.client.input.KeyEvent
@@ -18,14 +21,44 @@ import org.lwjgl.glfw.GLFW
 import me.mycellium.skymyce.utils.currentScreen
 
 /** Synthetic local rows exercise the real journal controls without writing acquisition records. */
-internal class GuiVisualJournalFixture(private val details: Boolean = false, private val narrow: Boolean = false) {
+internal class GuiVisualJournalFixture(private val details: Boolean = false, private val narrow: Boolean = false,
+                                       private val trends: Boolean = false, private val scrollTrendsBottom: Boolean = false) {
     private val stateField = AcquisitionRepository.javaClass.getDeclaredField("state").apply { isAccessible = true }
     private val preferencesField = AcquisitionRepository.javaClass.getDeclaredField("journalPreferences").apply { isAccessible = true }
     private val previous = AcquisitionRepository.state
     private val previousPreferences = AcquisitionRepository.journalPreferences
     private val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Fixture")
     private val time = System.currentTimeMillis() - 60_000
-    private val archive = AcquisitionArchive(events = List(40) { index ->
+    private val dayMs = 86_400_000L
+    private val archive = if (trends) {
+        val events = listOf(
+            AcquisitionEvent("01".padStart(32, '0'), "SHADOW_WARP_SCROLL", time - 28 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 215_000_000.0, 50_000_000.0, run = "trend-run-1", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("02".padStart(32, '0'), "FIFTH_MASTER_STAR", time - 27 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 92_000_000.0, 20_000_000.0, run = "trend-run-2", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("03".padStart(32, '0'), "SHADOW_WARP_SCROLL", time - 25 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 220_000_000.0, 50_000_000.0, run = "trend-run-3", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("04".padStart(32, '0'), "NECRON_HANDLE", time - 25 * dayMs + 3_600_000L, "dungeon", context, "M7", "BEDROCK", 1, 610_000_000.0, 100_000_000.0, run = "trend-run-4", player = "Fixture_Player", rarity = "LEGENDARY"),
+            AcquisitionEvent("05".padStart(32, '0'), "MASTER_SKULL_TIER_5", time - 20 * dayMs, "dungeon", context, "M7", "OBSIDIAN", 1, 28_500_000.0, 15_000_000.0, run = "trend-run-5", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("06".padStart(32, '0'), "WITHER_SHIELD_SCROLL", time - 4 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 205_000_000.0, 50_000_000.0, run = "trend-run-6", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("07".padStart(32, '0'), "AUTO_RECOMBOBULATOR", time - 2 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, null, 10_000_000.0, run = "trend-run-7", player = "Fixture_Player", rarity = "LEGENDARY"),
+            AcquisitionEvent("08".padStart(32, '0'), "IMPLOSION_SCROLL", time - 1 * dayMs, "dungeon", context, "M7", "BEDROCK", 1, 230_000_000.0, 50_000_000.0, run = "trend-run-8", player = "Fixture_Player", rarity = "EPIC"),
+            AcquisitionEvent("09".padStart(32, '0'), "WARDEN_HEART", time - 1 * dayMs + 7_200_000L, "slayer", context, null, null, 1, 145_000_000.0, null, run = null, player = "Fixture_Player", rarity = "MYTHIC"),
+            AcquisitionEvent("0a".padStart(32, '0'), "SHADOW_WARP_SCROLL", time - 10_000L, "dungeon", context, "M7", "BEDROCK", 1, 218_000_000.0, 50_000_000.0, run = "trend-run-9", player = "Fixture_Player", rarity = null),
+            AcquisitionEvent("0b".padStart(32, '0'), "NECRON_HANDLE", time - 15 * dayMs, "dungeon", context, "F7", "BEDROCK", 1, 500_000_000.0, 35_000_000.0, origin = "legacy-tracker", player = "Fixture_Player", rarity = "LEGENDARY")
+        )
+        val runs = listOf(
+            DungeonRunRecord("trend-run-9", "sess", context, "M7", time - 320_000L, time - 10_000L, 310_000L,
+                chests = listOf(ChestReceipt("c9", time - 10_000L, "BEDROCK", 50_000_000.0, listOf(RunLoot("SHADOW_WARP_SCROLL", 1, 218_000_000.0))))),
+            DungeonRunRecord("trend-run-8", "sess", context, "M7", time - dayMs - 295_000L, time - dayMs, 295_000L,
+                chests = listOf(ChestReceipt("c8", time - dayMs, "BEDROCK", 50_000_000.0, listOf(RunLoot("IMPLOSION_SCROLL", 1, 230_000_000.0))))),
+            DungeonRunRecord("trend-run-7", "sess", context, "M7", time - 2 * dayMs - 340_000L, time - 2 * dayMs, 340_000L,
+                chests = listOf(ChestReceipt("c7", time - 2 * dayMs, "BEDROCK", 10_000_000.0, listOf(RunLoot("AUTO_RECOMBOBULATOR", 1, null))))),
+            DungeonRunRecord("trend-run-6", "sess", context, "M7", time - 4 * dayMs - 280_000L, time - 4 * dayMs, 280_000L,
+                chests = listOf(ChestReceipt("c6", time - 4 * dayMs, "BEDROCK", 50_000_000.0, listOf(RunLoot("WITHER_SHIELD_SCROLL", 1, 205_000_000.0)))))
+        ) + List(116) { idx ->
+            val at = time - (idx % 28 + 1) * dayMs - 600_000L
+            DungeonRunRecord("bg-run-$idx", "sess", context, "M7", at - 300_000L, at, 300_000L)
+        }
+        AcquisitionArchive(events = events, runs = runs)
+    } else AcquisitionArchive(events = List(40) { index ->
         val slayer = index % 3 == 2
         AcquisitionEvent((index + 1).toString(16).padStart(32, '0'), if (slayer) "WARDEN_HEART" else "NECRON_HANDLE",
             time - index * 3_600_000L, if (slayer) "slayer" else "dungeon", context,
@@ -44,7 +77,9 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
     init {
         check(Minecraft.getInstance().connection == null)
         stateField.set(AcquisitionRepository, archive)
-        preferencesField.set(AcquisitionRepository, JournalFilter(scope = TrackerScope.ALL_LOCAL_PROFILES, query = "handle", includeLegacy = true))
+        preferencesField.set(AcquisitionRepository, if (trends)
+            JournalFilter(scope = TrackerScope.ALL_LOCAL_PROFILES, includeLegacy = true)
+        else JournalFilter(scope = TrackerScope.ALL_LOCAL_PROFILES, query = "handle", includeLegacy = true))
     }
 
     fun screen() = RngJournalScreen()
@@ -58,6 +93,48 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
         val components = arrayListOf<UIComponent>().apply { adapter.rootComponent.collectDescendants(this) }
         val view = RngJournalScreen::class.java.getDeclaredField("view").apply { isAccessible = true }.get(screen) as JournalView
         val filter = RngJournalScreen::class.java.getDeclaredField("filter").apply { isAccessible = true }.get(screen) as JournalFilter
+        if (trends) {
+            if (view.events.isEmpty()) return false
+            when (stage) {
+                0 -> {
+                    val tab = components.filterIsInstance<MenuButton>().single { it.navigation && it.message.string == "Trends" }
+                    press(screen, adapter, tab)
+                    stage++
+                    return false
+                }
+                1 -> {
+                    if (components.none { it.id() == "journal-trends-chart" }) return false
+                    check(components.none { it.id() in listOf("journal-previous", "journal-next", "journal-page") }) {
+                        "Trends tab must not show pagination controls"
+                    }
+                    val panel = components.single { it.id() == "journal-panel" } as ParentUIComponent
+                    val results = components.single { it.id() == "journal-results" }
+                    check(results.height() >= if (narrow) 50 else 100) { "Journal Trends leaves too little viewport" }
+                    val controls = arrayListOf<UIComponent>().apply { panel.collectDescendants(this) }
+                        .filter { it is MenuButton || it is MenuTextBox }.filter { it.y() < results.y() }
+                    check(controls.all { it.x() >= panel.x() && it.x() + it.width() <= panel.x() + panel.width() }) {
+                        "Journal Trends filter controls overflow the panel"
+                    }
+                    for (id in listOf("journal-trends-chart", "journal-trends-items", "journal-trends-rarity", "journal-trends-runs")) {
+                        val section = components.single { it.id() == id } as ParentUIComponent
+                        check(section.width() > 0 && section.height() > 0 &&
+                            section.x() >= panel.x() && section.x() + section.width() <= panel.x() + panel.width()) {
+                            "Trends section $id overflows or collapsed: bounds=${section.x()},${section.width()} panel=${panel.x()},${panel.width()}"
+                        }
+                        val inner = arrayListOf<UIComponent>().apply { section.collectDescendants(this) }
+                        check(inner.all { it.x() >= section.x() && it.x() + it.width() <= section.x() + section.width() }) {
+                            "Child inside $id overflows its card bounds"
+                        }
+                    }
+                    if (scrollTrendsBottom) {
+                        (results as? MenuScroll<*>)?.scrollBy(600.0, true, false)
+                    }
+                    stage++
+                    return true
+                }
+                else -> return true
+            }
+        }
         if (view.events.isEmpty() || components.none { it.id()?.startsWith("journal-event-") == true }) return false
         when (stage) {
             0 -> {
@@ -129,7 +206,7 @@ internal class GuiVisualJournalFixture(private val details: Boolean = false, pri
         AcquisitionRepository.rememberJournal(previousPreferences)
     }
 
-    private fun checkIntact() = check(AcquisitionRepository.state === archive && archive.events.size == 40) {
+    private fun checkIntact() = check(AcquisitionRepository.state === archive && archive.events.size == if (trends) 11 else 40) {
         "A journal viewing control modified acquisition records"
     }
 

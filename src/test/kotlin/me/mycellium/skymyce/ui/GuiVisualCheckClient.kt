@@ -153,6 +153,18 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("journal-details", ThemePreset.SIGNATURE) {
                 GuiVisualJournalFixture(details = true).also { journalFixture = it }.screen()
             },
+            Scene("journal-trends-wide", ThemePreset.SIGNATURE, 1920, 1080, 1) {
+                GuiVisualJournalFixture(trends = true).also { journalFixture = it }.screen()
+            },
+            Scene("journal-trends-narrow", ThemePreset.SIGNATURE, 640, 480, 2) {
+                GuiVisualJournalFixture(narrow = true, trends = true).also { journalFixture = it }.screen()
+            },
+            Scene("journal-trends-light", ThemePreset.LIGHT, 1280, 800, 2) {
+                GuiVisualJournalFixture(trends = true).also { journalFixture = it }.screen()
+            },
+            Scene("journal-trends-runs", ThemePreset.SIGNATURE, 1280, 800, 2) {
+                GuiVisualJournalFixture(trends = true, scrollTrendsBottom = true).also { journalFixture = it }.screen()
+            },
             Scene("dungeon-tracker-overview", ThemePreset.SIGNATURE) {
                 trackerScreen(TrackerPage.OVERVIEW)
             },

@@ -12,6 +12,7 @@ import java.time.LocalDate
 fun checkRngJournal() {
     checkObservedAcquisitionMetadata()
     checkObservedJournalComparisons()
+    checkJournalTimelineAndFormatting()
     val monday = Instant.parse("2026-10-12T00:00:00Z").toEpochMilli()
     val now = monday + 3600000
     val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
@@ -214,4 +215,78 @@ private fun checkObservedJournalComparisons() {
     val bounded = rngJournal(linked, JournalFilter(), context, now).runComparisons
     check(bounded.size == 20 && bounded.first().run == "run-25" && bounded.last().run == "run-6")
     check(bounded.all { it.estimatedProfit == null && it.completedAt == null && it.duration == null })
+}
+
+private fun checkJournalTimelineAndFormatting() {
+    val context = AcquisitionContext("a".repeat(32), "b".repeat(32), "Apple")
+    fun drop(id: Int, iso: String, item: String = "SHADOW_WARP_SCROLL", qty: Int = 1, origin: String = "confirmed", rarity: String? = "EPIC") =
+        AcquisitionEvent("%032x".format(id), item, Instant.parse(iso).toEpochMilli(), "dungeon", context, "M7", quantity = qty, origin = origin, rarity = rarity)
+
+    val now = Instant.parse("2026-11-24T12:00:00Z").toEpochMilli()
+    check(journalTimeline(emptyList(), JournalFilter(), now).buckets.isEmpty())
+    check(journalTimeline(listOf(drop(1, "2026-11-23T10:00:00Z", origin = "legacy-tracker")), JournalFilter(), now).buckets.isEmpty())
+
+    // Week period keeps all 7 days Mon..Sun, preserving zero-count days on the axis.
+    val weekEvents = listOf(drop(1, "2026-11-23T08:00:00Z", qty = 2), drop(2, "2026-11-24T09:00:00Z", qty = 1))
+    val weekTimeline = journalTimeline(weekEvents, JournalFilter(period = JournalPeriod.WEEK), now)
+    check(weekTimeline.granularity == JournalTimeGranularity.DAY && weekTimeline.buckets.size == 7)
+    check(weekTimeline.buckets.first().start == LocalDate.of(2026, 11, 23) && weekTimeline.buckets.first().count == 2L)
+    check(weekTimeline.buckets[1].count == 1L && weekTimeline.buckets.drop(2).all { it.count == 0L })
+
+    // Short all-time span pads to a 7-day axis so one drop isn't a giant slab.
+    val shortAllTime = journalTimeline(listOf(drop(1, "2026-11-24T01:00:00Z")), JournalFilter(), now)
+    check(shortAllTime.granularity == JournalTimeGranularity.DAY && shortAllTime.buckets.size == 7)
+    check(shortAllTime.buckets.last().start == LocalDate.of(2026, 11, 24) && shortAllTime.buckets.last().count == 1L)
+    check(shortAllTime.buckets.dropLast(1).all { it.count == 0L })
+
+    // Medium span (Oct 14..Nov 24 = 42 days) stays daily and keeps empty gaps between bursts.
+    val mediumEvents = listOf(
+        drop(1, "2026-10-14T10:00:00Z"),
+        drop(2, "2026-10-17T10:00:00Z", qty = 2),
+        drop(3, "2026-11-23T10:00:00Z"),
+        drop(4, "2026-11-23T11:00:00Z", origin = "legacy-digest")
+    )
+    val medium = journalTimeline(mediumEvents, JournalFilter(), now)
+    check(medium.granularity == JournalTimeGranularity.DAY && medium.buckets.size == 42)
+    check(medium.buckets.sumOf { it.count } == 4L)
+    check(medium.buckets.first { it.start == LocalDate.of(2026, 10, 17) }.count == 2L)
+    check(medium.buckets.first { it.start == LocalDate.of(2026, 11, 1) }.count == 0L)
+
+    // Multi-month span switches to weekly buckets (Mon..Sun) with zero-count weeks preserved.
+    val weeklyEvents = listOf(drop(1, "2026-08-03T10:00:00Z"), drop(2, "2026-11-23T10:00:00Z", qty = 3))
+    val weekly = journalTimeline(weeklyEvents, JournalFilter(), now)
+    check(weekly.granularity == JournalTimeGranularity.WEEK && weekly.buckets.size == 17)
+    check(weekly.buckets.sumOf { it.count } == 4L && weekly.buckets.any { it.count == 0L })
+    check(weekly.buckets.all { it.start.dayOfWeek == java.time.DayOfWeek.MONDAY && it.end == it.start.plusDays(6) })
+
+    // Long span (> 210 days) switches to monthly buckets with zero-count months preserved.
+    val monthlyEvents = listOf(drop(1, "2025-11-05T10:00:00Z"), drop(2, "2026-11-20T10:00:00Z", qty = 2))
+    val monthly = journalTimeline(monthlyEvents, JournalFilter(), now)
+    check(monthly.granularity == JournalTimeGranularity.MONTH && monthly.buckets.size == 13)
+    check(monthly.buckets.sumOf { it.count } == 3L && monthly.buckets.count { it.count == 0L } == 11)
+
+    // Month period starts on the 1st of the UTC month.
+    val monthTimeline = journalTimeline(listOf(drop(1, "2026-11-10T10:00:00Z")), JournalFilter(period = JournalPeriod.MONTH), now)
+    check(monthTimeline.granularity == JournalTimeGranularity.DAY && monthTimeline.buckets.size == 24)
+    check(monthTimeline.buckets.first().start == LocalDate.of(2026, 11, 1) && monthTimeline.buckets.last().start == LocalDate.of(2026, 11, 24))
+
+    // Custom period respects user date bounds.
+    val customTimeline = journalTimeline(listOf(drop(1, "2026-11-12T10:00:00Z")),
+        JournalFilter(period = JournalPeriod.CUSTOM, from = "2026-11-10", until = "2026-11-15"), now)
+    check(customTimeline.granularity == JournalTimeGranularity.DAY && customTimeline.buckets.size == 6)
+    check(customTimeline.buckets.first().start == LocalDate.of(2026, 11, 10) && customTimeline.buckets.last().start == LocalDate.of(2026, 11, 15))
+
+    // Primary rarity picks most frequent observed rarity and ignores null/legacy.
+    val rarityMap = journalItemRarities(listOf(
+        drop(1, "2026-11-20T00:00:00Z", item = "NECRON_HANDLE", rarity = "LEGENDARY"),
+        drop(2, "2026-11-21T00:00:00Z", item = "NECRON_HANDLE", rarity = "MYTHIC", qty = 2),
+        drop(3, "2026-11-22T00:00:00Z", item = "SHADOW_WARP_SCROLL", rarity = null),
+        drop(4, "2026-11-22T01:00:00Z", item = "SHADOW_WARP_SCROLL", rarity = "RARE", origin = "legacy-digest")
+    ))
+    check(rarityMap == mapOf("NECRON_HANDLE" to "MYTHIC"))
+
+    // Duration and rarity formatting.
+    check(formatRunDuration(null) == "—" && formatRunDuration(-5) == "—")
+    check(formatRunDuration(45_000) == "45s" && formatRunDuration(252_000) == "4m 12s" && formatRunDuration(3_665_000) == "1h 1m")
+    check(formatRarityName("UNKNOWN") == "Unknown" && formatRarityName("VERY_SPECIAL") == "Very Special" && formatRarityName("EPIC") == "Epic")
 }
