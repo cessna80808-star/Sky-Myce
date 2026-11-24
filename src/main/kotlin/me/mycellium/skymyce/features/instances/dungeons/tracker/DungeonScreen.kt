@@ -17,6 +17,7 @@ import me.mycellium.skymyce.api.DungeonChest
 import me.mycellium.skymyce.config.instances.dungeons.DungeonTrackerConfig
 import me.mycellium.skymyce.features.digest.DigestRngParser
 import me.mycellium.skymyce.hud.HudTheme
+import me.mycellium.skymyce.hud.themeLuminance
 import me.mycellium.skymyce.hud.themed
 import me.mycellium.skymyce.hud.wrappedTooltip
 import me.mycellium.skymyce.ui.*
@@ -547,78 +548,117 @@ private fun runsText(runs: Long?) = runs?.let { "~${String.format(Locale.ROOT, "
  */
 internal fun levelCardFooter(row: LevelRow, xpPerRun: Double?): List<String> {
     if (row.remaining <= 0) return listOf("Cata ${row.target} reached")
-    val next = listOfNotNull(runsText(runsFor(row.nextLevelRemaining, xpPerRun)), "${NumberUtils.condense(row.nextLevelRemaining)} XP").joinToString(" · ")
-    val lines = mutableListOf("Next: $next")
-    if (row.target > row.level + 1)
-        lines += "Cata ${row.target}: " + listOfNotNull(runsText(row.runs), "${NumberUtils.condense(row.remaining)} XP").joinToString(" · ")
-    return lines
+    val next = listOfNotNull(runsText(runsFor(row.nextLevelRemaining, xpPerRun)), "${formatCompactNumber(row.nextLevelRemaining)} XP").joinToString(" · ")
+    if (row.target <= row.level + 1) return listOf(next)
+    val goal = listOfNotNull(runsText(row.runs), "${formatCompactNumber(row.remaining)} XP").joinToString(" · ")
+    return listOf("Next: $next", "Cata ${row.target}: $goal")
 }
 
 internal fun levelCardPercent(row: LevelRow) = String.format(Locale.ROOT, "%.1f%%", row.nextLevelProgress * 100)
 
+internal fun levelCardHeader(row: LevelRow): Pair<String, String> =
+    if (row.remaining <= 0) "Cata ${row.level}" to "✓ ${row.target}"
+    else "Cata ${row.level} → ${row.target}" to levelCardPercent(row)
+
 /**
- * "Cata level 52 › Target 53" with the next-level bar, drawn in the HUD palette. Big numerals carry the card; labels
- * stay small and muted so the level and the bar read at a glance mid-run.
+ * Compact full-width level progress strip ("Cata 53 → 54", percent, bar, and runs/XP footer), drawn in the HUD palette
+ * with zero per-frame allocations.
  */
 class DungeonLevelCard : BaseUIComponent() {
     private var row: LevelRow? = null
     private var footer = emptyList<String>()
+    private var headerLeft = ""
+    private var headerRight = ""
+    private var levelPrefix = ""
+    private var targetText = ""
+    private var levelPrefixWidth = 0
+    private var arrowWidth = 0
+    private var headerRightWidth = 0
+    private var cardWidth = MIN_WIDTH
 
-    fun update(row: LevelRow, xpPerRun: Double?): DungeonLevelCard {
+    fun update(row: LevelRow, xpPerRun: Double?, width: Int = 0): DungeonLevelCard {
+        val font = MC.instance.font
         this.row = row
         footer = levelCardFooter(row, xpPerRun)
-        sizing(Sizing.fixed(WIDTH), Sizing.fixed(HEADER + footer.size * 10))
+        val (left, right) = levelCardHeader(row)
+        headerLeft = left
+        headerRight = right
+        levelPrefix = "Cata ${row.level}"
+        targetText = row.target.toString()
+        levelPrefixWidth = font.width(levelPrefix)
+        arrowWidth = font.width(ARROW)
+        headerRightWidth = font.width(headerRight)
+        cardWidth = if (width > 0) width.coerceAtLeast(preferredWidth()) else preferredWidth()
+        sizing(Sizing.fixed(cardWidth), Sizing.fixed(FOOTER_TOP + footer.size * LINE_HEIGHT - 1))
+        return this
+    }
+
+    fun preferredWidth(): Int {
+        val font = MC.instance.font
+        val headerW = font.width(headerLeft) + HEADER_GAP + headerRightWidth
+        val footerW = footer.maxOfOrNull { font.width(it) } ?: 0
+        return maxOf(MIN_WIDTH, headerW, footerW)
+    }
+
+    fun fitWidth(width: Int): DungeonLevelCard {
+        val target = width.coerceAtLeast(preferredWidth())
+        if (target != cardWidth) {
+            cardWidth = target
+            sizing(Sizing.fixed(cardWidth), Sizing.fixed(FOOTER_TOP + footer.size * LINE_HEIGHT - 1))
+        }
         return this
     }
 
     override fun draw(graphics: OwoUIGraphics, mouseX: Int, mouseY: Int, partialTicks: Float, delta: Float) {
         val row = row ?: return
         val font = MC.instance.font
-        val shadow = HudTheme.SHADOW
+        val shadow = HudTheme.SHADOW && themeLuminance(HudTheme.PANEL) < 0.4
         val text = HudTheme.alpha(HudTheme.TEXT, 100)
         val muted = HudTheme.alpha(HudTheme.MUTED, 100)
         val accent = HudTheme.alpha(HudTheme.ACCENT, 100)
+        val green = HudTheme.alpha(HudTheme.GREEN, 100)
         val reached = row.remaining <= 0
         val left = x(); val right = x() + width(); val top = y()
 
-        graphics.text(font, "Cata level", left, top, muted, shadow)
-        graphics.text(font, "Target", right - font.width("Target"), top, muted, shadow)
-        big(graphics, row.level.toString(), left, top + 11, text, shadow, align = 0)
-        big(graphics, "›", (left + right) / 2, top + 11, accent, shadow, align = 1)
-        big(graphics, row.target.toString(), right, top + 11, if (reached) HudTheme.alpha(HudTheme.GREEN, 100) else text, shadow, align = 2)
+        graphics.fill(left, top, right, top + 1, HudTheme.alpha(HudTheme.BORDER, 45))
 
-        val percent = levelCardPercent(row)
-        graphics.text(font, "Next level", left, top + 32, muted, shadow)
-        graphics.text(font, percent, right - font.width(percent), top + 32, text, shadow)
-
-        // Track, fill, and a one-pixel highlight along the fill's top edge.
-        val barTop = top + 43
-        graphics.fill(left, barTop, right, barTop + BAR, HudTheme.alpha(HudTheme.blend(HudTheme.PANEL, HudTheme.TEXT, 16), 85))
-        val filled = left + ((right - left) * row.nextLevelProgress).toInt().coerceIn(0, right - left)
-        if (filled > left) {
-            graphics.fill(left, barTop, filled, barTop + BAR, accent)
-            graphics.fill(left, barTop, filled, barTop + 1, HudTheme.alpha(HudTheme.blend(HudTheme.ACCENT, 0xFFFFFF, 45), 100))
+        val headerY = top + HEADER_TOP
+        if (reached) {
+            graphics.text(font, headerLeft, left, headerY, text, shadow)
+            graphics.text(font, headerRight, right - headerRightWidth, headerY, green, shadow)
+        } else {
+            graphics.text(font, levelPrefix, left, headerY, text, shadow)
+            graphics.text(font, ARROW, left + levelPrefixWidth, headerY, muted, shadow)
+            graphics.text(font, targetText, left + levelPrefixWidth + arrowWidth, headerY, accent, shadow)
+            graphics.text(font, headerRight, right - headerRightWidth, headerY, text, shadow)
         }
 
-        footer.forEachIndexed { index, line -> graphics.text(font, line, left, top + HEADER + index * 10, if (index == 0) text else muted, shadow) }
-    }
+        // Track, fill, and a subtle one-pixel highlight along the fill's top edge.
+        val barTop = top + BAR_TOP
+        val fillFraction = if (reached) 1.0 else row.nextLevelProgress
+        val fillColor = if (reached) HudTheme.GREEN else HudTheme.ACCENT
+        graphics.fill(left, barTop, right, barTop + BAR, HudTheme.alpha(HudTheme.blend(HudTheme.PANEL, HudTheme.TEXT, 18), 85))
+        val filled = left + ((right - left) * fillFraction).toInt().coerceIn(0, right - left)
+        if (filled > left) {
+            graphics.fill(left, barTop, filled, barTop + BAR, HudTheme.alpha(fillColor, 100))
+            graphics.fill(left, barTop, filled, barTop + 1, HudTheme.alpha(HudTheme.blend(fillColor, 0xFFFFFF, 30), 100))
+        }
 
-    /** Text at twice the size; [align] 0 left, 1 centre, 2 right of [x]. */
-    private fun big(graphics: OwoUIGraphics, value: String, x: Int, y: Int, color: Int, shadow: Boolean, align: Int) {
-        val width = MC.instance.font.width(value) * 2
-        val start = when (align) { 1 -> x - width / 2; 2 -> x - width; else -> x }
-        graphics.pose().pushMatrix()
-        graphics.pose().translate(start.toFloat(), y.toFloat())
-        graphics.pose().scale(2f, 2f)
-        graphics.text(MC.instance.font, value, 0, 0, color, shadow)
-        graphics.pose().popMatrix()
+        val footerColor = if (reached) green else muted
+        footer.forEachIndexed { index, line ->
+            graphics.text(font, line, left, top + FOOTER_TOP + index * LINE_HEIGHT, footerColor, shadow)
+        }
     }
 
     companion object {
-        const val WIDTH = 150
-        private const val BAR = 6
-        /** Labels, numerals, the next-level row and the bar, before the footer lines. */
-        private const val HEADER = 54
+        private const val MIN_WIDTH = 132
+        private const val HEADER_GAP = 10
+        private const val ARROW = " → "
+        private const val HEADER_TOP = 5
+        private const val BAR_TOP = 16
+        private const val BAR = 5
+        private const val FOOTER_TOP = 24
+        private const val LINE_HEIGHT = 10
     }
 }
 

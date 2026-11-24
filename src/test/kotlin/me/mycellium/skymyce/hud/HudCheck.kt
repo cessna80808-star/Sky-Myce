@@ -14,10 +14,15 @@ import me.mycellium.skymyce.hud.widget.hudEditorCoordinate
 import me.mycellium.skymyce.hud.widget.hudEditorToolbar
 import me.mycellium.skymyce.hud.widget.hudEditorHelp
 import me.mycellium.skymyce.hud.widget.hudEditorContent
-import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLines
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewView
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetVisible
 import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerDisplayFloor
-import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetLines
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerWidgetView
+import me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTargetLine
+import me.mycellium.skymyce.features.instances.dungeons.tracker.formatCompactDuration
+import me.mycellium.skymyce.features.instances.dungeons.tracker.formatCompactNumber
+import me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardHeader
+import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerValueTone
 import me.mycellium.skymyce.features.instances.dungeons.tracker.AcquisitionContext
 import me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonRunRecord
 import me.mycellium.skymyce.features.instances.dungeons.tracker.TrackerSummary
@@ -57,33 +62,56 @@ fun main() {
     checkThemes()
     me.mycellium.skymyce.features.digest.digestUiCheck()
     // On a fresh client the live tracker is hidden outside the dungeon hub, with no retained UI or activity.
-    val trackerPreview = checkNotNull(dungeonTrackerPreviewLines(enabled = true))
-    val plainPreview = trackerPreview.map { it.replace(Regex("§."), "") }
+    val trackerPreview = checkNotNull(dungeonTrackerPreviewView(enabled = true))
+    val previewTexts = listOf(trackerPreview.heading) + trackerPreview.rows.flatMap { listOf(it.label, it.value, it.secondary) }
     // Status bars, the skill XP bar, NPC dialogue and sign Enter.
     me.mycellium.skymyce.features.general.overlaysCheck()
-    check(plainPreview.size == 8 && plainPreview[0] == "M7 Dungeon Tracker" && plainPreview[1] == "/skymyce dungeon")
-    // The level card replaces the target line: Cata 52 at 86.2% toward 53, 27.6M (69 runs at 400k) to go.
+    check(trackerPreview.badge == "M7" && trackerPreview.heading == "M7 Tracker" && trackerPreview.rows.size == 6) { trackerPreview }
+    check(trackerPreview.rows.map { it.label } == listOf("Profit", "Cata XP", "Runs", "Avg run", "Chests", "Time")) { trackerPreview.rows }
+    check(trackerPreview.rows[0].let { it.prominent && it.tone == TrackerValueTone.POSITIVE && it.value == "~12M" && it.secondary == "12M/h" }) { trackerPreview.rows[0] }
+    check(trackerPreview.rows[1].let { it.value == "400K" && it.secondary == "400K/h" })
+    check(trackerPreview.rows[2].let { it.value == "10" && it.secondary == "10/h" })
+    check(trackerPreview.rows[3].let { it.value == "6m" && it.secondary.isEmpty() })
+    check(trackerPreview.rows[4].let { it.value == "10" && it.secondary == "2 rerolls" })
+    check(trackerPreview.rows[5].let { it.value == "1h" && it.secondary.isEmpty() })
+    check(previewTexts.none { it.contains("/skymyce") || it.contains("recorded") || it.contains("Editor preview") || it.contains("Historical") || it.contains("Inherited") || it.contains("profile") })
+    // Pure rounding and duration helpers: at most two time units and crisp compact numbers.
+    check(formatCompactDuration(337_125_000L) == "3d 21h" && formatCompactDuration(348_000L) == "5m 48s" && formatCompactDuration(0L) == "0s")
+    check(formatCompactDuration(null) == "—" && formatCompactDuration(-1L) == "—" && formatCompactDuration(Long.MAX_VALUE) == "—")
+    check(formatCompactNumber(7_360_000_000.0) == "7.36B" && formatCompactNumber(625_740_000.0) == "625.7M" && formatCompactNumber(78_600_000.0) == "78.6M")
+    check(formatCompactNumber(10.4) == "10.4" && formatCompactNumber(999_950.0) == "1M" && formatCompactNumber(-0.0) == "0")
+    // The level card replaces the target line: Cata 52 → 53 at 86.2%, 27.6M (~69 runs at 400k) to go.
     val level = me.mycellium.skymyce.features.instances.dungeons.tracker.dungeonTrackerPreviewLevel
     check(level.level == 52 && level.target == 53 && me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardPercent(level) == "86.2%")
+    check(levelCardHeader(level) == ("Cata 52 → 53" to "86.2%"))
     val footer = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(level, 400_000.0)
-    check(footer.size == 1 && Regex("Next: ~(69|70) runs · .*XP").matches(footer[0])) { footer }
+    check(footer.size == 1 && Regex("~(69|70) runs · 27\\.6M XP").matches(footer[0])) { footer }
     val far = me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1_000_000.0, 30, 100_000.0)
+    check(levelCardHeader(far).first == "Cata ${far.level} → 30")
     val farFooter = me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(far, 100_000.0)
-    check(farFooter.size == 2 && farFooter[1].startsWith("Cata 30: ~") && farFooter[1].contains("runs")) { farFooter }
-    check(me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(
-        me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1e12, 50, null), null) == listOf("Cata 50 reached"))
-    check(plainPreview[2].isEmpty())
-    check(plainPreview[3] == "Time: 1h (6m/run)" && plainPreview[4] == "Runs: 10 (10/h)")
-    check(plainPreview[5] == "Chests: 10 (2 rerolls)" && plainPreview[6].contains("12M/h") && plainPreview[7].contains("400K/h"))
-    check(plainPreview.none { it.contains("Editor preview") || it.contains("Historical") || it.contains("Inherited") || it.contains("profile") })
+    check(farFooter.size == 2 && farFooter[0].startsWith("Next: ~") && farFooter[1].startsWith("Cata 30: ~") && farFooter[1].contains("runs")) { farFooter }
+    val reached = me.mycellium.skymyce.features.instances.dungeons.tracker.levelRow("Catacombs", null, 1e12, 50, null)
+    check(levelCardHeader(reached) == ("Cata ${reached.level}" to "✓ 50"))
+    check(me.mycellium.skymyce.features.instances.dungeons.tracker.levelCardFooter(reached, null) == listOf("Cata 50 reached"))
     val partial = TrackerSummary(runs = 2, timedRuns = 1, time = 300_000, gross = 50_000.0, chestCost = 10_000.0, incompleteValues = true)
-    val partialRows = dungeonTrackerWidgetLines(DungeonFloor.M7, partial).map { it.replace(Regex("§."), "") }
-    check(partialRows.size == 8 && partialRows[3] == "Time: 5m recorded (5m/run)")
-    check(partialRows[4].contains("12/h") && partialRows[6].contains("40K + ?") && partialRows[6].contains("240K/h"))
-    check(dungeonTrackerWidgetLines(DungeonFloor.M7, TrackerSummary())[3].contains("0s") && plainPreview[6].contains("~"))
+    val partialView = dungeonTrackerWidgetView(DungeonFloor.M7, partial)
+    check(partialView.rows.single { it.label == "Time" }.value == "5m")
+    check(partialView.rows.single { it.label == "Avg run" }.value == "5m")
+    check(partialView.rows.single { it.label == "Runs" }.secondary == "12/h")
+    check(partialView.rows.single { it.label == "Profit" }.let { it.value == "~40K+" && it.secondary == "240K/h" && it.tone == TrackerValueTone.POSITIVE })
+    val emptyView = dungeonTrackerWidgetView(DungeonFloor.M7, TrackerSummary(), dungeonTargetLine(54, null, "loading your profile"))
+    check(emptyView.rows.single { it.label == "Time" }.value == "0s" && emptyView.rows.single { it.label == "Avg run" }.value == "—")
+    check(emptyView.rows.single { it.label == "Profit" }.let { it.value == "~0" && it.secondary == "—" && it.tone == TrackerValueTone.NEUTRAL })
+    check(emptyView.rows.single { it.label == "Chests" }.secondary.isEmpty() && emptyView.targetLine?.contains("Cata 54") == true)
+    val untimedRuns = dungeonTrackerWidgetView(null, TrackerSummary(runs = 3, timedRuns = 0, time = 0, gross = -500_000.0))
+    check(untimedRuns.badge == null && untimedRuns.heading == "All floors Tracker")
+    check(untimedRuns.rows.single { it.label == "Time" }.value == "—" && untimedRuns.rows.single { it.label == "Profit" }.let { it.value == "~-500K" && it.tone == TrackerValueTone.NEGATIVE && it.secondary == "—" })
     for (value in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
-        val rows = dungeonTrackerWidgetLines(null, TrackerSummary(gross = value, cataXp = value, time = Long.MAX_VALUE, timedRuns = 1))
-        check(rows.none { it.contains("NaN") || it.contains("Infinity") || it.contains("∞") })
+        val invalid = dungeonTrackerWidgetView(null, TrackerSummary(gross = value, cataXp = value, time = Long.MAX_VALUE, timedRuns = 1))
+        val invalidTexts = listOf(invalid.heading) + invalid.rows.flatMap { listOf(it.label, it.value, it.secondary) }
+        check(invalidTexts.none { it.contains("NaN") || it.contains("Infinity") || it.contains("∞") }) { invalid }
+        check(invalid.rows.single { it.label == "Profit" }.let { it.value == "—" && it.tone == TrackerValueTone.MUTED })
+        check(invalid.rows.single { it.label == "Cata XP" }.value == "—" && invalid.rows.single { it.label == "Time" }.value == "—")
     }
     val context = AcquisitionContext("a".repeat(32), profileName = "Apple")
     val completed = DungeonRunRecord("latest", "session", context, "M7", completedAt = 100)
@@ -98,8 +126,8 @@ fun main() {
     check(dungeonTrackerDisplayFloor(null, null, runs, null) == null)
     check(dungeonTrackerDisplayFloor(null, null, runs, context.copy(account = "b".repeat(32))) == null)
     check(dungeonTrackerDisplayFloor(null, null, runs, context.copy(server = "alpha")) == null)
-    check(dungeonTrackerPreviewLines(enabled = false) == null)
-    val firstEditorContent = hudEditorContent({ dungeonTrackerPreviewLines(true) },
+    check(dungeonTrackerPreviewView(enabled = false) == null)
+    val firstEditorContent = hudEditorContent({ dungeonTrackerPreviewView(true) },
         { error("A deterministic preview must not depend on live dungeon state") }, null, sinceActive = 0, now = 100_000)
     check(firstEditorContent === trackerPreview) { "A never-active tracker did not initialize its editor preview" }
     check(!dungeonTrackerWidgetVisible(true, false, false, false))
@@ -107,10 +135,10 @@ fun main() {
     check(!dungeonTrackerWidgetVisible(true, true, true, false))
     check(dungeonTrackerWidgetVisible(true, true, false, false))
     check(dungeonTrackerWidgetVisible(true, true, true, true))
-    check(hudEditorContent<List<String>>(null, { null }, null, 0, 100_000) == null)
+    check(hudEditorContent<Any>(null, { null }, null, 0, 100_000) == null)
     check(hudEditorContent(null, { null }, trackerPreview, 99_000, 100_000) === trackerPreview)
     check(hudEditorContent(null, { null }, trackerPreview, 90_000, 100_000) == null)
-    check(hudEditorContent({ dungeonTrackerPreviewLines(false) }, { trackerPreview }, trackerPreview, 99_000, 100_000) == null) {
+    check(hudEditorContent({ dungeonTrackerPreviewView(false) }, { trackerPreview }, trackerPreview, 99_000, 100_000) == null) {
         "A disabled tracker reappeared through recently retained live content"
     }
     val editorRoot = io.wispforest.owo.ui.container.UIContainers.verticalFlow(Sizing.fill(), Sizing.fill())

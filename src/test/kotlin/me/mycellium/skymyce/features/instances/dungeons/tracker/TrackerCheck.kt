@@ -204,13 +204,13 @@ private fun checkMarketValuedTrackerSummary() {
     val widgetSource = trackerView(archive, listOf(historical),
         TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES), context)
     val widgetSummary = marketValuedTrackerSummary(widgetSource.summary, marketValuedLoot(widgetSource.loot) { quotes[it] })
-    check(widgetSummary == shown && dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, widgetSummary)
-        .single { "Profit:" in it }.contains("388"))
+    check(widgetSummary == shown && dungeonTrackerWidgetView(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, widgetSummary)
+        .rows.single { it.label == "Profit" }.let { it.value == "~388" && it.tone == TrackerValueTone.POSITIVE })
     val missing = valued(filter, quotes - "NECRON_HANDLE")
     check(missing.gross == 100.0 && missing.knownNet == -112.0 && missing.net == null && missing.incompleteValues)
     val missingWidget = marketValuedTrackerSummary(widgetSource.summary, marketValuedLoot(widgetSource.loot) { (quotes - "NECRON_HANDLE")[it] })
-    check(missingWidget == missing && dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, missingWidget)
-        .single { "Profit:" in it }.contains("+ ?"))
+    check(missingWidget == missing && dungeonTrackerWidgetView(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, missingWidget)
+        .rows.single { it.label == "Profit" }.let { it.value == "~-112+" && it.tone == TrackerValueTone.NEGATIVE })
     check(valued(filter.copy(scope = TrackerScope.CURRENT_PROFILE)).net == -15.0)
     check(valued(filter.copy(from = "2026-09-24", until = "2026-09-24")).net == -15.0)
     check(valued(filter.copy(session = "second-session")).net == 13.0)
@@ -552,8 +552,9 @@ private fun checkDungeonWidgetRates() {
         timed.copy(id = "not-completed", completedAt = null), timed.copy(id = "no-duration", duration = 0)))
     val filter = TrackerFilter(floor = "M7", scope = TrackerScope.ALL_LOCAL_PROFILES)
     val total = trackerView(archive, listOf(historical), filter, null).summary
-    val rows = dungeonTrackerWidgetLines(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, total).map { it.replace(Regex("§."), "") }
-    check(rows.none { "matched" in it || "—" in it }) { rows }
+    val view = dungeonTrackerWidgetView(tech.thatgravyboat.skyblockapi.api.area.dungeon.DungeonFloor.M7, total)
+    val texts = listOf(view.heading) + view.rows.flatMap { listOf(it.label, it.value, it.secondary) }
+    check(texts.none { "matched" in it || "—" in it || "recorded" in it }) { view }
     // Chests claimed at Croesus are saved without a duration; the rate divides all profit by all run time.
     val claimed = AcquisitionArchive(runs = listOf(timed.copy(chests = emptyList()),
         DungeonRunRecord("claim", "session", context, "M7", chests = listOf(ChestReceipt("later", 70_000, "BEDROCK", 100.0, listOf(RunLoot("LOOT", 1, 1_000.0)))))))

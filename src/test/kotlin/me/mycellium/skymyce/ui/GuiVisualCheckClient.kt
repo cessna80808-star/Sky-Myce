@@ -117,6 +117,7 @@ class GuiVisualCheckClient : ClientModInitializer {
             Scene("dungeons-signature", ThemePreset.SIGNATURE) { MenuDirectoryScreen(MenuCategory.DUNGEONS) },
             Scene("item-models-skyblock", ThemePreset.SIGNATURE) { GuiVisualItemModelsScreen() },
             Scene("dungeon-tracker-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonTrackerPreviewScreen() },
+            Scene("dungeon-tracker-widget-light", ThemePreset.LIGHT) { GuiVisualDungeonTrackerPreviewScreen() },
             Scene("dungeon-splits-widget", ThemePreset.SIGNATURE) { GuiVisualDungeonSplitsPreviewScreen() },
             Scene("goldor-map-widget", ThemePreset.SIGNATURE) { GuiVisualGoldorMapPreviewScreen() },
             Scene("status-bars-editor", ThemePreset.SIGNATURE) { me.mycellium.skymyce.features.general.overlays.bars.StatusBarsEditorScreen() },
@@ -829,14 +830,14 @@ private class GuiVisualDungeonTrackerPreviewScreen : Screen(Minecraft.getInstanc
         check(widget.prepareEditor()) { "Dungeon Tracker editor preview did not mount" }
         val components = arrayListOf<UIComponent>()
         checkNotNull(widget.adapter).rootComponent.collectDescendants(components)
-        val rows = components.filterIsInstance<me.mycellium.skymyce.hud.HudTextLabel>().map { it.text().string.trim() }
-        check(rows.any { it == "M7 Dungeon Tracker" } && rows.count { it.isEmpty() } == 2)
-        for (field in listOf("Time:", "Runs:", "Chests:", "Profit:", "Cata Exp:")) check(rows.any { it.startsWith(field) })
-        check(rows.none { it.contains("Historical") || it.contains("Inherited") || it.contains("Current profile") || it.contains("Editor preview") })
+        val body = components.filterIsInstance<me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonTrackerBody>().single()
+        val card = components.filterIsInstance<me.mycellium.skymyce.features.instances.dungeons.tracker.DungeonLevelCard>().single()
+        check(body.width() == card.width() && body.width() > 0) { "Level card width ${card.width()} did not match table width ${body.width()}" }
         check(widget.width in 1..width && widget.height in 1..height)
     }
     override fun extractRenderState(output: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        output.fill(0, 0, width, height, 0xFF101725.toInt())
+        val backdrop = if (ThemeConfig.preset == ThemePreset.LIGHT) 0xFF64748B.toInt() else 0xFF101725.toInt()
+        output.fill(0, 0, width, height, backdrop)
         check(widget.render(output, mouseX, mouseY, partialTick, editor = true))
     }
 }
