@@ -4,7 +4,7 @@ This file is the repository's development reference. Prefer code and build confi
 
 ## Project at a glance
 
-- Sky-Myce is a standalone client-side Fabric mod for Minecraft 26.1.2, written primarily in Kotlin with some Java and compiled for Java 25.
+- Sky-Myce is a standalone client-side Fabric mod for Minecraft 26.2, written primarily in Kotlin with some Java and compiled for Java 25.
 - `relay/` is a separate TypeScript Cloudflare Worker and Durable Object service.
 - Gradle dependency versions and Minecraft/Fabric versions are in `gradle.properties`; dependency wiring and build/test tasks are in `build.gradle.kts`.
 - Do not edit generated output, runtime data or dependency caches under `build/`, `.gradle/`, or `run/`.
@@ -77,11 +77,11 @@ npm run check
 
 Run the narrowest relevant checks while iterating, then `./gradlew check` for mod-wide changes. Report any verification that could not be run and why.
 
-The mod targets Minecraft 26.1.2 and 26.2 from one source tree. `gradle.properties` is the 26.1.2 build; `-Pmc=26.2` (for example `./gradlew check -Pmc=26.2`) applies `versions/26.2.properties` and writes to `build/mc26.2/`. APIs that moved between the two go through the same-named shims in `src/mc/<minecraft>/` (such as `currentScreen`, `openScreen`, `hud`, `guiHidden` and `GpuCompat`), so shared code compiles for both; a mixin whose handler signature differs gets one copy per version there. The secondary world camera (Leap POV, Crush Camera) is built only for 26.1.2, and 26.2 uses a stub that reports it unavailable. Run checks for both targets when touching Minecraft APIs or mixins. 26.2 defaults to Vulkan, where Skija menus fall back to the AWT renderer, so verify GUI changes with `runGuiVisualCheck -Pmc=26.2` too.
+The mod targets Minecraft 26.2 only; 26.1.2 support ended with 2.8.0-beta-061. `utils/McCompat.kt` keeps short names for APIs that moved in 26.2 (such as `currentScreen`, `openScreen`, `hud`, `guiHidden` and `GpuCompat`). The secondary world camera (Leap POV, Crush Camera) is a stub that reports it unavailable; the 26.1.2 renderer is in git history before 2.9.0. 26.2 defaults to Vulkan, where Skija menus fall back to the AWT renderer.
 
 For GUI changes, `./gradlew runGuiVisualCheck` launches an isolated development client, captures real menu/theme/control screens at multiple sizes and GUI scales under `build/gui-visual-check/screenshots`, and exits. It uses test-only Fabric code and no multiplayer connection or existing player profile. This supplements the executable checks; gameplay HUD and native player previews still need in-world verification.
 
-The user has authorized deployment of every completed mod release build to the production Cloudflare backend. Include deployment in future build tasks without asking again: use a new release version, upload the private artifact before its signed protocol-4 Fabric manifest (`sign-community`), activate `releases/community-current.json` on `--env backend`, and verify the live signature and artifact hash. Release the 26.2 build alongside it: sign it with `minecraft` set to `26.2`, upload `releases/Sky-Myce-<version>-mc26.2.jar`, then activate `releases/community-current-26.2.json`, and verify it with `release.mjs verify ... 26.2`. Retain previous builds.
+The user has authorized deployment of every completed mod release build to the production Cloudflare backend. Include deployment in future build tasks without asking again: use a new release version, upload the private artifact before its signed protocol-4 Fabric manifest (`sign-community`), sign it with `minecraft` set to `26.2`, upload `releases/Sky-Myce-<version>-mc26.2.jar`, then activate `releases/community-current-26.2.json` on `--env backend`, and verify the live signature and artifact hash with `release.mjs verify ... 26.2`. Retain previous builds.
 
 The sole production Discord Gateway lives in the separate `D:\Code\Cessna fork\relay` checkout. Update that existing service for Gateway changes; do not start a competing Node bot. Keep RNG posts in a dedicated channel, Global bridged to Discord and Party restricted to game clients. Local features and personal history remain usable without a community session.
 

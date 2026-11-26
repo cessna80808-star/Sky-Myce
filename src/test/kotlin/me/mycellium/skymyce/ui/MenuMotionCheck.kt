@@ -203,9 +203,8 @@ private fun headlessMenuGraphics(canvas: MenuCanvas, width: Int, height: Int): M
     val graphics = unsafe.allocateInstance(MenuGraphics::class.java) as MenuGraphics
     fun field(owner: Class<*>, name: String, value: Any) = owner.getDeclaredField(name).apply { isAccessible = true }.set(graphics, value)
     val extractor = net.minecraft.client.gui.GuiGraphicsExtractor::class.java
-    // 26.2 bounds the scissor stack by the screen; 26.1.2 has a no-argument constructor.
     val scissors = extractor.declaredClasses.single { it.simpleName == "ScissorStack" }.declaredConstructors.single()
-        .apply { isAccessible = true }.let { if (it.parameterCount == 0) it.newInstance() else it.newInstance(net.minecraft.client.gui.navigation.ScreenRectangle(0, 0, width, height)) }
+        .apply { isAccessible = true }.newInstance(net.minecraft.client.gui.navigation.ScreenRectangle(0, 0, width, height))
     field(extractor, "pose", org.joml.Matrix3x2fStack(16)); field(extractor, "scissorStack", scissors)
     field(extractor, "guiRenderState", net.minecraft.client.renderer.state.gui.GuiRenderState())
     field(MenuGraphics::class.java, "canvas", canvas)

@@ -3,6 +3,10 @@
 Newest first. Every release gets a `## <version> (<date>)` section with one line per change you can see in game. The
 Daily Digest shows this whole file, the update prompt shows the section for the new version, and a copy goes to Discord.
 
+## 2.9.0 (2026-11-26)
+- Sky-Myce now runs on Minecraft 26.2 only. 2.8.0-beta-061 is the last build for 26.1.2.
+- The Spirit Leap menu no longer shows live previews, and Crush Camera is gone for now. Both need a camera that doesn't work on 26.2 yet.
+
 ## 2.8.0-beta-061 (2026-11-24)
 - The Dungeon Tracker HUD can show a time frame instead of your total: this session, today, this week, this month or this year. Open chat and click the HUD to switch, or pick one in the Dungeon Tracker settings.
 

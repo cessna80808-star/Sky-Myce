@@ -89,13 +89,6 @@ class GuiVisualCheckClient : ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STARTED.register { client ->
             client.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0)
             client.soundManager.updateCategoryVolume(SoundSource.MASTER, 0f)
-            val sodium = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")
-            // The 26.2 build has no secondary camera, so this check only exists in the 26.1.2 build.
-            val cameraCheck = runCatching { Class.forName("me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck") }.getOrNull()
-            if (cameraCheck != null) {
-                check(cameraCheck.getMethod("checkSodiumChunkEventsCompatibility").invoke(null) == sodium)
-                println("GUI visual check: transformed Sodium chunk events verified=$sodium")
-            }
         }
         data class Scene(val name: String, val theme: ThemePreset, val width: Int = 1280, val height: Int = 800,
                          val scale: Int = 2, val screen: () -> Screen)

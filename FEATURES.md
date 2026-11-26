@@ -3,7 +3,7 @@ Find a party, route through the floor, coordinate bosses, and track your runs an
 
 **Parties and Party Tools**
 - **Party Finder**: See which dungeon friends are online and who is looking for a group, send invites and filter parties.
-- **Spirit Leap Menu**: Pick who to leap to from a menu with four gameplay previews, rendered on your own client.
+- **Spirit Leap Menu**: Pick who to leap to from a menu.
 
 **Routes and Navigation**
 - **Dungeon Routing**: Shows the way through the doors to Blood, and can take you past starred mobs on the way if you want. A Blood timer counts down to 20 seconds after Blood opens, in server time.
@@ -15,7 +15,6 @@ Find a party, route through the floor, coordinate bosses, and track your runs an
 
 **Boss Coordination**
 - **Goldor Coordination**: A map of the F7/M7 terminals, routes for each ADG role, stacks and timed pre-leaps, shared with your party in party chat.
-- **Crush Camera**: A fixed camera view for your class, from 26 seconds into Storm until Storm dies.
 
 **Rewards and Dungeon Information**
 - **Dungeon Chests**: Estimated profit for each chest, which loot is valuable, and protection against buying or rerolling by mistake.

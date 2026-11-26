@@ -4,7 +4,7 @@ Sky-Myce adds optional quality-of-life features to Hypixel SkyBlock. Configure t
 
 ## Install
 
-1. Install Fabric for Minecraft **26.1.2** and use **Java 25**.
+1. Install Fabric for Minecraft **26.2** and use **Java 25**.
 2. Download the [latest Sky-Myce release](https://github.com/cessna80808-star/Sky-Myce/releases/latest).
 3. Close Minecraft and put the standalone JAR in your Fabric instance's `mods` folder. Keep the Fabric dependencies installed.
 4. Launch Minecraft and open `/sm`.

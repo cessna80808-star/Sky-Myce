@@ -27,10 +27,7 @@ private fun checkCommunityConfiguration(configuration: Properties) {
     }
 }
 
-// -Pmc=<version> builds against versions/<version>.properties, which overrides gradle.properties; the default stays 26.1.2.
-val minecraftTarget: String? = providers.gradleProperty("mc").orNull
-val targetProperties = Properties().apply { minecraftTarget?.let { file("versions/$it.properties").reader().use(::load) } }
-fun prop(name: String): String = targetProperties.getProperty(name) ?: providers.gradleProperty(name).get()
+fun prop(name: String): String = providers.gradleProperty(name).get()
 
 plugins {
 	id("net.fabricmc.fabric-loom")
@@ -39,22 +36,8 @@ plugins {
 }
 
 version = prop("mod_version")
-// Separate outputs so both targets can be built from one checkout without clobbering each other.
-minecraftTarget?.let { layout.buildDirectory = layout.projectDirectory.dir("build/mc$it") }
 group = prop("maven_group")
 
-// Small per-version shims for Minecraft APIs that moved between targets.
-// 26.2 rebuilt the world renderer, so its build leaves out the secondary camera and src/mc/26.2 stubs it as unavailable.
-// SecondaryCameraGuiInvoker stays: the Skija menu blits through it too.
-val secondaryCamera = prop("secondary_camera").toBoolean()
-fun isSecondaryCameraSource(path: String) = path.startsWith("me/mycellium/skymyce/features/instances/dungeons/camera/render/") ||
-    Regex("""me/mycellium/mixin/Secondary(Camera(?!GuiInvoker)\w*|\w*DispatcherAccessor)\.java""").matches(path)
-sourceSets.main {
-    kotlin.srcDir("src/mc/${prop("minecraft_version")}/kotlin")
-    java.srcDir("src/mc/${prop("minecraft_version")}/java")
-    if (!secondaryCamera) java.exclude { it.file.startsWith(file("src/main/java")) && isSecondaryCameraSource(it.path) }
-}
-if (!secondaryCamera) sourceSets.test { java.exclude { isSecondaryCameraSource(it.path) } }
 
 repositories {
 	// Add repositories to retrieve artifacts from in here.
@@ -143,8 +126,7 @@ dependencies {
 	}
 
 	// Optional at runtime (players install it themselves); pinned by Modrinth version ID so the dev client has it.
-	// SkyBlockPv has no 26.2 build yet, so the 26.2 target leaves skyblockpv_version empty.
-	prop("skyblockpv_version").takeIf { it.isNotEmpty() }?.let { runtimeOnly("maven.modrinth:skyblock-profile-viewer:$it") }
+	// SkyBlockPv has no 26.2 build yet; once it does, add it as runtimeOnly("maven.modrinth:skyblock-profile-viewer:<version id>").
 
 	// Resourceful Config
 	implementation("com.teamresourceful.resourcefulconfig:resourcefulconfig-fabric-${prop("resourceful_config_target")}:${prop("resourceful_config_version")}")
@@ -173,9 +155,6 @@ tasks.processResources {
 	val version = version
 	inputs.property("version", version)
 
-	if (!secondaryCamera) filesMatching("skymyce.mixins.json") {
-		filter { line -> if (Regex("""\s*"Secondary(Camera(?!GuiInvoker)\w*|\w*DispatcherAccessor)",""").matches(line)) null else line }
-	}
 	filesMatching("fabric.mod.json") {
 		expand("version" to version, "minecraft_version" to prop("minecraft_version"),
             "fabric_api_version" to prop("fabric_api_version"),
@@ -388,8 +367,6 @@ for (checkName in listOf("IrcChatModel", "IrcGif", "IrcMedia")) {
         "me.mycellium.skymyce.features.instances.dungeons.friends.${checkName}CheckKt", "Checks bounded IRC message and media behavior")
 }
 // Assertions run via the check tasks; this project does not use a test framework.
-if (secondaryCamera) registerCheck("cameraRenderCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.render.CameraRenderCheck",
-    "Checks independent secondary camera projection, target bounds and strict viewpoints")
 registerCheck("healerCrushCameraCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.HealerCrushCameraCheckKt",
     "Checks Crush Camera timing, class selection and encounter cleanup")
 registerCheck("cameraViewpointCheck", "me.mycellium.skymyce.features.instances.dungeons.camera.CameraViewpointCheckKt",

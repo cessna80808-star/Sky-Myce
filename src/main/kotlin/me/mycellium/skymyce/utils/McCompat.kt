@@ -11,7 +11,7 @@ import net.minecraft.client.gui.screens.Overlay
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.gizmos.Gizmos
 
-// Minecraft 26.2 side of the APIs that moved from 26.1.2; src/mc/26.1.2 has the same names.
+// Short names for Minecraft APIs that moved in 26.2.
 
 val Minecraft.currentScreen: Screen? get() = gui.screen()
 fun Minecraft.openScreen(screen: Screen?) = gui.setScreen(screen)
